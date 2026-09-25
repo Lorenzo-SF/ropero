@@ -9,8 +9,8 @@
 : "${SAFETENSORS_DIR:=$HOME/models/safetensors}"
 : "${LOG_DIR:=$HOME/.logs/ropero}"
 : "${LLAMA_DIR:=$HOME/llama.cpp}"
-: "${BIN_DIR:=$HOME/bin}"
+: "${BIN_DIR:=$HOME/.local/bin}"
 
 ropero_env_setup() {
-    mkdir -p "$GGUF_DIR" "$SAFETENSORS_DIR" "$LOG_DIR" "$HOME/.gunter" 2>/dev/null || true
+    mkdir -p "$GGUF_DIR" "$SAFETENSORS_DIR" "$LOG_DIR" "$LLAMA_DIR" 2>/dev/null || true
 }

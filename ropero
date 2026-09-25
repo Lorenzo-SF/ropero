@@ -1069,9 +1069,103 @@ start_model() {
 #    borrar+reclonar+compilar. Flags CMAKE EXACTOS del spec (NO modificar).
 # 3. AirLLM + TensorRT-LLM (este último solo cachy), best-effort con prompt.
 # 4. modelos via download con check individual (omitir si existen).
-# 5. symlinks en ~/bin.
+# 5. symlinks en $BIN_DIR (típicamente ~/.local/bin).
 # -----------------------------------------------------------------------------
 _ropero_nproc() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
+
+# -----------------------------------------------------------------------------
+# ropero_link — crea/actualiza los symlinks de ropero en $BIN_DIR.
+# Idempotente. Lo llaman cmd_install (al final) y se puede llamar suelto.
+# -----------------------------------------------------------------------------
+ropero_link() {
+    mkdir -p "$BIN_DIR" 2>/dev/null || true
+
+    # Entry point
+    ln -sfn "$SCRIPT_DIR/ropero" "$BIN_DIR/ropero" 2>/dev/null || true
+    ropero_ok "  → $BIN_DIR/ropero"
+
+    # ropero.d (necesario para que ropero encuentre sus módulos cuando se
+    # invoca desde el symlink de $BIN_DIR)
+    if [[ -d "$SCRIPT_DIR/ropero.d" ]]; then
+        ln -sfn "$SCRIPT_DIR/ropero.d" "$BIN_DIR/ropero.d" 2>/dev/null || true
+        ropero_ok "  → $BIN_DIR/ropero.d"
+    fi
+
+    # Binarios de llama.cpp (si están compilados)
+    if [[ -d "$LLAMA_DIR/build/bin" ]]; then
+        local b count=0
+        for b in "$LLAMA_DIR"/build/bin/*; do
+            [[ -x "$b" ]] || continue
+            ln -sfn "$b" "$BIN_DIR/$(basename "$b")" 2>/dev/null || true
+            count=$((count + 1))
+        done
+        [[ $count -gt 0 ]] && ropero_ok "  → $count binarios llama.cpp en $BIN_DIR"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# cmd_check — verifica que ropero está correctamente instalado.
+# NO modifica nada. Exit 0 si todo OK, 1 si algo falla.
+# -----------------------------------------------------------------------------
+cmd_check() {
+    local rc=0
+
+    printf "\n== ropero --check ==\n\n"
+
+    # Entry point
+    if [[ -e "$BIN_DIR/ropero" ]]; then
+        ropero_ok "ropero → $BIN_DIR/ropero"
+    else
+        ropero_err "ropero NO instalado en $BIN_DIR"
+        rc=1
+    fi
+
+    # ropero.d
+    if [[ -e "$BIN_DIR/ropero.d" ]]; then
+        local n
+        n=$(ls -1 "$BIN_DIR/ropero.d"/*.sh 2>/dev/null | wc -l | tr -d ' ')
+        ropero_ok "ropero.d → $BIN_DIR/ropero.d ($n scripts)"
+    else
+        ropero_err "ropero.d NO linkeado en $BIN_DIR"
+        rc=1
+    fi
+
+    # Modelos
+    if [[ -d "$GGUF_DIR" ]]; then
+        local n
+        n=$(ls -1 "$GGUF_DIR"/*.gguf 2>/dev/null | wc -l | tr -d ' ')
+        if (( n > 0 )); then
+            ropero_ok "modelos GGUF: $n en $GGUF_DIR"
+        else
+            ropero_warn "sin modelos en $GGUF_DIR (ropero --install los descarga)"
+        fi
+    else
+        ropero_warn "GGUF_DIR no existe: $GGUF_DIR"
+    fi
+
+    # llama-server
+    if command -v llama-server >/dev/null 2>&1; then
+        ropero_ok "llama-server: $(command -v llama-server)"
+    else
+        ropero_warn "llama-server NO en PATH (ropero --install lo compila)"
+    fi
+
+    # PATH: ¿BIN_DIR está en PATH?
+    if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
+        ropero_ok "$BIN_DIR está en PATH"
+    else
+        ropero_warn "$BIN_DIR NO está en PATH"
+        ropero_info "  Añade a tu .zshrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+
+    printf "\n"
+    if (( rc == 0 )); then
+        ropero_ok "ropero --check OK"
+    else
+        ropero_err "ropero --check FALLÓ ($rc problema(s))"
+    fi
+    return $rc
+}
 
 cmd_install() {
     local os
@@ -1126,14 +1220,6 @@ cmd_install() {
             ropero_compile_llama "$os" || { ropero_err "compilación falló"; return 1; }
         else
             ropero_ok "llama-server ya compilado (skip)"
-        fi
-        # symlinks compilados
-        if [[ -d "$LLAMA_DIR/build/bin" ]]; then
-            local b
-            for b in "$LLAMA_DIR"/build/bin/*; do
-                [[ -x "$b" ]] || continue
-                ln -sf "$b" "$BIN_DIR/$(basename "$b")" 2>/dev/null || true
-            done
         fi
     fi
 
@@ -1214,10 +1300,8 @@ cmd_install() {
     # 4. modelos LLM por defecto (lógica extraída a 21-download-models.sh)
     ropero_download_default_models
 
-    # 5. symlink entry en ~/bin si no existe
-    if [[ ! -e "$BIN_DIR/ropero" ]]; then
-        ln -sf "$SCRIPT_DIR/ropero" "$BIN_DIR/ropero" 2>/dev/null || true
-    fi
+    # 5. symlinks en $BIN_DIR (típicamente ~/.local/bin)
+    ropero_link
     ropero_ok "ropero --install OK"
 }
 
@@ -1235,6 +1319,11 @@ main() {
         --install)
             shift || true
             cmd_install "$@"
+            exit $?
+            ;;
+        --check)
+            shift || true
+            cmd_check "$@"
             exit $?
             ;;
         list)
