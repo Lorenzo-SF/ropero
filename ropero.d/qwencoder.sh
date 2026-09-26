@@ -30,9 +30,9 @@ MODEL_CTX="${ROPERO_CODER_CTX:-131072}"
 
 N_CPU_MOE="${ROPERO_CODER_N_CPU_MOE:-30}"             # 30 layers con expertos MoE en CPU (16GB VRAM estricto)
 # Alias público (lo carga bin/ropero como nombre alternativo del modelo).
-# Para cambiar el modelo físico asociado al alias `analyst`, edita este script;
+# Para cambiar el modelo físico asociado al alias `coder`, edita este script;
 # `opencode.jsonc` no se entera.
-MODEL_ALIAS="${MODEL_ALIAS:-analyst}"
+MODEL_ALIAS="${MODEL_ALIAS:-coder}"
 
 get_model_args_qwencoder() {
     local -a args=(

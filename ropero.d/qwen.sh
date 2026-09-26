@@ -31,8 +31,10 @@ MODEL_GGUF="Qwen3.8-27B-UD-Q3_K_XL.gguf"
 MODEL_DRAFT="$HOME/models/gguf/mtp-Qwen3.8-27B-Q4_0.gguf"
 
 MODEL_CTX="${ROPERO_QWEN_CTX:-131072}"
-# Sin alias público: este script solo es accesible como `qwen` en ropero.
-MODEL_ALIAS="${MODEL_ALIAS:-}"
+# Alias público (lo carga bin/ropero como nombre alternativo del modelo).
+# Para cambiar el modelo físico asociado al alias `analyst`, edita este script;
+# `opencode.jsonc` no se entera.
+MODEL_ALIAS="${MODEL_ALIAS:-analyst}"
 
 get_model_args_qwen() {
     local -a args=(
