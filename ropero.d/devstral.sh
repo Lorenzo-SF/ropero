@@ -7,9 +7,9 @@ DEVSTRAL_GGUF="Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"
 MODEL_GGUF="$DEVSTRAL_GGUF"
 MODEL_CTX="${ROPERO_DEVSTRAL_CTX:-131072}"
 # Alias público (lo carga bin/ropero como nombre alternativo del modelo).
-# Para cambiar el modelo físico asociado al alias `coder`, edita este script;
+# Para cambiar el modelo físico asociado al alias `coder_lite`, edita este script;
 # `opencode.jsonc` no se entera.
-MODEL_ALIAS="${MODEL_ALIAS:-coder}"
+MODEL_ALIAS="${MODEL_ALIAS:-coder_lite}"
 
 get_model_args_devstral(){
   local -a args=(

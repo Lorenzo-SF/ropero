@@ -109,18 +109,16 @@ ropero stop all       # ambos slots
 
 ## Arquitectura — dual-slot
 
-```
-┌──────────────────────────┐     ┌──────────────────────────┐
-│  GPU :9999               │     │  CPU :9998               │
-│  (dGPU RTX / Apple GPU)  │     │  (offload total)         │
-│                          │     │                          │
-│  Cualquier modelo:       │     │  Solo gptoss_*:          │
-│    coder (Devstral)      │     │    verifier              │
-│    analyst (Qwen3-Coder) │     │    designer              │
-│    qwen                  │     │                          │
-│    qwenvision            │     │                          │
-│    fable                 │     │                          │
-└──────────────────────────┘     └──────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph GPU["GPU :9999<br/>(dGPU RTX / Apple GPU)"]
+        direction TB
+        GPU_MODELS["Cualquier modelo:<br/>coder (Devstral)<br/>analyst (Qwen3-Coder)<br/>qwen<br/>qwenvision<br/>fable"]
+    end
+    subgraph CPU["CPU :9998<br/>(offload total)"]
+        direction TB
+        CPU_MODELS["Solo gptoss_*:<br/>verifier<br/>designer"]
+    end
 ```
 
 **Reglas**:
@@ -134,30 +132,53 @@ ropero stop all       # ambos slots
 
 ## Estructura del repo
 
-```
-ropero/
-├── ropero                     entry point (bash, dispatch)
-├── ropero.d/                  módulos
-│   ├── _common.sh             helpers comunes
-│   ├── _gptoss_common.sh      helper específico de gptoss
-│   ├── 00-utils.sh            helpers de logging / prompts
-│   ├── 01-env.sh              defaults de entorno (BIN_DIR, GGUF_DIR...)
-│   ├── 20-compile-llama.sh    compilación de llama.cpp (CMake flags)
-│   ├── 21-download-models.sh  descarga de los GGUF por defecto
-│   ├── devstral.sh            modelo: Devstral (alias "coder")
-│   ├── qwencoder.sh           modelo: Qwen3-Coder-30B (alias "analyst")
-│   ├── qwen.sh                modelo: Qwen3.8-27B (alias "analyst" alt)
-│   ├── gptoss_high.sh         modelo: gpt-oss reasoning high (alias "verifier")
-│   ├── gptoss_medium.sh       modelo: gpt-oss reasoning medium (alias "designer")
-│   ├── gptoss_low.sh          modelo: gpt-oss reasoning low
-│   ├── embed.sh               modelo: embeddings (jina-code)
-│   ├── qwenvision.sh          modelo: Qwen2.5-VL (visión)
-│   ├── fable.sh               modelo: Fable Coder 35B
-│   └── fired/                 modelos fuera del scope actual (archivados)
-├── README.md                  este archivo
-├── CHANGELOG.md
-└── docs/
-    └── model-eval.md          benchmarking de modelos
+```mermaid
+flowchart TD
+    root["ropero/"]
+    n0["ropero                     entry point (bash, dispatch)"]
+    root --> n0
+    n1["ropero.d/                  módulos"]
+    root --> n1
+    n2["_common.sh             helpers comunes"]
+    n1 --> n2
+    n3["_gptoss_common.sh      helper específico de gptoss"]
+    n1 --> n3
+    n4["00-utils.sh            helpers de logging / prompts"]
+    n1 --> n4
+    n5["01-env.sh              defaults de entorno (BIN_DIR, GGUF_DIR...)"]
+    n1 --> n5
+    n6["20-compile-llama.sh    compilación de llama.cpp (CMake flags)"]
+    n1 --> n6
+    n7["21-download-models.sh  descarga de los GGUF por defecto"]
+    n1 --> n7
+    n8["devstral.sh            modelo: Devstral (alias \"coder\")"]
+    n1 --> n8
+    n9["qwencoder.sh           modelo: Qwen3-Coder-30B (alias \"analyst\")"]
+    n1 --> n9
+    n10["qwen.sh                modelo: Qwen3.8-27B (alias \"analyst\" alt)"]
+    n1 --> n10
+    n11["gptoss_high.sh         modelo: gpt-oss reasoning high (alias \"verifier\")"]
+    n1 --> n11
+    n12["gptoss_medium.sh       modelo: gpt-oss reasoning medium (alias \"designer\")"]
+    n1 --> n12
+    n13["gptoss_low.sh          modelo: gpt-oss reasoning low"]
+    n1 --> n13
+    n14["embed.sh               modelo: embeddings (jina-code)"]
+    n1 --> n14
+    n15["qwenvision.sh          modelo: Qwen2.5-VL (visión)"]
+    n1 --> n15
+    n16["fable.sh               modelo: Fable Coder 35B"]
+    n1 --> n16
+    n17["fired/                 modelos fuera del scope actual (archivados)"]
+    n1 --> n17
+    n18["README.md                  este archivo"]
+    root --> n18
+    n19["CHANGELOG.md"]
+    root --> n19
+    n20["docs/"]
+    root --> n20
+    n21["model-eval.md          benchmarking de modelos"]
+    n20 --> n21
 ```
 
 ---
