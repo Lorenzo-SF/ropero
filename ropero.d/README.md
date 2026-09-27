@@ -4,33 +4,53 @@
 
 ## Mapa completo
 
-```
-ropero.d/
-│
-├── PHYSICAL LAYER (lanzan llama-server, fuente de verdad del binding)
-│   ├── devstral.sh         → Devstral-Small-2-24B-Instruct     alias: coder      (GPU :9999)
-│   ├── qwencoder.sh        → Qwen3-Coder-30B-A3B-Instruct      alias: analyst    (GPU :9999)
-│   ├── gptoss_high.sh      → gpt-oss-20b MXFP4, high           alias: verifier   (CPU :9998)
-│   ├── gptoss_medium.sh    → gpt-oss-20b MXFP4, medium         alias: designer   (CPU :9998)
-│   ├── gptoss_low.sh       → gpt-oss-20b MXFP4, low            (sin alias público)
-│   ├── qwen.sh             → Qwen3.8-27B-Instruct              (sin alias público)
-│   ├── embed.sh            → embeddings
-│   ├── airgptoss.sh        → gpt-oss-120b (airllm)
-│   ├── fable.sh            → fable-coder 35B-A3B (legacy)
-│   └── qwenvision.sh       → Qwen2.5-VL-7B-Instruct
-│
-├── HELPERS (no son modelos; sourceados por el entry point)
-│   ├── _common.sh          colorize y utilidades
-│   ├── _gptoss_common.sh   args compartidos de gptoss_{low,medium,high}
-│   ├── 00-utils.sh, 01-env.sh
-│   └── 20-compile-llama.sh, 21-download-models.sh
-│
-├── README.md (este archivo)
-└── fired/                                ← modelos legacy, NO usar
-    ├── fable.sh                          (Fable Coder 35B-A3B, retirado)
-    ├── qwopus.sh                         (Qwopus 35B-A3B, retirado)
-    ├── muse.sh                           (Muse Glimmer 30B MoE, retirado)
-    └── nemotron.sh                       (Nemotron 3.5 Lightning 30B-A3B, retirado)
+```mermaid
+flowchart TD
+    root["ropero.d/"]
+    n0["PHYSICAL LAYER (lanzan llama-server, fuente de verdad del binding)"]
+    root --> n0
+    n1["devstral.sh         → Devstral-Small-2-24B-Instruct     alias: coder      (GPU :9999)"]
+    n0 --> n1
+    n2["qwencoder.sh        → Qwen3-Coder-30B-A3B-Instruct      alias: analyst    (GPU :9999)"]
+    n0 --> n2
+    n3["gptoss_high.sh      → gpt-oss-20b MXFP4, high           alias: verifier   (CPU :9998)"]
+    n0 --> n3
+    n4["gptoss_medium.sh    → gpt-oss-20b MXFP4, medium         alias: designer   (CPU :9998)"]
+    n0 --> n4
+    n5["gptoss_low.sh       → gpt-oss-20b MXFP4, low            (sin alias público)"]
+    n0 --> n5
+    n6["qwen.sh             → Qwen3.8-27B-Instruct              (sin alias público)"]
+    n0 --> n6
+    n7["embed.sh            → embeddings"]
+    n0 --> n7
+    n8["airgptoss.sh        → gpt-oss-120b (airllm)"]
+    n0 --> n8
+    n9["fable.sh            → fable-coder 35B-A3B (legacy)"]
+    n0 --> n9
+    n10["qwenvision.sh       → Qwen2.5-VL-7B-Instruct"]
+    n0 --> n10
+    n11["HELPERS (no son modelos; sourceados por el entry point)"]
+    root --> n11
+    n12["_common.sh          colorize y utilidades"]
+    n11 --> n12
+    n13["_gptoss_common.sh   args compartidos de gptoss_{low,medium,high}"]
+    n11 --> n13
+    n14["00-utils.sh, 01-env.sh"]
+    n11 --> n14
+    n15["20-compile-llama.sh, 21-download-models.sh"]
+    n11 --> n15
+    n16["README.md (este archivo)"]
+    root --> n16
+    n17["fired/                                ← modelos legacy, NO usar"]
+    root --> n17
+    n18["fable.sh                          (Fable Coder 35B-A3B, retirado)"]
+    n17 --> n18
+    n19["qwopus.sh                         (Qwopus 35B-A3B, retirado)"]
+    n17 --> n19
+    n20["muse.sh                           (Muse Glimmer 30B MoE, retirado)"]
+    n17 --> n20
+    n21["nemotron.sh                       (Nemotron 3.5 Lightning 30B-A3B, retirado)"]
+    n17 --> n21
 ```
 
 ## Modelo selection (v5.0)
