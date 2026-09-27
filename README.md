@@ -109,18 +109,16 @@ ropero stop all       # ambos slots
 
 ## Arquitectura — dual-slot
 
-```
-┌──────────────────────────┐     ┌──────────────────────────┐
-│  GPU :9999               │     │  CPU :9998               │
-│  (dGPU RTX / Apple GPU)  │     │  (offload total)         │
-│                          │     │                          │
-│  Cualquier modelo:       │     │  Solo gptoss_*:          │
-│    coder (Devstral)      │     │    verifier              │
-│    analyst (Qwen3-Coder) │     │    designer              │
-│    qwen                  │     │                          │
-│    qwenvision            │     │                          │
-│    fable                 │     │                          │
-└──────────────────────────┘     └──────────────────────────┘
+```mermaid
+flowchart LR
+    subgraph GPU["GPU :9999<br/>(dGPU RTX / Apple GPU)"]
+        direction TB
+        GPU_MODELS["Cualquier modelo:<br/>coder (Devstral)<br/>analyst (Qwen3-Coder)<br/>qwen<br/>qwenvision<br/>fable"]
+    end
+    subgraph CPU["CPU :9998<br/>(offload total)"]
+        direction TB
+        CPU_MODELS["Solo gptoss_*:<br/>verifier<br/>designer"]
+    end
 ```
 
 **Reglas**:
