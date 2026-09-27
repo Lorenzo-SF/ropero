@@ -1,2 +1,6 @@
 *.log
 .DS_Store
+
+# Lock files de runtime (vault, cron, procesos efímeros)
+*.lock
+.lock/
