@@ -5,9 +5,10 @@ set -euo pipefail
 # ropero — lanzador simplificado de llama-server con modelos modulares
 # =============================================================================
 # USO:
-#   ropero <modelo> [--background]
-#   ropero list | status | stop <modelo>|all | help
-#   ropero --install   (deps base + dirs, idempotente; compilación llama.cpp en FASE B2)
+#   ropero <modelo> [--background] [--cpu] [--force]
+#   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
+#   ropero --install   (engines uno a uno: llama.cpp, airllm, tensorrt-llm/mlx-lm)
+#   ropero --check     (verifica la instalación, no modifica nada)
 # =============================================================================
 
 # Directorios y binarios
@@ -18,7 +19,19 @@ LLAMA_BIN="${LLAMA_BIN:-llama-server}"
 LLAMA_API_KEY="${LLAMA_API_KEY:-sk-local-dev-key}"
 HOST="${HOST:-0.0.0.0}"
 
-PORT=9999
+# -----------------------------------------------------------------------------
+# Puertos "slot" por defecto (los dos únicos que existían antes de MODEL_PORT).
+#   $PORT     → GPU  :9999
+#   $CPU_PORT → CPU  :9998  (offload forzado a CPU)
+#
+# Cualquier modelo puede además pinear un puerto propio declarando MODEL_PORT
+# en su .sh de ropero.d/. Si lo hace, ESE puerto gana siempre: da igual si se
+# invoca con --cpu o sin él. Sin MODEL_PORT, se aplica la lógica de dos slots
+# de aquí (--cpu → $CPU_PORT, si no → $PORT).
+# Ambos son sobrescribibles por entorno para tests: ROPERO_GPU_PORT / ROPERO_CPU_PORT.
+# -----------------------------------------------------------------------------
+PORT="${ROPERO_GPU_PORT:-9999}"
+CPU_PORT="${ROPERO_CPU_PORT:-9998}"
 
 mkdir -p "$GGUF_DIR" "$LOG_DIR" 2>/dev/null
 
@@ -40,6 +53,19 @@ BLUE_B=$'\033[1;34m'
 CYAN=$'\033[0;36m'
 CYAN_B=$'\033[1;36m'
 GREY=$'\033[0;90m'
+
+# -----------------------------------------------------------------------------
+# Limpieza de los marcadores de "aviso una sola vez" (ver _ropero_warn_once).
+# Se engancha AQUÍ, en el entrypoint, porque es el único punto que se ejecuta
+# siempre en el proceso principal: si se registrara dentro de la función que
+# los crea, quedaría atrapado en el subshell que la llamó primero y no se
+# ejecutaría nunca, dejando ficheros en /tmp.
+# -----------------------------------------------------------------------------
+_ropero_warn_cleanup() {
+    local f="${TMPDIR:-/tmp}/.ropero_warn_$$"
+    rm -f "$f" "$f.born" 2>/dev/null || true
+}
+trap '_ropero_warn_cleanup' EXIT INT TERM
 
 # -----------------------------------------------------------------------------
 # Modo desatendido: override de ropero_ask / ropero_ask_keep
@@ -101,8 +127,10 @@ if [[ "${_ropero_unattended:-0}" == "1" ]]; then
     ropero_ask_keep() { return 1; }
 fi
 
-declare -A MODEL_GGUF MODEL_CTX MODEL_ENGINE MODEL_PATH MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_GPU
+declare -A MODEL_GGUF MODEL_CTX MODEL_ENGINE MODEL_PATH MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_GPU MODEL_PORT
 declare -a MODEL_NAMES=()
+# puerto → script que lo reclamó. Solo para detectar colisiones al cargar.
+declare -A _MODEL_PORT_OWNER=()
 
 for f in "$MODULES_DIR"/*.sh; do
     [[ -f "$f" ]] || continue
@@ -126,6 +154,7 @@ for f in "$MODULES_DIR"/*.sh; do
     MODEL_ENGINE=
     MODEL_PATH=
     MODEL_ALIAS=
+    MODEL_PORT=
     source "$f"
 
     engine="${MODEL_ENGINE:-llama-server}"
@@ -159,9 +188,33 @@ for f in "$MODULES_DIR"/*.sh; do
             ;;
     esac
 
+    # ── MODEL_PORT opcional ────────────────────────────────────────────────
+    # Si el script lo declara, el modelo queda pineado a ese puerto SIEMPRE,
+    # con o sin --cpu (ver _model_port). Es la única forma de tener más de
+    # dos modelos vivos a la vez sin pelear por :9999/:9998.
+    #
+    # Validamos aquí y no en start_model: un puerto mal escrito debe delatar
+    # al culpable al CARGAR (con el nombre del .sh), no 3 comandos después
+    # cuando el modelo ya haOccupado media GPU.
+    if [[ -n "${MODEL_PORT:-}" ]]; then
+        if ! [[ "$MODEL_PORT" =~ ^[0-9]+$ ]] || (( MODEL_PORT < 1 || MODEL_PORT > 65535 )); then
+            echo "WARN: $f define MODEL_PORT='$MODEL_PORT' inválido (entero 1-65535); se ignora y se usará el slot por defecto" >&2
+            MODEL_PORT=
+        elif [[ "$MODEL_PORT" == "$PORT" || "$MODEL_PORT" == "$CPU_PORT" ]]; then
+            echo "WARN: $f define MODEL_PORT=$MODEL_PORT, que ya es uno de los slots por defecto (:$PORT GPU / :$CPU_PORT CPU); se ignora" >&2
+            MODEL_PORT=
+        elif [[ -n "${_MODEL_PORT_OWNER[$MODEL_PORT]:-}" ]]; then
+            echo "WARN: $f define MODEL_PORT=$MODEL_PORT, ya reclamado por '${_MODEL_PORT_OWNER[$MODEL_PORT]}'; se ignora (solo uno puede vivir en ese puerto)" >&2
+            MODEL_PORT=
+        else
+            _MODEL_PORT_OWNER["$MODEL_PORT"]="$bn"
+        fi
+    fi
+
     MODEL_NAMES+=("$alias_name")
     MODEL_GGUF["$alias_name"]="${MODEL_GGUF:-}"
     MODEL_CTX["$alias_name"]="${MODEL_CTX:-}"
+    MODEL_PORT["$alias_name"]="${MODEL_PORT:-}"
     MODEL_ALIAS["$alias_name"]="$bn"  # guardar nombre original para mostrarlo
 
     # Si el script define un alias público (MODEL_ALIAS), registrarlo como
@@ -181,6 +234,7 @@ for f in "$MODULES_DIR"/*.sh; do
             MODEL_GGUF["$public_alias"]="${MODEL_GGUF:-}"
             MODEL_CTX["$public_alias"]="${MODEL_CTX:-}"
             MODEL_ENGINE["$public_alias"]="$engine"
+            MODEL_PORT["$public_alias"]="${MODEL_PORT:-}"
             # Key de redirección: si $model coincide con el alias público,
             # start_model lo manda al script físico (alias_name).
             MODEL_ALIAS_TARGET["$public_alias"]="$alias_name"
@@ -200,6 +254,161 @@ get_model_on_port() {
         -H "Authorization: Bearer $LLAMA_API_KEY" \
         "http://127.0.0.1:$1/v1/models" 2>/dev/null \
         | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
+}
+
+# -----------------------------------------------------------------------------
+# Puertos: registro, resolución y etiquetado.
+#
+# Hay TRES fuentes de puertos, en este orden de precedencia:
+#
+#   1. MODEL_PORT declarado en el .sh del modelo  → gana SIEMPRE
+#      (da igual --cpu o no: el puerto está pineado, el offload no se mueve).
+#      Es lo que permite tener N modelos vivos a la vez en lugar de 2.
+#   2. --cpu                                        → $CPU_PORT (:9998)
+#   3. resto                                       → $PORT (:9999)
+#
+# `ropero status` lista TODOS los puertos conocidos, no solo los dos slots:
+# los dos por defecto + los pineados por los scripts. Así se ve de un vistazo
+# qué está configurado y qué está encendido.
+# -----------------------------------------------------------------------------
+
+# _model_port <model_key> → puerto pineado por el modelo, o 1 si no lo tiene.
+# Acepta también el env por modelo (ROPERO_<MODELO>_PORT), igual que
+# ROPERO_<MODELO>_CTX. Silencioso si no hay puerto fijo: devuelve 1.
+_model_port() {
+    local mk="$1"
+    local env_name="ROPERO_$(printf '%s' "$mk" | tr '[:lower:]' '[:upper:]')_PORT"
+    local env_val="${!env_name:-}"
+    local p="${MODEL_PORT[$mk]:-}"
+
+    # El env manda sobre el script, pero SOLO si es válido. Un typo en el env
+    # (ROPERO_EMBED_PORT=abc, o el 9990 que se te pasó sin querer) no puede
+    # dejar al modelo sin puerto: si el override es inservible se avisa y se
+    # cae al valor del .sh, que es lo que el autor del script pidió.
+    if [[ -n "$env_val" ]]; then
+        if _ropero_valid_port "$env_val"; then
+            p="$env_val"
+        elif _ropero_warn_once "port_$env_name"; then
+            # 0 = primera vez en este comando: avisamos.
+            echo "AVISO: $env_name='$env_val' no es un puerto válido (entero 1-65535); se usa el del script" >&2
+        fi
+    fi
+
+    if _ropero_valid_port "$p"; then
+        printf '%s' "$p"
+        return 0
+    fi
+    return 1
+}
+
+# _ropero_valid_port <valor> → 0 si es un puerto TCP usable.
+_ropero_valid_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 ))
+}
+
+# _ropero_warn_once <clave> → 0 la primera vez que se llama en el comando, 1 las
+# siguientes.
+#
+# Por qué un fichero y no una variable: _model_port se llama desde
+# ropero_managed_ports y ropero_port_label, que se usan en process substitution
+# (`while read; do ... done < <(ropero_managed_ports)`). Cada uno corre en un
+# SUBSHELL, así que un flag en variable se perdería y el aviso se repetiría
+# tantas veces como modelos y puertos se recorren. El fichero se borra con el
+# trap del entrypoint (ver _ropero_warn_cleanup, enganchado arriba del todo).
+_ropero_warn_once() {
+    # Un ÚNICO fichero por proceso, con una línea por clave ya avisada. Uno por
+    # clave no vale: alCleanup correría en el subshell que lo creó, no en el
+    # proceso principal, y se quedarían ficheros en /tmp para siempre.
+    local f="${TMPDIR:-/tmp}/.ropero_warn_$$"
+    local key="$1"
+    if [[ -f "$f" ]] && grep -qxF -- "$key" "$f" 2>/dev/null; then
+        return 1
+    fi
+    printf '%s\n' "$key" >>"$f" 2>/dev/null || return 1
+    return 0
+}
+
+# ropero_managed_ports → todos los puertos que ropero conoce, ordenados y sin
+# duplicados: los dos slots por defecto + los pineados por cada modelo.
+# Es la lista canónica: la usan status (tabla), stop all y stop <modelo>.
+ropero_managed_ports() {
+    local -a ports=("$PORT" "$CPU_PORT")
+    local mk p
+    if declare -p MODEL_PORT >/dev/null 2>&1; then
+        for mk in "${!MODEL_PORT[@]}"; do
+            if p=$(_model_port "$mk"); then
+                ports+=("$p")
+            fi
+        done
+    fi
+    printf '%s\n' "${ports[@]}" | sort -n -u
+}
+
+# ropero_port_label <port> → nombre "humano" de quien vive en ese puerto.
+# Se usa como columna SLOT del status. Para puertos pineados, el nombre del
+# modelo (alias si lo tiene); para los slots, "dGPU"/"CPU"; para puertos
+# configurados en env que no corresponden a ningún script, "env".
+ropero_port_label() {
+    local port="$1"
+    if [[ "$port" == "$PORT" ]]; then
+        printf 'dGPU'
+        return 0
+    fi
+    if [[ "$port" == "$CPU_PORT" ]]; then
+        printf 'CPU'
+        return 0
+    fi
+    local -a names=()
+    local mk p human
+    for mk in "${!MODEL_PORT[@]}"; do
+        if p=$(_model_port "$mk") && [[ "$p" == "$port" ]]; then
+            # Descartar la key de alias duplicada: mismo puerto, mismo
+            # modelo físico. Nos quedamos con el nombre físico del script.
+            [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" ]] && continue
+            human="${MODEL_ALIAS[$mk]:-$mk}"
+            names+=("$human")
+        fi
+    done
+    if [[ ${#names[@]} -gt 0 ]]; then
+        printf '%s' "${names[*]}"
+        return 0
+    fi
+    printf 'env'
+}
+
+# _collect_slots → rellena ROPERO_SLOT_ROWS con tuplas planas de 7 campos
+# (slot, port, state, model, pid, uptime, engine) para TODOS los puertos
+# gestionados, y ROPERO_SLOT_BUSY con cuántos están encendidos.
+#
+# Extracción única de propósito: antes cmd_status y _render_status_compact
+# tenían cada una su propio bucle sobre "$PORT" + "${ROPERO_CPU_PORT:-9998}",
+# así que cualquier puerto pineado se caía de los dos a la vez (y el render de
+# alaja y el artesanal podían discrepar).
+ROPERO_SLOT_ROWS=()
+ROPERO_SLOT_BUSY=0
+_collect_slots() {
+    ROPERO_SLOT_ROWS=()
+    ROPERO_SLOT_BUSY=0
+    local _p _slot model pid uptime bin_name engine
+    while read -r _p; do
+        [[ -n "$_p" ]] || continue
+        _slot=$(ropero_port_label "$_p")
+        if port_listening "$_p"; then
+            model=$(get_model_on_port "$_p" 2>/dev/null || echo "?")
+            pid=$(get_pid_for_port "$_p")
+            uptime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || echo "?")
+            bin_name=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
+            case "$bin_name" in
+                *airllm*) engine="airllm" ;;
+                *trtllm*) engine="tensorrt-llm" ;;
+                *)        engine="llama-server" ;;
+            esac
+            ROPERO_SLOT_ROWS+=("$_slot" "$_p" "ON" "$model" "$pid" "$uptime" "$engine")
+            ROPERO_SLOT_BUSY=$((ROPERO_SLOT_BUSY + 1))
+        else
+            ROPERO_SLOT_ROWS+=("$_slot" "$_p" "OFF" "-" "-" "-" "-")
+        fi
+    done < <(ropero_managed_ports)
 }
 
 # -----------------------------------------------------------------------------
@@ -430,29 +639,10 @@ _render_status_compact() {
     gpu_ghz=$(_get_gpu_ghz);    vram_mb=$(_get_vram_used_mb)
     gpu_temp=$(_get_gpu_temp);  gpu_fan=$(_get_gpu_fan_rpm)
 
-    # Recoger estado de slots (dGPU :9999 + CPU :9998). Mismo patrón que
-    # cmd_status pero devuelve tuplas planas (slot,port,state,model,pid,
-    # uptime,engine) para iterar fácil.
-    local -a _slot=()
-    for _p in "$PORT" "${ROPERO_CPU_PORT:-9998}"; do
-        local slot="dGPU"
-        (( _p != PORT )) && slot="CPU "
-        if port_listening "$_p"; then
-            local model pid uptime bin_name engine
-            model=$(get_model_on_port "$_p" 2>/dev/null || echo "?")
-            pid=$(get_pid_for_port "$_p")
-            uptime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || echo "?")
-            bin_name=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
-            case "$bin_name" in
-                *airllm*) engine="airllm" ;;
-                *trtllm*) engine="tensorrt-llm" ;;
-                *)        engine="llama-server" ;;
-            esac
-            _slot+=("$slot" "$_p" "ON" "$model" "$pid" "$uptime" "$engine")
-        else
-            _slot+=("$slot" "$_p" "OFF" "-" "-" "-" "-")
-        fi
-    done
+    # Estado de TODOS los puertos gestionados (los dos slots por defecto +
+    # los pineados por los scripts vía MODEL_PORT). Extracción compartida con
+    # cmd_status: una sola fuente para los dos renders.
+    _collect_slots
 
     # ── Cabecera ──────────────────────────────────────────────────────────
     printf "${BOLD}${CYAN_B}─── ROPERO STATUS ───${NC}  ${DIM}%s${NC}\n" "$(date +%H:%M:%S)"
@@ -467,37 +657,42 @@ _render_status_compact() {
         "$gpu_ghz" "$vram_mb" "$gpu_temp" "$gpu_fan"
     echo
 
-    # ── Slots (tabla padded) ──────────────────────────────────────────────
-    # Cabecera + separador dim. Anchos: SLOT=5, PUERTO=7, ESTADO=6,
-    # MODELO=20 (con elipsis si >20), PID=7, UPTIME=8, ENGINE=15.
-    printf "  ${YEL_B}%-5s %-7s %-6s %-20s %-7s %-8s %-15s${NC}\n" \
-        "SLOT" "PUERTO" "ESTADO" "MODELO" "PID" "UPTIME" "ENGINE"
-    printf "  ${DIM}%-5s %-7s %-6s %-20s %-7s %-8s %-15s${NC}\n" \
-        "─────" "───────" "──────" "────────────────────" "───────" "────────" "───────────────"
+    # ── Puertos (tabla padded) ────────────────────────────────────────────
+    # Cabecera + separador dim. Anchos: SLOT=9, PUERTO=6, ESTADO=6,
+    # MODELO=22 (con elipsis si >22), PID=7, UPTIME=8, ENGINE=15.
+    # SLOT lleva el dueño del puerto: "dGPU"/"CPU" para los slots por defecto,
+    # el nombre del modelo para los puertos pineados (MODEL_PORT).
+    printf "  ${YEL_B}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
+        "SLOT" "PORT" "ESTADO" "MODELO" "PID" "UPTIME" "ENGINE"
+    printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
+        "─────────" "──────" "──────" "──────────────────────" "───────" "────────" "───────────────"
 
     # Filas
     local i=0
-    while (( i < ${#_slot[@]} )); do
-        local slot="${_slot[$((i+0))]}"
-        local port="${_slot[$((i+1))]}"
-        local state="${_slot[$((i+2))]}"
-        local model="${_slot[$((i+3))]}"
-        local pid="${_slot[$((i+4))]}"
-        local uptime="${_slot[$((i+5))]}"
-        local engine="${_slot[$((i+6))]}"
+    while (( i < ${#ROPERO_SLOT_ROWS[@]} )); do
+        local slot="${ROPERO_SLOT_ROWS[$((i+0))]}"
+        local port="${ROPERO_SLOT_ROWS[$((i+1))]}"
+        local state="${ROPERO_SLOT_ROWS[$((i+2))]}"
+        local model="${ROPERO_SLOT_ROWS[$((i+3))]}"
+        local pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
+        local uptime="${ROPERO_SLOT_ROWS[$((i+5))]}"
+        local engine="${ROPERO_SLOT_ROWS[$((i+6))]}"
 
-        # Truncar modelo largo (preserva ancho de columna)
-        if (( ${#model} > 20 )); then
-            model="${model:0:17}..."
+        # Truncar slot/modelo largos (preservan ancho de columna)
+        if (( ${#slot} > 9 )); then
+            slot="${slot:0:6}..."
+        fi
+        if (( ${#model} > 22 )); then
+            model="${model:0:19}..."
         fi
 
         # Estado coloreado. Color FUERA del campo %-Ns para que el pad no
         # cuente bytes ANSI.
         if [[ "$state" == "ON" ]]; then
-            printf "  %-5s %-7s ${GRN_B}%-6s${NC} %-20s %-7s %-8s %-15s\n" \
+            printf "  %-9s %-6s ${GRN_B}%-6s${NC} %-22s %-7s %-8s %-15s\n" \
                 "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
         else
-            printf "  ${DIM}%-5s %-7s %-6s %-20s %-7s %-8s %-15s${NC}\n" \
+            printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
                 "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
         fi
         i=$((i+7))
@@ -507,15 +702,37 @@ _render_status_compact() {
 # -----------------------------------------------------------------------------
 # Comandos
 # -----------------------------------------------------------------------------
+
+# _port_legend → listado "puerto → dueño" para `ropero help`. Se genera desde
+# la misma lista que usa status/stop, para que nunca se desincronicen.
+_port_legend() {
+    local _p
+    while read -r _p; do
+        if [[ -n "$_p" ]]; then
+            printf '  %-7s %s\n' ":$_p" "$(ropero_port_label "$_p")"
+        fi
+    done < <(ropero_managed_ports)
+}
+
 cmd_list() {
     echo "Modelos disponibles:"
     for m in "${MODEL_NAMES[@]}"; do
         local engine="${MODEL_ENGINE[$m]:-llama-server}"
         local alias="${MODEL_ALIAS[$m]:-$m}"
-        if [[ "$engine" == "llama-server" ]]; then
-            printf "  %-12s ctx=%-22s gguf=%s engine=%s\n" "$alias" "${MODEL_CTX[$m]}" "${MODEL_GGUF[$m]}" "$engine"
+        # Puerto: el pineado (MODEL_PORT) si el modelo lo declara; si no,
+        # "slot :$PORT / :$CPU_PORT" según se invoque con o sin --cpu.
+        local port_desc _p
+        if _p=$(_model_port "$m"); then
+            port_desc="port :$_p (fijado)"
         else
-            printf "  %-12s ctx=%-22s path=%s engine=%s\n" "$alias" "${MODEL_CTX[$m]}" "${MODEL_PATH[$m]:-N/A}" "$engine"
+            port_desc="slot :$PORT / :$CPU_PORT"
+        fi
+        if [[ "$engine" == "llama-server" ]]; then
+            printf "  %-12s %-21s ctx=%-10s engine=%-14s gguf=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_GGUF[$m]}"
+        else
+            printf "  %-12s %-21s ctx=%-10s engine=%-14s path=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_PATH[$m]:-N/A}"
         fi
     done
 }
@@ -565,80 +782,84 @@ cmd_status() {
         esac
     done
 
-    # Cabecera con métricas de sistema (CPU/GHz, RAM, GPU/GHz, VRAM, temps, fans).
-    # Si una herramienta falta (nvidia-smi en Mac, sensors sin instalar...) el
-    # helper correspondiente devuelve "?" y el status sigue mostrándose.
-    local cpu_ghz ram_mb cpu_temp cpu_fan gpu_ghz vram_mb gpu_temp gpu_fan
-    cpu_ghz=$(_get_cpu_ghz)
-    ram_mb=$(_get_ram_used_mb)
-    cpu_temp=$(_get_cpu_temp)
-    cpu_fan=$(_get_cpu_fan_rpm)
-    gpu_ghz=$(_get_gpu_ghz)
-    vram_mb=$(_get_vram_used_mb)
-    gpu_temp=$(_get_gpu_temp)
-    gpu_fan=$(_get_gpu_fan_rpm)
+    # Estado de TODOS los puertos gestionados (los dos slots por defecto +
+    # los pineados por MODEL_PORT). Extracción compartida con el render
+    # artesanal, así alaja y --craft no pueden discrepar.
+    _collect_slots
 
-    # Estado de cada slot (dGPU :9999 + CPU :9998). Bug previo: solo se
-    # iteraba $PORT=9999, dejando el slot --cpu invisible.
-    local _busy=0
-    local -a _row_args=()
-    for _p in "$PORT" "${ROPERO_CPU_PORT:-9998}"; do
-        local slot="dGPU"
-        (( _p != PORT )) && slot="CPU "
-        if port_listening "$_p"; then
-            local model pid uptime bin_name engine
-            model=$(get_model_on_port "$_p" 2>/dev/null || echo "?")
-            pid=$(get_pid_for_port "$_p")
-            uptime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || echo "?")
-            bin_name=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
-            if [[ "$bin_name" == *"airllm"* ]]; then
-                engine="airllm"
-            elif [[ "$bin_name" == *"trtllm"* ]]; then
-                engine="tensorrt-llm"
-            else
-                engine="llama-server"
-            fi
-            _row_args+=("--rows" "ON;:$_p ($slot);$model;$pid;$uptime;$bin_name;$engine")
-            _busy=$((_busy+1))
-        else
-            _row_args+=("--rows" "OFF;:$_p ($slot);-;-;-;-;-")
-        fi
-    done
-
-    # Empaquetar los --rows en CSV para inyectar como args del comando table
-    # de alaja. Se hace en bash (sin jq) porque los valores son simples:
-    # números, palabras y "?". bin_name puede traer guiones pero no comillas.
-    local _rows_csv="" i=0
-    while (( i < ${#_row_args[@]} )); do
-        [[ -n "$_rows_csv" ]] && _rows_csv+=","
-        _rows_csv+="\"${_row_args[$i]}\",\"${_row_args[$((i+1))]}\""
-        i=$((i+2))
-    done
-
+    # El CSV de filas y las métricas de sistema solo hacen falta para el
+    # render de alaja: si vamos al artesanal, las calcula él mismo (y así no
+    # pagamos dos veces los ~10 forks de nvidia-smi/free/sensors).
+    #
     # ── Decisión de render ─────────────────────────────────────────────────
-    # Prioridad: --craft > alaja disponible > fallback artesanal.
+    # Prioridad: --craft > alaja disponible y funcional > fallback artesanal.
     # El fallback artesanal (_render_status_compact) es ahora el MISMO layout
     # que se va a replicar con alaja, así que el diseño queda coherente
     # aunque alaja no esté instalado (SSH sin TUI, etc.).
+    #
+    # ¿Por qué el chequeo de salida vacía? Porque `alaja` puede estar PRESENTE
+    # y ser inútil: un release a medio compilar deja un binario de 0 bytes, que
+    # sale con 0 y no imprime nada. Con el `|| true` de antes, `ropero status`
+    # se quedaba mudo sin decir nada — mientras `ropero status --watch` (que
+    # fuerza el render artesanal) sí enseñaba la tabla. Bug real, no teórico.
+    # Ahora: si alaja no dice absolutamente nada, caemos al artesanal.
+    local _rendered=0
     if (( force_craft == 0 )) && command -v alaja >/dev/null 2>&1; then
-        local _data
-        # Separators alaja: llevan GHz/MB/temp/fan. %% escapa el % literal
-        # del fan de GPU (printf format).
+        # Métricas de sistema para los separators. Si una herramienta falta
+        # (nvidia-smi en Mac, sensors sin instalar...) el helper devuelve "?"
+        # y el status sigue mostrándose.
+        local cpu_ghz ram_mb cpu_temp cpu_fan gpu_ghz vram_mb gpu_temp gpu_fan
+        cpu_ghz=$(_get_cpu_ghz)
+        ram_mb=$(_get_ram_used_mb)
+        cpu_temp=$(_get_cpu_temp)
+        cpu_fan=$(_get_cpu_fan_rpm)
+        gpu_ghz=$(_get_gpu_ghz)
+        vram_mb=$(_get_vram_used_mb)
+        gpu_temp=$(_get_gpu_temp)
+        gpu_fan=$(_get_gpu_fan_rpm)
+
+        # Empaquetar las filas como CSV para inyectar como args del comando
+        # table de alaja. En bash (sin jq) porque los valores son simples:
+        # números, palabras y "?". bin_name puede traer guiones pero no comillas.
+        local _rows_csv="" i=0
+        while (( i < ${#ROPERO_SLOT_ROWS[@]} )); do
+            local _slot="${ROPERO_SLOT_ROWS[$((i+0))]}"
+            local _p="${ROPERO_SLOT_ROWS[$((i+1))]}"
+            local _state="${ROPERO_SLOT_ROWS[$((i+2))]}"
+            local _model="${ROPERO_SLOT_ROWS[$((i+3))]}"
+            local _pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
+            local _uptime="${ROPERO_SLOT_ROWS[$((i+5))]}"
+            local _engine="${ROPERO_SLOT_ROWS[$((i+6))]}"
+            local _bin="$_engine"
+            if [[ "$_state" == "ON" ]]; then
+                _bin=$(ps -p "$_pid" -o comm= 2>/dev/null | tr -d ' ' || echo "?")
+            fi
+            [[ -n "$_rows_csv" ]] && _rows_csv+=","
+            _rows_csv+="\"--rows\",\"$_state;:$_p ($_slot);$_model;$_pid;$_uptime;$_bin;$_engine\""
+            i=$((i+7))
+        done
+
+        local _data _out
         _data=$(printf '{"actions":[
             {"order": "3", "command":"separator","args":["--text","CPU: %s GHz · %s MB · %s°C · fan %s RPM","--color","theme:gradient_1"]},
             {"order": "2", "command":"separator","args":["--text","GPU: %s GHz · %s MB · %s°C · fan %s RPM","--color","theme:gradient_3"]},
-            {"order": "1", "command":"table","args":["--border","rounded","---border-color","hex:#ffca00","--headers","Estado;Puerto;Modelo;PID;Uptime;bin;engine"%s]}
+            {"order": "1", "command":"table","args":["--border","rounded","---border-color","hex:#ffca00","--headers","Slot;Puerto;Estado;Modelo;PID;Uptime;bin;engine"%s]}
         ]}' \
             "$cpu_ghz" "$ram_mb" "$cpu_temp" "$cpu_fan" \
             "$gpu_ghz" "$vram_mb" "$gpu_temp" "$gpu_fan" \
             "${_rows_csv:+,$_rows_csv}")
-        alaja action --data "$_data" || true
-    else
+        _out=$(alaja action --data "$_data" 2>&1 || true)
+        if [[ -n "${_out//[[:space:]]/}" ]]; then
+            printf '%s\n' "$_out"
+            _rendered=1
+        fi
+    fi
+    if (( _rendered == 0 )); then
         # Render artesanal (mismo layout que se replicará con alaja). Lo
         # usa también --craft para iterar el diseño sin alaja de por medio.
         _render_status_compact
     fi
-    return $(( _busy == 0 ? 1 : 0 ))
+    return $(( ROPERO_SLOT_BUSY == 0 ? 1 : 0 ))
 }
 
 cmd_status_watch() {
@@ -716,19 +937,20 @@ cmd_stop() {
     }
 
     if [[ "$target" == "all" ]]; then
-        # Mata en AMBOS puertos: :9999 (dGPU) y :9998 (CPU). Si están vacíos,
-        # no falla — solo imprime que no había nada. IMPORTANTE: por puerto,
-        # no por nombre de proceso (no usar pkill -f global: mataría el slot
-        # paralelo).
-        local _stopped=0
-        for _p in "$PORT" "${ROPERO_CPU_PORT:-9998}"; do
+        # Mata en TODOS los puertos gestionados: :9999 (dGPU), :9998 (CPU) y
+        # los pineados por MODEL_PORT. Si están vacíos, no falla — solo
+        # imprime que no había nada. IMPORTANTE: por puerto, no por nombre de
+        # proceso (no usar pkill -f global: mataría los slots paralelos).
+        local _stopped=0 _p
+        while read -r _p; do
+            [[ -n "$_p" ]] || continue
             if _stop_port "$_p"; then
                 _stopped=$((_stopped+1))
                 echo "  ✓ :$_p detenido"
             fi
-        done
+        done < <(ropero_managed_ports)
         if (( _stopped == 0 )); then
-            echo "Nada que detener (ambos slots inactivos)"
+            echo "Nada que detener (ningún puerto gestionado activo)"
         else
             echo "Detenidos $_stopped slot(s)"
         fi
@@ -736,9 +958,11 @@ cmd_stop() {
     fi
 
     # Stop <modelo>: buscar en qué puerto está ese modelo y matar SOLO ese.
-    # Itera ambos slots (dGPU :9999 + CPU :9998). El primero que matchea gana.
+    # Itera todos los puertos gestionados, no solo los dos slots: un modelo
+    # pineado con MODEL_PORT podría estar en :9990 y nos lo saltaríamos.
     local _p
-    for _p in "$PORT" "${ROPERO_CPU_PORT:-9998}"; do
+    while read -r _p; do
+        [[ -n "$_p" ]] || continue
         if port_listening "$_p"; then
             local current
             current=$(get_model_on_port "$_p" 2>/dev/null || echo "")
@@ -748,9 +972,18 @@ cmd_stop() {
                 return 0
             fi
         fi
-    done
-    echo "✗ Modelo '$target' no encontrado en ningún puerto gestionado (:$PORT o :${ROPERO_CPU_PORT:-9998})" >&2
-    echo "  Activos ahora: $(ropero status 2>&1 | grep -E '^\s+OK' | sed 's/^[[:space:]]*//' | paste -sd '|' -)" >&2
+    done < <(ropero_managed_ports)
+
+    local _ports_human
+    _ports_human=$(ropero_managed_ports | paste -sd ' ' -)
+    echo "✗ Modelo '$target' no encontrado en ningún puerto gestionado ($_ports_human)" >&2
+    local _activos
+    _activos=$(ropero status 2>&1 | grep -E '\bON\b' | sed 's/^[[:space:]]*//' | paste -sd '|' - || true)
+    if [[ -n "$_activos" ]]; then
+        echo "  Activos ahora: ${_activos}" >&2
+    else
+        echo "  Activos ahora: ninguno" >&2
+    fi
     return 1
 }
 
@@ -761,34 +994,53 @@ ${BLUE}ropero${NC} — lanzador simplificado de LLM engines
 USO:
   ropero <modelo> [--background] [--cpu] [--force]
   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
+  ropero --install | ropero --check
+
+PUERTOS:
+$(_port_legend)
+  Por defecto hay 2 slots: $PORT = dGPU y $CPU_PORT = CPU (--cpu).
+  Un modelo puede pinear uno propio con MODEL_PORT en su .sh de ropero.d/;
+  entonces usa ESE puerto siempre, con o sin --cpu. Eso es lo que permite
+  tener más de 2 modelos vivos a la vez. Se ve en \`ropero list\` y en
+  \`ropero status\`, que listan todos los puertos configurados (encendidos o no).
 
 MODELOS:
 $(for m in "${MODEL_NAMES[@]}"; do echo "  ${MODEL_ALIAS[$m]:-$m}"; done)
 
 OPCIONES:
   --background  lanzar en segundo plano (log en $LOG_DIR)
-  --cpu         arrancar en :9998 sin GPU (offload CPU completo, todos los cores)
-  --force       si el slot destino está ocupado por OTRO modelo, matarlo y
-                arrancar el solicitado. Solo afecta al slot destino (no toca
-                el otro). Pensado para uso interactivo; en automatización
+  --cpu         arrancar sin GPU (offload CPU completo, todos los cores). Usa el
+                slot CPU :$CPU_PORT, salvo que el modelo tenga MODEL_PORT fijado,
+                en cuyo caso se respeta el puerto del modelo.
+  --force       si el puerto destino está ocupado por OTRO modelo, matarlo y
+                arrancar el solicitado. Solo afecta a ese puerto (no toca los
+                demás). Pensado para uso interactivo; en automatización
                 prefiere \`ropero stop X && ropero Y\` para ser explícito.
   --craft       (status) forzar el render artesanal (echo/printf/ANSI) en
                 lugar de delegar en alaja. Útil para iterar el layout del
                 status antes de replicarlo con \`alaja action\`. Si alaja no
-                está instalado, se usa el render artesanal igualmente.
+                está instalado —o está roto y no imprime nada— se usa el
+                render artesanal igualmente.
   --watch [ms]  (status) refresco continuo del status cada N ms (default 1000).
                 Acepta valor opcional: \`ropero status --watch\` o
                 \`ropero status --watch 500\`. Usa SIEMPRE el render
                 artesanal (alaja no soporta bien bordes selectivos/colores
                 de fila, y es más lento — incompatible con un loop).
-                Anti-parpadeo: cursor oculto (\`tput civis\`) + \`tput clear\`
-                antes de cada render. Ctrl+C para salir (restaura el cursor
-                vía trap).
+                Ctrl+C para salir.
+
+SUBCOMANDOS:
+  --install   instala/rehace los engines uno a uno (llama.cpp, airllm, y
+              tensorrt-llm en cachy o mlx-lm en macos). Cada uno enlaza SUS
+              ejecutables en ~/.local/bin al terminar, no al final el install.
+              Idempotente: si un engine ya está, pregunta si rehacerlo.
+  --check     verifica la instalación (enlaces, modelos, llama-server) sin
+              tocar nada. Exit 1 si algo falta.
 
 NOTAS:
-  - Overrides por modelo (sin editar .sh): ROPERO_<MODELO>_CTX, _NGL, _TEMP, etc.
-    (el nombre del modelo se normaliza: guiones → guiones bajos)
+  - Overrides por modelo (sin editar .sh): ROPERO_<MODELO>_CTX, _NGL, _TEMP,
+    _PORT, etc. (el nombre del modelo se normaliza: guiones → guiones bajos)
     ej: ROPERO_MULTIMODAL_ANALYZER_CTX=32768 ropero multimodal-analyzer
+         ROPERO_EMBED_PORT=9991 ropero embed
 EOF
 }
 
@@ -823,12 +1075,33 @@ start_model() {
     local engine="${MODEL_ENGINE[$model_key]:-llama-server}"
     local port="$PORT"
 
-    # Override --cpu: puerto 9998 desde el principio (afecta al check de
-    # "puerto ocupado" MÁS ABAJO y al cmd). Debe ir AQUÍ, antes del check,
-    # no en el case engine. Bug previo (commit 2b00b5c lo dejó tarde y
-    # el check usaba 9999).
-    if (( cpu_only == 1 )) && [[ "$engine" == "llama-server" ]]; then
-        port=9998
+    # Selección de puerto, en este orden:
+    #   1. MODEL_PORT del script → gana SIEMPRE (con o sin --cpu).
+    #   2. --cpu                 → $CPU_PORT (offload CPU).
+    #   3. resto                 → $PORT (dGPU).
+    #
+    # Tiene que resolverse AQUÍ, antes del check de "puerto ocupado" de más
+    # abajo: si se calculara después, el check miraría 9999 mientras el
+    # servidor nace en 9990 (bug previo con --cpu, commit 2b00b5c).
+    #
+    # MODEL_PORT gana sobre --cpu a propósito: quien escribe el .sh ha dicho
+    # "este modelo vive AQUÍ". --cpu sigue significando offload a CPU (los
+    # flags --n-gpu-layers 0 / --threads N se añaden igualmente más abajo);
+    # lo que --cpu ya no puede es mover el modelo de puerto.
+    local pinned_port=""
+    if pinned_port=$(_model_port "$model_key"); then
+        port="$pinned_port"
+    elif (( cpu_only == 1 )) && [[ "$engine" == "llama-server" ]]; then
+        port="$CPU_PORT"
+    fi
+
+    # Razón del puerto, para los mensajes de arranque: evita el "por qué este
+    # modelo no ha salido en 9999" que obligaba a abrir el .sh.
+    local port_reason="slot por defecto"
+    if [[ -n "$pinned_port" ]]; then
+        port_reason="puerto fijado por MODEL_PORT"
+    elif (( cpu_only == 1 )); then
+        port_reason="slot CPU (--cpu)"
     fi
 
     # Preflight ANTES de tocar el puerto: validar que el arranque puede
@@ -925,7 +1198,7 @@ start_model() {
             # Si no --cpu en Cachy: CUDA0 (la RTX 5080) por defecto; no hace
             # falta flag extra (llama-server auto-detecta CUDA).
             #
-            # NOTA: port=9998 se asignó ANTES del check de "puerto ocupado"
+            # NOTA: el puerto se resolvió ANTES del check de "puerto ocupado"
             # (justo después de detectar engine), no aquí. Bug previo.
             # ----------------------------------------------------------------
             if (( cpu_only != 1 )); then
@@ -960,6 +1233,8 @@ start_model() {
             )
 
             # Override --cpu al FINAL del cmd para ganar sobre args del modelo.
+            # Ojo: --cpu mueve el DISPOSITIVO, no el puerto. Si el modelo tiene
+            # MODEL_PORT, se queda en su puerto y solo se apaga la GPU.
             if (( cpu_only == 1 )); then
                 local _nproc
                 _nproc=$(command -v nproc >/dev/null && nproc || echo 8)
@@ -967,7 +1242,7 @@ start_model() {
                 cmd+=("--threads" "$_nproc")
             fi
 
-            alaja separator "Arrancando $model en :$port (bin: $LLAMA_BIN, ctx: $ctx_size)" --color
+            alaja separator "Arrancando $model en :$port (bin: $LLAMA_BIN, ctx: $ctx_size, $port_reason)" --color
             if (( background == 0 )); then
                 "${cmd[@]}" 2>&1 | colorize "$model"
                 return $?
@@ -1032,7 +1307,7 @@ start_model() {
                 cmd=("$bin_name" --model "$model_path" --host "$HOST" --port "$port")
             fi
 
-            echo "Arrancando $model en :$port (engine: $engine)"
+            echo "Arrancando $model en :$port (engine: $engine, $port_reason)"
             if (( background == 0 )); then
                 "${cmd[@]}" 2>&1 | colorize "$model"
                 return $?
@@ -1064,144 +1339,159 @@ start_model() {
 
 # -----------------------------------------------------------------------------
 # --install autónomo e idempotente (spec migración + Cambios por proyecto)
+# 0. symlinks del propio ropero (entrypoint + ropero.d), siempre.
 # 1. paquetes (cachy/paru, macos/brew; termux: nada)
-# 2. llama.cpp: pregunta (necesario para ropero); si ~/llama.cpp existe pregunta
-#    borrar+reclonar+compilar. Flags CMAKE EXACTOS del spec (NO modificar).
-# 3. AirLLM + TensorRT-LLM (este último solo cachy), best-effort con prompt.
-# 4. modelos via download con check individual (omitir si existen).
-# 5. symlinks en $BIN_DIR (típicamente ~/.local/bin).
+# 2. engines, uno a uno y en este orden, cada uno con su propio linkeado al
+#    terminar (ver ropero_install_*):
+#      llama.cpp   → todos los OS salvo termux. Flags CMAKE EXACTOS del spec.
+#      airllm      → todos los OS salvo termux.
+#      tensorrt-llm → solo cachy/arch.   mlx-lm → solo macos.
+# 3. modelos via download con check individual (omitir si existen).
+#
+# NO hay un paso final de "enlazar todos los backends": ver ropero_link_*.
 # -----------------------------------------------------------------------------
 _ropero_nproc() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
 
 # -----------------------------------------------------------------------------
-# ropero_link — crea/actualiza los symlinks de ropero en $BIN_DIR.
-# Idempotente. Lo llaman cmd_install (al final) y se puede llamar suelto.
+# Symlinks: uno por engine, ejecutados al terminar la instalación de ESE engine.
 # -----------------------------------------------------------------------------
-ropero_link() {
-    mkdir -p "$BIN_DIR" 2>/dev/null || true
+# Nada de "al final del install, enlázalo todo". El fallo era ese: instalar (o
+# saltarse) un engine no tenía relación con qué symlinks aparecían, porque al
+# final se recorría una lista de TODOS los backends. Consecuencias: instalar
+# solo llama.cpp tocaba también los ejecutables de tensorrt, y si esa carpeta
+# resultaba ser un venv, se linkeaba entera — metiendo su `python3` en
+# ~/.local/bin por delante del shim de asdf para todo el sistema.
+#
+# Ahora la regla es 1:1 — quien instala, linkea. Si quieres tocar solo los
+# enlaces de un engine, se reejecuta solo la fase de ese engine.
+#
+# ── Por qué hace falta enlazar ────────────────────────────────────────────────
+# ropero no es el único binario que acaba en ~/.local/bin. Si los ejecutables
+# de un backend no están ahí, solo se alcanzan por la ruta larga completa, o
+# —peor— a través de un shim de asdf que se rompe cuando se reinstala el
+# Python que los instaló. Que es lo que pasaba con mlx_lm: su ejecutable real
+# vive en ~/.asdf/installs/python/3.11.0/bin/ y el único enlace en el PATH
+# era el shim.
+# -----------------------------------------------------------------------------
 
-    # Entry point
-    ln -sfn "$SCRIPT_DIR/ropero" "$BIN_DIR/ropero" 2>/dev/null || true
-    ropero_ok "  → $BIN_DIR/ropero"
-
-    # ropero.d (necesario para que ropero encuentre sus módulos cuando se
-    # invoca desde el symlink de $BIN_DIR)
-    if [[ -d "$SCRIPT_DIR/ropero.d" ]]; then
-        ln -sfn "$SCRIPT_DIR/ropero.d" "$BIN_DIR/ropero.d" 2>/dev/null || true
-        ropero_ok "  → $BIN_DIR/ropero.d"
+# -----------------------------------------------------------------------------
+# _ropero_link_dir <nombre> <dir> [prefijo]
+# Núcleo compartido por los engines con binarios en un directorio fijo.
+# Enlaza en $BIN_DIR todo lo ejecutable de <dir> que empiece por <prefijo>
+# (prefijo vacío = todos). Idempotente.
+# -----------------------------------------------------------------------------
+_ropero_link_dir() {
+    local name="$1" dir="$2" prefix="${3:-}"
+    if [[ ! -d "$dir" ]]; then
+        ropero_info "  · $name: nada que enlazar ($dir no existe)"
+        return 0
     fi
 
-    ropero_link_backends
-}
+    local b exe link other linked=0 shadowed="" failed="" pending=""
+    for b in "$dir"/*; do
+        [[ -e "$b" ]] || continue
+        exe="$(basename "$b")"
 
-# -----------------------------------------------------------------------------
-# ropero_link_backends — deja los ejecutables de los backends en $BIN_DIR.
-# -----------------------------------------------------------------------------
-# ropero no es el único binario que acaba en ~/.local/bin: también lo son los
-# ejecutables de los backends que compila o instala. Si no se linkean, sólo son
-# alcanzables por la ruta larga completa, o —peor— sólo a través de un shim de
-# asdf que se rompe cuando se reinstala el Python que los instaló.
-#
-# Que es lo que pasaba con mlx_lm: su ejecutable real vive en
-# ~/.asdf/installs/python/3.11.0/bin/ y el único enlace en el PATH era el shim
-# de asdf. Si esa versión de Python se reinstala, el shim apunta al vacío.
-#
-# Tabla declarativa: "backend|directorio de binarios". Añadir un backend es una
-# línea, no un `if` más.
-#
-# ── Por qué airllm y mlx_lm NO están en la tabla ────────────────────────────
-# Se instalan como console scripts de Python, y no siempre caen en el mismo
-# sitio: `uv pip install --system` y `pip install` apuntan a directorios
-# distintos según qué Python esté activo, y ropero los instala por `uv` o por
-# `pip` según lo que encuentre. Su ruta se resuelve en runtime, no se puede
-# escribir de antemano. Por eso van aparte, en ropero_link_pythons.
-# -----------------------------------------------------------------------------
-ROPERO_BACKEND_BINS=(
-    "llama.cpp|$LLAMA_DIR/build/bin"
-    "tensorrt-llm|$HOME/.venv-tensorrt/bin"
-)
-
-ropero_link_backends() {
-    local entry name dir b target count=0
-    for entry in "${ROPERO_BACKEND_BINS[@]}"; do
-        name="${entry%%|*}"
-        dir="${entry##*|}"
-
-        if [[ ! -d "$dir" ]]; then
-            ropero_info "  · $name: sin compilar/instalado aún ($dir no existe)"
+        # ── Filtros, en este orden ────────────────────────────────────────
+        # 1. El prefijo. Es lo que impide que un venv se linkee entero: solo
+        #    pasan los `trtllm-*`. Vacío (llama.cpp) = todos, que es lo
+        #    correcto: build/bin es un directorio de herramientas compiladas,
+        #    no un entorno de Python.
+        if [[ -n "$prefix" && "$exe" != "$prefix"* ]]; then
             continue
         fi
+        # 2. Scripts de activación de venv, que no son programas. Red de
+        #    seguridad para cuando alguien meta un venv con prefijo vacío:
+        #    `activate` y compañía nunca deben salir a $BIN_DIR.
+        case "$exe" in
+            activate|activate.*|Activate.ps1|deactivate.*|activate_this.py) continue ;;
+        esac
 
-        local linked=0 shadowed=""
-        for b in "$dir"/*; do
-            [[ -x "$b" && ! -d "$b" ]] || continue
-            local exe link
-            exe="$(basename "$b")"
-            link="$BIN_DIR/$exe"
-
-            # Si el mismo nombre ya resuelve a OTRO binario en el PATH, al
-            # enlazar el nuestro lo vamos a tapar. No es siempre un problema
-            # (casi siempre es lo que se quiere: que gane el que gestiona
-            # ropero), pero puede ser un downgrade sin que nadie se entere.
-            # Se comprueba ANTES y se avisa después, con las dos versiones.
-            local other
-            other=$(command -v "$exe" 2>/dev/null)
-            if [[ -n "$other" && "$other" != "$link" ]]; then
-                shadowed="$shadowed $exe"
+        # Sin +x: no terminó de linkearse, o es un directorio. Un build en
+        # curso deja ficheros de 0 bytes sin permiso de ejecución; si nos
+        # pillan a mitad, mejor avisar que fingir que no existen.
+        if [[ ! -x "$b" || -d "$b" ]]; then
+            if [[ -f "$b" && ! -x "$b" ]]; then
+                pending="$pending $exe"
             fi
+            continue
+        fi
+        link="$BIN_DIR/$exe"
 
-            # `ln -sfn` falla si el destino es un symlink colgado, y aquí es
-            # el caso normal: el destino apunta a un binario que se ha
-            # recompilado. Se borra antes.
-            if [[ -L "$link" ]]; then rm -f "$link"; fi
-            # Nunca pisar un fichero real que no sea nuestro symlink.
-            if [[ -e "$link" && ! -L "$link" ]]; then continue; fi
-            ln -sfn "$b" "$link" 2>/dev/null && linked=$((linked + 1))
-        done
-
-        if [[ -n "$shadowed" ]]; then
-            ropero_warn "  ! $name tapa estos binarios que ya estaban en el PATH:$shadowed"
-            ropero_info "    Ahora gana el de ropero. Si el otro era más nuevo,"
-            ropero_info "    quítalo del PATH o quítale el symlink a mano."
+        # Si el mismo nombre ya resuelve a OTRO binario en el PATH, al enlazar
+        # el nuestro lo vamos a tapar. No siempre es un problema (casi siempre
+        # es lo que se quiere: que gane el que gestiona ropero), pero puede ser
+        # un downgrade sin que nadie se entere. Se comprueba ANTES y se avisa
+        # después, con las dos versiones.
+        #
+        # El `|| true` NO es decorativo: `command -v` sale con 1 cuando el
+        # binario NO está en el PATH, que es justo el caso normal la primera
+        # vez que se linkea (es lo que estamos haciendo aquí). Sin él, el
+        # `set -e` del entrypoint abortaba en el primer ejecutable, y como no
+        # había tubería ni `||` que lo absorbiera, `ropero --install` moría en
+        # silencio sin linkear NADA: compilaba bien y luego no aparecía ni
+        # `llama-server` en $BIN_DIR.
+        other=$(command -v "$exe" 2>/dev/null || true)
+        if [[ -n "$other" && "$other" != "$link" ]]; then
+            shadowed="$shadowed $exe"
         fi
 
-        count=$((count + linked))
-        if (( linked > 0 )); then
-            ropero_ok "  → $name: $linked ejecutables en $BIN_DIR"
+        # `ln -sfn` falla si el destino es un symlink colgado, y aquí es el
+        # caso normal: el destino apunta a un binario que se ha recompilado.
+        # Se borra antes.
+        if [[ -L "$link" ]]; then rm -f "$link"; fi
+        # Nunca pisar un fichero real que no sea nuestro symlink.
+        if [[ -e "$link" && ! -L "$link" ]]; then
+            failed="$failed $exe (ya hay un fichero real)"
+            continue
+        fi
+        if ln -sfn "$b" "$link" 2>/dev/null; then
+            linked=$((linked + 1))
         else
-            ropero_info "  · $name: nada que linkear en $dir"
+            # Antes el error se comía con 2>/dev/null + &&: un enlace fallido se
+            # contaba como si no hubiera pasado y nadie se enteraba.
+            failed="$failed $exe"
         fi
     done
 
-    ropero_link_pythons
+    if [[ -n "$pending" ]]; then
+        ropero_warn "  ! $name: aún no ejecutables (build en curso?):$pending"
+    fi
+    if [[ -n "$failed" ]]; then
+        ropero_err "  ✗ $name: no se pudieron enlazar:$failed"
+    fi
+    if [[ -n "$shadowed" ]]; then
+        ropero_warn "  ! $name tapa estos binarios que ya estaban en el PATH:$shadowed"
+        ropero_info "    Ahora gana el de ropero. Si el otro era más nuevo,"
+        ropero_info "    quítalo del PATH o quítale el symlink a mano."
+    fi
+
+    if (( linked > 0 )); then
+        ropero_ok "  → $name: $linked ejecutables en $BIN_DIR"
+    else
+        ropero_info "  · $name: nada que enlazar en $dir"
+    fi
     return 0
 }
 
 # -----------------------------------------------------------------------------
-# ropero_link_pythons — enlaza los console scripts de airllm y mlx_lm.
+# _ropero_python_script_dirs — directorios de console scripts de TODOS los
+# Pythons que podrían haber instalado un paquete: el activo y los de asdf.
+# Que se instale con uno y se ejecute con otro es la norma, no la excepción.
 # -----------------------------------------------------------------------------
-# Busca en el directorio de scripts del Python que esté activo, y en los de
-# todos los Pythons de asdf (puede que se instalara con uno distinto al actual).
-# Se prueban todos, y se enlaza lo que se encuentre: si ya está en $BIN_DIR, no
-# se toca.
-# -----------------------------------------------------------------------------
-ropero_link_pythons() {
-    local wanted=("airllm" "airllm-server" "mlx_lm" "mlx_lm.generate" "mlx_lm.chat")
+_ropero_python_script_dirs() {
     local -a dirs=()
-    local py d b exe target linked=0
+    local py d base
 
-    # ── OJO: sin `cmd && cmd` como última cosa de una iteración ─────────────
-    # ropero corre con `set -e`. Con la forma `[[ test ]] && hacer`, si el test
-    # falla la iteración devuelve 1 y el script ABORTA en silencio, sin mensaje:
-    # es decir, airllm se quedaba sin linkear y nadie se enteraba de por qué.
-    # Por eso aquí todo es un `if` explícito. Same motivo que en el resto del
-    # fichero, pero aquí el síntoma era invisible.
+    # OJO: sin `test && hacer` como última cosa de una iteración. ropero corre
+    # con `set -e`: con esa forma, si el test falla la iteración devuelve 1 y
+    # el script ABORTA en silencio. Por eso aquí todo es un `if` explícito.
 
     # 1. Python activo
     if command -v python3 >/dev/null 2>&1; then
-        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null)
+        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null || true)
         if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
-        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts","posix_user"))' 2>/dev/null)
+        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts","posix_user"))' 2>/dev/null || true)
         if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
     fi
 
@@ -1209,17 +1499,13 @@ ropero_link_pythons() {
     #
     # Ni `python*` ni `python3*` valen como filtro: en el mismo directorio
     # están `python-config` y `python3-config`, que no son intérpretes y no
-    # responden a `-c`. Bajo `set -e` eso abortaba el enlace en silencio, y
-    # airllm se quedaba sin linkear sin que hubiera ningún mensaje.
-    #
-    # Se valida el NOMBRE: un intérprete es `python3` o `python3.N`. Cualquier
-    # otra cosa se ignora.
-    local base
+    # responden a `-c`. Bajo `set -e` eso abortaba el enlace en silencio.
+    # Se valida el NOMBRE: un intérprete es `python3` o `python3.N`.
     for py in "$HOME"/.asdf/installs/python/*/bin/python3*; do
         base="$(basename "$py")"
-        if [[ ! "$base" =~ ^python3(\.[0-9]+)?$ ]]; then continue; fi
+        if ! [[ "$base" =~ ^python3(\.[0-9]+)?$ ]]; then continue; fi
         if [[ ! -x "$py" ]]; then continue; fi
-        d=$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null)
+        d=$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null || true)
         if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
     done
 
@@ -1233,24 +1519,91 @@ ropero_link_pythons() {
         if (( seen == 0 )); then uniq+=("$d"); fi
     done
 
-    for d in "${uniq[@]}"; do
-        for exe in "${wanted[@]}"; do
+    printf '%s\n' "${uniq[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_link_python <nombre> <console script> [<console script> ...]
+# Enlaza console scripts de Python por nombre exacto. Al revés que
+# _ropero_link_dir: aquí NO se enlaza "lo que haya", se enlaza lo que se pide.
+# Un paquete de Python trae dependencias que se instalan como ejecutables
+# (ninja, hf, wheel…); si se linkeara el directorio entero, esos ganarian al
+# resto del sistema. Buscar por nombre hace imposible ese fallo.
+# -----------------------------------------------------------------------------
+_ropero_link_python() {
+    local name="$1"; shift
+    local d exe target linked=0
+
+    while read -r d; do
+        if [[ -z "$d" ]]; then continue; fi
+        for exe in "$@"; do
             if [[ ! -x "$d/$exe" ]]; then continue; fi
             target="$BIN_DIR/$exe"
-            # Si ya está (o hay algo ahí), no se toca: puede ser un
-            # symlink previo, y no es asunto de ropero decidir cuál gana.
+            # Si ya está (o hay algo ahí), no se toca: puede ser un symlink
+            # previo, y no es asunto de ropero decidir cuál gana.
             if [[ -e "$target" || -L "$target" ]]; then continue; fi
             if ln -sfn "$d/$exe" "$target" 2>/dev/null; then
                 linked=$((linked + 1))
                 ropero_ok "  → $exe → $d/$exe"
             fi
         done
-    done
+    done < <(_ropero_python_script_dirs)
 
     if (( linked == 0 )); then
-        ropero_info "  · airllm/mlx_lm: no instalados, o ya alcanzables en el PATH"
+        ropero_info "  · $name: no instalados, o ya alcanzables en el PATH"
     fi
     return 0
+}
+
+# -----------------------------------------------------------------------------
+# Linkeados por engine. Cada uno existe solo, y lo llama únicamente la fase de
+# instalación de su engine.
+# -----------------------------------------------------------------------------
+
+# ropero_link_self — el entrypoint y su ropero.d. No es un engine: se hace
+# siempre, al principio del install, para que ropero quede utilizable desde el
+# principio aunque el usuario decline todos los engines.
+ropero_link_self() {
+    mkdir -p "$BIN_DIR" 2>/dev/null || true
+    ln -sfn "$SCRIPT_DIR/ropero" "$BIN_DIR/ropero" 2>/dev/null || true
+    ropero_ok "  → $BIN_DIR/ropero"
+    if [[ -d "$SCRIPT_DIR/ropero.d" ]]; then
+        ln -sfn "$SCRIPT_DIR/ropero.d" "$BIN_DIR/ropero.d" 2>/dev/null || true
+        ropero_ok "  → $BIN_DIR/ropero.d"
+    fi
+    return 0
+}
+
+# ropero_link_llamacpp — todos los ejecutables de build/bin.
+#
+# Sin prefijo: build/bin es un directorio de herramientas compiladas, no un
+# entorno de Python. Sus 23 binarios (llama-server, llama-cli, llama-bench…)
+# son justo lo que tiene que quedar alcanzable.
+ropero_link_llamacpp() {
+    _ropero_link_dir "llama.cpp" "$LLAMA_DIR/build/bin" ""
+}
+
+# ropero_link_tensorrt — SOLO los trtllm-*.
+#
+# $HOME/.venv-tensorrt/bin es un VENV. Dentro hay 69 ejecutables, pero solo 7
+# son de tensorrt; los otros 62 son activadores y scripts de Python que el venv
+# trae de paso, incluidos `python`/`python3`/`pydoc.bat`. Linkear el venv
+# entero en ~/.local/bin mete su python POR DELANTE del shim de asdf en el
+# PATH de todo el sistema: a partir de ahí, cualquier `python3` ejecuta el
+# venv de tensorrt. Se probó y se revirtió a mano (62 enlaces borrados); el
+# prefijo es lo que impide que el install vuelva a hacerlo.
+ropero_link_tensorrt() {
+    _ropero_link_dir "tensorrt-llm" "$HOME/.venv-tensorrt/bin" "trtllm-"
+}
+
+# ropero_link_airllm — console scripts por nombre.
+ropero_link_airllm() {
+    _ropero_link_python "airllm" airllm airllm-server airllm-generate
+}
+
+# ropero_link_mlx — console scripts por nombre.
+ropero_link_mlx() {
+    _ropero_link_python "mlx_lm" mlx_lm mlx_lm.generate mlx_lm.chat
 }
 
 # -----------------------------------------------------------------------------
@@ -1280,34 +1633,53 @@ cmd_check() {
         rc=1
     fi
 
-    # Backends: sus ejecutables tienen que estar en $BIN_DIR, no sólo en su
-    # ruta larga. Si esto falla, la solución es `ropero --install`, no buscar
-    # el binario a mano.
-    local entry bname bdir b found miss=0
-    for entry in "${ROPERO_BACKEND_BINS[@]}"; do
-        bname="${entry%%|*}"
-        bdir="${entry##*|}"
-        if [[ ! -d "$bdir" ]]; then
-            ropero_info "$bname: no compilado/instalado ($bdir no existe)"
-            continue
-        fi
+    # Engines: sus ejecutables tienen que estar en $BIN_DIR, no sólo en su ruta
+    # larga. Si esto falla, la solución es `ropero --install`, no buscar el
+    # binario a mano. Cada engine se comprueba por separado, con SU regla de
+    # qué debe estar enlazado (llama.cpp: todo; tensorrt: solo trtllm-*).
+    local bdir b found
+    bdir="$LLAMA_DIR/build/bin"
+    if [[ ! -d "$bdir" ]]; then
+        ropero_info "llama.cpp: no compilado ($bdir no existe)"
+    else
         found=0
-        # OJO: el nombre del backend y el del ejecutable son variables
+        # OJO: el nombre del engine y el del ejecutable son variables
         # DISTINTAS. Con una sola, el mensaje sale con el nombre del último
-        # ejecutable recorrido en vez de con el del backend.
+        # ejecutable recorrido en vez de con el del engine.
         for b in "$bdir"/*; do
             [[ -x "$b" && ! -d "$b" ]] || continue
             local link="$BIN_DIR/$(basename "$b")"
             [[ -L "$link" && -x "$link" ]] && found=$((found + 1))
         done
         if (( found > 0 )); then
-            ropero_ok "$bname: $found ejecutables en $BIN_DIR"
+            ropero_ok "llama.cpp: $found ejecutables en $BIN_DIR"
         else
-            ropero_err "$bname: $bdir tiene ejecutables pero ninguno linkeado en $BIN_DIR"
+            ropero_err "llama.cpp: $bdir tiene ejecutables pero ninguno linkeado en $BIN_DIR"
             ropero_info "  solución: ropero --install"
             rc=1
         fi
-    done
+    fi
+
+    # tensorrt-llm: solo los trtllm-*, igual que hace ropero_link_tensorrt.
+    bdir="$HOME/.venv-tensorrt/bin"
+    if [[ ! -d "$bdir" ]]; then
+        ropero_info "tensorrt-llm: no instalado ($bdir no existe)"
+    else
+        found=0
+        for b in "$bdir"/trtllm-*; do
+            [[ -x "$b" && ! -d "$b" ]] || continue
+            local link="$BIN_DIR/$(basename "$b")"
+            [[ -L "$link" && -x "$link" ]] && found=$((found + 1))
+        done
+        if (( found > 0 )); then
+            ropero_ok "tensorrt-llm: $found ejecutables en $BIN_DIR"
+        elif [[ -x "$bdir/trtllm-serve" ]]; then
+            ropero_warn "tensorrt-llm: instalado pero sin enlaces en $BIN_DIR"
+            ropero_info "  no es bloqueante: ropero lo invoca por su ruta larga"
+        else
+            ropero_info "tensorrt-llm: venv presente, sin trtllm-serve"
+        fi
+    fi
 
     # airllm / mlx_lm: sólo se avisa. Que no esté el symlink no significa que no
     # funcionen: si están en el PATH de otra forma, ropero los encuentra igual.
@@ -1320,7 +1692,7 @@ cmd_check() {
         fi
     done
     if (( missing > 0 )); then
-        ropero_warn "$missing backend(s) de Python no instalados (airllm/mlx_lm)"
+        ropero_warn "$missing engine(s) de Python no instalados (airllm/mlx_lm)"
         ropero_info "  es opcional: sólo hacen falta para los safetensors que"
         ropero_info "  llama.cpp no puede cargar"
     fi
@@ -1367,11 +1739,184 @@ cmd_check() {
     return $rc
 }
 
+# -----------------------------------------------------------------------------
+# Instalación por engine. Cada función hace TRES cosas, en este orden:
+#   1. preguntar si se quiere (o rehacerlo si ya estaba),
+#   2. instalar / compilar,
+#   3. y enlazar SUS ejecutables en $BIN_DIR.
+#
+# El punto 3 va dentro de la función a propósito. Antes los enlaces eran un
+# paso aparte al final del install que recorría todos los backends: instalar
+# solo llama.cpp acababa tocando también los ejecutables de tensorrt, y
+# saltarse un engine no evitaba sus enlaces. Con un engine roto, no había
+# forma de relanzar solo su fase — de ahí el `--link` que se ha quitado: no
+# arreglaba el diseño, lo tapaba.
+#
+# Todas devuelven 0 aunque fallen: que un engine opcional no se caiga no
+# impide instalar los demás.
+# -----------------------------------------------------------------------------
+
+# ── llama.cpp (todos los OS salvo termux) ────────────────────────────────────
+ropero_install_llama() {
+    local os="$1"
+
+    if [[ -x "$LLAMA_DIR/build/bin/llama-server" ]]; then
+        ropero_ok "llama.cpp ya compilado en $LLAMA_DIR"
+        if ! ropero_ask "¿Recompilarlo desde cero (borra $LLAMA_DIR, ~40 min)?"; then
+            ropero_link_llamacpp
+            return 0
+        fi
+    elif ! ropero_ask "Descargar y compilar llama.cpp (imprescindible para ropero)?"; then
+        ropero_warn "llama.cpp omitido — ropero solo funcionará con binarios ya presentes"
+        return 0
+    fi
+
+    if [[ -d "$LLAMA_DIR/.git" ]]; then
+        ropero_info "borrando $LLAMA_DIR para recompilar limpio"
+        rm -rf "$LLAMA_DIR"
+    elif [[ -d "$LLAMA_DIR" ]]; then
+        ropero_warn "$LLAMA_DIR existe pero no es un clon de git; lo sustituyo"
+        rm -rf "$LLAMA_DIR"
+    fi
+
+    if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+        ropero_err "clone de llama.cpp falló"
+        return 0
+    fi
+    if [[ ! -d "$LLAMA_DIR/.git" ]]; then
+        ropero_err "llama.cpp no parece un repo git tras el clone"
+        return 0
+    fi
+
+    if ! ropero_compile_llama "$os"; then
+        ropero_err "compilación de llama.cpp falló; no hay symlinks que crear"
+        return 0
+    fi
+
+    # Solo ahora que los binarios existen de verdad.
+    ropero_link_llamacpp
+    return 0
+}
+
+# ── AirLLM (todos los OS salvo termux) ───────────────────────────────────────
+ropero_install_airllm() {
+    if command -v airllm >/dev/null 2>&1; then
+        ropero_ok "airllm ya instalado"
+        if ! ropero_ask "¿Reinstalarlo?"; then
+            ropero_link_airllm
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar AirLLM (modelos safetensors que no caben en VRAM)?"; then
+        return 0
+    fi
+
+    local rc=1
+    # uv primero: es lo que hay en cachy y evita ensuciar el Python de asdf.
+    if command -v uv &>/dev/null; then
+        ropero_info "instalando airllm via uv (puede tardar)..."
+        uv pip install --system --quiet airllm 2>/dev/null && rc=0
+    fi
+    if (( rc != 0 )) && { command -v pip &>/dev/null || command -v pip3 &>/dev/null; }; then
+        ropero_info "fallback: instalando airllm via pip..."
+        { pip install --quiet airllm 2>/dev/null || pip3 install --quiet airllm 2>/dev/null; } && rc=0
+    fi
+
+    if (( rc == 0 )); then
+        ropero_ok "airllm instalado"
+        ropero_link_airllm
+    else
+        ropero_warn "airllm no instalado (ni uv ni pip han funcionado)"
+        ropero_info "  manual: uv pip install airllm"
+    fi
+    return 0
+}
+
+# ── TensorRT-LLM (solo cachy/arch) ───────────────────────────────────────────
+ropero_install_tensorrt() {
+    local venv="$HOME/.venv-tensorrt"
+
+    if [[ -x "$venv/bin/trtllm-serve" ]]; then
+        ropero_ok "tensorrt-llm ya instalado en $venv"
+        if ! ropero_ask "¿Reinstalarlo (borra el venv, ~30 min)?"; then
+            ropero_link_tensorrt
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar TensorRT-LLM (pesado, ~30 min)?"; then
+        return 0
+    fi
+
+    if ! command -v uv &>/dev/null; then
+        ropero_warn "tensorrt-llm necesita uv; se omite"
+        ropero_info "  manual: pacman -S uv"
+        return 0
+    fi
+
+    # Recrear SIEMPRE: si quedó un venv roto/incompleto de un install anterior,
+    # `uv venv` falla con "A virtual environment already exists".
+    ropero_info "creando venv tensorrt-llm..."
+    rm -rf "$venv"
+    if ! uv venv "$venv" --python 3.12 2>/dev/null; then
+        ropero_warn "uv venv falló (¿borrado manual de $venv?)"
+        return 0
+    fi
+
+    ropero_info "instalando tensorrt-llm (20-40 min)..."
+    if uv pip install --python "$venv/bin/python" --quiet tensorrt-llm 2>/dev/null; then
+        ropero_ok "tensorrt-llm instalado en $venv"
+        # Solo los trtllm-*: el resto del venv no debe tocar el PATH global.
+        ropero_link_tensorrt
+    else
+        ropero_warn "tensorrt-llm falló (puede necesitar CUDA wheels manuales)"
+        ropero_info "  ver https://nvidia.github.io/TensorRT-LLM/"
+    fi
+    return 0
+}
+
+# ── mlx_lm (solo macOS / Apple Silicon) ──────────────────────────────────────
+ropero_install_mlx() {
+    if command -v mlx_lm >/dev/null 2>&1; then
+        ropero_ok "mlx-lm ya instalado"
+        if ! ropero_ask "¿Reinstalarlo?"; then
+            ropero_link_mlx
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar mlx-lm (modelos MLX en Apple Silicon)?"; then
+        return 0
+    fi
+
+    local rc=1
+    if command -v uv &>/dev/null; then
+        ropero_info "instalando mlx-lm via uv..."
+        uv pip install --system --quiet mlx-lm 2>/dev/null && rc=0
+    fi
+    if (( rc != 0 )) && { command -v pip &>/dev/null || command -v pip3 &>/dev/null; }; then
+        ropero_info "fallback: instalando mlx-lm via pip..."
+        { pip install --quiet mlx-lm 2>/dev/null || pip3 install --quiet mlx-lm 2>/dev/null; } && rc=0
+    fi
+
+    if (( rc == 0 )); then
+        ropero_ok "mlx-lm instalado"
+        ropero_link_mlx
+    else
+        ropero_warn "mlx-lm no instalado (ni uv ni pip han funcionado)"
+        ropero_info "  manual: uv pip install mlx-lm"
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# cmd_install — orquesta. Cada engine va por su cuenta; el siguiente no depende
+# del anterior.
+# -----------------------------------------------------------------------------
 cmd_install() {
     local os
     os=$(ropero_detect_os 2>/dev/null || echo unknown)
     ropero_info "ropero --install ($os)"
     ropero_env_setup
+
+    # El entrypoint primero: a partir de aquí ropero ya es utilizable, decline
+    # lo que decline el usuario.
+    ropero_link_self
 
     if [[ "$os" == "termux" ]]; then
         ropero_info "termux: sin paquetes nativos, solo dirs"
@@ -1379,7 +1924,7 @@ cmd_install() {
         return 0
     fi
 
-    # 1. paquetes
+    # 1. paquetes del sistema
     if [[ "$os" == "cachy" || "$os" == "arch" ]]; then
         local pkgs=(base-devel git cmake ninja curl ccache gcc14 uv)
         local p
@@ -1397,111 +1942,20 @@ cmd_install() {
         done
     fi
 
-    # 2. llama.cpp (preguntar: necesario para ropero)
-    if ! ropero_ask "Descargar llama.cpp (necesario para ropero)?"; then
-        ropero_info "llama.cpp omitido — ropero funcionará solo con binarios existentes"
-    else
-        if [[ -d "$LLAMA_DIR/.git" ]]; then
-            if ropero_ask_keep "Borrar $LLAMA_DIR y volver a clonar+compilar?"; then
-                rm -rf "$LLAMA_DIR"
-                git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR" || { ropero_err "clone falló"; return 1; }
-            else
-                ropero_info "se conserva $LLAMA_DIR existente"
-            fi
-        elif [[ -d "$LLAMA_DIR" ]]; then
-            if ropero_ask_keep "Borrar $LLAMA_DIR (sin .git) y volver a clonar+compilar?"; then
-                rm -rf "$LLAMA_DIR"
-                git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR" || { ropero_err "clone falló"; return 1; }
-            fi
-        else
-            git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR" || { ropero_err "clone falló"; return 1; }
-        fi
-        if [[ -d "$LLAMA_DIR/.git" && ! -x "$LLAMA_DIR/build/bin/llama-server" ]]; then
-            ropero_compile_llama "$os" || { ropero_err "compilación falló"; return 1; }
-        else
-            ropero_ok "llama-server ya compilado (skip)"
-        fi
-    fi
+    # 2. engines. Cada uno instala lo suyo y linkea lo suyo.
+    ropero_install_llama "$os"
+    ropero_install_airllm
 
-    # 3. AirLLM (best-effort con prompt) — cross-platform: macOS, Linux (cachy/arch), Windows 11 native
-    if ropero_ask "Instalar AirLLM (para modelos safetensors 120B)?"; then
-        # Intenta uv primero (disponible en macOS, Linux, y Windows con uv instalado)
-        if command -v uv &>/dev/null; then
-            ropero_info "  · Instalando airllm via uv (puede tardar)..."
-            if uv pip install --system --quiet airllm 2>/dev/null; then
-                ropero_ok "  · airllm instalado"
-            else
-                # Fallback a pip si uv install falló
-                if command -v pip &>/dev/null || command -v pip3 &>/dev/null; then
-                    ropero_info "  · Fallback: instalando airllm via pip..."
-                    if pip install --quiet airllm 2>/dev/null || pip3 install --quiet airllm 2>/dev/null; then
-                        ropero_ok "  · airllm instalado (via pip)"
-                    else
-                        ropero_warn "  · AirLLM omitido (falló install pip; instálalo manual: pip install airllm)"
-                    fi
-                else
-                    ropero_warn "  · AirLLM omitido (falló install uv; instálalo manual: uv pip install airllm)"
-                fi
-            fi
-        elif command -v pip &>/dev/null || command -v pip3 &>/dev/null; then
-            # No uv, pero pip disponible (ej. Windows native, algunos Linux)
-            ropero_info "  · Instalando airllm via pip..."
-            if pip install --quiet airllm 2>/dev/null || pip3 install --quiet airllm 2>/dev/null; then
-                ropero_ok "  · airllm instalado (via pip)"
-            else
-                ropero_warn "  · AirLLM omitido (falló install pip; instálalo manual: pip install airllm)"
-            fi
-        else
-            ropero_warn "  · AirLLM omitido (ni uv ni pip disponibles; instálalo manual: uv pip install airllm o pip install airllm)"
-        fi
-    fi
-    # 3b. mlx_lm (solo macOS, Apple Silicon + Metal)
-    if [[ "$os" == "macos" ]]; then
-        if ropero_ask "Instalar mlx-lm (modelos MLX en Apple Silicon)?"; then
-            ropero_info "  · Instalando mlx-lm..."
-            if command -v uv &>/dev/null; then
-                if uv pip install --system --quiet mlx-lm 2>/dev/null; then
-                    ropero_ok "  · mlx-lm instalado"
-                else
-                    ropero_warn "  · mlx-lm omitido (falló install)"
-                fi
-            elif command -v pip &>/dev/null || command -v pip3 &>/dev/null; then
-                if pip install --quiet mlx-lm 2>/dev/null || pip3 install --quiet mlx-lm 2>/dev/null; then
-                    ropero_ok "  · mlx-lm instalado (via pip)"
-                else
-                    ropero_warn "  · mlx-lm omitido (falló install)"
-                fi
-            else
-                ropero_warn "  · mlx-lm omitido (ni uv ni pip disponibles)"
-            fi
-        fi
-    fi
     if [[ "$os" == "cachy" || "$os" == "arch" ]]; then
-        if ropero_ask "Instalar TensorRT-LLM (solo Cachy, pesado, ~30 min)?"; then
-            ropero_info "  · Creando venv tensorrt-llm..."
-            local TRT_VENV="$HOME/.venv-tensorrt"
-            # Recrear SIEMPRE: si quedó un venv roto/incompleto de un install
-            # anterior, uv venv falla con "A virtual environment already exists".
-            # rm -rf + venv nuevo es la forma más segura.
-            rm -rf "$TRT_VENV"
-            if uv venv "$TRT_VENV" --python 3.12 2>/dev/null; then
-                ropero_info "  · Instalando tensorrt-llm (puede tardar 20-40 min)..."
-                if uv pip install --python "$TRT_VENV/bin/python" --quiet tensorrt-llm 2>/dev/null; then
-                    ropero_ok "  · tensorrt-llm instalado en $TRT_VENV"
-                else
-                    ropero_warn "  · tensorrt-llm falló (puede requerir CUDA wheels manuales; ver https://nvidia.github.io/TensorRT-LLM/)"
-                fi
-            else
-                ropero_warn "  · uv venv falló (¿ya existe $TRT_VENV corrupto? borrado manual necesario)"
-            fi
-        fi
+        ropero_install_tensorrt
+    fi
+    if [[ "$os" == "macos" ]]; then
+        ropero_install_mlx
     fi
 
-    # 4. modelos LLM por defecto (lógica extraída a 21-download-models.sh)
+    # 3. modelos por defecto (lógica en 21-download-models.sh)
     ropero_download_default_models
 
-    # 5. symlinks en $BIN_DIR (típicamente ~/.local/bin)
-    ropero_link
     ropero_ok "ropero --install OK"
 }
 
@@ -1524,15 +1978,6 @@ main() {
         --check)
             shift || true
             cmd_check "$@"
-            exit $?
-            ;;
-        --link)
-            # Sólo rehace los symlinks. Existe para el caso real de "he
-            # compilado llama.cpp a mano" o "he instalado un backend por mi
-            # cuenta": re-ejecutar --install para eso es absurdo, porque
-            # --install vuelve a preguntar por los modelos y puede volver a
-            # compilar 40 minutos.
-            ropero_link
             exit $?
             ;;
         list)

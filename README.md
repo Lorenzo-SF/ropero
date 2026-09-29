@@ -27,12 +27,23 @@ un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
 
 `--install`:
 
-1. Instala dependencias (pacman/brew según OS).
-2. Clona y compila `llama.cpp` (20-40 min la primera vez, con CUDA/Metal).
-3. Instala `airllm` / `mlx-lm` / `tensorrt-llm` (best-effort, pregunta).
+1. Enlaza el propio ropero (`ropero`, `ropero.d`) en `~/.local/bin`.
+2. Instala dependencias (pacman/brew según OS).
+3. Engines, uno a uno y en este orden — **cada uno enlaza sus ejecutables en
+   `~/.local/bin` en cuanto termina**, no al final del install:
+   - `llama.cpp` (todos los OS salvo termux): clona y compila con CUDA/Metal
+     (20-40 min la primera vez).
+   - `airllm` (todos los OS salvo termux).
+   - `tensorrt-llm` (solo CachyOS/Arch) **o** `mlx-lm` (solo macOS).
 4. Descarga los GGUF por defecto (~50 GB).
-5. Crea symlinks en `~/.local/bin` — **incluidos los ejecutables de los
-   backends**, no sólo los de ropero. Ver más abajo.
+
+Es idempotente: si un engine ya está instalado, pregunta si quieres rehacerlo
+en vez de repetirlo a ciegas. Si reintentas uno, solo se relinkea ese.
+
+Que cada engine.linkee al terminar es lo que evita el fallo de antes: los
+symlinks eran un paso único al final que recorría todos los backends, así que
+instalar solo `llama.cpp` acababa tocando también los ejecutables de
+`tensorrt-llm`. Ver [la tabla de qué se linkea](#cada-engine-linkea-lo-suyo-al-terminar-de-instalarse).
 
 `--check` verifica:
 
@@ -43,46 +54,44 @@ un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
   abajo).
 - `BIN_DIR` en PATH.
 
-### Los ejecutables de los backends también se linkean
+### Cada engine linkea lo suyo al terminar de instalarse
 
-`ropero` no es el único binario que acaba en `~/.local/bin`. También lo son los
-ejecutables de los backends que compila o instala:
+`ropero --install` recorre los engines uno a uno, y **cada uno enlaza sus
+ejecutables en cuanto acaba** — no hay un paso final "enlaza todo":
 
-| Backend | Dónde vive | Qué se linkea |
+| Engine | Dónde vive | Qué se linkea |
 |---|---|---|
 | `llama.cpp` | `~/llama.cpp/build/bin/` | los 23+ (`llama-server`, `llama-cli`, `llama-bench`, `llama-quantize`…) |
-| `tensorrt-llm` | `~/.venv-tensorrt/bin/` | los de su venv (CachyOS) |
+| `tensorrt-llm` | `~/.venv-tensorrt/bin/` | **sólo** los `trtllm-*` (CachyOS) |
 | `airllm` | el `bin` del Python que lo instaló | `airllm`, `airllm-server` |
 | `mlx-lm` | el `bin` del Python que lo instaló | `mlx_lm`, `mlx_lm.generate`, `mlx_lm.chat` |
 
-Para `airllm` y `mlx_lm` la ruta no se puede escribir de antemano: cambian según
-si se instalaron con `uv` o con `pip`, y según qué Python esté activo. Se
-resuelve en runtime: se pregunta a los Pythons de asdf dónde ponen sus
-console scripts.
+La relación es 1:1. Si instalas sólo `llama.cpp`, los enlaces que aparecen son
+los de `llama.cpp`; saltarte un engine no deja ninguno suyo suelto.
 
-**Por qué importa.** `mlx_lm` vivía sólo detrás del shim de asdf. Si esa versión
-de Python se reinstalaba, el shim apuntaba al vacío y `mlx_lm` desaparecía sin
-aviso. Con el symlink, sobrevive al Python.
+**Por qué importa el link.** `mlx_lm` vivía sólo detrás del shim de asdf. Si esa
+versión de Python se reinstalaba, el shim apuntaba al vacío y `mlx_lm`
+desaparecía sin aviso. Con el symlink, sobrevive al Python.
+
+**Por qué `tensorrt-llm` sólo linkea `trtllm-*`.** `~/.venv-tensorrt/bin` es un
+venv, no un directorio de herramientas: dentro hay 69 ejecutables, pero sólo 7
+son de tensorrt. Los otros 62 son activadores y scripts de Python que el venv
+trae de paso — incluidos `python`, `python3` y `pydoc.bat`. Enlazarlos pondría el
+`python3` del venv por delante del shim de asdf en el PATH de todo el sistema, y
+a partir de ahí cualquier `python3` ejecutaría el venv de tensorrt.
+
+**AirLLM y mlx-lm se buscan por nombre.** La ruta no se puede escribir de
+antemano: cambia según si se instalaron con `uv` o con `pip`, y según qué Python
+esté activo. Se resuelve en runtime (preguntando a los Pythons de asdf dónde
+ponen sus console scripts) y se enlaza **por nombre exacto**, nunca "lo que haya
+en el directorio": un paquete de Python trae dependencias que se instalan como
+ejecutables (`ninja`, `hf`, `wheel`…) y linkearlas ganaría al resto del sistema.
 
 **Aviso de shadowing.** Al linkear, ropero **tapa** cualquier binario del mismo
 nombre que ya estuviera en el PATH. Casi siempre es lo que se quiere, pero
 puede ser un downgrade sin que se note: si tienes un `llama-server` de Homebrew
-más nuevo que el que compila ropero, el de ropero pasa a ganar. `--link` avisa
+más nuevo que el que compila ropero, el de ropero pasa a ganar. El install avisa
 cuando lo detecta, y `--check` imprime la versión para que el cambio sea visible.
-
-### `ropero --link`
-
-Sólo rehace los symlinks. Existe para dos casos reales:
-
-- has compilado `llama.cpp` a mano y quieres los symlinks sin re-ejecutar el
-  `--install` entero (que vuelve a preguntar por los modelos);
-- has instalado un backend por tu cuenta y quieres que ropero lo registre.
-
-```bash
-ropero --link
-```
-
-Idempotente y rápido: no compila, no descarga, no pregunta.
 
 ---
 
@@ -139,8 +148,14 @@ ropero status --watch 500  # refresco cada 500ms
 Muestra:
 
 - CPU/GPU GHz, RAM/VRAM, temp, fan RPM.
-- Slots activos (`:9999` GPU, `:9998` CPU).
+- **Todos los puertos configurados**, no solo los activos: los dos slots por
+  defecto (`:9999` GPU, `:9998` CPU) más los que hayan pineado los modelos con
+  `MODEL_PORT`. Cada fila indica si está `ON` u `OFF`, su modelo, PID, uptime y
+  engine. La columna `SLOT` dice quién vive en ese puerto.
 - Modelo, PID, uptime, engine.
+
+`status` delega en `alaja` para el render, y cae al render artesanal si no está
+o si no imprime nada (p. ej. un binario de `alaja` a medio compilar).
 
 ### Parar
 
