@@ -134,7 +134,24 @@ ropero verifier --cpu --background
 
 # Forzar si el slot destino está ocupado por otro
 ropero coder --force --background
+
+# Puerto puntual, sin editar el .sh del modelo
+ropero embed --port 9995 --background
 ```
+
+### `--port` vs `MODEL_PORT`
+
+| | Cuándo | Dónde se define | Sobrevive al comando |
+|---|---|---|---|
+| `MODEL_PORT` | el modelo SIEMPRE vive en ese puerto | en su `.sh` de `ropero.d/` | sí |
+| `--port N` | solo este arranque | en la línea de comandos | no |
+
+Precedencia: `--port` > `MODEL_PORT` > `--cpu` (`:9998`) > `:9999` (GPU).
+
+Los puertos de `--port` se recuerdan en `~/.logs/ropero/ad-hoc-ports`, para que
+`ropero status` los liste (columna `SLOT` = `ad-hoc`) y `ropero stop <modelo>` los
+encuentre. Se borran del registro al parar el modelo, así que no se acumulan.
+
 
 ### Estado
 
@@ -185,6 +202,8 @@ flowchart LR
 - GPU y CPU pueden coexistir con modelos distintos.
 - `gptoss_*` es el único que va bien en CPU. Los demás van a GPU.
 - `--cpu` arranca en `:9998` con todos los layers en CPU.
+- `--port N` arranca en `N`, saltándose `MODEL_PORT` y los slots. No edita el
+  `.sh`: el siguiente arranque vuelve al puerto de siempre.
 - `--force` mata el slot destino si está ocupado por otro modelo (no toca el otro slot).
 
 ---

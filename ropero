@@ -5,7 +5,7 @@ set -euo pipefail
 # ropero — lanzador simplificado de llama-server con modelos modulares
 # =============================================================================
 # USO:
-#   ropero <modelo> [--background] [--cpu] [--force]
+#   ropero <modelo> [--background] [--cpu] [--force] [--port N]
 #   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
 #   ropero --install   (engines uno a uno: llama.cpp, airllm, tensorrt-llm/mlx-lm)
 #   ropero --check     (verifica la instalación, no modifica nada)
@@ -328,18 +328,58 @@ _ropero_warn_once() {
     return 0
 }
 
+# -----------------------------------------------------------------------------
+# Registro de puertos "ad-hoc" (los de `--port`).
+#
+# `ropero status` y `ropero stop` son OTROS procesos: no pueden saber que hace
+# un rato lanzaste `ropero embed --port 9995`. Sin este registro el modelo
+# arrancaba en 9995 pero su fila no salía en el status y `ropero stop embed` no
+# lo encontraba — vivo, invisible e imparable salvo a mano.
+#
+# Se añade al arrancar y se quita al parar (cmd_stop), no por antigüedad: así no
+# hay carrera con un arranque en curso, que tarda segundos en escuchar.
+# ---------------------------------------------------------------------------
+_ropero_adhoc_file() { printf '%s/ad-hoc-ports' "${LOG_DIR:-$HOME/.logs/ropero}"; }
+
+_ropero_adhoc_add() {
+    local port="$1" f
+    _ropero_valid_port "$port" || return 0
+    f=$(_ropero_adhoc_file)
+    mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+    if grep -qxF -- "$port" "$f" 2>/dev/null; then return 0; fi
+    printf '%s\n' "$port" >>"$f" 2>/dev/null || true
+}
+
+_ropero_adhoc_del() {
+    local port="$1" f
+    f=$(_ropero_adhoc_file)
+    [[ -f "$f" ]] || return 0
+    grep -vxF -- "$port" "$f" >"$f.tmp" 2>/dev/null || true
+    mv -f "$f.tmp" "$f" 2>/dev/null || rm -f "$f.tmp" 2>/dev/null || true
+}
+
 # ropero_managed_ports → todos los puertos que ropero conoce, ordenados y sin
-# duplicados: los dos slots por defecto + los pineados por cada modelo.
+# duplicados: los dos slots por defecto + los pineados por cada modelo + los
+# ad-hoc de --port.
 # Es la lista canónica: la usan status (tabla), stop all y stop <modelo>.
 ropero_managed_ports() {
     local -a ports=("$PORT" "$CPU_PORT")
-    local mk p
+    local mk p extra f
     if declare -p MODEL_PORT >/dev/null 2>&1; then
         for mk in "${!MODEL_PORT[@]}"; do
             if p=$(_model_port "$mk"); then
                 ports+=("$p")
             fi
         done
+    fi
+    f=$(_ropero_adhoc_file)
+    if [[ -f "$f" ]]; then
+        while read -r extra; do
+            [[ -n "$extra" ]] || continue
+            if _ropero_valid_port "$extra"; then
+                ports+=("$extra")
+            fi
+        done <"$f"
     fi
     printf '%s\n' "${ports[@]}" | sort -n -u
 }
@@ -369,6 +409,16 @@ ropero_port_label() {
             names+=("$human")
         fi
     done
+    # Puerto que alguien pidió con --port y que no corresponde a ningún .sh:
+    # lo que está escuchando ahí lo dirá el status, no el nombre del modelo.
+    if [[ ${#names[@]} -eq 0 ]]; then
+        local f extra
+        f=$(_ropero_adhoc_file)
+        if [[ -f "$f" ]] && grep -qxF -- "$port" "$f" 2>/dev/null; then
+            printf 'ad-hoc'
+            return 0
+        fi
+    fi
     if [[ ${#names[@]} -gt 0 ]]; then
         printf '%s' "${names[*]}"
         return 0
@@ -931,16 +981,20 @@ cmd_stop() {
         pid=$(get_pid_for_port "$port")
         if [[ -n "$pid" ]]; then
             kill -9 "$pid" 2>/dev/null || true
+            # Si el puerto era ad-hoc (pedido con --port), ya no sirve para
+            # nada: sale del registro para que no siga saliendo en el status.
+            _ropero_adhoc_del "$port"
             return 0
         fi
         return 1
     }
 
     if [[ "$target" == "all" ]]; then
-        # Mata en TODOS los puertos gestionados: :9999 (dGPU), :9998 (CPU) y
-        # los pineados por MODEL_PORT. Si están vacíos, no falla — solo
-        # imprime que no había nada. IMPORTANTE: por puerto, no por nombre de
-        # proceso (no usar pkill -f global: mataría los slots paralelos).
+        # Mata en TODOS los puertos gestionados: :9999 (dGPU), :9998 (CPU), los
+        # pineados por MODEL_PORT y los ad-hoc de --port. Si están vacíos, no
+        # falla — solo imprime que no había nada. IMPORTANTE: por puerto, no
+        # por nombre de proceso (no usar pkill -f global: mataría los slots
+        # paralelos).
         local _stopped=0 _p
         while read -r _p; do
             [[ -n "$_p" ]] || continue
@@ -959,7 +1013,8 @@ cmd_stop() {
 
     # Stop <modelo>: buscar en qué puerto está ese modelo y matar SOLO ese.
     # Itera todos los puertos gestionados, no solo los dos slots: un modelo
-    # pineado con MODEL_PORT podría estar en :9990 y nos lo saltaríamos.
+    # pineado con MODEL_PORT, o lanzado con --port, podría estar en :9990/:9995
+    # y nos lo saltaríamos.
     local _p
     while read -r _p; do
         [[ -n "$_p" ]] || continue
@@ -992,7 +1047,7 @@ cmd_help() {
 ${BLUE}ropero${NC} — lanzador simplificado de LLM engines
 
 USO:
-  ropero <modelo> [--background] [--cpu] [--force]
+  ropero <modelo> [--background] [--cpu] [--force] [--port N]
   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
   ropero --install | ropero --check
 
@@ -1010,8 +1065,12 @@ $(for m in "${MODEL_NAMES[@]}"; do echo "  ${MODEL_ALIAS[$m]:-$m}"; done)
 OPCIONES:
   --background  lanzar en segundo plano (log en $LOG_DIR)
   --cpu         arrancar sin GPU (offload CPU completo, todos los cores). Usa el
-                slot CPU :$CPU_PORT, salvo que el modelo tenga MODEL_PORT fijado,
-                en cuyo caso se respeta el puerto del modelo.
+                slot CPU :$CPU_PORT, salvo que el modelo tenga MODEL_PORT fijado
+                o se pase --port, en cuyo caso se respeta ese puerto.
+  --port N      arrancar en el puerto N, saltándose MODEL_PORT y los slots.
+                Puntual: no edita el .sh, así que el siguiente arranque del
+                modelo vuelve a su puerto de siempre. Ej: \`ropero embed --port 9995\`
+                Combina con --cpu (puerto libre, pero sin GPU).
   --force       si el puerto destino está ocupado por OTRO modelo, matarlo y
                 arrancar el solicitado. Solo afecta a ese puerto (no toca los
                 demás). Pensado para uso interactivo; en automatización
@@ -1052,6 +1111,7 @@ start_model() {
     local background="$2"
     local cpu_only="${3:-0}"
     local force="${4:-0}"
+    local port_override="${5:-}"
 
     # Normalizar nombre del modelo (guiones a guiones underscores) para buscar en arrays
     local model_key="${model//-/_}"
@@ -1075,10 +1135,11 @@ start_model() {
     local engine="${MODEL_ENGINE[$model_key]:-llama-server}"
     local port="$PORT"
 
-    # Selección de puerto, en este orden:
-    #   1. MODEL_PORT del script → gana SIEMPRE (con o sin --cpu).
-    #   2. --cpu                 → $CPU_PORT (offload CPU).
-    #   3. resto                 → $PORT (dGPU).
+    # Selección de puerto, por orden de precedencia:
+    #   1. --port N              → gana TODO (es lo que estás pidiendo AHORA).
+    #   2. MODEL_PORT del script → si no hay --port.
+    #   3. --cpu                 → $CPU_PORT (offload CPU).
+    #   4. resto                 → $PORT (dGPU).
     #
     # Tiene que resolverse AQUÍ, antes del check de "puerto ocupado" de más
     # abajo: si se calculara después, el check miraría 9999 mientras el
@@ -1088,19 +1149,28 @@ start_model() {
     # "este modelo vive AQUÍ". --cpu sigue significando offload a CPU (los
     # flags --n-gpu-layers 0 / --threads N se añaden igualmente más abajo);
     # lo que --cpu ya no puede es mover el modelo de puerto.
+    #
+    # Y --port gana sobre MODEL_PORT porque es una orden explícita de quien
+    # escribe, en ese momento, con el contexto que tiene. El .sh no se toca:
+    # la siguiente vez que lances ese modelo sin --port, vuelve a su puerto
+    # de siempre.
     local pinned_port=""
-    if pinned_port=$(_model_port "$model_key"); then
+    local port_reason="slot por defecto"
+    if [[ -n "$port_override" ]]; then
+        if ! _ropero_valid_port "$port_override"; then
+            echo "ERROR: --port $port_override no es un puerto válido (1-65535)" >&2
+            return 1
+        fi
+        port="$port_override"
+        port_reason="forzado con --port"
+        # Registrar el puerto para que `status` y `stop` lo vean: son otros
+        # procesos y no pueden saberlo solos.
+        _ropero_adhoc_add "$port_override"
+    elif pinned_port=$(_model_port "$model_key"); then
         port="$pinned_port"
+        port_reason="puerto fijado por MODEL_PORT"
     elif (( cpu_only == 1 )) && [[ "$engine" == "llama-server" ]]; then
         port="$CPU_PORT"
-    fi
-
-    # Razón del puerto, para los mensajes de arranque: evita el "por qué este
-    # modelo no ha salido en 9999" que obligaba a abrir el .sh.
-    local port_reason="slot por defecto"
-    if [[ -n "$pinned_port" ]]; then
-        port_reason="puerto fijado por MODEL_PORT"
-    elif (( cpu_only == 1 )); then
         port_reason="slot CPU (--cpu)"
     fi
 
@@ -2000,16 +2070,53 @@ main() {
         local background=0
         local cpu_only=0
         local force=0
+        local port_override=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --background) background=1 ;;
                 --cpu) cpu_only=1 ;;
                 --force) force=1 ;;
+                --port)
+                    # Mismo contrato que --watch: el valor es obligatorio y
+                    # numérico. Si el siguiente token es otro flag o no
+                    # existe, es un error de uso, no un default: arrancar en
+                    # un puerto que el usuario NO ha pedido sería peor que
+                    # no arrancar.
+                    #
+                    # OJO con el `continue`: el `shift` de este caso se come el
+                    # VALOR, y el `shift` del final del bucle se come el flag.
+                    # Sin el continue, cuando --port va el último
+                    # (`ropero embed --port 9995`) el shift final no tiene
+                    # argumentos: `shift` sale con 1 y, con `set -e`, aborta el
+                    # script entero EN SILENCIO. Por eso `ropero embed --port
+                    # 9995` no arrancaba nada y no decía nada. Con dos flags
+                    # detrás funcionaba, que es lo que hacía el fallo tan
+                    # esquivo.
+                    shift
+                    if [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; then
+                        port_override="$1"
+                        shift
+                    elif [[ $# -eq 0 ]]; then
+                        echo "ERROR: --port requiere un número de puerto" >&2
+                        exit 1
+                    else
+                        echo "ERROR: --port requiere un número de puerto, recibido: $1" >&2
+                        exit 1
+                    fi
+                    continue
+                    ;;
+                --port=*)
+                    port_override="${1#--port=}"
+                    if [[ ! "$port_override" =~ ^[0-9]+$ ]]; then
+                        echo "ERROR: --port=$port_override no es un puerto válido" >&2
+                        exit 1
+                    fi
+                    ;;
                 *) echo "Opción desconocida: $1" >&2; cmd_help; exit 1 ;;
             esac
             shift
         done
-        start_model "$model" "$background" "$cpu_only" "$force"
+        start_model "$model" "$background" "$cpu_only" "$force" "$port_override"
         exit $?
         ;;
     esac
