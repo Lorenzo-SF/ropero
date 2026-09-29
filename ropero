@@ -1091,16 +1091,166 @@ ropero_link() {
         ropero_ok "  → $BIN_DIR/ropero.d"
     fi
 
-    # Binarios de llama.cpp (si están compilados)
-    if [[ -d "$LLAMA_DIR/build/bin" ]]; then
-        local b count=0
-        for b in "$LLAMA_DIR"/build/bin/*; do
-            [[ -x "$b" ]] || continue
-            ln -sfn "$b" "$BIN_DIR/$(basename "$b")" 2>/dev/null || true
-            count=$((count + 1))
+    ropero_link_backends
+}
+
+# -----------------------------------------------------------------------------
+# ropero_link_backends — deja los ejecutables de los backends en $BIN_DIR.
+# -----------------------------------------------------------------------------
+# ropero no es el único binario que acaba en ~/.local/bin: también lo son los
+# ejecutables de los backends que compila o instala. Si no se linkean, sólo son
+# alcanzables por la ruta larga completa, o —peor— sólo a través de un shim de
+# asdf que se rompe cuando se reinstala el Python que los instaló.
+#
+# Que es lo que pasaba con mlx_lm: su ejecutable real vive en
+# ~/.asdf/installs/python/3.11.0/bin/ y el único enlace en el PATH era el shim
+# de asdf. Si esa versión de Python se reinstala, el shim apunta al vacío.
+#
+# Tabla declarativa: "backend|directorio de binarios". Añadir un backend es una
+# línea, no un `if` más.
+#
+# ── Por qué airllm y mlx_lm NO están en la tabla ────────────────────────────
+# Se instalan como console scripts de Python, y no siempre caen en el mismo
+# sitio: `uv pip install --system` y `pip install` apuntan a directorios
+# distintos según qué Python esté activo, y ropero los instala por `uv` o por
+# `pip` según lo que encuentre. Su ruta se resuelve en runtime, no se puede
+# escribir de antemano. Por eso van aparte, en ropero_link_pythons.
+# -----------------------------------------------------------------------------
+ROPERO_BACKEND_BINS=(
+    "llama.cpp|$LLAMA_DIR/build/bin"
+    "tensorrt-llm|$HOME/.venv-tensorrt/bin"
+)
+
+ropero_link_backends() {
+    local entry name dir b target count=0
+    for entry in "${ROPERO_BACKEND_BINS[@]}"; do
+        name="${entry%%|*}"
+        dir="${entry##*|}"
+
+        if [[ ! -d "$dir" ]]; then
+            ropero_info "  · $name: sin compilar/instalado aún ($dir no existe)"
+            continue
+        fi
+
+        local linked=0 shadowed=""
+        for b in "$dir"/*; do
+            [[ -x "$b" && ! -d "$b" ]] || continue
+            local exe link
+            exe="$(basename "$b")"
+            link="$BIN_DIR/$exe"
+
+            # Si el mismo nombre ya resuelve a OTRO binario en el PATH, al
+            # enlazar el nuestro lo vamos a tapar. No es siempre un problema
+            # (casi siempre es lo que se quiere: que gane el que gestiona
+            # ropero), pero puede ser un downgrade sin que nadie se entere.
+            # Se comprueba ANTES y se avisa después, con las dos versiones.
+            local other
+            other=$(command -v "$exe" 2>/dev/null)
+            if [[ -n "$other" && "$other" != "$link" ]]; then
+                shadowed="$shadowed $exe"
+            fi
+
+            # `ln -sfn` falla si el destino es un symlink colgado, y aquí es
+            # el caso normal: el destino apunta a un binario que se ha
+            # recompilado. Se borra antes.
+            if [[ -L "$link" ]]; then rm -f "$link"; fi
+            # Nunca pisar un fichero real que no sea nuestro symlink.
+            if [[ -e "$link" && ! -L "$link" ]]; then continue; fi
+            ln -sfn "$b" "$link" 2>/dev/null && linked=$((linked + 1))
         done
-        [[ $count -gt 0 ]] && ropero_ok "  → $count binarios llama.cpp en $BIN_DIR"
+
+        if [[ -n "$shadowed" ]]; then
+            ropero_warn "  ! $name tapa estos binarios que ya estaban en el PATH:$shadowed"
+            ropero_info "    Ahora gana el de ropero. Si el otro era más nuevo,"
+            ropero_info "    quítalo del PATH o quítale el symlink a mano."
+        fi
+
+        count=$((count + linked))
+        if (( linked > 0 )); then
+            ropero_ok "  → $name: $linked ejecutables en $BIN_DIR"
+        else
+            ropero_info "  · $name: nada que linkear en $dir"
+        fi
+    done
+
+    ropero_link_pythons
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# ropero_link_pythons — enlaza los console scripts de airllm y mlx_lm.
+# -----------------------------------------------------------------------------
+# Busca en el directorio de scripts del Python que esté activo, y en los de
+# todos los Pythons de asdf (puede que se instalara con uno distinto al actual).
+# Se prueban todos, y se enlaza lo que se encuentre: si ya está en $BIN_DIR, no
+# se toca.
+# -----------------------------------------------------------------------------
+ropero_link_pythons() {
+    local wanted=("airllm" "airllm-server" "mlx_lm" "mlx_lm.generate" "mlx_lm.chat")
+    local -a dirs=()
+    local py d b exe target linked=0
+
+    # ── OJO: sin `cmd && cmd` como última cosa de una iteración ─────────────
+    # ropero corre con `set -e`. Con la forma `[[ test ]] && hacer`, si el test
+    # falla la iteración devuelve 1 y el script ABORTA en silencio, sin mensaje:
+    # es decir, airllm se quedaba sin linkear y nadie se enteraba de por qué.
+    # Por eso aquí todo es un `if` explícito. Same motivo que en el resto del
+    # fichero, pero aquí el síntoma era invisible.
+
+    # 1. Python activo
+    if command -v python3 >/dev/null 2>&1; then
+        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null)
+        if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
+        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts","posix_user"))' 2>/dev/null)
+        if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
     fi
+
+    # 2. Todos los Pythons de asdf: el script pudo quedar en otro.
+    #
+    # Ni `python*` ni `python3*` valen como filtro: en el mismo directorio
+    # están `python-config` y `python3-config`, que no son intérpretes y no
+    # responden a `-c`. Bajo `set -e` eso abortaba el enlace en silencio, y
+    # airllm se quedaba sin linkear sin que hubiera ningún mensaje.
+    #
+    # Se valida el NOMBRE: un intérprete es `python3` o `python3.N`. Cualquier
+    # otra cosa se ignora.
+    local base
+    for py in "$HOME"/.asdf/installs/python/*/bin/python3*; do
+        base="$(basename "$py")"
+        if [[ ! "$base" =~ ^python3(\.[0-9]+)?$ ]]; then continue; fi
+        if [[ ! -x "$py" ]]; then continue; fi
+        d=$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null)
+        if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
+    done
+
+    # 3. Deduplicar: el Python activo y el de asdf suelen ser el mismo.
+    local -a uniq=()
+    for d in "${dirs[@]}"; do
+        local seen=0 x
+        for x in "${uniq[@]}"; do
+            if [[ "$x" == "$d" ]]; then seen=1; break; fi
+        done
+        if (( seen == 0 )); then uniq+=("$d"); fi
+    done
+
+    for d in "${uniq[@]}"; do
+        for exe in "${wanted[@]}"; do
+            if [[ ! -x "$d/$exe" ]]; then continue; fi
+            target="$BIN_DIR/$exe"
+            # Si ya está (o hay algo ahí), no se toca: puede ser un
+            # symlink previo, y no es asunto de ropero decidir cuál gana.
+            if [[ -e "$target" || -L "$target" ]]; then continue; fi
+            if ln -sfn "$d/$exe" "$target" 2>/dev/null; then
+                linked=$((linked + 1))
+                ropero_ok "  → $exe → $d/$exe"
+            fi
+        done
+    done
+
+    if (( linked == 0 )); then
+        ropero_info "  · airllm/mlx_lm: no instalados, o ya alcanzables en el PATH"
+    fi
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -1130,6 +1280,51 @@ cmd_check() {
         rc=1
     fi
 
+    # Backends: sus ejecutables tienen que estar en $BIN_DIR, no sólo en su
+    # ruta larga. Si esto falla, la solución es `ropero --install`, no buscar
+    # el binario a mano.
+    local entry bname bdir b found miss=0
+    for entry in "${ROPERO_BACKEND_BINS[@]}"; do
+        bname="${entry%%|*}"
+        bdir="${entry##*|}"
+        if [[ ! -d "$bdir" ]]; then
+            ropero_info "$bname: no compilado/instalado ($bdir no existe)"
+            continue
+        fi
+        found=0
+        # OJO: el nombre del backend y el del ejecutable son variables
+        # DISTINTAS. Con una sola, el mensaje sale con el nombre del último
+        # ejecutable recorrido en vez de con el del backend.
+        for b in "$bdir"/*; do
+            [[ -x "$b" && ! -d "$b" ]] || continue
+            local link="$BIN_DIR/$(basename "$b")"
+            [[ -L "$link" && -x "$link" ]] && found=$((found + 1))
+        done
+        if (( found > 0 )); then
+            ropero_ok "$bname: $found ejecutables en $BIN_DIR"
+        else
+            ropero_err "$bname: $bdir tiene ejecutables pero ninguno linkeado en $BIN_DIR"
+            ropero_info "  solución: ropero --install"
+            rc=1
+        fi
+    done
+
+    # airllm / mlx_lm: sólo se avisa. Que no esté el symlink no significa que no
+    # funcionen: si están en el PATH de otra forma, ropero los encuentra igual.
+    local w missing=0
+    for w in airllm mlx_lm; do
+        if [[ -x "$BIN_DIR/$w" ]] || command -v "$w" >/dev/null 2>&1; then
+            ropero_ok "$w disponible"
+        else
+            missing=$((missing + 1))
+        fi
+    done
+    if (( missing > 0 )); then
+        ropero_warn "$missing backend(s) de Python no instalados (airllm/mlx_lm)"
+        ropero_info "  es opcional: sólo hacen falta para los safetensors que"
+        ropero_info "  llama.cpp no puede cargar"
+    fi
+
     # Modelos
     if [[ -d "$GGUF_DIR" ]]; then
         local n
@@ -1145,7 +1340,12 @@ cmd_check() {
 
     # llama-server
     if command -v llama-server >/dev/null 2>&1; then
-        ropero_ok "llama-server: $(command -v llama-server)"
+        # Con la versión, porque ropero linkea el suyo en $BIN_DIR y eso
+        # TAPA cualquier llama-server que hubiera estado en el PATH. Sin la
+        # versión no hay forma de notar un downgrade.
+        local ls_ver
+        ls_ver=$(llama-server --version 2>&1 | grep -m1 '^version:' | sed 's/^version: //')
+        ropero_ok "llama-server: $(command -v llama-server) ${ls_ver:+(v$ls_ver)}"
     else
         ropero_warn "llama-server NO en PATH (ropero --install lo compila)"
     fi
@@ -1324,6 +1524,15 @@ main() {
         --check)
             shift || true
             cmd_check "$@"
+            exit $?
+            ;;
+        --link)
+            # Sólo rehace los symlinks. Existe para el caso real de "he
+            # compilado llama.cpp a mano" o "he instalado un backend por mi
+            # cuenta": re-ejecutar --install para eso es absurdo, porque
+            # --install vuelve a preguntar por los modelos y puede volver a
+            # compilar 40 minutos.
+            ropero_link
             exit $?
             ;;
         list)

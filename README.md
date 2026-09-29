@@ -31,14 +31,58 @@ un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
 2. Clona y compila `llama.cpp` (20-40 min la primera vez, con CUDA/Metal).
 3. Instala `airllm` / `mlx-lm` / `tensorrt-llm` (best-effort, pregunta).
 4. Descarga los GGUF por defecto (~50 GB).
-5. Crea symlinks en `~/.local/bin/ropero` + `ropero.d/`.
+5. Crea symlinks en `~/.local/bin` — **incluidos los ejecutables de los
+   backends**, no sólo los de ropero. Ver más abajo.
 
 `--check` verifica:
 
 - Symlinks en `~/.local/bin/`.
+- Que los ejecutables de los backends estén linkeados.
 - Modelos GGUF descargados.
-- `llama-server` compilado y en PATH.
+- `llama-server` compilado, en PATH, y **con su versión** (importa, ver más
+  abajo).
 - `BIN_DIR` en PATH.
+
+### Los ejecutables de los backends también se linkean
+
+`ropero` no es el único binario que acaba en `~/.local/bin`. También lo son los
+ejecutables de los backends que compila o instala:
+
+| Backend | Dónde vive | Qué se linkea |
+|---|---|---|
+| `llama.cpp` | `~/llama.cpp/build/bin/` | los 23+ (`llama-server`, `llama-cli`, `llama-bench`, `llama-quantize`…) |
+| `tensorrt-llm` | `~/.venv-tensorrt/bin/` | los de su venv (CachyOS) |
+| `airllm` | el `bin` del Python que lo instaló | `airllm`, `airllm-server` |
+| `mlx-lm` | el `bin` del Python que lo instaló | `mlx_lm`, `mlx_lm.generate`, `mlx_lm.chat` |
+
+Para `airllm` y `mlx_lm` la ruta no se puede escribir de antemano: cambian según
+si se instalaron con `uv` o con `pip`, y según qué Python esté activo. Se
+resuelve en runtime: se pregunta a los Pythons de asdf dónde ponen sus
+console scripts.
+
+**Por qué importa.** `mlx_lm` vivía sólo detrás del shim de asdf. Si esa versión
+de Python se reinstalaba, el shim apuntaba al vacío y `mlx_lm` desaparecía sin
+aviso. Con el symlink, sobrevive al Python.
+
+**Aviso de shadowing.** Al linkear, ropero **tapa** cualquier binario del mismo
+nombre que ya estuviera en el PATH. Casi siempre es lo que se quiere, pero
+puede ser un downgrade sin que se note: si tienes un `llama-server` de Homebrew
+más nuevo que el que compila ropero, el de ropero pasa a ganar. `--link` avisa
+cuando lo detecta, y `--check` imprime la versión para que el cambio sea visible.
+
+### `ropero --link`
+
+Sólo rehace los symlinks. Existe para dos casos reales:
+
+- has compilado `llama.cpp` a mano y quieres los symlinks sin re-ejecutar el
+  `--install` entero (que vuelve a preguntar por los modelos);
+- has instalado un backend por tu cuenta y quieres que ropero lo registre.
+
+```bash
+ropero --link
+```
+
+Idempotente y rápido: no compila, no descarga, no pregunta.
 
 ---
 
