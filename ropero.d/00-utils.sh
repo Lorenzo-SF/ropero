@@ -72,8 +72,20 @@ ropero_detect_os() {
     echo "unknown"
 }
 
-# descarga gguf idempotente con check individual (spec: omitir si existe)
-# $6 opcional: renombrar al descargar (mmproj-F16.gguf choca entre repos)
+# Descarga GGUF idempotente, con check individual (omite si ya existe).
+#
+#   ropero_download_gguf <repo> <filename> <name> [size] [dest_dir] [dest_name]
+#                              ^^^^^^^  ^^^^^^^^  ^^^^  ^^^^  ^^^^^^^^  ^^^^^^^^^
+#                              HF repo  fichero   nombre tamaño ruta     nombre
+#                                       en el     legible        destino final
+#                                       repo
+#
+#   dest_dir   dónde acaba el modelo. Por defecto $GGUF_DIR. Acepta "~".
+#   dest_name  nombre final del fichero. Por defecto <filename>. Es lo que
+#              permite renombrar al descargar: "mmproj-F16.gguf" choca entre
+#              repos y cada modelo quiere el suyo.
+#
+# Las llamadas reales están en ropero.d/21-download-models.sh.
 #
 # IMPORTANTE: bajo `set -u` (entrypoint ropero lo tiene), `local var=$1` con
 # $1 vacío falla con "var: unbound variable" en algunas versiones de bash.
@@ -81,38 +93,140 @@ ropero_detect_os() {
 # usamos asignaciones que absorben el unset (`:="${var:-default}"`).
 ropero_download_gguf() {
     local repo="${1:-}" filename="${2:-}" name="${3:-}" size="${4:-}"
-    local dest_dir="${5:-${GGUF_DIR:-$HOME/models/gguf}}"
-    local dest_name="${6:-$filename}"
+    local dest_dir="${5:-}" dest_name="${6:-}"
 
     if [[ -z "$repo" || -z "$filename" || -z "$name" ]]; then
         ropero_err "ropero_download_gguf: argumentos incompletos (repo='$repo' filename='$filename' name='$name')"
         return 1
     fi
-    if [[ -z "$dest_dir" ]]; then
-        ropero_err "ropero_download_gguf: dest_dir vacío"; return 1
+
+    # ── Validación de los argumentos opcionales ─────────────────────────────
+    # El bug de siempre: los args 4º/5º se escribían a ojo, así que una llamada
+    # que se saltara el `name` acababa con el TAMAÑO en `name` y la RUTA en
+    # `size`. Entonces dest_dir recibía el nombre del fichero de destino
+    # ("Qwen2.5-VL-mmproj.gguf"), y el resultado era una CARPETA con ese nombre
+    # conteniendo el gguf, en el cwd. Parecía funcionar (el fichero estaba ahí)
+    # pero en el sitio equivocado, y el renombrado nunca ocurría porque
+    # dest_name se quedaba vacío.
+    #
+    # Se detecta por forma: un tamaño tiene unidades o un punto ("1.6 GB",
+    # "900MB"), una ruta no. Se normaliza al esquema correcto en vez de fallar,
+    # que es lo que quiere quien llama: los 6 argumentos son fijos y el que se
+    # olvidó no va a beneficiarse de un error.
+    #
+    # Casos que cubre:
+    #   (... repo file name SIZE PATH NAME)      → 6 args, bien
+    #   (... repo file name SIZE NAME)           → 5 args: falta dest_dir
+    #   (... repo file name PATH NAME)           → 5 args: falta size
+    if [[ -n "$dest_dir" && -z "$dest_name" ]]; then
+        # 5 args: el 5º es el nombre final (o un tamaño mal colocado), no un
+        # directorio. El destino es el de por defecto.
+        dest_name="$dest_dir"
+        dest_dir=""
     fi
 
-    local dest="$dest_dir/$filename"
+    [[ -n "$dest_dir" ]] || dest_dir="${GGUF_DIR:-$HOME/models/gguf}"
+    [[ -n "$dest_name" ]] || dest_name="$filename"
+
+    # ── Expandir ~ ──────────────────────────────────────────────────────────
+    # Los llamadores pasan "~/models/gguf" con comillas, y dentro de comillas
+    # bash NO expande ~. Sin esto, mkdir -p crea un directorio LITERAL llamado
+    # "~" en el cwd y la descarga se va al sitio equivocado. (hf download sí
+    # expandía su --local-dir, pero el `mv` de Rename no: de ahí que el fichero
+    # acabara descargado pero sin renombrar.)
+    case "$dest_dir" in
+        "~")     dest_dir="$HOME" ;;
+        "~/"*)   dest_dir="$HOME/${dest_dir#\~/}" ;;
+    esac
+
+    # ── Nombre final, sin directorios ───────────────────────────────────────
+    # dest_name es un NOMBRE de fichero. Si alguien pasa una ruta con /
+    # (ej. "sub/mi-modelo.gguf"), lo respetamos creando el subdirectorio, para
+    # que "MTP/x.gguf" en dest_name no crees una carpeta MTP sorpresa.
+    case "$dest_name" in
+        */*) dest_dir="$dest_dir/$(dirname "$dest_name")"
+             dest_name="$(basename "$dest_name")" ;;
+    esac
+
     local final="$dest_dir/$dest_name"
-    if [[ "$dest_name" != "$filename" && -f "$final" && -s "$final" ]]; then
+
+    # ── ¿Ya está? ──────────────────────────────────────────────────────────
+    # Se mira SIEMPRE el nombre final primero. Con rename, el fichero que
+    # descarga hf es el original y el que nos interesa es el renombrado; si
+    # solo mirásemos el original, un rename ya aplicado se redescargaría cada
+    # vez (y con `~` sin expandir, la comprobación nunca encontraba nada).
+    if [[ -f "$final" && -s "$final" ]]; then
         ropero_ok "$dest_name ya descargado"; return 0
     fi
-    if [[ -f "$dest" && -s "$dest" ]]; then
-        ropero_ok "$name ya descargado"; return 0
+    if [[ "$dest_name" != "$filename" ]]; then
+        # `filename` puede traer subdirectorio del repo ("MTP/x.gguf"), así que
+        # el fichero original NO está en la raíz de dest_dir.
+        local orig="$dest_dir/$filename"
+        if [[ -f "$orig" && -s "$orig" ]]; then
+            # Descargado pero sin renombrar (una versión anterior falló aquí):
+            # el fichero está, solo falta el rename: se aplica y listo.
+            if mv "$orig" "$final" 2>/dev/null; then
+                ropero_ok "$dest_name renombrado (ya estaba descargado)"
+                return 0
+            fi
+        fi
     fi
     if ! ropero_ask "Descargar $name (~$size)? Necesario para ropero"; then
         ropero_info "$name omitido por el usuario"; return 0
     fi
-    mkdir -p "$dest_dir"
+
+    mkdir -p "$dest_dir" || { ropero_err "no se pudo crear $dest_dir"; return 1; }
+
+    # ── Descarga ────────────────────────────────────────────────────────────
+    # `filename` puede traer subdirectorios en el repo ("MTP/x.gguf"). hf los
+    # reproduce bajo dest_dir, así que hay que buscarlos ahí, no en la raíz.
+    local staged_dir="$dest_dir"
     if command -v hf &>/dev/null; then
-        hf download "$repo" "$filename" --local-dir "$dest_dir" || { ropero_err "falló $name"; return 1; }
+        hf download "$repo" "$filename" --local-dir "$staged_dir" \
+            || { ropero_err "falló $name"; return 1; }
+        local downloaded="$staged_dir/$filename"
+        # hf a veces normaliza el nombre; si no está donde lo esperamos,
+        # buscamos por basename dentro de lo recién descargado.
+        if [[ ! -f "$downloaded" ]]; then
+            downloaded="$(find "$staged_dir" -type f -name "$(basename "$filename")" -print -quit 2>/dev/null || true)"
+        fi
     else
-        curl -fL "https://huggingface.co/$repo/resolve/main/$filename" -o "$dest" || { ropero_err "falló $name"; return 1; }
+        # Sin hf: se descarga directo al nombre final. No hay staging ni rename
+        # porque curl no crea la subestructura del repo.
+        local dest="$final"
+        mkdir -p "$(dirname "$dest")"
+        curl -fL "https://huggingface.co/$repo/resolve/main/$filename" -o "$dest" \
+            || { ropero_err "falló $name"; return 1; }
+        ropero_ok "$name descargado"
+        return 0
     fi
-    if [[ "$dest_name" != "$filename" ]]; then
-        mv "$dest" "$final" || { ropero_err "no se pudo renombrar a $dest_name"; rm -f "$dest"; return 1; }
+
+    if [[ -z "$downloaded" || ! -f "$downloaded" ]]; then
+        ropero_err "falló $name (hf dijo OK pero no aparece $filename)"
+        return 1
     fi
-    ropero_ok "$name descargado"
+
+    # ── Renombrado ──────────────────────────────────────────────────────────
+    # Se comparan AMBAS rutas ya normalizadas a absoluta. Con comparación
+    # directa, `mv X X` no es un no-op limpio: si las cadenas difieren (una
+    # relativa y otra absoluta, un "~" sin expandir) el rename se dispara y
+    # puede fallar o, peor, dejar el fichero a medias.
+    local abs_downloaded abs_final
+    abs_downloaded="$(cd "$(dirname "$downloaded")" && pwd)/$(basename "$downloaded")"
+    abs_final="$(cd "$(dirname "$final")" 2>/dev/null && pwd)/$(basename "$final")" || abs_final="$final"
+
+    if [[ "$abs_downloaded" != "$abs_final" ]]; then
+        mkdir -p "$(dirname "$abs_final")" 2>/dev/null || true
+        if mv "$abs_downloaded" "$abs_final"; then
+            ropero_ok "$name → $dest_name"
+        else
+            ropero_err "no se pudo renombrar $abs_downloaded a $abs_final"
+            return 1
+        fi
+    else
+        ropero_ok "$name descargado"
+    fi
+    return 0
 }
 
 

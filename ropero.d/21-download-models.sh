@@ -25,11 +25,17 @@ ropero_download_default_models() {
 
     ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "13.1 GB"
     ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB" 
-
+    ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB" "$GGUF_DIR" "qwen3.8-mmproj-BF16.gguf"
 
     cp "$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "$HOME/models/gguf/"
 
-    ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB" "$HOME/models/gguf" "qwen3.8-mmproj-BF16.gguf"
+
+	ropero_download_gguf "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" "Qwen2.5-VL 7B" "4.79 GB"
+	# OJO: el 3er argumento es el NOMBRE legible del modelo, no su tamaño. Con
+	# "1.35 GB" aquí, el size se colaba en `name` y la ruta en `size`, así que
+	# dest_dir recibía el nombre del fichero de destino: se creaba una CARPETA
+	# "Qwen2.5-VL-mmproj.gguf" con el gguf dentro, y el renombrado no ocurría.
+	ropero_download_gguf "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "mmproj-F16.gguf" "Qwen2.5-VL mmproj" "1.35 GB" "$GGUF_DIR" "Qwen2.5-VL-mmproj.gguf"
 
     # nuevo setup de modelos para gunter
     ropero_download_gguf "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
