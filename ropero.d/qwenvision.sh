@@ -26,10 +26,12 @@
 # =============================================================================
 MODEL_ENGINE="llama-server"
 QWENVISION_GGUF="Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
-QWENVISION_MMPROJ="mmproj-Qwen2.5-VL-7B-Instruct-Q8_0.gguf"
+QWENVISION_MMPROJ="Qwen2.5-VL-mmproj.gguf"
 
 MODEL_GGUF="$QWENVISION_GGUF"
 MODEL_CTX="${ROPERO_QWENVISION_CTX:-32768}"
+
+MODEL_PORT=9991
 
 get_model_args_qwenvision() {
     local ngl="${ROPERO_QWENVISION_NGL:-999}"
