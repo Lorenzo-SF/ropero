@@ -24,7 +24,11 @@ ropero_download_default_models() {
     ropero_download_gguf "Achilles1089/fable-coder-35B-A3B-GGUF" "fable-coder-35B-A3B-Q4_K_M.gguf" "Fable Coder Q4" "21.7 GB"
 
     ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "13.1 GB"
-    ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB" "$HOME/models/gguf"
+    ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB" 
+
+
+    cp "$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "$HOME/models/gguf/"
+
     ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB" "$HOME/models/gguf" "qwen3.8-mmproj-BF16.gguf"
 
     # nuevo setup de modelos para gunter
