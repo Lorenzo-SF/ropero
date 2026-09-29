@@ -16,7 +16,7 @@ GGUF_DIR="${GGUF_DIR:-$HOME/models/gguf}"
 SAFETENSORS_DIR="${SAFETENSORS_DIR:-$HOME/models/safetensors}"
 LOG_DIR="${LOG_DIR:-$HOME/.logs/ropero}"
 LLAMA_BIN="${LLAMA_BIN:-llama-server}"
-LLAMA_API_KEY="${LLAMA_API_KEY:-sk-local-dev-key}"
+LLAMA_API_KEY="${LLAMA_API_KEY:-OPENAI_API_KEY}"
 HOST="${HOST:-0.0.0.0}"
 
 # -----------------------------------------------------------------------------
