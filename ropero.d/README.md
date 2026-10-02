@@ -1,164 +1,207 @@
-# ropero.d/ — FÍSICO + ALIAS público (v5.0)
+# ropero.d/ — FÍSICO + ALIAS público + engines (v6.0)
 
-> **Cada `.sh` (sin prefijo `_`) es un modelo físico que lanza `llama-server`.** Algunos declan un `MODEL_ALIAS` público, así `ropero` registra tanto el nombre físico (`devstral`, `gptoss_high`, ...) como el alias humano (`coder`, `verifier`, ...) que `opencode.jsonc` usa.
+> **Cada `.sh` (sin prefijo `_`, sin `-template-` en el nombre) es un modelo físico.** Algunos declan un `MODEL_ALIAS` público, así `ropero` registra tanto el nombre físico (`devstral`, `gptoss_high`, ...) como el alias humano (`coder`, `verifier`, ...) que `opencode.jsonc` usa.
+
+## Los cinco engines
+
+ropero publica **todos** los engines en el **mismo puerto y con la misma `API_KEY`**, para que `opencode.jsonc` no tenga que saber qué hay detrás.
+
+| Engine | Binario | SO / HW | ¿Valida la API key? | Servidor |
+| --- | --- | --- | --- | --- |
+| `llama-server` | `~/llama.cpp/build/bin/llama-server` | todos (Metal en macOS, CUDA en cachy) | **sí** (`--api-key`) | propio de llama.cpp |
+| `airllm` | `airllm-server` → `ropero.d/_airllm_server.py` | todos | **sí** (el nuestro, `--api-key`) | **nuestro**: airllm es librería pura y no trae ninguno |
+| `mlx_lm` | `mlx_lm.server` | macOS / Apple Silicon | **no** | + `_authproxy.py` |
+| `tensorrt-llm` | `trtllm-serve` (`~/.venv-tensorrt`) | cachy/arch / NVIDIA | **no** | + `_authproxy.py` |
+| `fastflowlm` | `flm` (`/opt/fastflowlm`) | cachy/arch / **NPU AMD** | **no** | + `_authproxy.py` |
+
+### Por qué hay un proxy de auth
+
+Sólo `llama-server` trae `--api-key`. Está verificado en el CLI de los otros tres:
+
+- `mlx_lm.server` (0.31.3): ni flag ni variable de entorno de auth.
+- `trtllm-serve` (1.x): no existe `--api_key`. El `api_key="tensorrt_llm"` de la doc oficial es el campo que *exige el SDK de OpenAI*, no una comprobación del servidor.
+- `flm serve`: su propia documentación dice *"the key is not checked"*.
+
+Con `HOST=0.0.0.0` y sin auth, esos tres quedarían abiertos a la LAN. Así que ropero les pone delante `ropero.d/_authproxy.py`:
+
+```
+opencode ──► :9996 (proxy, exige LLAMA_API_KEY) ──127.0.0.1:10996──► mlx_lm.server
+```
+
+Tres cosas de este diseño que importan:
+
+1. **El engine real solo escucha en loopback**, en un puerto interno derivado del de ropero (`+1000..+1049`, primer hueco libre). La API key del proxy no tiene puerta trasera.
+2. **El proxy es el padre del engine**, así que un solo `kill` en el puerto de ropero apaga el árbol entero. Por eso `cmd_stop` manda **SIGTERM antes que SIGKILL**: con `kill -9` el proxy muere sin ejecutar su handler y el engine se queda sirviendo en `:10xxx` para siempre, invisible para `ropero status`.
+3. **El proxy responde `/v1/models` con el nombre del modelo de ropero** y expone `/ropero/engine`. Eso es lo que hace que `ropero stop <modelo>`, la columna MODELO del status y la columna ENGINE funcionen igual para todos los engines, sin un caso especial por engine.
+
+`ROPERO_NO_AUTH_PROXY=1` lo desactiva (y avisa). Sólo tiene sentido con `HOST=127.0.0.1`.
 
 ## Mapa completo
 
 ```mermaid
 flowchart TD
     root["ropero.d/"]
-    n0["PHYSICAL LAYER (lanzan llama-server, fuente de verdad del binding)"]
+    n0["PHYSICAL LAYER (modelos reales; llama-server sobre GGUF)"]
     root --> n0
-    n1["devstral.sh         → Devstral-Small-2-24B-Instruct     alias: coder      (GPU :9999)"]
+    n1["devstral.sh         → Devstral-Small-2-24B-Instruct     alias: coder_lite"]
     n0 --> n1
-    n2["qwencoder.sh        → Qwen3-Coder-30B-A3B-Instruct      alias: analyst    (GPU :9999)"]
+    n2["qwencoder.sh        → Qwen3-Coder-30B-A3B-Instruct      alias: coder"]
     n0 --> n2
-    n3["gptoss_high.sh      → gpt-oss-20b MXFP4, high           alias: verifier   (CPU :9998)"]
+    n3["gptoss_high.sh      → gpt-oss-20b MXFP4, high           alias: verifier"]
     n0 --> n3
-    n4["gptoss_medium.sh    → gpt-oss-20b MXFP4, medium         alias: designer   (CPU :9998)"]
+    n4["gptoss_medium.sh    → gpt-oss-20b MXFP4, medium         alias: designer"]
     n0 --> n4
-    n5["gptoss_low.sh       → gpt-oss-20b MXFP4, low            (sin alias público)"]
+    n5["gptoss_low.sh       → gpt-oss-20b MXFP4, low"]
     n0 --> n5
-    n6["qwen.sh             → Qwen3.8-27B-Instruct              (sin alias público)"]
+    n6["qwen.sh             → Qwen3.8-27B-Instruct              alias: analyst"]
     n0 --> n6
-    n7["embed.sh            → embeddings"]
+    n7["embed.sh            → jina-code embeddings   port :9990"]
     n0 --> n7
-    n8["airgptoss.sh        → gpt-oss-120b (airllm)"]
+    n8["qwenvision.sh       → Qwen2.5-VL-7B-Instruct  port :9991"]
     n0 --> n8
     n9["fable.sh            → fable-coder 35B-A3B (legacy)"]
     n0 --> n9
-    n10["qwenvision.sh       → Qwen2.5-VL-7B-Instruct"]
+    n10["airgptoss.sh       → gpt-oss-120b  (engine airllm, server propio)"]
     n0 --> n10
-    n11["HELPERS (no son modelos; sourceados por el entry point)"]
+    n11["PLANTILLAS (el loader las salta; copiar para usar)"]
     root --> n11
-    n12["_common.sh          colorize y utilidades"]
+    n12["30-template-airllm.sh · mlx · tensorrt-llm · fastflowlm"]
     n11 --> n12
-    n13["_gptoss_common.sh   args compartidos de gptoss_{low,medium,high}"]
-    n11 --> n13
-    n14["00-utils.sh, 01-env.sh"]
-    n11 --> n14
-    n15["20-compile-llama.sh, 21-download-models.sh"]
-    n11 --> n15
-    n16["README.md (este archivo)"]
-    root --> n16
-    n17["fired/                                ← modelos legacy, NO usar"]
-    root --> n17
-    n18["fable.sh                          (Fable Coder 35B-A3B, retirado)"]
-    n17 --> n18
-    n19["qwopus.sh                         (Qwopus 35B-A3B, retirado)"]
-    n17 --> n19
-    n20["muse.sh                           (Muse Glimmer 30B MoE, retirado)"]
-    n17 --> n20
-    n21["nemotron.sh                       (Nemotron 3.5 Lightning 30B-A3B, retirado)"]
-    n17 --> n21
+    n13["HELPERS (sourceados por el entrypoint, NO son modelos)"]
+    root --> n13
+    n14["_engines.sh         REGISTRO de engines: binario, flags reales, auth"]
+    n13 --> n14
+    n15["_authproxy.py       proxy OpenAI-compatible + auth (engine padre)"]
+    n13 --> n15
+    n16["_airllm_server.py   el 'airllm serve' que airllm no trae"]
+    n13 --> n16
+    n17["_common.sh · _gptoss_common.sh · 00-utils.sh · 01-env.sh"]
+    n13 --> n17
+    n18["20-compile-llama.sh · 21-download-models.sh"]
+    n13 --> n18
+    n19["README.md (este archivo)"]
+    root --> n19
+    n20["fired/                              ← modelos legacy, NO usar"]
+    root --> n20
+    n21["fired/mlx_lm.sh · fired/tensorrt-llm.sh"]
+    n20 --> n21
+    n22["supersedidas por 30-template-mlx.sh y 30-template-tensorrt-llm.sh"]
+    n21 --> n22
 ```
 
-## Modelo selection (v5.0)
+## Plantillas (`ropero templates`)
 
-| Alias (opencode.jsonc) | Físico                       | Slot       | VRAM / RAM       | Uso                              |
-| ---------------------- | ---------------------------- | ---------- | ---------------- | -------------------------------- |
-| `coder`                | `devstral.sh`                | GPU :9999  | 14.5 GB VRAM     | Implementación principal         |
-| `analyst`              | `qwencoder.sh`               | GPU :9999  | 16 GB GPU + 1.7 GB CPU offload | Análisis, agentic            |
-| `verifier`             | `gptoss_high.sh`             | CPU :9998  | 14 GB RAM        | Razonamiento profundo, validación |
-| `designer`             | `gptoss_medium.sh`           | CPU :9998  | 14 GB RAM        | Creatividad, UX/UI               |
-| `qwen` (sin alias)     | `qwen.sh`                    | GPU :9999  | 12.5 GB VRAM     | Análisis broad (sustituye histórico) |
+`ropero.d/30-template-*.sh` son ejemplos copiables. El loader las salta (`*-template-*`), así que no aparecen en `ropero list` ni se pueden arrancar por su nombre.
 
-## Cómo añadir el alias público a un script
+| Plantilla | Engine | Para qué |
+| --- | --- | --- |
+| `30-template-airllm.sh` | `airllm` | checkpoints de HF que no caben en la VRAM (offload por capas) |
+| `30-template-mlx.sh` | `mlx_lm` | pesos MLX convertidos en Apple Silicon |
+| `30-template-tensorrt-llm.sh` | `tensorrt-llm` | NVIDIA: checkpoint de HF o `.engine` compilado |
+| `30-template-fastflowlm.sh` | `fastflowlm` | NPU AMD (XDNA); `MODEL_PATH` es un **tag** de FLM, no una ruta |
 
-Cada script que deba ser invocable desde `opencode.jsonc` declara una línea en su cabecera:
+Cada una documenta el formato de ficheros, las arquitecturas concretas soportadas y los flags que de verdad mueven la aguja. Para usar una:
 
 ```bash
-MODEL_ALIAS="${MODEL_ALIAS:-coder}"   # valor por defecto; override con env
+cp ropero.d/30-template-mlx.sh ropero.d/mi-modelo.sh
+# editar MODEL_PATH / MODEL_CTX, renombrar get_engine_args_mlx → get_engine_args_mi_modelo
+chmod +x ropero.d/mi-modelo.sh
+ropero list && ropero mi-modelo --background
 ```
 
-`bin/ropero` lee esa variable al cargar el script y registra la key alias junto a la del nombre físico. `cmd_list` muestra ambos nombres como modelos disponibles.
-
-## Dual-slot coexistencia
-
-- **CPU slot (`:9998`)**: gpt-oss-20b corre aquí. `verifier` y `designer` comparten script físico (distinto `reasoning_effort`).
-- **GPU slot (`:9999`)**: Solo UN modelo GPU activo a la vez. `coder` y `analyst` (y `qwen`) son mutuamente exclusivos.
-
-## Cómo descargar los modelos
-
-Los scripts buscan los modelos en estas rutas por defecto:
+## Contrato de un script de modelo
 
 ```bash
-~/.cache/models/devstral/Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf
-~/.cache/models/gpt-oss/openai_gpt-oss-20b-MXFP4.gguf
-~/.cache/models/qwen/Qwen3-8B-27B-Instruct-Q3_K_XL.gguf
+MODEL_ENGINE="llama-server" | "airllm" | "mlx_lm" | "tensorrt-llm" | "fastflowlm"
+
+# engine=llama-server → GGUF en $GGUF_DIR
+MODEL_GGUF="mi-modelo-Q4_K_M.gguf"
+MODEL_CTX=131072
+get_model_args_mi_modelo() { printf '%s\n' --n-gpu-layers -1 --threads 12; }
+
+# engine con servidor propio → directorio en $SAFETENSORS_DIR, o ruta ABSOLUTA
+#   (para fastflowlm: un TAG de FLM, p.ej. "llama3.2:1b")
+MODEL_PATH="mi-modelo"
+MODEL_CTX=131072
+MODEL_FORMAT="safetensors"      # opcional, informativo; ropero list lo muestra
+MODEL_PORT=9997                 # opcional; si está, GANA siempre a --cpu
+get_engine_args_mi_modelo() { printf '%s\n' --compression 4bit; }   # opcional
+
+MODEL_ALIAS="${MODEL_ALIAS:-mi_alias}"   # opcional: nombre público para opencode
 ```
 
-Si los tienes en otro path, edita `MODEL_FILE=` y/o `ALT_PATHS=` en cada script.
+Variables de entorno por modelo: `ROPERO_<MODELO>_CTX`, `_PORT`. El nombre se normaliza con guiones bajos (`ROPERO_MULTIMODAL_ANALYZER_CTX`).
 
-### Comandos de descarga (HF)
+## Variables de entorno
+
+| Variable | Default | Significado |
+| --- | --- | --- |
+| `LLAMA_API_KEY` | `sk-local-dev-key` | API key de TODOS los engines |
+| `HOST` | `0.0.0.0` | IP del endpoint. Los engines con proxy solo exponen aquí el proxy |
+| `GGUF_DIR` | `~/models/gguf` | GGUF de llama-server |
+| `SAFETENSORS_DIR` | `~/models/safetensors` | checkpoints de los demás engines |
+| `LOG_DIR` | `~/.logs/ropero` | logs de `--background` |
+| `ROPERO_GPU_PORT` / `ROPERO_CPU_PORT` | 9999 / 9998 | los dos slots |
+| `ROPERO_START_TIMEOUT` | 180 | segundos de espera al arrancar en `--background` |
+| `ROPERO_ENGINE_WAIT` | 20 | segundos que el proxy espera a que el engine acepte conexiones |
+| `ROPERO_NO_AUTH_PROXY` | — | `1` arranca sin proxy (SIN API key). Solo con `HOST=127.0.0.1` |
+| `ROPERO_PYTHON` | — | intérprete forzado para los engines de Python |
+| `FLM_MODEL_PATH` | `~/.config/flm` | almacén de modelos de FastFlowLM |
+
+## Comandos
+
+```
+ropero <modelo> [--background] [--force] [--port N]   # --cpu: solo llama-server
+ropero list | templates | status [--craft] [--watch [ms]] | stop <modelo>|all
+ropero --install | ropero --check
+```
+
+- `--cpu` es **exclusivo de llama-server**: mapea a `--n-gpu-layers 0 --threads N`, flags que no existen en los demás. En un engine con servidor propio da error explicándolo, en vez de ignorarse y dejarte pensando que tienes la CPU.
+- `--port N` funciona en todos los engines: salta `MODEL_PORT` y los slots, y registra el puerto como ad-hoc para que `status` y `stop` lo vean.
+- `--force` rota el modelo del puerto destino (SIGTERM primero, para que un proxy con engine detrás apague el árbol entero).
+- `ropero --install` instala engine por engine y **enlaza sus ejecutables en `~/.local/bin` al terminar**, no al final. `ropero --check` hace un probe real de cada uno (importa el paquete, no solo mira el fichero).
+
+## Descargar modelos
+
+`ropero --install` los descarga todos (GGUF siempre; el checkpoint MLX solo en macOS). A mano:
 
 ```bash
-# Devstral-Small-2-24B-Instruct (Mistral, 14.5 GB Q4_K_M)
-hf download mistralai/Devstral-Small-2-24B-Instruct-2512-GGUF \
-    --include 'Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf' \
-    --local-dir ~/.cache/models/devstral/
+# GGUF (llama-server) — un solo fichero del repo
+hf download unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF \
+    --include 'Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf' \
+    --local-dir ~/models/gguf/
 
-# gpt-oss-20b (OpenAI, ~13 GB MXFP4)
-hf download openai/gpt-oss-20b-GGUF \
-    --include 'openai_gpt-oss-20b-MXFP4.gguf' \
-    --local-dir ~/.cache/models/gpt-oss/
+# Checkpoint completo (mlx_lm / airllm / tensorrt-llm) — con ropero, que es
+# idempotente, reanudable y comprueba que los pesos están de verdad:
+ropero_download_safetensors "mlx-community/gpt-oss-20b-MXFP4-Q8" \
+    "gpt-oss-20b-MXFP4-Q8" "12.1 GB"
+# O con hf, sin intermediarios:
+hf download mlx-community/gpt-oss-20b-MXFP4-Q8 \
+    --local-dir ~/models/safetensors/gpt-oss-20b-MXFP4-Q8
 
-# Qwen3-27B-Instruct (Alibaba, 12.5 GB Q3_K_XL)
-hf download Qwen/Qwen3-27B-Instruct-GGUF \
-    --include 'Qwen3-27B-Instruct-Q3_K_XL.gguf' \
-    --local-dir ~/.cache/models/qwen/
+# TensorRT-LLM — checkpoint de HF (compila al arrancar) o .engine ya compilado
+hf download <repo> --local-dir ~/models/safetensors/mi-modelo
+
+# AirLLM — el checkpoint de HF tal cual (safetensors + config + tokenizer)
+ropero_download_safetensors "openai/gpt-oss-120b" "gpt-oss-120b" "130 GB" \
+    "$SAFETENSORS_DIR/gpt-oss-120b" "original/*"
+#                         ↑ el 5º argumento importa: openai/gpt-oss-120b trae
+#                         `original/` con los pesos bf16 SIN cuantizar. Sin
+#                         excluirlo descargas el doble de disco para nada.
+
+# FastFlowLM — kernels optimizados para NPU; NO es `hf download`
+flm pull llama3.2:1b && flm list
+
+# MLX hay que CONVERTIRLO, no solo descargarlo
+hf download mlx-community/Qwen3-8B-4bit --local-dir /tmp/src
+mlx_lm.convert --hf-path /tmp/src --mlx-path ~/models/safetensors/qwen3-8b-4bit
 ```
 
-> **Proveedor preferido**: `unsloth` > `bartowski` > `mnotex` para HF GGUF.
-> Si usas `bartowski`, el nombre del archivo puede cambiar — ajusta `MODEL_FILE`.
+Un directorio se considera descargado si tiene **pesos + `config.json`**, no por un
+marcador: si borras un shard, `ropero --install` vuelve a bajarlo. Los pesos se
+detectan en los tres formatos (`*.safetensors`, `pytorch_model*.bin`, `*.npz`) porque hay
+checkpoints válidos sin un solo safetensors.
 
-## Cómo swapear un modelo (1 línea)
+## Cutoffs
 
-**Para cambiar el alias `coder` de Devstral a Qwen3-Coder-30B-A3B**, dos opciones:
-
-**(a) Cambiar el binding del alias:** edita `bin/ropero.d/qwencoder.sh` y ponle el alias `coder` (queda accesible como `ropero coder` corriendo el modelo físico de Qwen3-Coder). Si quieres que `coder` siga apuntando al script físico Devstral pero con otro GGUF, edita `bin/ropero.d/devstral.sh` (cambia `MODEL_GGUF` + args). **NO necesitas tocar `opencode.jsonc`** — el alias sigue siendo `coder`.
-
-**(b) Apuntar `coder` a otro script:** pon en `bin/ropero.d/devstral.sh` el alias que prefieras (o vacío) y reserva el alias `coder` para el script que elijas. El registro de aliases se re-evalúa en cada arranque de `ropero`.
-
-Tras cualquier cambio, `gunter smoke` para verificar.
-
-## Variables de entorno reconocidas
-
-| Variable                       | Default | Usado por              | Significado                          |
-| ------------------------------ | ------- | ---------------------- | ------------------------------------ |
-| `LLAMA_SERVER_BIN`             | `llama-server` | todos los físicos | Path al binario de llama.cpp         |
-| `ROPERO_DEVSTRAL_CTX`          | 131072  | `devstral.sh`          | Override de context length (alias `coder`) |
-| `ROPERO_CODER_CTX`             | 131072  | `qwencoder.sh`         | Override de context length (alias `analyst`) |
-| `ROPERO_GPTOSS_HIGH_CTX`       | 131072  | `gptoss_high.sh`       | Override de context length (alias `verifier`) |
-| `ROPERO_GPTOSS_MEDIUM_CTX`     | 131072  | `gptoss_medium.sh`     | Override de context length (alias `designer`) |
-| `ROPERO_QWEN_CTX`              | 131072  | `qwen.sh`              | Override de context length (alias físico `qwen`) |
-| `CODER_PORT` / `VERIFIER_PORT` / `ANALYST_PORT` / `DESIGNER_PORT` | 9999/9998/9999/9998 | aliases | Override de puerto por alias |
-| `FORCE_GPTOSS`                 | unset   | `gptoss_{low,medium,high}.sh` | Si está, skip RAM check         |
-
-## Cuándo un modelo NO está disponible
-
-Si un script físico no encuentra el archivo `.gguf`, imprime:
-
-```
-[devstral-24b] ERROR: modelo no encontrado.
-  Esperado en: ~/.cache/models/devstral/Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf
-  Descarga con: hf download mistralai/Devstral-Small-2-24B-Instruct-2512-GGUF ...
-```
-
-El alias lo recibe y termina con exit code 1. NO lanza el modelo. El smoke test debe pasar antes de cualquier delegación.
-
-## Fallback chain (recomendado)
-
-Si el modelo físico del alias primario no responde, configura manualmente en su script:
-
-```bash
-# En bin/ropero.d/devstral.sh, al final:
-if ! curl -sf "${HOST}:${PORT}/health" >/dev/null 2>&1; then
-    echo "[devstral] Primary failed, trying fallback..." >&2
-    source "${HOME}/bin/ropero.d/qwencoder.sh"
-    MODEL_GGUF="$MODEL_GGUF"
-    # ... retry launch con get_model_args_qwencoder
-fi
-```
-
-Por defecto v5.0 **NO incluye fallback automático** (cada swap cuesta 5-15s). Si lo necesitas, añádelo explícitamente.
+`fired/` contiene modelos legacy retirados. `fired/mlx_lm.sh` y `fired/tensorrt-llm.sh` están **superados** por `30-template-mlx.sh` y `30-template-tensorrt-llm.sh`: usan `python -m airllm serve` y flags que no existen, y sus `MODEL_PATH` apuntan a rutas que ya no son válidas. Recuperables con `mv fired/<x>.sh ./`, pero lo razonable es partir de la plantilla.

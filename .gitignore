@@ -1,6 +1,10 @@
 *.log
 .DS_Store
 
+# Python bytecode (los servidores de ropero.d/ son .py)
+__pycache__/
+*.pyc
+
 # Lock files de runtime (vault, cron, procesos efímeros)
 *.lock
 .lock/

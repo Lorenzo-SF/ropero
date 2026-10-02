@@ -230,51 +230,197 @@ ropero_download_gguf() {
 }
 
 
-ropero_download_safetensors() {
-    local repo="${1:-}"
-    local modelname="${2:-}"
-    local size="${3:-}"
+# _ropero_dir_has_weights <dir> → 0 si hay pesos de CUALQUIER formato que un
+# engine sepa cargar.
+#
+# Why no basta con "*.safetensors": porque hay checkpoints perfectamente válidos
+# que solo traen pytorch_model.bin. Comprobado con
+# hf-internal-testing/tiny-random-GPTNeoXForCausalLM: su único fichero de pesos
+# es pytorch_model.bin, sin un solo safetensors. Con el chequeo restringido a
+# safetensors, la función NUNCA daba el modelo por descargado, no tocaba el
+# marcador y cada `ropero --install` volvía a bajar los mismos 12 GB. Un bug de
+# idempotencia que solo se ve probando contra un repo de verdad.
+#
+# Los tres formatos:
+#   *.safetensors     lo normal (HF moderno, y lo que usa mlx_lm)
+#   pytorch_model*.bin checkpoints antiguos o de publishers que no migraron
+#   *.npz             conversiones MLX muy viejas, antes de safetensors
+#
+# Un shard suelto NO cuenta: un repo de 3 shards con solo el primero descargado
+# (interrumpido) tiene pesos y no es utilizable. Por eso se exige el índice
+# cuando hay más de un shard, igual que hace transformers al cargar.
+_ropero_dir_has_weights() {
+    local dir="${1:-}"
+    [[ -d "$dir" ]] || return 1
 
-    local dest_dir="${4:-${SAFETENSORS_DIR:-$HOME/models/safetensors}/$modelname}"
-    local marker="$dest_dir/.download_complete"
+    local n=0 f
+    for f in "$dir"/*.safetensors "$dir"/pytorch_model*.bin "$dir"/*.npz; do
+        [[ -f "$f" ]] && n=$((n + 1))
+    done
+    (( n > 0 )) || return 1
+
+    # Si hay varios shards y además hay un índice, el índice tiene que estar.
+    # Sin él, transformers no sabe qué shard va con qué y falla al cargar.
+    if (( n > 1 )); then
+        if [[ -f "$dir/model.safetensors.index.json" || -f "$dir/pytorch_model.bin.index.json" ]]; then
+            return 0
+        fi
+        # Sin ningún índice: solo es válido si hay un único fichero de pesos.
+        (( n == 1 ))
+        return $?
+    fi
+    return 0
+}
+
+# ropero_download_safetensors <repo> <modelname> <size> [dest_dir] [excludes]
+#                                   ^^^^^^^  ^^^^^^^^^  ^^^^  ^^^^^^^^^  ^^^^^^^^^
+#                                   HF repo  nombre    tam. ruta        globs extra
+#                                           legible    destino   a excluir
+#
+# Descarga un checkpoint COMPLETO de HuggingFace (safetensors + config +
+# tokenizer) a un directorio, que es lo que necesitan los engines con servidor
+# propio: mlx_lm, airllm, tensorrt-llm.
+#
+# ── IDEMPOTENCIA POR CONTENIDO REAL, NO POR UN MARCADOR ─────────────────────
+# La versión anterior decidía con un fichero `.download_complete` que se tocaba
+# al final. Eso miente en los dos sentidos:
+#   · Si borras un shard, el marcador sigue ahí y dice "ya descargado" para
+#     siempre. El modelo no arranca y el `--install` no vuelve a intentarlo.
+#   · Si el directorio se creó por otra vía (un `hf download` a mano, un symlink,
+#     un montaje), no hay marcador y descarga 12 GB encima de 12 GB.
+# Ahora la pregunta es "¿hay pesos ahí?", y se responde contando ficheros:
+# al menos un *.safetensors y un config.json. El marcador se conserva, pero como
+# optimisation, no como fuente de verdad: si existe y el contenido está bien, se
+# refresca; si el marcador dice que sí y el contenido dice que no, gana el
+# contenido y se vuelve a descargar.
+#
+# ── POR QUÉ `hf` Y NO `curl` ─────────────────────────────────────────────────
+# Los checkpoints son 3-15 shards con un `model.safetensors.index.json` que dice
+# cuál va con cuál, y las URLs de HF caducan. `hf download` resuelve el
+# índice, reanuda una descarga a medias y verifica etags. Con curl habría que
+# replicar las tres cosas y fallar en silencio en cuanto el repo se reescriba.
+#
+# ── `excludes` ───────────────────────────────────────────────────────────────
+# Globs relativos a la raíz del repo, separados por espacio. Se suman a una
+# lista fija de basura. Existe por un motivo concreto: hay checkpoints que
+# duplican los pesos dentro del repo (`openai/gpt-oss-120b` trae `original/` en
+# bf16 junto a la versión cuantizada). Sin excluir eso descargas el doble de
+# disco para nada. Por eso el default NO excluye `original/*` —sería magia— y
+# quien lo sepa, lo pasa explícitamente.
+ropero_download_safetensors() {
+    local repo="${1:-}" modelname="${2:-}" size="${3:-}"
+    local dest_dir="${4:-}" excludes="${5:-}"
 
     if [[ -z "$repo" || -z "$modelname" ]]; then
         ropero_err "ropero_download_safetensors: argumentos incompletos (repo='$repo' modelname='$modelname')"
         return 1
     fi
 
-    if [[ -z "$dest_dir" ]]; then
-        ropero_err "ropero_download_safetensors: dest_dir vacío"
-        return 1
+    # ── Destino ───────────────────────────────────────────────────────────
+    [[ -n "$dest_dir" ]] || dest_dir="${SAFETENSORS_DIR:-$HOME/models/safetensors}/$modelname"
+    # `~` sin expandir crearía un directorio LITERAL llamado "~" en el cwd. Los
+    # llamadores pasan las rutas entre comillas, y bash NO expande ~ ahí dentro.
+    case "$dest_dir" in
+        "~")     dest_dir="$HOME" ;;
+        "~/"*)   dest_dir="$HOME/${dest_dir#\~/}" ;;
+    esac
+
+    # ── ¿Está ya? ─────────────────────────────────────────────────────────
+    # Lo que tiene que haber para que un engine pueda cargarlo: pesos y config.
+    # El tokenizer solo se avisa: hay checkpoints que lo traen embebido en
+    # tokenizer_config.json y no tienen tokenizer.json suelto, así que exigirlo
+    # daría un falso negativo en modelos perfectamente buenos.
+    local have_weights=0 have_config=0
+    if [[ -d "$dest_dir" ]]; then
+        _ropero_dir_has_weights "$dest_dir" && have_weights=1
+        [[ -f "$dest_dir/config.json" ]] && have_config=1
     fi
 
-    if [[ -f "$marker" ]]; then
-        ropero_ok "$modelname ya descargado"
+    if (( have_weights == 1 && have_config == 1 )); then
+        # Refrescar el marcador si falta, para que las versiones viejas del
+        # repo (que solo miraban el marcador) sigan funcionando.
+        [[ -f "$dest_dir/.download_complete" ]] || touch "$dest_dir/.download_complete" 2>/dev/null || true
+        local wmb
+        wmb=$(du -sm "$dest_dir" 2>/dev/null | awk '{print $1; exit}')
+        ropero_ok "$modelname ya descargado (${wmb:-?} MB en $dest_dir)"
         return 0
     fi
 
-    if ! ropero_ask "Descargar $modelname (~$size)? Necesario para ropero"; then
+    # Hay marcador pero no pesos: alguien borró los shards, o una descarga
+    # anterior se quedó a medias y llegó a tocar el marcador. Hay que decirlo,
+    # porque si no parece un bug de ropero cuando es un directorio roto.
+    if [[ -f "$dest_dir/.download_complete" ]] && (( have_weights == 0 )); then
+        ropero_warn "$modelname: el directorio $dest_dir dice estar descargado pero no tiene pesos."
+        ropero_warn "  Se vuelve a descargar (los shards que quedaran se sobrescriben)."
+        rm -f "$dest_dir/.download_complete" 2>/dev/null || true
+    fi
+
+    # ── hf ANTES de preguntar ──────────────────────────────────────────────
+    # Preguntar "¿descargo 12 GB?" y luego decir que no se puede es la peor
+    # secuencia posible: el usuario contesta sí y no entiende el fallo.
+    if ! command -v hf >/dev/null 2>&1; then
+        ropero_err "no se puede descargar $modelname: falta 'hf' (huggingface_hub)"
+        ropero_info "  instalarlo:  pip install -U 'huggingface_hub[cli]'"
+        ropero_info "  o descarga manual y ponlo en: $dest_dir"
+        return 1
+    fi
+
+    if ! ropero_ask "Descargar $modelname (~$size) en $dest_dir?"; then
         ropero_info "$modelname omitido por el usuario"
         return 0
     fi
 
-    mkdir -p "$dest_dir"
+    mkdir -p "$dest_dir" || { ropero_err "no se pudo crear $dest_dir"; return 1; }
 
-    if command -v hf &>/dev/null; then
-        hf download "$repo" \
-            --local-dir "$dest_dir" \
-            || {
-                ropero_err "falló la descarga de $modelname"
-                return 1
-            }
-    else
-        ropero_err "hf no disponible; no se puede descargar $modelname"
+    # ── Descarga ──────────────────────────────────────────────────────────
+    # Se acumulan los excludes: los de basura, siempre, y los que pase el
+    # llamador. `hf download` es reanudable, así que si esto se corta a mitad
+    # el siguiente `--install` continúa donde lo dejó en vez de rehacer 12 GB.
+    local -a hf_args=(download "$repo" --local-dir "$dest_dir")
+    local e
+    for e in ".gitattributes" "*.md" ".DS_Store" "*.png" "*.jpg" "*.gif" $excludes; do
+        [[ -n "$e" ]] || continue
+        hf_args+=(--exclude "$e")
+    done
+
+    ropero_info "  hf ${hf_args[*]}"
+    # Progreso por stderr: hf escribe mucho y si se fuera a stdout, --install
+    # parecería escupir basura en vez de modelo.
+    if ! hf "${hf_args[@]}" >&2; then
+        ropero_err "falló la descarga de $modelname (hf)"
+        ropero_info "  hf reanuda solo: vuelve a ejecutar el install y continúa."
+        ropero_info "  para ir más rápido:  pip install hf_transfer"
+        ropero_info "  y luego  HF_HUB_ENABLE_HF_TRANSFER=1 ropero --install"
         return 1
     fi
 
-    touch "$marker"
+    # ── Verificación ──────────────────────────────────────────────────────
+    # hf puede salir con 0 y dejar el directorio a medias (fallo de red tratado
+    # como fin, o un repo sin pesos). El marcador solo se toca si los pesos
+    # están de verdad: es lo que hace que la idempotencia sea de fiar.
+    have_weights=0 have_config=0
+    _ropero_dir_has_weights "$dest_dir" && have_weights=1
+    [[ -f "$dest_dir/config.json" ]] && have_config=1
 
-    ropero_ok "$modelname descargado"
+    if (( have_weights == 0 || have_config == 0 )); then
+        ropero_err "hf terminó pero $dest_dir está incompleto"
+        [[ $have_weights -eq 0 ]] && ropero_info "  faltan los pesos (*.safetensors / pytorch_model*.bin / *.npz)"
+        [[ $have_config -eq 0 ]] && ropero_info "  falta config.json (¿repo equivocado?)"
+        rm -f "$dest_dir/.download_complete" 2>/dev/null || true
+        return 1
+    fi
+
+    touch "$dest_dir/.download_complete" 2>/dev/null || true
+    local wmb
+    wmb=$(du -sm "$dest_dir" 2>/dev/null | awk '{print $1; exit}')
+    # En MB mientras sea pequeño: decir "0 GB" de un modelo de 15 MB parece un
+    # error, y el redondeo a GB solo tiene sentido a partir del gigabyte.
+    if (( ${wmb:-0} >= 1024 )); then
+        ropero_ok "$modelname descargado ($(( ${wmb:-0} / 1024 )) GB en $dest_dir)"
+    else
+        ropero_ok "$modelname descargado (${wmb:-?} MB en $dest_dir)"
+    fi
+    return 0
 }
 
 # -----------------------------------------------------------------------------

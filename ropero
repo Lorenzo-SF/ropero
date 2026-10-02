@@ -115,9 +115,14 @@ fi
 [[ -f "$MODULES_DIR/01-env.sh" ]] && source "$MODULES_DIR/01-env.sh"
 
 # Sourcear explícitamente los módulos de soporte/infra del install.
-# El loop de modelos los excluye por convención (NN-compile-*, NN-download-*).
+# El loop de modelos los salta (no definen MODEL_*).
 [[ -f "$MODULES_DIR/20-compile-llama.sh" ]]  && source "$MODULES_DIR/20-compile-llama.sh"
 [[ -f "$MODULES_DIR/21-download-models.sh" ]] && source "$MODULES_DIR/21-download-models.sh"
+# Registro de engines que NO son llama-server (airllm, mlx_lm, tensorrt-llm,
+# fastflowlm). Define cómo se resuelve cada binario, qué flags acepta de verdad
+# y si valida la API key por sí mismo o necesita el proxy de _authproxy.py.
+# Sin esto, cada sitio que nombraba un engine repetía su comando a mano.
+[[ -f "$MODULES_DIR/_engines.sh" ]] && source "$MODULES_DIR/_engines.sh"
 
 # Re-aplicar override de desatendido DESPUÉS de sourcear módulos. Si los
 # módulos redefinen ropero_ask / ropero_ask_keep (no deberían, pero por si),
@@ -127,7 +132,7 @@ if [[ "${_ropero_unattended:-0}" == "1" ]]; then
     ropero_ask_keep() { return 1; }
 fi
 
-declare -A MODEL_GGUF MODEL_CTX MODEL_ENGINE MODEL_PATH MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_GPU MODEL_PORT
+declare -A MODEL_GGUF MODEL_CTX MODEL_ENGINE MODEL_PATH MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_GPU MODEL_PORT MODEL_FORMAT MODEL_DL
 declare -a MODEL_NAMES=()
 # puerto → script que lo reclamó. Solo para detectar colisiones al cargar.
 declare -A _MODEL_PORT_OWNER=()
@@ -144,6 +149,13 @@ for f in "$MODULES_DIR"/*.sh; do
     # (convención "NN-<nombre>.sh" extraída del spec para modularizar
     # el install, sin que el loop los confunda con modelos)
     [[ "$bn" == *-compile-* || "$bn" == *-download-* ]] && continue
+    # Excluir las PLANTILLAS de modelo (30-template-<engine>.sh). Viven en
+    # ropero.d/ a propósito, para poder leerlas y copiarlas, pero no son
+    # modelos: si el loop las cargara, `ropero list` ofrecería entradas
+    # rotas con MODEL_PATH="PON_AQUI..." y `ropero 30-template-mlx` fallaría
+    # al buscar un directorio que no existe. Copia la que quieras a
+    # ropero.d/<nombre>.sh (sin el prefijo 30-) y esa sí se carga.
+    [[ "$bn" == *-template-* ]] && continue
 
     # Normalizar nombre: reemplazar guiones por guiones bajos para variables/funciones
     alias_name="${bn//-/_}"
@@ -155,6 +167,8 @@ for f in "$MODULES_DIR"/*.sh; do
     MODEL_PATH=
     MODEL_ALIAS=
     MODEL_PORT=
+    MODEL_FORMAT=
+    MODEL_DOWNLOAD=
     source "$f"
 
     engine="${MODEL_ENGINE:-llama-server}"
@@ -171,7 +185,10 @@ for f in "$MODULES_DIR"/*.sh; do
                 continue
             fi
             ;;
-        "airllm"|"tensorrt-llm"|"mlx_lm")
+        # Engines con servidor propio. Ya no se escriben a mano en start_model:
+        # todo (binario, flags, auth) sale de ropero.d/_engines.sh, que es
+        # donde se verificaron contra el --help real de cada uno.
+        "airllm"|"mlx_lm"|"tensorrt-llm"|"fastflowlm")
             if [[ -z "${MODEL_PATH:-}" || -z "${MODEL_CTX:-}" ]]; then
                 echo "WARN: $f (engine=$engine) no define MODEL_PATH o MODEL_CTX, se omite" >&2
                 continue
@@ -215,6 +232,13 @@ for f in "$MODULES_DIR"/*.sh; do
     MODEL_GGUF["$alias_name"]="${MODEL_GGUF:-}"
     MODEL_CTX["$alias_name"]="${MODEL_CTX:-}"
     MODEL_PORT["$alias_name"]="${MODEL_PORT:-}"
+    MODEL_FORMAT["$alias_name"]="${MODEL_FORMAT:-}"
+    # MODEL_DOWNLOAD va en array y no como variable suelta por la misma razón que
+    # MODEL_GGUF: el loader sourcea TODOS los scripts seguidos, así que una
+    # variable normal se queda con el valor del ÚLTIMO script sourceado. Al
+    # arrancar el modelo 'metaloss' le estamparías el hint de descarga del
+    # último .sh alfabético.
+    MODEL_DL["$alias_name"]="${MODEL_DOWNLOAD:-}"
     MODEL_ALIAS["$alias_name"]="$bn"  # guardar nombre original para mostrarlo
 
     # Si el script define un alias público (MODEL_ALIAS), registrarlo como
@@ -235,6 +259,8 @@ for f in "$MODULES_DIR"/*.sh; do
             MODEL_CTX["$public_alias"]="${MODEL_CTX:-}"
             MODEL_ENGINE["$public_alias"]="$engine"
             MODEL_PORT["$public_alias"]="${MODEL_PORT:-}"
+            MODEL_FORMAT["$public_alias"]="${MODEL_FORMAT:-}"
+            MODEL_DL["$public_alias"]="${MODEL_DL[$alias_name]:-}"
             # Key de redirección: si $model coincide con el alias público,
             # start_model lo manda al script físico (alias_name).
             MODEL_ALIAS_TARGET["$public_alias"]="$alias_name"
@@ -250,10 +276,147 @@ done
 port_listening() { lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 get_pid_for_port() { lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
 get_model_on_port() {
+    # El patrón tolera el espacio opcional alrededor de los dos puntos.
+    #
+    # No es parsería por el gusto de parsear: llama-server serializa JSON
+    # compacto ("id":"nombre") y el patrón viejo, que exigía exactamente eso,
+    # funcionaba solo por casualidad. Cualquier server que serialice con
+    # espacios —Python lo hace por defecto, y eso incluye al que escribe ropero
+    # para airllm y al proxy— devolvía vacío. Y un vacío aquí no es un detalle
+    # cosmético: el bucle de arranque de --background nunca daba el modelo por
+    # bueno y se comía los 180s de espera para luego decir que no había
+    # respondido; y `ropero stop <modelo>` no encontraba lo que estaba corriendo.
     curl -sf --max-time 2 \
         -H "Authorization: Bearer $LLAMA_API_KEY" \
         "http://127.0.0.1:$1/v1/models" 2>/dev/null \
-        | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
+        | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+}
+
+# -----------------------------------------------------------------------------
+# engine_on_port <port> → qué engine responde en ese puerto, o "" si no se sabe.
+#
+# Por qué hace falta si ya se mira el nombre del proceso: cuando un engine NO
+# valida la API key (mlx_lm, trtllm-serve, flm), ropero pone delante
+# _authproxy.py, y el proceso que escucha en el puerto de ropero es un
+# `python3` anónimo. `ps -o comm=` devolvería "Python" para los tres, y la
+# columna ENGINE del status mentiría. El proxy publica /ropero/engine, que es
+# la única fuente de verdad.
+#
+# Para llama-server y para airllm (que validan la key ellos mismos) la ruta
+# devuelve 404 y caemos al nombre del proceso, que ahí sí es informativo.
+# Sin auth, curl no manda nada: es una ruta local de diagnóstico.
+# -----------------------------------------------------------------------------
+engine_on_port() {
+    local p="$1" j
+    j=$(curl -sf --max-time 2 "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
+    [[ -n "$j" ]] || return 1
+    printf '%s' "$j" | grep -oE '"engine"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+}
+
+# child_pid_on_port <port> → PID del engine hijo que el proxy de auth tiene
+# launching, o "" si no hay proxy (llama-server, airllm) o no responde.
+# Lo usa el apagado para no dejar engines huérfanos.
+child_pid_on_port() {
+    local p="$1" j
+    j=$(curl -sf --max-time 2 "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
+    [[ -n "$j" ]] || return 1
+    printf '%s' "$j" | grep -oE '"child_pid"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 \
+        | grep -oE '[0-9]+' || true
+}
+
+# _engine_from_comm <bin_name> → engine a partir del nombre del proceso.
+# Fallback para cuando /ropero/engine no contesta.
+_engine_from_comm() {
+    case "$1" in
+        *airllm*)       printf 'airllm' ;;
+        *mlx_lm*|*mlx*) printf 'mlx_lm' ;;
+        *trtllm*)       printf 'tensorrt-llm' ;;
+        *flm*|*fastflow*) printf 'fastflowlm' ;;
+        *llama-server*) printf 'llama-server' ;;
+        *)              printf 'llama-server' ;;
+    esac
+}
+
+# _engine_human <port> → engine del puerto, para poder nombrarlo al pararlo.
+_engine_human() {
+    local eng
+    eng=$(engine_on_port "$1" 2>/dev/null || true)
+    if [[ -n "$eng" ]]; then
+        ropero_engine_label "$eng"
+    else
+        local p comm
+        p=$(get_pid_for_port "$1" 2>/dev/null || true)
+        comm=$(ps -p "$p" -o comm= 2>/dev/null || true)
+        _engine_from_comm "$comm"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# _kill_port <port> — apaga lo que vive en <port>, incluido su engine hijo.
+# Por puerto, nunca por nombre de proceso: un `pkill -f trtllm` mataría los slots
+# paralelos. Devuelve 0 si había algo, 1 si el puerto estaba libre.
+#
+# ⚠️ SIGTERM primero, SIGKILL de recurso. No es puritanismo: es lo que sostiene
+# el árbol de procesos de los engines con proxy. El proxy (ropero.d/_authproxy.py)
+# es el PADRE del engine, y es él quien, al recibir SIGTERM, apaga a su hijo y
+# suelta el puerto interno. Con `kill -9` —que era lo que había— el proxy moría
+# sin ejecutar su handler, el engine real se quedaba sirviendo en :10xxx para
+# siempre, y lo peor es que `ropero status` no lo enseña: no está en ningún puerto
+# gestionado. Se quedaba ahí comiéndose la GPU/RAM/NPU sin que nada lo dijera.
+#
+# El SIGKILL sigue como red de seguridad: si algo ignora SIGTERM, el puerto tiene
+# que quedar libre igual.
+#
+# Lo usan cmd_stop y el --force de start_model. Por eso es de nivel de archivo y
+# no una función anidada en cmd_stop: una función definida dentro de otra no
+# existe hasta que esa se ha ejecutado, y estos dos caminos nunca corren juntos.
+# -----------------------------------------------------------------------------
+_kill_port() {
+    local port="$1"
+    if ! port_listening "$port"; then
+        return 1
+    fi
+    local pid
+    pid=$(get_pid_for_port "$port")
+    if [[ -z "$pid" ]]; then
+        return 1
+    fi
+
+    # Red de seguridad explícita, antes de tocar el padre: si el proceso raíz no
+    # va a propagar (ignora SIGTERM, está zombi, o el proxy ya murió), el
+    # child_pid que publica /ropero/engine dice a quién hay que matar igualmente.
+    local cpid
+    cpid=$(child_pid_on_port "$port")
+    if [[ -n "$cpid" ]]; then
+        kill -TERM "$cpid" 2>/dev/null || true
+    fi
+
+    kill -TERM "$pid" 2>/dev/null || true
+    local waited=0
+    while (( waited < 10 )) && port_listening "$port"; do
+        sleep 1
+        (( waited++ ))
+    done
+    if port_listening "$port"; then
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+    if [[ -n "$cpid" ]] && kill -0 "$cpid" 2>/dev/null; then
+        kill -9 "$cpid" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# _stop_port <port> — _kill_port + limpiar el registro de puertos ad-hoc.
+_stop_port() {
+    local port="$1"
+    _kill_port "$port" || return 1
+    # Si el puerto era ad-hoc (pedido con --port), ya no sirve para nada: sale
+    # del registro para que no siga saliendo en el status.
+    _ropero_adhoc_del "$port"
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -448,11 +611,14 @@ _collect_slots() {
             pid=$(get_pid_for_port "$_p")
             uptime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || echo "?")
             bin_name=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
-            case "$bin_name" in
-                *airllm*) engine="airllm" ;;
-                *trtllm*) engine="tensorrt-llm" ;;
-                *)        engine="llama-server" ;;
-            esac
+            # El engine se pregunta al endpoint, no al nombre del proceso: con
+            # proxy delante, el proceso es un `python3` que no dice nada (ver
+            # engine_on_port). El nombre del proceso queda de respaldo.
+            engine=$(engine_on_port "$_p" 2>/dev/null || true)
+            if [[ -z "$engine" ]]; then
+                engine=$(_engine_from_comm "$bin_name")
+            fi
+            engine=$(ropero_engine_label "$engine")
             ROPERO_SLOT_ROWS+=("$_slot" "$_p" "ON" "$model" "$pid" "$uptime" "$engine")
             ROPERO_SLOT_BUSY=$((ROPERO_SLOT_BUSY + 1))
         else
@@ -781,10 +947,44 @@ cmd_list() {
             printf "  %-12s %-21s ctx=%-10s engine=%-14s gguf=%s\n" \
                 "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_GGUF[$m]}"
         else
-            printf "  %-12s %-21s ctx=%-10s engine=%-14s path=%s\n" \
-                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_PATH[$m]:-N/A}"
+            # Para los engines con servidor propio, lo útil ver de un vistazo
+            # es el formato del checkpoint: un .safetensors no se puede meter
+            # en un trtllm-serve y un GGUF tampoco, y el error que sale de ahí
+            # ("no se encontró ningún archivo de pesos") no lo dice.
+            local fmt="${MODEL_FORMAT[$m]:-dir}"
+            local auth="proxy"
+            if ropero_engine_auth_native "$engine"; then auth="api-key"; fi
+            printf "  %-12s %-21s ctx=%-10s engine=%-14s [%s/%s] path=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" \
+                "$fmt" "$auth" "${MODEL_PATH[$m]:-N/A}"
         fi
     done
+}
+
+# -----------------------------------------------------------------------------
+# ropero_templates → lista las plantillas de modelo disponibles en ropero.d/.
+# -----------------------------------------------------------------------------
+cmd_templates() {
+    local f bn count=0
+    printf 'Plantillas en %s/ — copia una a ropero.d/<nombre>.sh (SIN el prefijo 30-) y edítala:\n\n' "$MODULES_DIR"
+    for f in "$MODULES_DIR"/30-template-*.sh; do
+        [[ -f "$f" ]] || continue
+        bn="$(basename "$f" .sh)"
+        count=$((count + 1))
+        # MODEL_ENGINE va en el .sh (una sola vez), el título en la cabecera.
+        local eng title
+        eng="$(sed -n 's/^MODEL_ENGINE="\([^"]*\)".*/\1/p' "$f" | head -1)"
+        eng="${eng:-?}"
+        title="$(grep -m1 '^# PLANTILLA' "$f" | sed 's/^# PLANTILLA[[:space:]]*:[[:space:]]*//')"
+        printf '  %-30s engine=%-14s %s\n' "$bn" "$eng" "$title"
+    done
+    if (( count == 0 )); then
+        printf '  (ninguna)\n'
+    fi
+    printf '\nLas plantillas NO se cargan como modelos (el loader salta *-template-*),\n'
+    printf 'así que no aparecen en `ropero list` ni se pueden arrancar por su nombre.\n'
+    printf 'Al copiar: renombra la función get_engine_args_* al nombre del nuevo\n'
+    printf 'fichero (guiones bajos), y chmod +x.\n'
 }
 
 cmd_status() {
@@ -969,25 +1169,9 @@ cmd_status_watch() {
 cmd_stop() {
     local target="${1:-all}"
 
-    # Helper: mata el proceso que escucha en un puerto dado POR SU PID
-    # (sin pkill -f global: no queremos matar modelos en el otro slot).
-    # Devuelve 0 si mató algo, 1 si el puerto estaba vacío.
-    _stop_port() {
-        local port="$1"
-        if ! port_listening "$port"; then
-            return 1
-        fi
-        local pid
-        pid=$(get_pid_for_port "$port")
-        if [[ -n "$pid" ]]; then
-            kill -9 "$pid" 2>/dev/null || true
-            # Si el puerto era ad-hoc (pedido con --port), ya no sirve para
-            # nada: sale del registro para que no siga saliendo en el status.
-            _ropero_adhoc_del "$port"
-            return 0
-        fi
-        return 1
-    }
+    # _kill_port y _engine_human están a nivel de archivo (ver más arriba), no
+    # aquí dentro: --force, en start_model, también necesita apagarlos, y una
+    # función definida dentro de otra no existe hasta que esa se ha ejecutado.
 
     if [[ "$target" == "all" ]]; then
         # Mata en TODOS los puertos gestionados: :9999 (dGPU), :9998 (CPU), los
@@ -998,9 +1182,11 @@ cmd_stop() {
         local _stopped=0 _p
         while read -r _p; do
             [[ -n "$_p" ]] || continue
+            local _eng
+            _eng=$(_engine_human "$_p" 2>/dev/null || echo "?")
             if _stop_port "$_p"; then
                 _stopped=$((_stopped+1))
-                echo "  ✓ :$_p detenido"
+                echo "  ✓ :$_p detenido ($_eng)"
             fi
         done < <(ropero_managed_ports)
         if (( _stopped == 0 )); then
@@ -1022,8 +1208,10 @@ cmd_stop() {
             local current
             current=$(get_model_on_port "$_p" 2>/dev/null || echo "")
             if [[ "$current" == "$target" ]]; then
+                local _eng
+                _eng=$(_engine_human "$_p" 2>/dev/null || echo "?")
                 _stop_port "$_p"
-                echo "Modelo '$target' detenido en :$_p"
+                echo "Modelo '$target' ($_eng) detenido en :$_p"
                 return 0
             fi
         fi
@@ -1049,7 +1237,27 @@ ${BLUE}ropero${NC} — lanzador simplificado de LLM engines
 USO:
   ropero <modelo> [--background] [--cpu] [--force] [--port N]
   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
+  ropero templates
   ropero --install | ropero --check
+
+ENGINES:
+  llama-server    llama.cpp sobre GGUF. Metal en macOS, CUDA en cachy. El único
+                  con --cpu (mapea a --n-gpu-layers 0 + --threads N).
+  airllm          Carga por capas desde disco: modelos que no caben en VRAM.
+                  El server es ropero.d/_airllm_server.py, porque airllm es
+                  librería pura y no trae ninguno. SÍ valida la API key.
+  mlx_lm          Modelos MLX en Apple Silicon. macOS.
+  tensorrt-llm    Engines de TensorRT-LLM en NVIDIA. cachy/arch, RTX.
+  fastflowlm      AMD Ryzen AI NPU (XDNA). Solo cachy/arch CON NPU. El engine
+                  que descarga CPU y GPU: útil para el modelo pequeño en
+                  paralelo con el grande en la GPU.
+
+  Todos hablan OpenAI-compatible y todos se publican en el MISMO puerto con la
+  MISMA API_KEY, para que opencode.jsonc no tenga que saber qué hay detrás.
+  Como mlx_lm, tensorrt-llm y fastflowlm NO validan la API key (está verificado
+  en el CLI de cada uno), ropero les pone delante _authproxy.py, que sí la
+  exige. El engine real escucha solo en 127.0.0.1, en un puerto interno que se
+  deriva del de ropero (+1000..+1049). Nada de eso se ve desde fuera.
 
 PUERTOS:
 $(_port_legend)
@@ -1067,6 +1275,9 @@ OPCIONES:
   --cpu         arrancar sin GPU (offload CPU completo, todos los cores). Usa el
                 slot CPU :$CPU_PORT, salvo que el modelo tenga MODEL_PORT fijado
                 o se pase --port, en cuyo caso se respeta ese puerto.
+                SOLO llama-server: es el único con esa palanca. En airllm,
+                mlx_lm, tensorrt-llm y fastflowlm da error explicándolo, en vez
+                de ignorarse y dejarte pensando que tienes la CPU.
   --port N      arrancar en el puerto N, saltándose MODEL_PORT y los slots.
                 Puntual: no edita el .sh, así que el siguiente arranque del
                 modelo vuelve a su puerto de siempre. Ej: \`ropero embed --port 9995\`
@@ -1088,18 +1299,40 @@ OPCIONES:
                 Ctrl+C para salir.
 
 SUBCOMANDOS:
+  templates    lista las plantillas de modelo de ropero.d/30-template-*.sh
+               (airllm, mlx, tensorrt-llm, fastflowlm). Cada una documenta
+               qué debe tener el modelo (arquitectura y formato exactos) y qué
+               flags usarla para exprimir el hardware. Copia la que quieras,
+               renómbrala SIN el prefijo 30- y ya es un modelo de ropero.
+               No se cargan como modelos: el loader salta *-template-*.
   --install   instala/rehace los engines uno a uno (llama.cpp, airllm, y
-              tensorrt-llm en cachy o mlx-lm en macos). Cada uno enlaza SUS
-              ejecutables en ~/.local/bin al terminar, no al final el install.
-              Idempotente: si un engine ya está, pregunta si rehacerlo.
-  --check     verifica la instalación (enlaces, modelos, llama-server) sin
-              tocar nada. Exit 1 si algo falta.
+              tensorrt-llm en cachy o mlx-lm en macos, más fastflowlm si hay
+              NPU AMD). Cada uno enlaza SUS ejecutables en ~/.local/bin al
+              terminar, no al final del install.
+              Después descarga los modelos: los GGUF de llama.cpp, y en macOS
+              también el checkpoint MLX de gpt-oss-20b (metaloss). Los que
+              son plataforma-dependientes no se descargan en Linux, donde no
+              sirven de nada.
+              Idempotente: si un engine ya está, pregunta si rehacerlo; y un
+              modelo ya descargado se detecta por su CONTENIDO (pesos +
+              config.json), no por un marcador, así que ro survives a que
+              borres un shard.
+  --check     verifica la instalación (enlaces, modelos, engines, sus
+              dependencias reales) sin tocar nada. Exit 1 si algo falta.
 
 NOTAS:
   - Overrides por modelo (sin editar .sh): ROPERO_<MODELO>_CTX, _NGL, _TEMP,
     _PORT, etc. (el nombre del modelo se normaliza: guiones → guiones bajos)
     ej: ROPERO_MULTIMODAL_ANALYZER_CTX=32768 ropero multimodal-analyzer
          ROPERO_EMBED_PORT=9991 ropero embed
+  - Con engine propio, un script de modelo puede declarar
+    get_engine_args_<nombre>() para añadir flags al comando del server.
+    Ej: `printf '%s\\n' --draft-model ... --num-draft-tokens 4`.
+  - ROPERO_NO_AUTH_PROXY=1 arranca un engine sin proxy, SIN API key y en
+    \$HOST. Solo tiene sentido con HOST=127.0.0.1. Avisa.
+  - ROPERO_START_TIMEOUT (def. 180s) y ROPERO_ENGINE_WAIT (def. 20s) ajustan
+    las esperas de arranque. Los engines con NPU y los que cargan por capas son
+    mucho más lentos que llama-server.
 EOF
 }
 
@@ -1174,6 +1407,20 @@ start_model() {
         port_reason="slot CPU (--cpu)"
     fi
 
+    # --cpu sólo tiene sentido en llama-server, y no por pereza sino porque es
+    # el único con esa palanca: --cpu mapea a --n-gpu-layers 0 + --threads N,
+    # flags que son de llama-server. En los demás engines "apagar la GPU" no
+    # es un flag, es elegir el backend (device= en airllm, y en mlx_lm/trtllm/
+    # flm ni existe la opción). Ignorarlo en silencio dejaría al usuario
+    # pensando que tiene la CPU y con la GPU delante; así que se dice.
+    if (( cpu_only == 1 )) && [[ "$engine" != "llama-server" ]]; then
+        echo "ERROR: --cpu solo funciona con engine=llama-server." >&2
+        echo "       Este modelo usa '$engine', que no tiene offload a CPU por flag." >&2
+        echo "       Para airllm, el device se elige en el propio script del modelo" >&2
+        echo "       (get_engine_args_<model>). Para los demás, no hay equivalente." >&2
+        return 1
+    fi
+
     # Preflight ANTES de tocar el puerto: validar que el arranque puede
     # tener éxito (GGUF + args del módulo). No matar lo que corre por un
     # lanzamiento condenado (p.ej. mmproj ausente → antes dejaba :9999
@@ -1201,6 +1448,56 @@ start_model() {
         "airllm"|"tensorrt-llm"|"mlx_lm")
             if [[ ! -d "${MODEL_PATH[$model_key]}" ]]; then
                 echo "Directorio de modelo no encontrado: ${MODEL_PATH[$model_key]}" >&2
+                # Si el script del modelo sabe cómo se descarga, que lo diga.
+                # Fallar con "no encontrado" y nada más obliga a ir a leer el
+                # .sh, y el comando de descarga está justo ahí arriba.
+                local _dl="${MODEL_DL[$model_key]:-}"
+                if [[ -n "$_dl" ]]; then
+                    echo "       Para conseguirlo:" >&2
+                    printf '         %s\n' "${_dl}" >&2
+                fi
+                return 1
+            fi
+            # Que el directorio exista NO basta: que el server esté instalado sí.
+            # Sin esta comprobación, `ropero gptoss-120b` en una máquina donde
+            # mlx_lm no está se lanza, falla al instante con un error de
+            # "command not found" dentro de un pipe a colorize, y el usuario no
+            # ve qué falta. El binario se comprueba AQUÍ, antes de tocar el
+            # puerto de destino: matar el modelo que hubiera en :9999 y luego
+            # descubrir que el engine no existe sería el peor orden posible.
+            if ! ropero_engine_resolve "$engine" >/dev/null 2>&1; then
+                ropero_err "engine '$engine' no instalado (falta su binario de servidor)"
+                case "$engine" in
+                    airllm)       ropero_info "  ropero --install   (o revisa ropero --check)" ;;
+                    mlx_lm)       ropero_info "  pip install mlx-lm  ·  ropero --install" ;;
+                    tensorrt-llm) ropero_info "  ropero --install   (crea ~/.venv-tensorrt)" ;;
+                    fastflowlm)   ropero_info "  ropero --install   (necesita AMD NPU: driver amdxdna + xrt)" ;;
+                esac
+                return 1
+            fi
+            ;;
+        "fastflowlm")
+            # FLM no recibe una ruta: recibe un TAG ("llama3.2:1b") y lo busca
+            # en su propio almacén. Por eso el chequeo de "-d" de los otros
+            # engines no aplica: 9999 no es un directorio.
+            local flm_root flm_dir
+            flm_root="${FLM_MODEL_PATH:-$HOME/.config/flm}"
+            flm_dir="$flm_root/models/${MODEL_PATH[$model_key]}"
+            if [[ ! -d "$flm_dir" ]]; then
+                # Puede estar en subdirectorios (el tag trae '/'), que es lo
+                # que hace flm con los nombres de tipo "hf.co/org/model:tag".
+                flm_dir="$flm_root/models/$(dirname "${MODEL_PATH[$model_key]}")/$(basename "${MODEL_PATH[$model_key]}")"
+            fi
+            if [[ ! -d "$flm_dir" ]]; then
+                echo "ERROR: el modelo '${MODEL_PATH[$model_key]}' no está en el almacén de FLM." >&2
+                echo "       Buscado en: $flm_dir" >&2
+                echo "       Descárgalo con: flm pull ${MODEL_PATH[$model_key]}" >&2
+                echo "       Modelos disponibles: flm list" >&2
+                return 1
+            fi
+            if ! ropero_engine_resolve "$engine" >/dev/null 2>&1; then
+                ropero_err "engine 'fastflowlm' no instalado (falta 'flm')"
+                ropero_info "  ropero --install   (solo en cachy/arch con NPU AMD)"
                 return 1
             fi
             ;;
@@ -1224,8 +1521,13 @@ start_model() {
             local pid
             pid=$(get_pid_for_port "$port")
             if [[ -n "$pid" ]]; then
-                echo "⚠  --force: matando '$current' en :$port (pid $pid)"
-                kill -9 "$pid" 2>/dev/null || true
+                echo "⚠  --force: matando '$current' ($(_engine_human "$port" 2>/dev/null || echo '?')) en :$port (pid $pid)"
+                # _kill_port y no `kill -9`: el occupant puede ser un proxy con
+                # un engine detrás, y SIGKILL no deja que el proxy apague a su
+                # hijo. Con `kill -9` directo, rotar de modelo con --force
+                # dejaba el engine anterior sirviendo en su puerto interno
+                # (:10xxx), invisible para `ropero status` y para `ropero stop`.
+                _kill_port "$port"
                 # Pequeña espera para que el puerto se libere (lsof ve TIME_WAIT)
                 local _wait=0
                 while (( _wait < 5 )) && port_listening "$port"; do
@@ -1342,69 +1644,214 @@ start_model() {
             fi
             ;;
 
-        "airllm"|"tensorrt-llm"|"mlx_lm")
-            local model_path="${MODEL_PATH[$model_key]}"
-            if [[ ! -d "$model_path" ]]; then
-                echo "Directorio de modelo no encontrado: $model_path" >&2
-                return 1
-            fi
-
-            local bin_name=""
-            case "$engine" in
-                "airllm") bin_name="python -m airllm serve" ;;
-                "tensorrt-llm")
-                    if [[ -x "$BIN_DIR/trtllm-serve" ]]; then
-                        bin_name="$BIN_DIR/trtllm-serve"
-                    elif [[ -x "$HOME/.venv-tensorrt/bin/trtllm-serve" ]]; then
-                        bin_name="$HOME/.venv-tensorrt/bin/trtllm-serve"
-                    else
-                        echo "ERROR: trtllm-serve no encontrado" >&2
-                        return 1
-                    fi
-                    ;;
-                "mlx_lm") bin_name="mlx_lm.server" ;;
-            esac
-
-            local -a cmd=()
-            if [[ "$engine" == "airllm" ]]; then
-                cmd=(python -m airllm serve --model "$model_path" --host "$HOST" --port "$port")
-            elif [[ "$engine" == "tensorrt-llm" ]]; then
-                cmd=("$bin_name" --model "$model_path" --host "$HOST" --port "$port")
-                if [[ -n "${LLAMA_API_KEY:-}" ]]; then
-                    cmd+=(--api-key "$LLAMA_API_KEY")
-                fi
-            elif [[ "$engine" == "mlx_lm" ]]; then
-                cmd=("$bin_name" --model "$model_path" --host "$HOST" --port "$port")
-            fi
-
-            echo "Arrancando $model en :$port (engine: $engine, $port_reason)"
-            if (( background == 0 )); then
-                "${cmd[@]}" 2>&1 | colorize "$model"
-                return $?
-            else
-                local logfile="$LOG_DIR/ropero-${model}-${port}.log"
-                nohup "${cmd[@]}" >>"$logfile" 2>&1 &
-                local pid=$!
-                disown "$pid" 2>/dev/null || true
-                echo "Modelo $model lanzado en background (pid $pid). Log: $logfile"
-                local wait_secs="${ROPERO_START_TIMEOUT:-180}" elapsed=0
-                while (( elapsed < wait_secs )); do
-                    if port_listening "$port"; then
-                        local got
-                        got=$(get_model_on_port "$port" 2>/dev/null || true)
-                        if [[ -n "$got" ]]; then
-                            echo "✓ $model responde en :$port (alias: $got)"
-                            return 0
-                        fi
-                    fi
-                    sleep 2
-                    (( elapsed += 2 ))
-                done
-                echo "⚠  '$model' no responde tras ${wait_secs}s; revisa el log." >&2
-                return 1
-            fi
+        "airllm"|"tensorrt-llm"|"mlx_lm"|"fastflowlm")
+            ropero_launch_engine "$model" "$model_key" "$engine" "$ctx_size" \
+                                 "$port" "$port_reason" "$background"
+            return $?
             ;;
     esac
+}
+
+# -----------------------------------------------------------------------------
+# ropero_launch_engine <model> <model_key> <engine> <ctx> <port> <why> <background>
+#
+# Lanza un engine con servidor propio (airllm / mlx_lm / tensorrt-llm /
+# fastflowlm) respetando EXACTAMENTE el mismo contrato público que llama-server,
+# para que todo lo de arriba — --background, --port, --force, MODEL_PORT,
+# `ropero stop`, `ropero status` — no tenga que saber qué hay detrás.
+#
+# ── La pieza que hace posible ese "exactamente igual": el proxy de auth ───────
+#
+# ropero promete que todos los engines hablan con el mismo LLAMA_API_KEY, la
+# misma IP y el mismo puerto. Eso solo es cierto si el engine valida la key:
+#
+#   llama-server  sí (--api-key)          → directo a $HOST:$port
+#   airllm        sí (nuestro _airllm_server.py trae --api-key) → directo
+#   mlx_lm        NO tiene ese flag
+#   trtllm-serve  NO tiene ese flag
+#   flm serve     la doc dice "the key is not checked"
+#
+# Para los tres últimos se pone _authproxy.py delante:
+#
+#     opencode ──► :9999 (proxy, exige la key) ──127.0.0.1:10999──► engine
+#
+# El proxy es el padre del engine, así que `ropero stop` — que mata lo que
+# escucha en el puerto — mata el proxy, que a su vez mata a su hijo y libera el
+# puerto interno. Y el proxy responde /v1/models con el nombre del modelo de
+# ropero, que es lo que hace que `ropero stop <modelo>` y la columna MODELO del
+# status funcionen sin ningún caso especial por engine.
+#
+# Sin el proxy, con HOST=0.0.0.0, esos tres quedarían SIN AUTH en la LAN. Por
+# eso es el default; ROPERO_NO_AUTH_PROXY=1 lo desactiva, y avisa.
+# -----------------------------------------------------------------------------
+ropero_launch_engine() {
+    local model="$1" model_key="$2" engine="$3" ctx="$4"
+    local port="$5" why="$6" background="${7:-0}"
+    local model_path="${MODEL_PATH[$model_key]}"
+
+    # Flags extra del modelo: get_engine_args_<model>, un argumento por línea.
+    # Es el equivalente de get_model_args_<model> para los engines con server.
+    local -a extra=()
+    local fn="get_engine_args_${model_key}"
+    if declare -f "$fn" >/dev/null 2>&1; then
+        local out st=0 err err_f
+        err_f="$(mktemp "${TMPDIR:-/tmp}/ropero_engargs.XXXXXX")"
+        # stderr va a un fichero aparte, NO a `out`. Con `2>&1` cualquier
+        # warning de la función acababa en el array de ARGUMENTOS del engine,
+        # y el server moría con "no such option: [i]". Una línea de diagnóstico
+        # pasaba a formar parte del comando entero. Los scripts de modelo avisan
+        # por stderr (el guard de RAM de metaloss.sh, por ejemplo), así que esto
+        # no es teórico: es la diferencia entre un aviso y un arranque roto.
+        out=$("$fn" 2>"$err_f") || st=$?
+        err=$(cat "$err_f" 2>/dev/null || true)
+        rm -f "$err_f" 2>/dev/null || true
+        if [[ -n "$err" ]]; then
+            printf '%s\n' "$err" >&2
+        fi
+        if (( st != 0 )); then
+            ropero_err "$fn devolvió error (rc=$st); no se arranca:"
+            return 1
+        fi
+        if [[ -n "$out" ]]; then
+            mapfile -t extra <<<"$out"
+        fi
+    fi
+
+    local use_proxy=1
+    if ropero_engine_auth_native "$engine"; then
+        use_proxy=0
+    elif [[ "${ROPERO_NO_AUTH_PROXY:-0}" == "1" ]]; then
+        use_proxy=0
+        ropero_warn "ROPERO_NO_AUTH_PROXY=1: $engine arranca SIN API key en $HOST:$port."
+        ropero_warn "  Cualquiera de la red puede usarlo. Sin proxy solo es"
+        ropero_warn "  razonable si HOST=127.0.0.1."
+    fi
+
+    local engine_host="$HOST" engine_port="$port"
+    local -a proxy_cmd=()
+
+    if (( use_proxy == 1 )); then
+        # El engine NUNCA se expone. Escucha en loopback, en un puerto que se
+        # deriva del de ropero para que sea predecible y no choque con otro
+        # slot ya vivo.
+        if ! engine_port=$(ropero_engine_internal_port "$port"); then
+            ropero_err "no hay puerto interno libre para :$port (+1000..+1049)"
+            return 1
+        fi
+        engine_host="127.0.0.1"
+    fi
+
+    # ── argv del engine ────────────────────────────────────────────────────
+    local -a eng_out=()
+    mapfile -t eng_out < <(ropero_engine_cmd "$engine" "$model_path" "$model" \
+                              "$engine_host" "$engine_port" "$ctx")
+    if (( ${#eng_out[@]} == 0 )); then
+        ropero_err "no se pudo construir el comando de '$engine' (resuelve '$model_key')"
+        return 1
+    fi
+    local -a cmd=("${eng_out[@]}" "${extra[@]}")
+
+    # ── env del engine ─────────────────────────────────────────────────────
+    local -a eng_env=()
+    mapfile -t eng_env < <(ropero_engine_env "$engine")
+    local kv
+    for kv in "${eng_env[@]}"; do
+        if [[ -n "$kv" ]]; then export "${kv?}"; fi
+    done
+
+    local bin_label
+    bin_label="$(printf '%s' "${cmd[0]##*/}")"
+
+    # ── caso CON proxy: el proxy es el proceso que oye en el puerto de ropero ─
+    if (( use_proxy == 1 )); then
+        local py argv_file pid_file
+        if ! py=$(ropero_python_bin); then
+            ropero_err "hace falta python3 para el proxy de auth de '$engine'"
+            return 1
+        fi
+        # El argv del engine va en un fichero, un argumento por línea: pasar un
+        # array por línea de comandos con --chat-template-args '{"a":1}' o rutas
+        # con espacios es pedir que algo se desmonte en el quoting.
+        argv_file="${TMPDIR:-/tmp}/.ropero_eng_$$_${port}"
+        pid_file="${TMPDIR:-/tmp}/.ropero_eng_$$_${port}.pid"
+        : >"$argv_file"
+        local a
+        for a in "${cmd[@]}"; do printf '%s\n' "$a" >>"$argv_file"; done
+
+        # El proxy hereda el env del engine: se lo pasamos por variable para que
+        # no haya que exportarlo en dos sitios distintos.
+        if (( ${#eng_env[@]} > 0 )); then
+            export ROPERO_ENGINE_ENV
+            ROPERO_ENGINE_ENV="$(printf '%s\n' "${eng_env[@]}")"
+        fi
+
+        proxy_cmd=(
+            "$py" "$MODULES_DIR/_authproxy.py"
+            --host "$HOST"
+            --port "$port"
+            --target-host "$engine_host"
+            --target-port "$engine_port"
+            --api-key "$LLAMA_API_KEY"
+            --model-id "$model"
+            --engine "$engine"
+            --engine-cmd-file "$argv_file"
+            --pid-file "$pid_file"
+            --wait "${ROPERO_ENGINE_WAIT:-20}"
+        )
+        # Lo que se ejecuta es el proxy, no el engine.
+        cmd=("${proxy_cmd[@]}")
+        bin_label="_authproxy.py -> $bin_label"
+        ropero_info "  $engine no valida la API key: proxy en :$port, engine en $engine_host:$engine_port"
+    fi
+
+    alaja separator "Arrancando $model en :$port (engine: $engine, ctx: $ctx, $why)" --color
+
+    if (( background == 0 )); then
+        "${cmd[@]}" 2>&1 | colorize "$model"
+        return $?
+    fi
+
+    local logfile="$LOG_DIR/ropero-${model}-${port}.log"
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    nohup "${cmd[@]}" >>"$logfile" 2>&1 &
+    local pid=$!
+    disown "$pid" 2>/dev/null || true
+    echo "Modelo $model lanzado en background (pid $pid). Log: $logfile"
+    if (( use_proxy == 1 )); then
+        echo "  proxy :$port → engine $engine en $engine_host:$engine_port (el proxy lo apaga)"
+    fi
+
+    # Espera activa. Se mira el puerto Y /v1/models, porque un puerto abierto no
+    # significa modelo servido: sin el segundo check, `ropero status` mostraría
+    # un modelo "?" durante los minutos que tarda en cargar.
+    local wait_secs="${ROPERO_START_TIMEOUT:-180}" elapsed=0
+    while (( elapsed < wait_secs )); do
+        if port_listening "$port"; then
+            local got
+            got=$(get_model_on_port "$port" 2>/dev/null || true)
+            if [[ -n "$got" ]]; then
+                rm -f "${argv_file:-}" 2>/dev/null || true
+                echo "✓ $model responde en :$port (alias: $got)"
+                return 0
+            fi
+        fi
+        # Si el proceso raíz ya no está, esperar hasta los 180s no va a
+        # arreglar nada: ha fallado el arranque. Se sale ya y se enseña el log,
+        # que es donde está el motivo.
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "✗ '$model' ($bin_label) se ha salido durante el arranque." >&2
+            echo "  Últimas líneas del log ($logfile):" >&2
+            tail -n 15 "$logfile" 2>/dev/null | sed 's/^/    /' >&2 || true
+            rm -f "${argv_file:-}" 2>/dev/null || true
+            return 1
+        fi
+        sleep 2
+        (( elapsed += 2 ))
+    done
+    echo "⚠  '$model' no responde tras ${wait_secs}s; revisa el log." >&2
+    echo "  model:  tail -f $logfile" >&2
+    echo "  engine: ss -ltnp | grep $engine_port   (puerto interno)" >&2
+    return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -1666,14 +2113,87 @@ ropero_link_tensorrt() {
     _ropero_link_dir "tensorrt-llm" "$HOME/.venv-tensorrt/bin" "trtllm-"
 }
 
-# ropero_link_airllm — console scripts por nombre.
+# ropero_link_airllm — el server de airllm, que airllm NO trae.
+#
+# airllm 2.11.0 no registra ningún entry point (su dist-info no tiene
+# entry_points.txt): no hay `airllm`, ni `airllm-server`, ni `airllm-generate`.
+# El código anterior pedía esos tres nombres, no encontraba ninguno y no
+# linkeaba nada — sin avisar, porque "0 enlazados" se imprimía como info y el
+# install seguía como si nada. Además, `python -m airllm serve` tampoco existe:
+# el paquete es una librería pura, sin `__main__.py`.
+#
+# El server lo aporta ropero.d/_airllm_server.py: un servidor OpenAI-compatible
+# sobre AutoModel.from_pretrained, con la API key de ropero y el mismo
+# contrato de /v1/models que llama-server. Se linkea aquí como cualquier otro
+# ejecutable, y ropero_link_dir se encarga de refrescarlo si el fichero cambia.
 ropero_link_airllm() {
-    _ropero_link_python "airllm" airllm airllm-server airllm-generate
+    local src="$MODULES_DIR/_airllm_server.py"
+    if [[ ! -f "$src" ]]; then
+        ropero_err "  ✗ airllm: falta $src"
+        return 1
+    fi
+    # +x: sin permiso de ejecución no es un symlink válido a un programa.
+    [[ -x "$src" ]] || chmod +x "$src" 2>/dev/null || true
+    mkdir -p "$BIN_DIR" 2>/dev/null || true
+    if [[ -L "$BIN_DIR/airllm-server" ]]; then rm -f "$BIN_DIR/airllm-server"; fi
+    if [[ -e "$BIN_DIR/airllm-server" && ! -L "$BIN_DIR/airllm-server" ]]; then
+        ropero_warn "  ! airllm: $BIN_DIR/airllm-server ya es un fichero real, no lo toco"
+        return 0
+    fi
+    if ln -sfn "$src" "$BIN_DIR/airllm-server" 2>/dev/null; then
+        ropero_ok "  → airllm-server → $src"
+    else
+        ropero_err "  ✗ airllm: no se pudo enlazar airllm-server en $BIN_DIR"
+    fi
+
+    # Y el health check de la librería, que es lo que de verdad decide si airllm
+    # sirve para algo. "Instalado" y "utilizable" no son lo mismo: se comprobó
+    # que airllm 2.11.0 con transformers 5.x es inimportable.
+    local py
+    if py=$(ropero_python_bin) && "$py" -c 'import airllm' >/dev/null 2>&1; then
+        ropero_ok "  airllm importable"
+    else
+        ropero_warn "  ! airllm no es importable con este Python."
+        ropero_warn "    El server arranca igual (airllm-server), pero SIN offload"
+        ropero_warn "    capa a capa: será lento y la GPU casi no se usará."
+        ropero_warn "    Causa habitual: airllm 2.11.0 importa LlamaForCausalLM del"
+        ropero_warn "    nivel superior de transformers, que ya no está en 5.x."
+        ropero_warn "    Arreglo: pip install 'transformers<5'"
+    fi
+    return 0
 }
 
-# ropero_link_mlx — console scripts por nombre.
+# ropero_link_mlx — console scripts de mlx-lm por nombre exacto.
+#
+# La lista se ha ampliado con `mlx_lm.server`, que es el que ropero usa para
+# arrancar y el que faltaba: el install|linkaba mlx_lm, mlx_lm.generate y
+# mlx_lm.chat, pero NO el server. El resultado era que `ropero <modelo-mlx>`
+# sólo encontraba mlx_lm.server a través del shim de asdf — justo el shim que se
+# rompe al reinstalar el Python, y exactamente lo que este mismo entrypoint
+# denuncia al principio de la sección de symlinks.
+#
+# El resto son herramientas de uso diario (convertir, fusionar cuantizaciones,
+# LoRA, medir velocidad) que antes solo se alcanzaban por ruta larga.
 ropero_link_mlx() {
-    _ropero_link_python "mlx_lm" mlx_lm mlx_lm.generate mlx_lm.chat
+    _ropero_link_python "mlx_lm" \
+        mlx_lm.server \
+        mlx_lm.generate \
+        mlx_lm.chat \
+        mlx_lm.convert \
+        mlx_lm.fuse \
+        mlx_lm.lora \
+        mlx_lm.benchmark \
+        mlx_vlm.server \
+        mlx_vlm.generate
+}
+
+# ropero_link_fastflowlm — el binario `flm` de FastFlowLM.
+#
+# El cmake preset de FastFlowLM instala en /opt/fastflowlm (linux-default), fuera
+# del PATH de un usuario normal. Se enlaza para que `flm pull`, `flm list` y
+# `flm validate` se puedan escribir sin la ruta larga — que es como se documentan.
+ropero_link_fastflowlm() {
+    _ropero_link_dir "fastflowlm" "/opt/fastflowlm/bin" "flm"
 }
 
 # -----------------------------------------------------------------------------
@@ -1751,21 +2271,45 @@ cmd_check() {
         fi
     fi
 
-    # airllm / mlx_lm: sólo se avisa. Que no esté el symlink no significa que no
-    # funcionen: si están en el PATH de otra forma, ropero los encuentra igual.
-    local w missing=0
-    for w in airllm mlx_lm; do
-        if [[ -x "$BIN_DIR/$w" ]] || command -v "$w" >/dev/null 2>&1; then
-            ropero_ok "$w disponible"
+    # Engines con servidor propio: uno por engine, con su probe real. El bloque
+    # anterior era un `for w in airllm mlx_lm` que miraba `command -v` — es
+    # decir, preguntaba por un ejecutable que airllm no tiene, y no preguntaba
+    # por tensorrt-llm ni por FastFlowLM en absoluto. Peor: "command -v" dice si
+    # el fichero está, no si el paquete importa. airllm daba "no disponible"
+    # (correcto por casualidad, mal por el motivo) y mlx_lm daba "disponible"
+    # porque su shim de asdf responde, sin comprobar que mlx_lm.server exista.
+    local e verdict probe_err probe_err_f
+    printf "\n-- engines con servidor propio --\n"
+    probe_err_f="$(mktemp "${TMPDIR:-/tmp}/ropero_probe.XXXXXX")"
+    for e in $(ropero_engine_list); do
+        local bin auth_mode
+        if bin=$(ropero_engine_resolve "$e" 2>/dev/null); then
+            if ropero_engine_auth_native "$e"; then
+                auth_mode="api-key propia"
+            else
+                auth_mode="proxy de auth"
+            fi
         else
-            missing=$((missing + 1))
+            auth_mode="proxy de auth"
+        fi
+        # El probe escribe el VEREDICTO en stdout y el DIAGNÓSTICO en stderr.
+        # Se necesitan los dos, y el diagnóstico es a menudo lo más importante:
+        # airllm responde "ok" (el server arranca) mientras avisa de que la
+        # LIBRERÍA no importa. Con `2>/dev/null` —como estaba— ese aviso se
+        # perdía y el --check saying "ok" era media verdad.
+        : >"$probe_err_f"
+        verdict=$(ropero_engine_probe "$e" 2>"$probe_err_f" || true)
+        case "$verdict" in
+            ok)      ropero_ok  "$e: $bin [$auth_mode]" ;;
+            missing) ropero_info "$e: no instalado (engine opcional)" ;;
+            *)       ropero_warn "$e: instalado pero NO utilizable" ;;
+        esac
+        probe_err=$(cat "$probe_err_f")
+        if [[ -n "$probe_err" ]]; then
+            printf '%s\n' "$probe_err" >&2
         fi
     done
-    if (( missing > 0 )); then
-        ropero_warn "$missing engine(s) de Python no instalados (airllm/mlx_lm)"
-        ropero_info "  es opcional: sólo hacen falta para los safetensors que"
-        ropero_info "  llama.cpp no puede cargar"
-    fi
+    rm -f "$probe_err_f"
 
     # Modelos
     if [[ -d "$GGUF_DIR" ]]; then
@@ -1870,13 +2414,21 @@ ropero_install_llama() {
 
 # ── AirLLM (todos los OS salvo termux) ───────────────────────────────────────
 ropero_install_airllm() {
-    if command -v airllm >/dev/null 2>&1; then
-        ropero_ok "airllm ya instalado"
+    local py
+    py=$(ropero_python_bin 2>/dev/null || true)
+
+    # El criterio de "ya instalado" NO es `command -v airllm`. airllm no registra
+    # ningún ejecutable, así que ese test siempre daba falso y además medía una
+    # cosa que no importa. Lo que importa es si el PAQUETE importa, porque de eso
+    # depende que el server pueda hacer offload capa a capa.
+    if [[ -n "$py" ]] && "$py" -c 'import airllm' >/dev/null 2>&1; then
+        ropero_ok "airllm ya instalado y utilizable"
         if ! ropero_ask "¿Reinstalarlo?"; then
             ropero_link_airllm
             return 0
         fi
     elif ! ropero_ask "¿Instalar AirLLM (modelos safetensors que no caben en VRAM)?"; then
+        ropero_info "airllm omitido; el resto de engines funciona igual"
         return 0
     fi
 
@@ -1891,8 +2443,18 @@ ropero_install_airllm() {
         { pip install --quiet airllm 2>/dev/null || pip3 install --quiet airllm 2>/dev/null; } && rc=0
     fi
 
+    # airllm 2.11.0 hace `from transformers import LlamaForCausalLM`, que en
+    # transformers 5.x ya no existe. No lo arregla el install (dependencias de
+    # airllm, no nuestras), pero sí avisar: sin esto el usuario ve "airllm
+    # instalado" y luego un ImportError cuando arranca el modelo.
     if (( rc == 0 )); then
         ropero_ok "airllm instalado"
+        if ! "$py" -c 'import airllm' >/dev/null 2>&1; then
+            ropero_warn "  ! airllm instalado pero NO importa con este Python"
+            ropero_warn "    airllm 2.11.0 usa LlamaForCausalLM del nivel superior de"
+            ropero_warn "    transformers, que ya no existe en 5.x. Solución:"
+            ropero_warn "      pip install 'transformers<5'"
+        fi
         ropero_link_airllm
     else
         ropero_warn "airllm no instalado (ni uv ni pip han funcionado)"
@@ -1974,6 +2536,142 @@ ropero_install_mlx() {
     return 0
 }
 
+# ── FastFlowLM (solo cachy/arch CON NPU AMD) ─────────────────────────────────
+# El único engine de ropero que no acelera una GPU: descarga el trabajo a la
+# NPU (XDNA) de los Ryzen AI. Es OPUESTO a la RTX, no sustituto — tiene sentido
+# precisamente porque convive con ella: la NPU come el modelo pequeño mientras la
+# GPU come el grande.
+#
+# Por qué el gate es tan específico (cachy/arch + AMD + NPU):
+#   · macOS no tiene NPU AMD. Ni el stack ni el driver.
+#   · En Linux, el stack de la NPU es amdxdna (kernel) + XRT (userspace) + firmware.
+#     `flm validate` puede pasar (usa el DRM device) mientras `flm run` falla con
+#     "No such device with index '0'" (usa XRT). Por eso se comprueban AMBAS capas.
+#   · En una CPU Intel/AMD sin NPU no hay nada que instalar: flm existiría y no
+#     arrancaría ningún modelo.
+ropero_install_fastflowlm() {
+    local os="${1:-}"
+    if [[ "$os" != "cachy" && "$os" != "arch" ]]; then
+        ropero_info "FastFlowLM: solo en cachy/arch con NPU AMD; omitido en $os"
+        return 0
+    fi
+    if ! ropero_has_amd_npu; then
+        ropero_info "FastFlowLM: no veo NPU AMD (XDNA) en esta máquina; omitido"
+        ropero_info "  se necesita /dev/accel/accel0 (driver amdxdna) o 'xrt-smi examine'"
+        ropero_info "  con NPU listada. Si la tienes y no la detecto, dímelo: el"
+        ropero_info "  gate está en ropero_has_amd_npu (ropero.d/_engines.sh)"
+        return 0
+    fi
+
+    if [[ -x /opt/fastflowlm/bin/flm ]]; then
+        ropero_ok "FastFlowLM ya instalado en /opt/fastflowlm"
+        if ! ropero_ask "¿Reinstalarlo?"; then
+            ropero_link_fastflowlm
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar FastFlowLM (usa la NPU AMD; sólo cachy/arch con NPU)?"; then
+        return 0
+    fi
+
+    # ── 1. Stack del sistema ───────────────────────────────────────────────
+    # xrt-plugin-amdxdna es el que hace que `flm run` (XRT) vea el device. Sin él,
+    # `flm validate` puede pasar y el modelo no arranca: es el fallo más confuso
+    # de toda esta cadena, así que se instala siempre que falte.
+    local p
+    for p in xrt xrt-plugin-amdxdna linux-firmware-other; do
+        if pacman -Qi "$p" &>/dev/null; then
+            continue
+        fi
+        ropero_info "instalando $p..."
+        sudo pacman -S --needed --noconfirm "$p" \
+            || ropero_warn "  no se pudo instalar $p"
+    done
+
+    # amdxdna-dkms está en el AUR, no en los repos. Sin él, un kernel 6.19+ usa
+    # el driver in-tree, que con firmware 1.1 puede hacer desaparecer la NPU
+    # (el driver espera el protocolo viejo). El orden importa: headers → DKMS →
+    # depmod → REBOOT. El reboot no se puede hacer desde aquí; se avisa.
+    if ! modinfo amdxdna >/dev/null 2>&1 || \
+       { modinfo -F filename amdxdna 2>/dev/null | grep -q '/dkms/'; }; then
+        ropero_info "instalando amdxdna-dkms (AUR)..."
+        local _installed_dkms=0
+        if command -v paru &>/dev/null; then
+            paru -S --needed --noconfirm amdxdna-dkms && _installed_dkms=1
+        elif command -v yay &>/dev/null; then
+            yay -S --needed --noconfirm amdxdna-dkms && _installed_dkms=1
+        else
+            ropero_warn "  no hay paru/yay: instala amdxdna-dkms a mano"
+        fi
+        if (( _installed_dkms == 1 )); then
+            ropero_info "reconstruyendo el módulo para el kernel en uso..."
+            sudo dkms autoinstall -k "$(uname -r)" || ropero_warn "  dkms falló"
+            sudo depmod -a || true
+            ropero_warn "  REBOOT NECESARIO para que cargue el módulo DKMS."
+            ropero_warn "  Sin reboot, `flm validate` puede fallar o ver la NPU apagada."
+        fi
+    fi
+
+    # El límite de memoria bloqueada: la NPU reserva memoria no swapeable. Sin
+    # memlock ilimitado, los modelos grandes fallan al Allocate.
+    local memlock
+    memlock=$(ulimit -l 2>/dev/null || echo unknown)
+    if [[ "$memlock" != "unlimited" ]]; then
+        ropero_warn "  memlock = $memlock (hace falta 'unlimited' para la NPU)"
+        ropero_warn "  Añade a /etc/security/limits.conf:"
+        ropero_warn "      *    soft    memlock    unlimited"
+        ropero_warn "      *    hard    memlock    unlimited"
+        ropero_warn "  y vuelve a entrar en la sesión (o reinicia)."
+    fi
+
+    # ── 2. El runtime ──────────────────────────────────────────────────────
+    # En Arch no hay .deb de FastFlowLM, así que se compila. El preset
+    # linux-default instala en /opt/fastflowlm; de ahí el symlink.
+    local src="$HOME/FastFlowLM"
+    if [[ ! -d "$src/.git" ]]; then
+        ropero_info "clonando FastFlowLM (con submodulos)..."
+        rm -rf "$src"
+        git clone -q --recursive https://github.com/ROCm/FastFlowLM.git "$src" \
+            || { ropero_err "clone de FastFlowLM falló"; return 0; }
+    fi
+
+    # Dependencias de compilación. Sin libxrt-dev no compila; sin los de ffmpeg
+    # fallan las capacidades de audio (Whisper / transcripción).
+    for p in ninja; do
+        pacman -Qi "$p" &>/dev/null || sudo pacman -S --needed --noconfirm "$p" \
+            || ropero_warn "  no se pudo instalar $p"
+    done
+
+    ropero_info "compilando FastFlowLM (10-20 min, -j)..."
+    if ! ( cd "$src/src" && cmake --preset linux-default && \
+           cmake --build build -j"$(nproc)" && sudo cmake --install build ); then
+        ropero_warn "FastFlowLM no compiló"
+        ropero_info "  deps de build: ninja libavformat-dev libavutil-dev libavcodec-dev"
+        ropero_info "                     libswresample-dev libswscale-dev libxrt-dev uuid-dev libdrm-dev"
+        ropero_info "  guía: https://github.com/ROCm/FastFlowLM/blob/main/docs/linux-getting-started.md"
+        return 0
+    fi
+
+    ropero_link_fastflowlm
+
+    # ── 3. Verificación de la NPU ──────────────────────────────────────────
+    # No es un adorno: el 90% de los fallos de FLM aquí son de firmware/driver,
+    # no de compilación, y sin esto el install "termina bien" con una NPU muerta.
+    local flm
+    if flm=$(ropero_engine_resolve fastflowlm) && "$flm" validate 2>&1 | sed 's/^/  /'; then
+        ropero_ok "FastFlowLM listo (NPU verificada)"
+        ropero_info "  modelos: flm pull <tag>   ·   listados: flm list"
+    else
+        ropero_warn "FastFlowLM instalado pero 'flm validate' no pasa."
+        ropero_info "  Causas, en orden de probabilidad:"
+        ropero_info "    1. firmware NPU < 1.1.0.0 (necesario 1.1.2.64 en kernels 6.19)"
+        ropero_info "    2. amdxdna-dkms sin reconstruir tras el último kernel"
+        ropero_info "    3. XRT no ve la NPU:  xrt-smi examine   (flm run usa XRT,"
+        ropero_info "       no el DRM device: validate puede pasar y run fallar)"
+        ropero_info "    4. memlock no ilimitado"
+    fi
+    return 0
+}
+
 # -----------------------------------------------------------------------------
 # cmd_install — orquesta. Cada engine va por su cuenta; el siguiente no depende
 # del anterior.
@@ -2022,6 +2720,11 @@ cmd_install() {
     if [[ "$os" == "macos" ]]; then
         ropero_install_mlx
     fi
+    # La NPU es un recurso APARTE de la GPU: se instala solo si hay una, y sin
+    # preguntar por el resto de engines (que ya han pasado). El gate está dentro
+    # de la función (cachy/arch + AMD + XDNA), no aquí, para que la razón de que
+    # se salte se pueda explicar engine por engine.
+    ropero_install_fastflowlm "$os"
 
     # 3. modelos por defecto (lógica en 21-download-models.sh)
     ropero_download_default_models
@@ -2052,6 +2755,10 @@ main() {
             ;;
         list)
             cmd_list
+            exit 0
+            ;;
+        templates)
+            cmd_templates
             exit 0
             ;;
         status)
