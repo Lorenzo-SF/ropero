@@ -25,14 +25,24 @@ Sólo `llama-server` trae `--api-key`. Está verificado en el CLI de los otros t
 Con `HOST=0.0.0.0` y sin auth, esos tres quedarían abiertos a la LAN. Así que ropero les pone delante `ropero.d/_authproxy.py`:
 
 ```
-opencode ──► :9996 (proxy, exige LLAMA_API_KEY) ──127.0.0.1:10996──► mlx_lm.server
+opencode ──► :9992 (proxy, exige LLAMA_API_KEY) ──127.0.0.1:10992──► mlx_lm.server
 ```
 
-Tres cosas de este diseño que importan:
+Cuatro cosas de este diseño que importan:
 
-1. **El engine real solo escucha en loopback**, en un puerto interno derivado del de ropero (`+1000..+1049`, primer hueco libre). La API key del proxy no tiene puerta trasera.
+1. **El engine real solo escucha en loopback**, en un puerto **fijo por engine**, no derivado del de ropero:
+
+   | engine | puerto interno |
+   |---|---|
+   | `mlx_lm` | `10992` |
+   | `airllm` | `11999` |
+   | `tensorrt-llm` | `12999` |
+   | `fastflowlm` | `13999` |
+
+   Así `--port 9995` no mueve el engine, y dos engines distintos nunca se pisan (antes airllm, tensorrt-llm y fastflowlm caían todos en el mismo `+1000`). Si el puerto está ocupado sube de uno en uno hasta +49. Ver `ropero_engine_internal_port`. La API key del proxy no tiene puerta trasera.
 2. **El proxy es el padre del engine**, así que un solo `kill` en el puerto de ropero apaga el árbol entero. Por eso `cmd_stop` manda **SIGTERM antes que SIGKILL**: con `kill -9` el proxy muere sin ejecutar su handler y el engine se queda sirviendo en `:10xxx` para siempre, invisible para `ropero status`.
 3. **El proxy responde `/v1/models` con el nombre del modelo de ropero** y expone `/ropero/engine`. Eso es lo que hace que `ropero stop <modelo>`, la columna MODELO del status y la columna ENGINE funcionen igual para todos los engines, sin un caso especial por engine.
+4. **Si el engine sólo acepta un nombre de modelo, el proxy lo reescribe** (`--rewrite-model`, lo decide `ropero_engine_pinned_model`). Ahora mismo sólo aplica a `mlx_lm`, que acepta únicamente `default_model` y trata cualquier otro nombre como un **repo_id de HuggingFace**: sin esto, un cliente que manda `"model": "gptoss"` recibe un 404 con `Repository Not Found for url: .../api/models/gptoss` — un error que habla de descargas y no de nombres, con el modelo ya en disco y cargado. El engine no tiene flag para fijarlo (ni `--alias` ni `--served-model-name`), y `/v1/models` anuncia el id de ropero, así que el proxy es el único sitio donde se puede normalizar. Por eso en el `opencode.jsonc` da igual qué nombre le pongas al modelo.
 
 `ROPERO_NO_AUTH_PROXY=1` lo desactiva (y avisa). Sólo tiene sentido con `HOST=127.0.0.1`.
 

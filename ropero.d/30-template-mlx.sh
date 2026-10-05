@@ -20,8 +20,19 @@
 # (verificado en su --help y en mlx_lm/server.py de 0.31.3). Con HOST=0.0.0.0
 # eso sería un endpoint de inferencia abierto a la LAN. Así que ropero le pone
 # delante ropero.d/_authproxy.py, que sí exige el LLAMA_API_KEY de ropero, y el
-# mlx_lm.server real escucha solo en 127.0.0.1 (puerto :$PORT+1000). No lo
-# saltes con ROPERO_NO_AUTH_PROXY=1 salvo que sea 127.0.0.1 y punto.
+# mlx_lm.server real escucha solo en 127.0.0.1 (puerto :10992, fijo por engine
+# para todos los modelos MLX). No lo saltes con ROPERO_NO_AUTH_PROXY=1 salvo que
+# sea 127.0.0.1 y punto.
+#
+# ⚠️ Y NO PUEDES RENOMBRAR EL MODELO EN EL opencode.jsonc PARA CAMBIARLO
+# `mlx_lm.server` sólo acepta "default_model" en el body: su ModelProvider
+# resuelve con `_model_map.get(nombre, nombre)`, y lo único registrado es
+# "default_model". Cualquier otro nombre se trata como un repo_id de
+# HuggingFace → 404 con "Repository Not Found", que parece un problema de
+# descarga y no lo es. El proxy ya lo arregla (--rewrite-model), así que da
+# igual qué nombre le pongas al modelo en el opencode.jsonc. No lo declares
+# MODEL_ALIAS "gptoss"-style esperando que el engine lo atienda: el nombre lo
+# elige el cliente, y el proxy lo normaliza.
 # =============================================================================
 
 # -----------------------------------------------------------------------------

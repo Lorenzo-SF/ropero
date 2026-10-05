@@ -35,9 +35,23 @@
 # asdf, sin instalar httpx/fastapi/uvicorn en ninguno de ellos.
 #
 # USO (lo llama start_model, no se usa a mano normalmente)
-#   _authproxy.py --host 0.0.0.0 --port 9999 --target-port 10999 \
-#                 --api-key "$LLAMA_API_KEY" --model-id coder --engine mlx_lm \
-#                 --engine-cmd-file /tmp/argv --pid-file /tmp/x.pid
+#   _authproxy.py --host 0.0.0.0 --port 9992 --target-port 10992 \
+#                 --api-key "$LLAMA_API_KEY" --model-id metaloss --engine mlx_lm \
+#                 --engine-cmd-file /tmp/argv --pid-file /tmp/x.pid \
+#                 --rewrite-model default_model
+#
+# POR QUÉ `--rewrite-model`
+#
+# Hay engines que no aceptan el nombre de modelo que el cliente manda. mlx_lm
+# es el caso: su ModelProvider registra un único nombre, "default_model", y
+# cualquier otra cosa la trata como un repo de HuggingFace. El síntoma es un
+# 404 cuyo texto habla de "Repository Not Found" y hace creer que falta la
+# descarga, cuando el modelo está en disco y cargado. Como /v1/models anuncia
+# el id de ropero (arriba), sin reescribir el proxy estaría anunciando un
+# nombre que su propio engine rechaza. Ver Handler._rewrite_model_field.
+#
+# Sólo se pasa para los engines que lo necesitan (ropero_engine_pinned_model);
+# con el flag vacío el body se reenvía byte a byte, como antes.
 #
 # RUTAS QUE NO SE REENVÍAN AL ENGINE (se responden aquí, y por eso no dependen
 # de que el engine las implemente):
@@ -89,6 +103,10 @@ STATE = {
     "child": None,
     "shutdown": False,
     "server_port": 0,
+    # Nombre al que se reescribe el campo "model" del body ("" = no se toca).
+    # Ver _rewrite_model_field() para por qué hace falta.
+    "rewrite_model": "",
+    "rewrite_logged": False,
 }
 
 
@@ -216,6 +234,65 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._forward()
 
+    def _rewrite_model_field(self, body):
+        """Reescribe el campo "model" del body al nombre que el engine EXIGE.
+
+        ── POR QUÉ EXISTE ESTO ──────────────────────────────────────────────
+        `mlx_lm.server` sólo acepta UN nombre de modelo: "default_model".
+        En su `ModelProvider.__init__` el mapa es `{"default_model": args.model}`
+        y `load()` hace `self._model_map.get(model_path, model_path)`: lo que no
+        está en el mapa se usa TAL CUAL, como si fuera una ruta o un repo_id de
+        HuggingFace. Y lo es. Con un cliente que manda "gptoss", huggingface_hub
+        pide `api/models/gptoss/revision/main`, recibe 401 y el engine responde
+        404 con un error que MIENTE sobre la causa: dice "Repository Not Found"
+        cuando el repositorio no tiene nada que ver y lo que pasa es que el
+        nombre no es el que el engine conoce. Medido en 0.32.x con gpt-oss-20b
+        ya cargado en memoria:
+
+            model="gptoss"         → 404 + GET huggingface.co/api/models/gptoss
+            model="metaloss"       → 404 + GET huggingface.co/api/models/metaloss
+            model="default_model"  → 200
+
+        No hay flag para arreglarlo en el engine: `mlx_lm.server --help` no tiene
+        `--alias`, ni `--served-model-name`, ni `--model-name` (a diferencia de
+        llama-server `--alias`, airllm `--model-id` y trtllm-serve
+        `--served_model_name`, que sí fijan el nombre que aceptan). Por eso lo
+        arregla el proxy, que es el componente que ropero ya pone delante de los
+        engines sin auth y que YA reescribe la identidad del modelo en
+        /v1/models: sin esto el proxy anuncia un id que su propio engine
+        rechaza, y el cliente (opencode, cualquier SDK) no tiene forma de
+        saberlo porque la API no ofrece "usa el único nombre que acepto".
+
+        Decisiones:
+        · Sólo POST. GET/HEAD no llevan body y nada que reescribir.
+        · Body que no es JSON, o que no trae "model", se reenvía INTACTO. Que el
+          field no exista no es un problema: mlx_lm hace
+          `body.get("model", "default_model")`, así que ya cae en el bueno. No
+          se inventan campos.
+        · No se toca ninguna cabecera: "content-length" está en HOP_BY_HOP (que
+          es exactamente para esto, ver arriba) y http.client lo recalcula a
+          partir del body. Añadirlo aquí a mano duplicaría la cabecera.
+        """
+        pin = STATE["rewrite_model"]
+        if not pin or self.command != "POST" or not body:
+            return body
+        try:
+            doc = json.loads(body)
+        except Exception:
+            return body  # no es JSON (multipart, audio, ...): sin tocar
+        if not isinstance(doc, dict):
+            return body
+        got = doc.get("model")
+        if not isinstance(got, str) or got == pin:
+            return body
+        doc["model"] = pin
+        # Una vez por proceso, no por request: si no, cada stream de opencode
+        # deja una línea de ruido en el log del modelo.
+        if not STATE["rewrite_logged"]:
+            STATE["rewrite_logged"] = True
+            log("model '%s' -> '%s' (el engine sólo acepta ese nombre)" % (got, pin))
+        return json.dumps(doc).encode("utf-8")
+
     def _forward(self):
         if not self._authed():
             self._deny()
@@ -237,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
         # Cuerpo de la petición.
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length) if length else None
+        body = self._rewrite_model_field(body)
 
         # Cabeceras hacia arriba. Se quita Authorization a propósito: el engine
         # no la valida (por eso existe el proxy), así que reenviar una credencial
@@ -380,6 +458,12 @@ def main():
     ap.add_argument("--target-port", type=int, required=True)
     ap.add_argument("--api-key", default="")
     ap.add_argument("--model-id", default="")
+    ap.add_argument(
+        "--rewrite-model",
+        default="",
+        help="reescribe el campo 'model' del body a este valor (engines que sólo "
+        "aceptan un nombre fijo, como mlx_lm -> default_model). Vacío = no tocar",
+    )
     ap.add_argument("--engine", default="?")
     ap.add_argument("--engine-cmd-file", default="",
                     help="fichero con el argv del engine, un argumento por línea")
@@ -389,6 +473,7 @@ def main():
     args = ap.parse_args()
 
     STATE["model_id"] = args.model_id or "ropero-model"
+    STATE["rewrite_model"] = args.rewrite_model
     STATE["engine"] = args.engine
     STATE["api_key"] = args.api_key
     STATE["target_host"] = args.target_host

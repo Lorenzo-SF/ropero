@@ -27,6 +27,25 @@
 # (verificado en su --help y en mlx_lm/server.py de 0.31.3). ropero le pone
 # delante ropero.d/_authproxy.py, que sí exige tu LLAMA_API_KEY. El mlx_lm.server
 # real escucha solo en 127.0.0.1, en :10992. No lo arranques a mano en 0.0.0.0.
+#
+# ⚠️ Y EL NOMBRE DEL MODELO LO REESCRIBE EL PROXY
+# `mlx_lm.server` sólo acepta "default_model" como nombre de modelo: su
+# ModelProvider registra `{"default_model": <lo que sea --model>}` y resuelve con
+# `_model_map.get(nombre, nombre)`, así que lo que no está en el mapa se usa
+# como si fuera una ruta o un REPO_ID de HuggingFace. Con "gptoss" en el body,
+# huggingface_hub busca el repo `gptoss`, y lo que vuelve es:
+#
+#     404 + "Repository Not Found for url: .../api/models/gptoss/revision/main"
+#
+# que se lee como "le falta el repo" cuando el repo está descargado y el modelo
+# cargado. Es el mismo bug con tres nombres distintos (gptoss, metaloss,
+# default_model → sólo el último funciona).
+#
+# ropero lo resuelve en el proxy: /v1/models anuncia "metaloss" y además
+# reescribe el campo `model` del body a "default_model" (--rewrite-model, lo
+# decide ropero_engine_pinned_model). POR ESO en el opencode.jsonc puedes
+# llamar a este modelo como quieras — "gptoss", "metaloss", lo que pongas en el
+# provider — y funciona igual. No hace falta tocar nada aquí para renombrarlo.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -114,8 +133,6 @@
 # Aviso que ropero imprime si el directorio no existe. Cada línea es una orden.
 # `ropero metaloss` sin esto solo diría "Directorio de modelo no encontrado", y
 # la respuesta (12 GB de HF) está tres scrolls más arriba en este fichero.
-MODEL_DOWNLOAD="hf download mlx-community/gpt-oss-20b-MXFP4-Q8 --local-dir ~/models/safetensors/gpt-oss-20b-MXFP4-Q8   # 12.1 GB"
-
 MODEL_ENGINE="mlx_lm"
 MODEL_PATH="gpt-oss-20b-MXFP4-Q8"
 MODEL_FORMAT="mlx-mxfp4"

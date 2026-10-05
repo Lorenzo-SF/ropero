@@ -1256,8 +1256,9 @@ ENGINES:
   MISMA API_KEY, para que opencode.jsonc no tenga que saber qué hay detrás.
   Como mlx_lm, tensorrt-llm y fastflowlm NO validan la API key (está verificado
   en el CLI de cada uno), ropero les pone delante _authproxy.py, que sí la
-  exige. El engine real escucha solo en 127.0.0.1, en un puerto interno que se
-  deriva del de ropero (+1000..+1049). Nada de eso se ve desde fuera.
+  exige. El engine real escucha solo en 127.0.0.1, en un puerto interno FIJO por
+  engine (10992 mlx_lm, 11999 airllm, 12999 tensorrt-llm, 13999 fastflowlm).
+  Nada de eso se ve desde fuera.
 
 PUERTOS:
 $(_port_legend)
@@ -1673,13 +1674,18 @@ start_model() {
 #
 # Para los tres últimos se pone _authproxy.py delante:
 #
-#     opencode ──► :9999 (proxy, exige la key) ──127.0.0.1:10999──► engine
+#     opencode ──► :9992 (proxy, exige la key) ──127.0.0.1:10992──► mlx_lm.server
 #
 # El proxy es el padre del engine, así que `ropero stop` — que mata lo que
 # escucha en el puerto — mata el proxy, que a su vez mata a su hijo y libera el
 # puerto interno. Y el proxy responde /v1/models con el nombre del modelo de
 # ropero, que es lo que hace que `ropero stop <modelo>` y la columna MODELO del
 # status funcionen sin ningún caso especial por engine.
+#
+# Y como anuncia ese nombre, tiene que poder cumplirlo: si el engine sólo acepta
+# uno (mlx_lm sólo acepta "default_model" y trata el resto como repo_id de HF),
+# el proxy reescribe el campo "model" del body. Sin eso, /v1/models prometería un
+# id que el engine de detrás rechaza. Ver ropero_engine_pinned_model.
 #
 # Sin el proxy, con HOST=0.0.0.0, esos tres quedarían SIN AUTH en la LAN. Por
 # eso es el default; ROPERO_NO_AUTH_PROXY=1 lo desactiva, y avisa.
@@ -1731,11 +1737,13 @@ ropero_launch_engine() {
     local -a proxy_cmd=()
 
     if (( use_proxy == 1 )); then
-        # El engine NUNCA se expone. Escucha en loopback, en un puerto que se
-        # deriva del de ropero para que sea predecible y no choque con otro
-        # slot ya vivo.
-        if ! engine_port=$(ropero_engine_internal_port "$port"); then
-            ropero_err "no hay puerto interno libre para :$port (+1000..+1049)"
+        # El engine NUNCA se expone. Escucha en loopback, en un puerto FIJO por
+        # engine (10992 mlx_lm, 11999 airllm, 12999 tensorrt-llm, 13999
+        # fastflowlm) que NO depende del puerto público. Ver
+        # ropero_engine_internal_port en ropero.d/_engines.sh para el porqué de
+        # que sea por engine y no "puerto + 1000".
+        if ! engine_port=$(ropero_engine_internal_port "$engine" "$port"); then
+            ropero_err "no hay puerto interno libre para '$engine' (base + 0..49)"
             return 1
         fi
         engine_host="127.0.0.1"
@@ -1798,10 +1806,22 @@ ropero_launch_engine() {
             --pid-file "$pid_file"
             --wait "${ROPERO_ENGINE_WAIT:-20}"
         )
+        # Nombre de modelo que el engine EXIGE. vacío = el engine enruta por el
+        # que le pasa ropero y no hay que tocar el body. Ver
+        # ropero_engine_pinned_model: hoy es sólo mlx_lm, que sólo acepta
+        # "default_model" y trata cualquier otro nombre como un repo_id de HF.
+        local pinned_model
+        pinned_model=$(ropero_engine_pinned_model "$engine" || true)
+        if [[ -n "$pinned_model" ]]; then
+            proxy_cmd+=(--rewrite-model "$pinned_model")
+        fi
         # Lo que se ejecuta es el proxy, no el engine.
         cmd=("${proxy_cmd[@]}")
         bin_label="_authproxy.py -> $bin_label"
         ropero_info "  $engine no valida la API key: proxy en :$port, engine en $engine_host:$engine_port"
+        if [[ -n "$pinned_model" ]]; then
+            ropero_info "  $engine sólo acepta '$pinned_model' como nombre de modelo: el proxy lo reescribe"
+        fi
     fi
 
     alaja separator "Arrancando $model en :$port (engine: $engine, ctx: $ctx, $why)" --color

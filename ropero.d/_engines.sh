@@ -26,11 +26,14 @@
 # ── CONTRATO QUE EXPORTA (el que consume start_model y cmd_check) ─────────────
 #   ropero_engine_is_known <engine>          0 si el launcher lo soporta
 #   ropero_engine_auth_native <engine>      0 si el engine valida la key
+#   ropero_engine_pinned_model <engine>     nombre de modelo que el engine exige
+#                                           ("" si enruta por el que le pasan)
 #   ropero_engine_resolve <engine>          ruta al ejecutable ("" si no está)
 #   ropero_engine_probe <engine>            "ok"|"missing"|"broken" + detalle
 #   ropero_engine_env <engine>              líneas "K=V" para el sub-proceso
 #   ropero_engine_cmd <engine> ...          argv, un argumento por línea
-#   ropero_engine_internal_port <port>      puerto libre para el engine
+#   ropero_engine_internal_port <engine> <port>
+#                                           puerto libre para el engine
 #   ropero_python_bin                       intérprete con el engine instalado
 #   ropero_has_amd_npu                      0 si hay NPU AMD (XDNA) usable
 #   ropero_engine_label <engine>            nombre para la columna ENGINE
@@ -86,6 +89,50 @@ ropero_engine_auth_native() {
         airllm) return 0 ;;      # servidor propio, con --api-key
         *)      return 1 ;;
     esac
+}
+
+# -----------------------------------------------------------------------------
+# ropero_engine_pinned_model <engine>
+#   imprime → el ÚNICO nombre de modelo que el engine acepta en el body.
+#   imprime "" → el engine enruta por el nombre que le pase ropero.
+#
+# ── POR QUÉ EXISTE ───────────────────────────────────────────────────────────
+# La mayoría de engines SÍ aceptan el nombre que les pasa ropero, porque tienen
+# un flag para fijarlo (ver ropero_engine_cmd):
+#   llama-server    → --alias
+#   airllm          → --model-id
+#   trtllm-serve    → --served_model_name
+#   flm serve       → (no enruta: `flm serve` habla con su almacén por el tag)
+#
+# mlx_lm.server NO tiene ninguno de esos flags. Verificado contra
+# `mlx_lm.server --help` de 0.32.x: no existen --alias, --served-model-name ni
+# --model-name. Y no es que lo ignore por descuido: su `ModelProvider` construye
+# `self._model_map = {"default_model": args.model}` y `load()` resuelve con
+# `self._model_map.get(model_path, model_path)`. Lo único registrado es
+# "default_model". Cualquier otro nombre se usa tal cual, y "tal cual" para un
+# engine de HF significa REPO_ID: el cliente manda "gptoss", huggingface_hub
+# busca el repo `gptoss`, y la respuesta es un 401 "Repository Not Found" que
+# el engine envuelve en un 404.
+#
+# El síntoma es desconcertante porque el error habla de HuggingFace y parece
+# "que le falta el repo descargado" cuando el repo está en disco y el modelo
+# cargado. Medido con gpt-oss-20b ya en memoria (11.5 GB, 36864 MiB):
+#   model="gptoss"        → 404 + GET huggingface.co/api/models/gptoss
+#   model="metaloss"      → 404 + GET huggingface.co/api/models/metaloss
+#   model="default_model" → 200
+#
+# Por eso el arreglo va en el proxy (--rewrite-model, ver _authproxy.py): es el
+# que ya anuncia `id: <modelo de ropero>` en /v1/models, así que sin reescribir
+# el proxy Estaría prometiendo una identidad que su propio engine rechaza. Y es
+# la única capa donde tiene arreglo: el engine no tiene flag, y opencode
+# mandaría el id que le ponga el usuario en su config.
+# -----------------------------------------------------------------------------
+ropero_engine_pinned_model() {
+    case "${1:-}" in
+        mlx_lm) printf 'default_model' ;;
+        *)      ;;   # enrutan por nombre: que llegue el de ropero
+    esac
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -351,7 +398,7 @@ ropero_engine_cmd() {
 }
 
 # -----------------------------------------------------------------------------
-# ropero_engine_internal_port <port> → puerto libre para el engine que va
+# ropero_engine_internal_port <engine> <port> → puerto libre para el engine que va
 # detrás del proxy.
 #
 # Por qué hace falta: el engine NO puede escuchar en el puerto que opencode
@@ -361,15 +408,60 @@ ropero_engine_cmd() {
 # en el de ropero, matar el puerto de ropero = matar el proxy = el proxy mata a
 # su hijo (ver --engine-cmd-file en _authproxy.py).
 #
-# Empieza en port+1000 y sube hasta +50 buscando hueco. Determinista dentro de
-# una máquina, que es lo que importa para poder documentarlo y para que dos
-# launches seguidos del mismo modelo caigan en el mismo sitio.
+# ── POR QUÉ UN PUERTO FIJO POR ENGINE Y NO "puerto de ropero + 1000" ─────────
+# Antes se derivaba del puerto público (9999 → 10999, 9992 → 10992), lo que
+# tenía dos fallos medibles:
+#
+#   1. Si el engine cambia MODEL_PORT, el puerto INTERNO cambia con él. El
+#      puerto interno es un detalle de implementación invisible (está detrás del
+#      proxy, en loopback) y no debería depender de una decisión que es del
+#      cliente: `ropero metaloss --port 9995` movía el engine de 10992 a 10995
+#      sin que nadie lo hubiera pedido.
+#   2. Todos los engines que comparten slot (airllm, tensorrt-llm y fastflowlm
+#      usan los slots :9999/:9998) caían en el MISMO 10999. Hoy no chocan
+#      porque el check de "puerto ocupado" impide dos modelos en un slot, pero
+#      es una colisión esperando: en cuanto dos engines quisieran convivir (un
+#      servidor y su prefill, un draft, una cuantización compartida) el segundo
+#      se quedaría sin puerto.
+#
+# Con un puerto por engine las dos cosas desaparecen: el interno depende sólo
+# del engine, y dos engines distintos nunca se pisan. La tabla es fija y
+# documentable, que es lo que hace falta para escribir "el engine de metaloss
+# escucha en 127.0.0.1:10992" sin quedarse con la duda de si es el de ahora.
+#
+#   engine          puerto interno   por qué ese
+#   ─────────────────────────────────────────────────────────────────────────
+#   mlx_lm          10992             :9992 (slot propio de metaloss) + 1000
+#   airllm          11999             bloque 11xxx
+#   tensorrt-llm    12999             bloque 12xxx
+#   fastflowlm      13999             bloque 13xxx
+#
+# El 1000 de mnemónico es el de siempre (el interno nunca es el público), y
+# acaba en 999 para que se lea como "el 999 de siempre, desplazado".
+#
+# ── Y SI EL PUERTO ESTÁ OCUPADO ──────────────────────────────────────────────
+# Se sube de uno en uno (base, +1, ... +49) antes de rendirse. El caso real: un
+# launch anterior mal parado dejó el engine vivo. Preferimos un 11093 a un
+# "no hay puerto" que deja al usuario sin modelo, y el log dice cuál se usó.
+# Rango fijo y determinista a propósito: dos launches seguidos del mismo modelo
+# caen en el mismo sitio, que es lo que permite documentarlo.
+#
+# `port` (segundo argumento) sólo se usa como plan B, para un engine que no esté
+# en la tabla: fallback al comportamiento antiguo, puerto + 1000.
 # -----------------------------------------------------------------------------
 ropero_engine_internal_port() {
-    local base="${1:-}"
-    _ropero_valid_port "$base" || return 1
-    local i p
-    for (( i = 1000; i < 1050; i++ )); do
+    local engine="${1:-}" port="${2:-}" base i p
+    case "$engine" in
+        mlx_lm)       base=10992 ;;
+        airllm)       base=11999 ;;
+        tensorrt-llm) base=12999 ;;
+        fastflowlm)   base=13999 ;;
+        *)
+            _ropero_valid_port "$port" || return 1
+            base=$(( port + 1000 ))
+            ;;
+    esac
+    for (( i = 0; i < 50; i++ )); do
         p=$(( base + i ))
         if (( p > 65535 )); then break; fi
         if ! port_listening "$p" 2>/dev/null; then
