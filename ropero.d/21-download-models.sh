@@ -60,10 +60,13 @@ _ropero_download_gguf_set() {
     ropero_download_gguf "Achilles1089/fable-coder-35B-A3B-GGUF" "fable-coder-35B-A3B-Q4_K_M.gguf" "Fable Coder Q4" "21.7 GB"
 
     ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "13.1 GB"
-    ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB"
-    ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB" "$GGUF_DIR" "qwen3.8-mmproj-BF16.gguf"
+    
+    if [[ -e "$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" ]]; then
+        ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB"
+        ropero_download_gguf "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB" "$GGUF_DIR" "qwen3.8-mmproj-BF16.gguf"
 
-    cp "$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "$HOME/models/gguf/"
+        cp "$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "$HOME/models/gguf/"
+    fi
 
     ropero_download_gguf "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" "Qwen2.5-VL 7B" "4.79 GB"
     # OJO: el 3er argumento es el NOMBRE legible del modelo, no su tamaño. Con
