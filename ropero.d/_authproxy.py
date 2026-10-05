@@ -201,6 +201,33 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return True
+        # Interceptar peticiones a HuggingFace para evitar que el engine intente
+        # descargar el modelo. mlx_lm.server hace una llamada interna a
+        # huggingface.co/api/models/<repo_id>/revision/main para verificar el repo,
+        # y si el nombre no es un repo válido de HF, falla con 401.
+        # Respondemos con un JSON válido de HF para que el engine use el path local.
+        if path.startswith("/api/models/"):
+            # Extraer el repo_id del path (ej: /api/models/gptoss/revision/main)
+            parts = path.split("/")
+            if len(parts) >= 3:
+                repo_id = parts[2]
+                # Responder con un JSON válido de HuggingFace
+                self._send_json(
+                    200,
+                    {
+                        "id": repo_id,
+                        "modelId": repo_id,
+                        "pipeline_tag": "text-generation",
+                        "library_name": "mlx",
+                        "private": False,
+                        "sha": "0000000000000000000000000000000000000000",
+                        "downloads": 0,
+                        "likes": 0,
+                        "tags": ["mlx", "text-generation"],
+                        "siblings": [],
+                    },
+                )
+                return True
         if path == "/ropero/engine":
             # Sin auth a propósito: lo consume `_collect_slots` en la misma
             # máquina. Si se exponía el proxy a la LAN, esto solo diría qué
