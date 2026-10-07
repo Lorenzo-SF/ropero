@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 # =============================================================================
 # ropero — lanzador simplificado de llama-server con modelos modulares
