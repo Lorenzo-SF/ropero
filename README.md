@@ -21,13 +21,26 @@ un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
 ## Instalación
 
 ```bash
-./ropero --install
-./ropero --check
+ropero --install              # todo: engines + modelos
+ropero --install engines      # solo engines y dependencias
+ropero --install models       # solo descargar los pesos
+ropero --install link         # solo rehacer symlinks y verificar
+ropero models                 # igual que --install models
+ropero --check
 ```
 
-`--install`:
+`--install` acepta un **target** y hace una de estas cuatro cosas:
+
+| target   | qué hace                                                        | sudo | descarga pesos |
+| -------- | --------------------------------------------------------------- | ---- | -------------- |
+| `all`    | todo lo de abajo (defecto)                                      | sí   | sí (~50 GB)    |
+| `engines`| pasos 1-3                                                       | sí   | no             |
+| `models` | paso 4                                                         | no   | sí             |
+| `link`   | rehace los symlinks de lo ya instalado y verifica. Instala nada  | no   | no             |
 
 1. Enlaza el propio ropero (`ropero`, `ropero.d`) en `~/.local/bin`.
+   **Siempre**, sea cual sea el target: aunque declines todo lo demás, desde
+   ese punto `ropero` ya es utilizable.
 2. Instala dependencias (pacman/brew según OS).
 3. Engines, uno a uno y en este orden — **cada uno enlaza sus ejecutables en
    `~/.local/bin` en cuanto termina**, no al final del install:
@@ -36,6 +49,16 @@ un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
    - `airllm` (todos los OS salvo termux).
    - `tensorrt-llm` (solo CachyOS/Arch) **o** `mlx-lm` (solo macOS).
 4. Descarga los GGUF por defecto (~50 GB).
+
+`--force` hace el install **sin preguntar nada** (es `AUTO_YES=1` con otro
+nombre). No es destructivo: las preguntas que borran —recompilar llama.cpp
+desde cero, recrear el venv de tensorrt— siguen respondiendo "no" por su cuenta.
+
+El target `link` existe para un caso concreto: los binarios están compilados
+pero `~/.local/bin` está vacío (lo borraste, o instalaste ropero en otra
+máquina). Rehacer `--install engines` para eso significa cinco preguntas y un
+`sudo pacman` de propina; `ropero --install link` no instala nada, rehace los
+enlaces de lo que YA está y termina con el check.
 
 Es idempotente: si un engine ya está instalado, pregunta si quieres rehacerlo
 en vez de repetirlo a ciegas. Si reintentas uno, solo se relinkea ese.

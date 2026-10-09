@@ -6,7 +6,8 @@
 # USO:
 #   ropero <modelo> [--background] [--cpu] [--force] [--port N]
 #   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
-#   ropero --install   (engines uno a uno: llama.cpp, airllm, tensorrt-llm/mlx-lm)
+#   ropero models      (descarga solo los modelos por defecto, sin engines)
+#   ropero --install [all|models|engines|link] [--force]
 #   ropero --check     (verifica la instalación, no modifica nada)
 # =============================================================================
 
@@ -929,7 +930,56 @@ _port_legend() {
     done < <(ropero_managed_ports)
 }
 
+# -----------------------------------------------------------------------------
+# Uso y error de uso.
+#
+# A nivel de archivo, no anidados en el comando que los usa, por el mismo
+# motivo que _kill_port: una función definida dentro de otra no existe hasta
+# que esa se ha ejecutado.
+#
+# Por qué hace falta: hasta ahora los subcomandos aceptaban CUALQUIER cosa
+# detrás y la tiraban a la basura sin decir nada. `ropero --install models`
+# ejecutaba el install entero —compilando llama.cpp si hacía falta— porque
+# cmd_install nunca miraba "$@". Un typo, o un argumento de alguien que se
+#antasyaba otra cosa, se-convirtió en media hora de compilación sin aviso. Un
+# CLI que descarta lo que le pasan no es un CLI: es unalotería. Ahora todo lo
+# que no se reconoce falla, y falla ANTES de tocar nada.
+# -----------------------------------------------------------------------------
+_ropero_usage() {
+    case "${1:-}" in
+        install)   printf 'USO: ropero --install [all|models|engines|link] [--force]\n' ;;
+        check)     printf 'USO: ropero --check\n' ;;
+        list)      printf 'USO: ropero list\n' ;;
+        templates) printf 'USO: ropero templates\n' ;;
+        stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        models)    printf 'USO: ropero models\n' ;;
+        status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        # Sin subcomando: la línea del modelo. Es lo que devuelven los typos de
+        # flag, y ropero help para el resto.
+        *)         printf 'USO: ropero <modelo> [--background] [--cpu] [--force] [--port N]\n' ;;
+    esac
+}
+
+# _ropero_usage_error <subcomando> <mensaje> → error a stderr y exit 2.
+#
+# exit 2 y no 1 a propósito: 2 es "error de uso" en la convención estándar de
+# Unix, 1 es "el comando se ejecutó y falló". Un wrapper necesita poder
+# distinguir `ropero noexiste` de `ropero --install` roto a medio.
+#
+# Se imprime la línea de uso de ESE comando y no el help entero: el help son
+# 200 líneas, y cuando ya sabes qué has tipeado mal, lo que quieres es la
+# línea que te dice qué escribir.
+_ropero_usage_error() {
+    echo "ERROR: $2" >&2
+    _ropero_usage "${1:-}" >&2
+    echo "  (ropero help → uso completo)" >&2
+    exit 2
+}
+
 cmd_list() {
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error list "list no acepta argumentos (recibido: '$1')"
+    fi
     echo "Modelos disponibles:"
     for m in "${MODEL_NAMES[@]}"; do
         local engine="${MODEL_ENGINE[$m]:-llama-server}"
@@ -964,6 +1014,9 @@ cmd_list() {
 # ropero_templates → lista las plantillas de modelo disponibles en ropero.d/.
 # -----------------------------------------------------------------------------
 cmd_templates() {
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error templates "templates no acepta argumentos (recibido: '$1')"
+    fi
     local f bn count=0
     printf 'Plantillas en %s/ — copia una a ropero.d/<nombre>.sh (SIN el prefijo 30-) y edítala:\n\n' "$MODULES_DIR"
     for f in "$MODULES_DIR"/30-template-*.sh; do
@@ -1016,8 +1069,7 @@ cmd_status() {
                     # siguiente es flag, no valor de --watch → default
                     watch_ms=1000
                 elif [[ $# -gt 0 ]]; then
-                    echo "ERROR: --watch requiere milisegundos (entero positivo), recibido: $1" >&2
-                    return 2
+                    _ropero_usage_error status "--watch requiere milisegundos (entero positivo), recibido: $1"
                 else
                     watch_ms=1000
                 fi
@@ -1025,8 +1077,12 @@ cmd_status() {
                 return $?
                 ;;
             *)
-                echo "Opción desconocida: $1" >&2
-                return 1
+                # El mismo helper que el resto de la CLI, y por el mismo
+                # motivo: `status --badopt` decía "Opción desconocida" sin la
+                # palabra ERROR y con otro código de salida que el resto de
+                # comandos, así que un wrapper no podía contarlo como error de
+                # uso. Ahora todos los comandos fallan igual.
+                _ropero_usage_error status "opción desconocida: '$1'"
                 ;;
         esac
     done
@@ -1166,7 +1222,35 @@ cmd_status_watch() {
 }
 
 cmd_stop() {
+    # Parseo ANTES de tocar ningún puerto. `ropero stop` acepta como mucho un
+    # argumento, y ese es el nombre del modelo (o "all"). Antes main le pasaba
+    # solo "${1:-all}", así que `ropero stop embed --force` recorría los puertos
+    # buscando un modelo llamado "embed" y descartaba el --force sin pestañear:
+    # el usuario veía "Modelo 'embed' no encontrado" cuando lo que había pasado
+    # es que el nombre estaba mal escrito. Ahora el --force es un error de uso
+    # claro, que es lo que es.
+    if [[ $# -gt 1 ]]; then
+        _ropero_usage_error stop "stop acepta como mucho un argumento (modelo o 'all'); recibidos $#: $*"
+    fi
     local target="${1:-all}"
+    if [[ "$target" == -* ]]; then
+        _ropero_usage_error stop "stop no tiene opciones; '$target' no es un modelo (usa 'stop all')"
+    fi
+
+    # Nombre desconocido → typo casi seguro. Se comprueba contra MODEL_NAMES
+    # (que ya contiene tanto los scripts físicos como sus alias públicos, así
+    # que cubre los dos casos) y no contra lo que hay escuchando: stop compara
+    # el nombre que ropero publica en /v1/models, y ese nombre solo puede ser
+    # el de un modelo cargado. Sin esto, `ropero stop quezqui` se comportaba
+    # como un acierto hasta el final y luego decía "no encontrado en ningún
+    # puerto gestionado", que es un diagnóstico de runtime para lo que es un
+    # typo de teclado.
+    if [[ "$target" != "all" ]]; then
+        local _k="${target//-/_}"
+        if [[ ! " ${MODEL_NAMES[*]} " =~ " $_k " ]]; then
+            _ropero_usage_error stop "modelo desconocido: '$target' (mira 'ropero list')"
+        fi
+    fi
 
     # _kill_port y _engine_human están a nivel de archivo (ver más arriba), no
     # aquí dentro: --force, en start_model, también necesita apagarlos, y una
@@ -1237,7 +1321,8 @@ USO:
   ropero <modelo> [--background] [--cpu] [--force] [--port N]
   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
   ropero templates
-  ropero --install | ropero --check
+  ropero models
+  ropero --install [all|models|engines|link] [--force] | ropero --check
 
 ENGINES:
   llama-server    llama.cpp sobre GGUF. Metal en macOS, CUDA en cachy. El único
@@ -1305,18 +1390,34 @@ SUBCOMANDOS:
                flags usarla para exprimir el hardware. Copia la que quieras,
                renómbrala SIN el prefijo 30- y ya es un modelo de ropero.
                No se cargan como modelos: el loader salta *-template-*.
-  --install   instala/rehace los engines uno a uno (llama.cpp, airllm, y
+  models      descarga solo los modelos por defecto (los GGUF de llama.cpp, y
+              en macOS también el checkpoint MLX de metaloss). Idempotente: lo
+              que ya está, se salta. Es exactamente el paso 3 del install, y
+              existe aparte porque es lo que se quiere cuando el stack ya está
+              hecho y lo que falta es disco: pedir \`--install models\` (con sus
+              paquetes y sus engines por delante) para bajar 50 GB es una forma
+              de que nadie los baje.
+  --install [all|models|engines|link] [--force]
+              target (defecto: all):
+                all      engines + modelos — el comportamiento de siempre
+                engines  solo paquetes del sistema y engines; ni un byte de pesos
+                models   solo los modelos (igual que \`ropero models\`)
+                link     solo rehacer los symlinks de lo ya instalado y
+                         verificar. No instala NADA. Es para cuando los
+                         binarios están pero ~/.local/bin se ha quedado vacío.
+              Instala/rehace los engines uno a uno (llama.cpp, airllm, y
               tensorrt-llm en cachy o mlx-lm en macos, más fastflowlm si hay
               NPU AMD). Cada uno enlaza SUS ejecutables en ~/.local/bin al
               terminar, no al final del install.
-              Después descarga los modelos: los GGUF de llama.cpp, y en macOS
-              también el checkpoint MLX de gpt-oss-20b (metaloss). Los que
-              son plataforma-dependientes no se descargan en Linux, donde no
-              sirven de nada.
+              Los que son plataforma-dependientes no se descargan en Linux,
+              donde no sirven de nada.
               Idempotente: si un engine ya está, pregunta si rehacerlo; y un
               modelo ya descargado se detecta por su CONTENIDO (pesos +
-              config.json), no por un marcador, así que ro survives a que
-              borres un shard.
+              config.json), no por un marcador, así que sobrevive a que borres
+              un shard.
+              --force no pregunta NADA (equivale a AUTO_YES=1). Ojo: NO es
+              destructivo — las preguntas que borran (recompilar desde cero,
+              rehacer el venv) siguen respondiendo "no" por su cuenta.
   --check     verifica la instalación (enlaces, modelos, engines, sus
               dependencias reales) sin tocar nada. Exit 1 si algo falta.
 
@@ -1327,7 +1428,7 @@ NOTAS:
          ROPERO_EMBED_PORT=9991 ropero embed
   - Con engine propio, un script de modelo puede declarar
     get_engine_args_<nombre>() para añadir flags al comando del server.
-    Ej: `printf '%s\\n' --draft-model ... --num-draft-tokens 4`.
+    Ej: \`printf '%s\\n' --draft-model ... --num-draft-tokens 4\`.
   - ROPERO_NO_AUTH_PROXY=1 arranca un engine sin proxy, SIN API key y en
     \$HOST. Solo tiene sentido con HOST=127.0.0.1. Avisa.
   - ROPERO_START_TIMEOUT (def. 180s) y ROPERO_ENGINE_WAIT (def. 20s) ajustan
@@ -2220,6 +2321,15 @@ ropero_link_fastflowlm() {
 # NO modifica nada. Exit 0 si todo OK, 1 si algo falla.
 # -----------------------------------------------------------------------------
 cmd_check() {
+    # Igual que cmd_list/cmd_templates: lo que llega detrás y no se reconoce
+    # es un error, no algo que se tira. `ropero --check models` parece una
+    # orden razonable —"mira qué modelos hay"— y hasta hace un rato ejecutaba
+    # el check entero fingiendo que eso era lo que le habías pedido. Fallar
+    # aquí, arriba del todo, es lo que le da sentido al mensaje.
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error check "check no acepta argumentos (recibido: '$1')"
+    fi
+
     local rc=0
 
     printf "\n== ropero --check ==\n\n"
@@ -2692,24 +2802,51 @@ ropero_install_fastflowlm() {
 }
 
 # -----------------------------------------------------------------------------
-# cmd_install — orquesta. Cada engine va por su cuenta; el siguiente no depende
-# del anterior.
+# _ropero_do_models — la fase de modelos, en un solo sitio.
+#
+# Existe por un motivo concreto: la reachable desde `ropero --install models`,
+# `ropero --install all` y `ropero models` (top-level), y son tres llamadas al
+# mismo trabajo. Duplicar el cuerpo en las tres es exactamente cómo un día
+# `ropero models` se queda sin el GGUF de MLX porque el otro camino sí lo tenía.
+# Es el mismo bug que estamos arreglando en el parseo, aplicado a la lógica: una
+# sola definición, tres entradas.
+#
+# NO llama a ropero_env_setup: quien llama a esta función ya lo ha hecho (mkdir
+# -p es idempotente, pero llamar al setup dos veces por comando es pedir que
+# mañana alguien lo lea mal y no sepa cuál de los dos manda).
 # -----------------------------------------------------------------------------
-cmd_install() {
+_ropero_do_models() {
+    ropero_download_default_models
+}
+
+# -----------------------------------------------------------------------------
+# cmd_models — descarga solo los modelos por defecto. Sin engines, sin paquetes,
+# sin sudo. Es lo que se pide cuando ya se tiene el stack y solo falta disco.
+# -----------------------------------------------------------------------------
+cmd_models() {
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error models "models no acepta argumentos (recibido: '$1')"
+    fi
     local os
     os=$(ropero_detect_os 2>/dev/null || echo unknown)
-    ropero_info "ropero --install ($os)"
+    ropero_info "ropero models ($os)"
     ropero_env_setup
+    _ropero_do_models
+    ropero_ok "ropero models OK"
+}
 
-    # El entrypoint primero: a partir de aquí ropero ya es utilizable, decline
-    # lo que decline el usuario.
-    ropero_link_self
-
-    if [[ "$os" == "termux" ]]; then
-        ropero_info "termux: sin paquetes nativos, solo dirs"
-        ropero_ok "ropero --install OK"
-        return 0
-    fi
+# -----------------------------------------------------------------------------
+# _ropero_install_engines <os> — paquetes del sistema + engines. La fase que
+# necesita sudo, descarga código y deja binarios.
+#
+# Separada de cmd_install por el target, no por gusto de factoring: con
+# `--install engines` y `--install all` es exactamente el mismo bloque, y
+# mantenerlo inline obligaba a anidar media función dentro de un if para que la
+# mitad de las rutas lo ejecutara. A nivel de archivo, además, porque la fase de
+# modelos tiene la misma forma y conviene leerlas como dos piezas hermanas.
+# -----------------------------------------------------------------------------
+_ropero_install_engines() {
+    local os="$1"
 
     # 1. paquetes del sistema
     if [[ "$os" == "cachy" || "$os" == "arch" ]]; then
@@ -2744,11 +2881,161 @@ cmd_install() {
     # de la función (cachy/arch + AMD + XDNA), no aquí, para que la razón de que
     # se salte se pueda explicar engine por engine.
     ropero_install_fastflowlm "$os"
+}
 
-    # 3. modelos por defecto (lógica en 21-download-models.sh)
-    ropero_download_default_models
+# -----------------------------------------------------------------------------
+# _ropero_relink_all <os> — rehace los symlinks de TODO lo que ya está
+# instalado. No instala nada, no pide sudo, no pregunta.
+#
+# El hueco que cubre: los enlaces solo se creaban de rebote, al final de
+# ropero_install_* — y solo si esa fase llegaba a ejecutarse. Borraste
+# ~/.local/bin/llama-server y para recuperarlo tenías dos opciones, las dos
+# malas: `ropero --install engines` (que te pregunta cinco veces y puede quedarse
+# enganchado en un sudo pacman) o acordarte de la ruta larga de build/bin.
+#
+# Es la fase de engines con todo el "instalar" sustituido por "¿ya está?", que
+# es un test sin efectos. Y por eso un engine que no está no es un fallo: si no
+# hay build, no hay nada que enlazar, y decirlo es más útil que callarse.
+# -----------------------------------------------------------------------------
+_ropero_relink_all() {
+    local os="$1"
 
-    ropero_ok "ropero --install OK"
+    ropero_info "relinkeando ejecutables en $BIN_DIR (no instala nada, no pide sudo)"
+
+    if [[ -x "$LLAMA_DIR/build/bin/llama-server" ]]; then
+        ropero_link_llamacpp
+    else
+        ropero_info "  · llama.cpp no compilado ($LLAMA_DIR/build/bin); nada que enlazar"
+    fi
+
+    # airllm es distinto de los demás: lo que se enlaza es _airllm_server.py,
+    # que es de ropero y siempre está. Que el PAQUETE airllm importe o no es
+    # otra pregunta, y la responde ropero_link_airllm con su propio aviso. Por
+    # eso aquí no hay "¿está instalado?": el enlace se rehace siempre.
+    ropero_link_airllm
+
+    if [[ -x "$HOME/.venv-tensorrt/bin/trtllm-serve" ]]; then
+        ropero_link_tensorrt
+    else
+        ropero_info "  · tensorrt-llm no instalado; nada que enlazar"
+    fi
+
+    if [[ "$os" == "macos" ]]; then
+        ropero_link_mlx
+    else
+        ropero_info "  · mlx-lm es Apple Silicon; no aplica en $os"
+    fi
+
+    if [[ -x /opt/fastflowlm/bin/flm ]]; then
+        ropero_link_fastflowlm
+    else
+        ropero_info "  · FastFlowLM no instalado; nada que enlazar"
+    fi
+
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# cmd_install — orquesta. Cada engine va por su cuenta; el siguiente no depende
+# del anterior.
+#
+# Target (primer argumento, opcional):
+#   all      (defecto) engines + modelos — el comportamiento de siempre
+#   engines  solo paquetes del sistema y engines; no descarga ni un byte de pesos
+#   models   solo los modelos por defecto; no toca engines ni pide sudo
+#   link     solo rehacer los symlinks de lo ya instalado, y verificar. No
+#            instala NADA: es la respuesta a "¿por qué no encuentro
+#            llama-server?" cuando los binarios están compilados pero ~/.local/bin
+#            se ha quedado vacío.
+#
+# --force: no preguntar. Es lo que ya se conseguía con AUTO_YES=1 /
+# SETUP_MODE=full, expuesto como flag porque en un install interactivo ir
+# escribiendo una variable de entorno es una forma rara de decir "ya he dicho
+# que sí".
+#
+# El target se parsea PRIMERO, antes de instalar nada. Si no fuera así,
+# `ropero --install mdoels` empezaría a instalar paquetes antes de que nadie le
+# hubiera dicho que el argumento no existe — y la auditoría de por qué se paró
+# a medias sería "se quedó sin espacio" en vez de "escribiste mdoels".
+# -----------------------------------------------------------------------------
+cmd_install() {
+    local target="all"
+    local force=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            all|models|engines|link)
+                target="$1"
+                shift
+                ;;
+            --force|-f)
+                force=1
+                shift
+                ;;
+            -h|--help)
+                cmd_help
+                return 0
+                ;;
+            *)
+                _ropero_usage_error install "argumento desconocido: '$1' (targets: all|models|engines|link · flag: --force)"
+                ;;
+        esac
+    done
+
+    # --force NO redefine ropero_ask/ropero_ask_keep: las dos leen AUTO_YES y
+    # SETUP_MODE en TIEMPO DE LLAMADA (00-utils.sh), así que exportarlos basta.
+    # Y de paso sale gratis la protección de las preguntas destructivas:
+    # ropero_ask_keep sigue devolviendo "no", de modo que --force nunca borra
+    # ~/llama.cpp ni hace un rm -rf por su cuenta. Rewriar las funciones aquí,
+    # además, las metería en un punto donde el entrypoint ya no las defiende.
+    if (( force == 1 )); then
+        export AUTO_YES=1
+        export SETUP_MODE=full
+    fi
+
+    local os
+    os=$(ropero_detect_os 2>/dev/null || echo unknown)
+    ropero_info "ropero --install $target ($os)"
+    ropero_env_setup
+
+    # El entrypoint primero, y pase lo que pase: a partir de aquí ropero ya es
+    # utilizable aunque el usuario decline todos los engines. Por eso está
+    # fuera de los if de target — incluso `ropero --install models` debe dejar
+    # el binario enlazado, no solo cuando se instalan engines.
+    ropero_link_self
+
+    if [[ "$os" == "termux" ]]; then
+        ropero_info "termux: sin paquetes nativos, solo dirs"
+        ropero_ok "ropero --install $target OK"
+        return 0
+    fi
+
+    if [[ "$target" == "link" ]]; then
+        _ropero_relink_all "$os"
+        # El check va dentro y no como paso aparte de la CLI: "he relinkeado"
+        # no es lo mismo que "está bien". Un symlink que apunta a un binario
+        # recompilado a medias es justo el fallo que no se ve hasta que algo
+        # deja de arrancar, y un relink sin check no lo pilla. El rc que sale
+        # es el del check.
+        cmd_check
+        return $?
+    fi
+
+    if [[ "$target" == "models" ]]; then
+        # Ni sudo, ni pacman, ni engines. Solo los pesos.
+        _ropero_do_models
+        ropero_ok "ropero --install models OK"
+        return 0
+    fi
+
+    _ropero_install_engines "$os"
+
+    # 3. modelos por defecto (lógica en 21-download-models.sh). Con target
+    #    `engines` no se llega aquí: ya hemos salido por el return de arriba.
+    if [[ "$target" == "all" ]]; then
+        _ropero_do_models
+    fi
+
+    ropero_ok "ropero --install $target OK"
 }
 
 # -----------------------------------------------------------------------------
@@ -2763,22 +3050,33 @@ main() {
 
     case "$cmd" in
         --install)
-            shift || true
+            shift
             cmd_install "$@"
             exit $?
             ;;
         --check)
-            shift || true
+            shift
             cmd_check "$@"
             exit $?
             ;;
         list)
-            cmd_list
+            shift
+            cmd_list "$@"
             exit 0
             ;;
         templates)
-            cmd_templates
+            shift
+            cmd_templates "$@"
             exit 0
+            ;;
+        # Top-level y no solo `--install models`: es lo que se escribe cuando
+        # ya se tiene el stack y solo falta disco, y obligar a recordar el
+        # doble flag para eso es pedir que nadie lo use. Mismo cuerpo, misma
+        # fase (_ropero_do_models): no hay dos caminos que puedan divergir.
+        models)
+            shift
+            cmd_models "$@"
+            exit $?
             ;;
         status)
             shift
@@ -2787,10 +3085,18 @@ main() {
             ;;
         stop)
             shift
-            cmd_stop "${1:-all}"
+            cmd_stop "$@"
             exit $?
             ;;
     *)
+        # Un token que empieza por "-" no es un modelo, es una opción que no
+        # existe. Decirlo así y no "Modelo desconocido: --foc" (seguido de un
+        # volcado de la lista de modelos a stderr): lo segundo convierte un typo
+        # de teclado en veinte líneas de ruido y esconde el problema real.
+        if [[ "$cmd" == -* ]]; then
+            _ropero_usage_error '' "opción desconocida: '$cmd'"
+        fi
+
         local model="$cmd"
         shift
         local background=0
@@ -2820,6 +3126,15 @@ main() {
                     # esquivo.
                     shift
                     if [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; then
+                        # --port repetido: gana el último, pero se dice. Sin el
+                        # aviso, `ropero embed --port 9995 --port 9996` arrancaba
+                        # en 9996 sin dar ninguna pista de que el 9995 se había
+                        # perdido por el camino — y cuando el puerto no era el
+                        # que esperabas, el culpable no parecía ropero sino un
+                        # segundo flag que nadie había visto.
+                        if [[ -n "$port_override" ]]; then
+                            echo "AVISO: --port repetido; gana el último (:$1)" >&2
+                        fi
                         port_override="$1"
                         shift
                     elif [[ $# -eq 0 ]]; then
@@ -2838,7 +3153,17 @@ main() {
                         exit 1
                     fi
                     ;;
-                *) echo "Opción desconocida: $1" >&2; cmd_help; exit 1 ;;
+                -h|--help)
+                    # Antes caía en el `*)` de abajo y salía "opción
+                    # desconocida: --help". No era mentira —este branch no
+                    # documentaba ningún flag de ayuda— pero `ropero embed
+                    # --help` es lo primero que escribe cualquiera que haya
+                    # leído cualquier otro CLI en su vida, y contestarle que su
+                    # --help no existe es una forma cara de no contestar.
+                    _ropero_usage ''
+                    exit 0
+                    ;;
+                *) _ropero_usage_error '' "opción desconocida: '$1'" ;;
             esac
             shift
         done

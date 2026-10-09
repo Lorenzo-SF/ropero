@@ -79,6 +79,11 @@ _ropero_download_gguf_set() {
     ropero_download_gguf "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
     ropero_download_gguf "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF" "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf" "Qwen3 Coder UD-Q4_K_XL" "17.7 GB"
     ropero_download_gguf "bartowski/agentica-org_DeepCoder-14B-Preview-GGUF" "agentica-org_DeepCoder-14B-Preview-Q4_K_L.gguf" "DeepCoder Q4_K_L" "9.57 GB"
+
+    ropero_download_safetensors \
+        "unsloth/Qwen3.8-27B-NVFP4" \
+        "Qwen3.8-27B-NVFP4" \
+        "23.4 GB"        
 }
 
 # -----------------------------------------------------------------------------
@@ -109,11 +114,6 @@ _ropero_download_safetensors_mlx() {
         "mlx-community/gpt-oss-20b-MXFP4-Q8" \
         "gpt-oss-20b-MXFP4-Q8" \
         "12.1 GB"
-
-    ropero_download_safetensors \
-        "unsloth/Qwen3.8-27B-NVFP4" \
-        "Qwen3.8-27B-NVFP4" \
-        "23.4 GB"        
 
     # ── Lo que NO se descarga aquí, y por qué ───────────────────────────────
     # ropero.d/airgptoss.sh (engine airllm) necesita ~/models/safetensors/

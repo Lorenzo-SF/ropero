@@ -163,17 +163,21 @@ Variables de entorno por modelo: `ROPERO_<MODELO>_CTX`, `_PORT`. El nombre se no
 ```
 ropero <modelo> [--background] [--force] [--port N]   # --cpu: solo llama-server
 ropero list | templates | status [--craft] [--watch [ms]] | stop <modelo>|all
-ropero --install | ropero --check
+ropero models
+ropero --install [all|models|engines|link] [--force] | ropero --check
 ```
 
 - `--cpu` es **exclusivo de llama-server**: mapea a `--n-gpu-layers 0 --threads N`, flags que no existen en los demás. En un engine con servidor propio da error explicándolo, en vez de ignorarse y dejarte pensando que tienes la CPU.
 - `--port N` funciona en todos los engines: salta `MODEL_PORT` y los slots, y registra el puerto como ad-hoc para que `status` y `stop` lo vean.
 - `--force` rota el modelo del puerto destino (SIGTERM primero, para que un proxy con engine detrás apague el árbol entero).
-- `ropero --install` instala engine por engine y **enlaza sus ejecutables en `~/.local/bin` al terminar**, no al final. `ropero --check` hace un probe real de cada uno (importa el paquete, no solo mira el fichero).
+- `ropero --install` instala engine por engine y **enlaza sus ejecutables en `~/.local/bin` al terminar**, no al final. Acepta un target: `all` (defecto), `engines` (sin pesos), `models` (solo pesos, sin sudo) y `link` (solo rehacer symlinks de lo ya instalado + verificar). `--force` lo hace sin preguntar nada.
+- `ropero --check` hace un probe real de cada engine (importa el paquete, no solo mira el fichero).
+- **Los argumentos que no existen son un error**, no se ignoran: `ropero --install models` hace solo los modelos, y `ropero --install mdoels` falla con exit 2 antes de instalar nada. Error de uso = 2, fallo de ejecución = 1.
 
 ## Descargar modelos
 
-`ropero --install` los descarga todos (GGUF siempre; el checkpoint MLX solo en macOS). A mano:
+`ropero models` (o `ropero --install models`) los descarga todos (GGUF siempre;
+el checkpoint MLX solo en macOS). A mano:
 
 ```bash
 # GGUF (llama-server) — un solo fichero del repo
