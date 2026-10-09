@@ -110,6 +110,11 @@ _ropero_download_safetensors_mlx() {
         "gpt-oss-20b-MXFP4-Q8" \
         "12.1 GB"
 
+    ropero_download_safetensors \
+        "unsloth/Qwen3.8-27B-NVFP4" \
+        "Qwen3.8-27B-NVFP4" \
+        "23.4 GB"        
+
     # ── Lo que NO se descarga aquí, y por qué ───────────────────────────────
     # ropero.d/airgptoss.sh (engine airllm) necesita ~/models/safetensors/
     # gpt-oss-120b, pero son ~130-240 GB según la variante: no es una descarga
