@@ -7,9 +7,35 @@
 
 _ropero_log() { printf '%s\n' "$*" >&2; }
 ropero_info() { _ropero_log "  [i] $*"; }
-ropero_ok() { _ropero_log "  [✓] $*"; }
-ropero_warn() { _ropero_log "  [!] $*"; }
-ropero_err() { _ropero_log "  [✗] $*"; }
+
+# Contadores del contrato. Se incrementan en los mismos helpers que ya usaba
+# todo ropero, así que `--install` y `--check` traen su recuento sin tocar las
+# decenas de llamadas que hay repartidas por el proyecto. `ropero_counters_reset`
+# los pone a cero al entrar en cada comando del contrato; fuera de ellos los
+# valores no se leen y no molestan.
+ROPERO_OK=0; ROPERO_WARN=0; ROPERO_FAIL=0
+ropero_ok()   { _ropero_log "  [✓] $*"; ROPERO_OK=$((ROPERO_OK+1)); }
+ropero_warn() { _ropero_log "  [!] $*"; ROPERO_WARN=$((ROPERO_WARN+1)); }
+ropero_err()  { _ropero_log "  [✗] $*"; ROPERO_FAIL=$((ROPERO_FAIL+1)); }
+
+ropero_counters_reset() { ROPERO_OK=0; ROPERO_WARN=0; ROPERO_FAIL=0; }
+
+# Numeración de fases. Se cuenta en vez de escribirse a mano porque las rutas
+# de --install tienen distinto número de fases (all=4, engines=3, models=3,
+# link=3) y a mano la lista salía como [1/5] ... [2/5] ... [5/5], saltando el
+# 3 y el 4. Un "[5/5] Resumen" después de un "[2/5]" hace pensar que se perdió
+# trabajo, y no se perdió: es que no Applicable.
+ROPERO_STEP_N=0
+ROPERO_STEP_TOTAL=0
+ropero_phases_begin() { ROPERO_STEP_N=0; ROPERO_STEP_TOTAL="$1"; }
+ropero_phase() {
+    ROPERO_STEP_N=$((ROPERO_STEP_N+1))
+    # Log directo y no ropero_step: ese ya pone sus propios corchetes, y
+    # pasarle "[1/3]" ya formateado salía como [[1/3]].
+    _ropero_log ""; _ropero_log "[$ROPERO_STEP_N/$ROPERO_STEP_TOTAL] $1"
+}
+ropero_step()  { _ropero_log ""; _ropero_log "[$1] $2"; }
+ropero_counters() { _ropero_log "  $ROPERO_OK ok · $ROPERO_WARN avisos · $ROPERO_FAIL fallos"; }
 
 # respeta CI / AUTO_YES / --full desatendido (igual que setup ask_*)
 # LECTURA DIRECTA de AUTO_YES / SETUP_MODE / CI sin pasar por la lógica
@@ -156,7 +182,15 @@ ropero_download_gguf() {
     # solo mirásemos el original, un rename ya aplicado se redescargaría cada
     # vez (y con `~` sin expandir, la comprobación nunca encontraba nada).
     if [[ -f "$final" && -s "$final" ]]; then
-        ropero_ok "$dest_name ya descargado"; return 0
+        # --force: borra y vuelve a bajar. Antes `--force` solo ponía AUTO_YES,
+        # así que la pregunta desaparecía pero el "ya descargado" cortaba
+        # igualmente: pedías forzar y no pasaba nada, en silencio.
+        if [[ "${ROPERO_FORCE:-0}" == "1" ]]; then
+            ropero_info "--force: borrando $final"
+            rm -f "$final" || { ropero_err "no se pudo borrar $final"; return 1; }
+        else
+            ropero_ok "$dest_name ya descargado"; return 0
+        fi
     fi
     if [[ "$dest_name" != "$filename" ]]; then
         # `filename` puede traer subdirectorio del repo ("MTP/x.gguf"), así que
@@ -337,13 +371,21 @@ ropero_download_safetensors() {
     fi
 
     if (( have_weights == 1 && have_config == 1 )); then
-        # Refrescar el marcador si falta, para que las versiones viejas del
-        # repo (que solo miraban el marcador) sigan funcionando.
-        [[ -f "$dest_dir/.download_complete" ]] || touch "$dest_dir/.download_complete" 2>/dev/null || true
-        local wmb
-        wmb=$(du -sm "$dest_dir" 2>/dev/null | awk '{print $1; exit}')
-        ropero_ok "$modelname ya descargado (${wmb:-?} MB en $dest_dir)"
-        return 0
+        # --force borra el checkpoint entero y lo vuelve a bajar (mismo motivo
+        # que en el GGUF: sin esto, forzar no re-descargaba nada).
+        if [[ "${ROPERO_FORCE:-0}" == "1" ]]; then
+            ropero_info "--force: borrando $dest_dir"
+            rm -rf "$dest_dir" || { ropero_err "no se pudo borrar $dest_dir"; return 1; }
+            have_weights=0; have_config=0
+        else
+            # Refrescar el marcador si falta, para que las versiones viejas del
+            # repo (que solo miraban el marcador) sigan funcionando.
+            [[ -f "$dest_dir/.download_complete" ]] || touch "$dest_dir/.download_complete" 2>/dev/null || true
+            local wmb
+            wmb=$(du -sm "$dest_dir" 2>/dev/null | awk '{print $1; exit}')
+            ropero_ok "$modelname ya descargado (${wmb:-?} MB en $dest_dir)"
+            return 0
+        fi
     fi
 
     # Hay marcador pero no pesos: alguien borró los shards, o una descarga

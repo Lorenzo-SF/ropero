@@ -1397,7 +1397,7 @@ SUBCOMANDOS:
               hecho y lo que falta es disco: pedir \`--install models\` (con sus
               paquetes y sus engines por delante) para bajar 50 GB es una forma
               de que nadie los baje.
-  --install [all|models|engines|link] [--force]
+  --install [all|models|engines|link] [<engine|modelo>] [--force]
               target (defecto: all):
                 all      engines + modelos — el comportamiento de siempre
                 engines  solo paquetes del sistema y engines; ni un byte de pesos
@@ -1405,19 +1405,37 @@ SUBCOMANDOS:
                 link     solo rehacer los symlinks de lo ya instalado y
                          verificar. No instala NADA. Es para cuando los
                          binarios están pero ~/.local/bin se ha quedado vacío.
-              Instala/rehace los engines uno a uno (llama.cpp, airllm, y
-              tensorrt-llm en cachy o mlx-lm en macos, más fastflowlm si hay
-              NPU AMD). Cada uno enlaza SUS ejecutables en ~/.local/bin al
-              terminar, no al final del install.
-              Los que son plataforma-dependientes no se descargan en Linux,
-              donde no sirven de nada.
-              Idempotente: si un engine ya está, pregunta si rehacerlo; y un
-              modelo ya descargado se detecta por su CONTENIDO (pesos +
-              config.json), no por un marcador, así que sobrevive a que borres
-              un shard.
-              --force no pregunta NADA (equivale a AUTO_YES=1). Ojo: NO es
-              destructivo — las preguntas que borran (recompilar desde cero,
-              rehacer el venv) siguen respondiendo "no" por su cuenta.
+
+              SIN nombre, preguntando uno a uno:
+                --install engines   instala engines + paquetes del sistema.
+                                    Cada uno pregunta antes de instalar; si ya
+                                    está, pregunta si se reinstala o si se borra
+                                    el proyecto y se recompila. Los ejecutables
+                                    se enlazan en ~/.local/bin al terminar.
+                                    airllm NO se enlaza: es una librería de
+                                    Python, no un binario.
+                --install models    descarga el catálogo, saltando lo que ya
+                                    está (se detecta por CONTENIDO: pesos +
+                                    config.json, no por un marcador).
+
+              CON nombre, sin preguntar — para manifests y scripts:
+                --install engines llama|mlx|airllm|tensorrt|flm|all
+                                    instala solo ese engine, sin preguntar.
+                --install models <modelo>
+                                    instala solo ese modelo. Admite el alias o
+                                    el script de \`ropero list\` (qwen, coder_lite,
+                                    fable…) o el nombre del .gguf. Si el nombre
+                                    no existe, se imprime el catálogo completo.
+
+              Los engines que son plataforma-dependientes no se descargan en
+              Linux, donde no sirven de nada.
+
+              --force no pregunta NADA (equivale a AUTO_YES=1) Y borra lo que
+              ya está para volver a bajarlo/compilarlo. Antes sólo callaba la
+              pregunta: el "ya descargado" cortaba antes, así que pedir --force
+              no hacía nada, en silencio.
+              Ojo: --force NO autoriza borrados destructivos que no pediste
+              (las preguntas de "borro ~/llama.cpp" siguen respondiendo "no").
   --check     verifica la instalación (enlaces, modelos, engines, sus
               dependencias reales) sin tocar nada. Exit 1 si algo falta.
 
@@ -2331,8 +2349,11 @@ cmd_check() {
     fi
 
     local rc=0
+    ropero_counters_reset
 
-    printf "\n== ropero --check ==\n\n"
+    printf "\n== ropero --check ==\n"
+
+    ropero_step "1/5" "Symlinks"
 
     # Entry point
     if [[ -e "$BIN_DIR/ropero" ]]; then
@@ -2351,6 +2372,8 @@ cmd_check() {
         ropero_err "ropero.d NO linkeado en $BIN_DIR"
         rc=1
     fi
+
+    ropero_step "2/5" "Engines"
 
     # Engines: sus ejecutables tienen que estar en $BIN_DIR, no sólo en su ruta
     # larga. Si esto falla, la solución es `ropero --install`, no buscar el
@@ -2440,6 +2463,8 @@ cmd_check() {
     done
     rm -f "$probe_err_f"
 
+    ropero_step "3/5" "Modelos"
+
     # Modelos
     if [[ -d "$GGUF_DIR" ]]; then
         local n
@@ -2465,6 +2490,8 @@ cmd_check() {
         ropero_warn "llama-server NO en PATH (ropero --install lo compila)"
     fi
 
+    ropero_step "4/5" "PATH"
+
     # PATH: ¿BIN_DIR está en PATH?
     if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
         ropero_ok "$BIN_DIR está en PATH"
@@ -2473,12 +2500,15 @@ cmd_check() {
         ropero_info "  Añade a tu .zshrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
     fi
 
+    ropero_phase "Resumen"
+    ropero_counters
     printf "\n"
     if (( rc == 0 )); then
-        ropero_ok "ropero --check OK"
+        _ropero_log "  [✓] ropero --check OK"
     else
-        ropero_err "ropero --check FALLÓ ($rc problema(s))"
+        _ropero_log "  [✗] ropero --check FALLÓ → ejecuta: ropero --install"
     fi
+    printf "\n"
     return $rc
 }
 
@@ -2816,7 +2846,7 @@ ropero_install_fastflowlm() {
 # mañana alguien lo lea mal y no sepa cuál de los dos manda).
 # -----------------------------------------------------------------------------
 _ropero_do_models() {
-    ropero_download_default_models
+    ropero_download_default_models "${1:-}"
 }
 
 # -----------------------------------------------------------------------------
@@ -2936,6 +2966,92 @@ _ropero_relink_all() {
 }
 
 # -----------------------------------------------------------------------------
+# _ropero_install_one_engine <engine> <os>
+#
+# La versión SIN preguntas de `_ropero_install_engines`, para un engine
+# concreto. No es un refactor de gusto: `ropero --install engines` pregunta, y
+# una pregunta en un contexto no interactivo (repos.yaml, un script de
+# arranque, un pipeline) se queda esperando una respuesta que no va a llegar.
+#
+# Lo que NO hace aquí y sí hace la versión interactiva: preguntar por qué se
+# borra ~/llama.cpp antes de borrarlo. Por eso los engines destructivos
+# (llama) se limpian con `ropero_ask_keep`, que sigue negándose aunque
+# AUTO_YES=1: instalar un engine que el usuario pidió no le da permiso para
+# tirarle 40 minutos de compilación a otro.
+# -----------------------------------------------------------------------------
+_ropero_install_one_engine() {
+    local only="$1" os="$2"
+
+    case "$only" in
+        llama)
+            if [[ -d "$LLAMA_DIR/.git" ]]; then
+                ropero_info "llama.cpp ya está clonada; la recompilo desde cero"
+                rm -rf "$LLAMA_DIR" || { ropero_err "no se pudo borrar $LLAMA_DIR"; return 1; }
+            fi
+            ropero_install_llama "$os"
+            ropero_link_llamacpp
+            ;;
+        airllm)
+            ropero_install_airllm
+            ropero_link_airllm
+            ;;
+        mlx)
+            if [[ "$os" != "macos" ]]; then
+                ropero_err "mlx-lm es Apple Silicon; no aplica en $os"
+                return 1
+            fi
+            ropero_install_mlx
+            ropero_link_mlx
+            ;;
+        tensorrt)
+            if [[ "$os" != "cachy" && "$os" != "arch" ]]; then
+                ropero_err "tensorrt-llm solo se instala en cachy/arch (nvidia); detected $os"
+                return 1
+            fi
+            ropero_install_tensorrt
+            ropero_link_tensorrt
+            ;;
+        flm)
+            ropero_install_fastflowlm "$os"
+            if [[ -x /opt/fastflowlm/bin/flm ]]; then
+                ropero_link_fastflowlm
+            else
+                ropero_info "FastFlowLM no quedó instalado; nada que enlazar"
+            fi
+            ;;
+        *)
+            ropero_err "engine desconocido: '$only'"
+            ropero_info "  los que ropero conoce: llama · mlx · airllm · tensorrt · flm"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# ropero_install_finisher <etiqueta> — el ÚNICO sitio por el que --install
+# termina.
+#
+# Estaba copiado en cinco salidas distintas (termux, link, models, models con
+# nombre, engines con nombre, all). Con cinco copias, cualquier cambio —un
+# contador más, un wording— tenía quearse en las cinco, y el forgot de una
+# daba un --install que se callaba justo en el camino que falló.
+# -----------------------------------------------------------------------------
+ropero_install_finisher() {
+    local label="${1:-}"
+    ropero_phase "Resumen"
+    ropero_counters
+    printf '\n'
+    if (( ROPERO_FAIL > 0 )); then
+        _ropero_log "  [✗] ropero --install ${label} incompleto → revisa: ropero --check"
+        return 1
+    fi
+    _ropero_log "  [✓] ropero --install ${label} OK"
+    printf '\n'
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # cmd_install — orquesta. Cada engine va por su cuenta; el siguiente no depende
 # del anterior.
 #
@@ -2961,12 +3077,21 @@ _ropero_relink_all() {
 cmd_install() {
     local target="all"
     local force=0
+    local only=""          # engine o modelo concreto, si se indicó
     while [[ $# -gt 0 ]]; do
         case "$1" in
             all|models|engines|link)
                 target="$1"
                 shift
                 ;;
+            # Un argumento tras el target es el "qué": un engine concreto o un
+            # modelo concreto. Antes `ropero --install engines llama` era un
+            # error de uso; ahora es la forma de instalar UNO sin preguntas.
+            llama|llamacpp|llama_cpp|llama-cpp) only="llama";   shift ;;
+            mlx|mlx_lm|mlx-lm)                  only="mlx";     shift ;;
+            airllm)                             only="airllm";  shift ;;
+            tensorrt|trtllm|tensorrt-llm|tensorrt_llm) only="tensorrt"; shift ;;
+            flm|fastflowlm|fastflow_lm)        only="flm";     shift ;;
             --force|-f)
                 force=1
                 shift
@@ -2976,10 +3101,21 @@ cmd_install() {
                 return 0
                 ;;
             *)
-                _ropero_usage_error install "argumento desconocido: '$1' (targets: all|models|engines|link · flag: --force)"
+                if [[ -z "$only" ]]; then
+                    only="$1"; shift
+                else
+                    _ropero_usage_error install "argumento desconocido: '$1' (solo se admite uno)"
+                fi
                 ;;
         esac
     done
+
+    # `ropero --install engines llama`: engine explícito, sin preguntar. Es la
+    # forma que usan los manifests (repos.yaml) y los scripts de arranque, donde
+    # no hay nadie para contestar a una pregunta.
+    if [[ -n "$only" && "$target" != "engines" && "$target" != "models" && "$target" != "all" ]]; then
+        _ropero_usage_error install "'$only' solo vale con: engines o models"
+    fi
 
     # --force NO redefine ropero_ask/ropero_ask_keep: las dos leen AUTO_YES y
     # SETUP_MODE en TIEMPO DE LLAMADA (00-utils.sh), así que exportarlos basta.
@@ -2990,12 +3126,24 @@ cmd_install() {
     if (( force == 1 )); then
         export AUTO_YES=1
         export SETUP_MODE=full
+        # ROPERO_FORCE es lo que hace que los descargadores BORREN lo que hay.
+        # AUTO_YES solo callaba la pregunta: con el "ya descargado" de delante,
+        # `ropero --install models --force` no volvía a bajar nada y no decía
+        # por qué. Son dos cosas distintas y solo faltaba la segunda.
+        export ROPERO_FORCE=1
     fi
 
     local os
     os=$(ropero_detect_os 2>/dev/null || echo unknown)
+    ropero_counters_reset
+    # Cuántas fases tiene ESTE camino: 4 para `all` (que encadena engines y
+    # modelos), 3 para el resto, que solo hace una cosa además del binario.
+    if [[ "$target" == "all" ]]; then ropero_phases_begin 4; else ropero_phases_begin 3; fi
+    printf '\n══ ropero --install %s%s ══\n\n' "$target" "${only:+ $only}"
     ropero_info "ropero --install $target ($os)"
     ropero_env_setup
+
+    ropero_phase "Binario"
 
     # El entrypoint primero, y pase lo que pase: a partir de aquí ropero ya es
     # utilizable aunque el usuario decline todos los engines. Por eso está
@@ -3005,11 +3153,11 @@ cmd_install() {
 
     if [[ "$os" == "termux" ]]; then
         ropero_info "termux: sin paquetes nativos, solo dirs"
-        ropero_ok "ropero --install $target OK"
-        return 0
+        ropero_install_finisher "$target"; return $?
     fi
 
     if [[ "$target" == "link" ]]; then
+        ropero_phase "Enlaces"
         _ropero_relink_all "$os"
         # El check va dentro y no como paso aparte de la CLI: "he relinkeado"
         # no es lo mismo que "está bien". Un symlink que apunta a un binario
@@ -3022,20 +3170,36 @@ cmd_install() {
 
     if [[ "$target" == "models" ]]; then
         # Ni sudo, ni pacman, ni engines. Solo los pesos.
+        if [[ -n "$only" ]]; then
+            # Un modelo concreto: NO se pregunta (ya lo pidió por nombre) y no
+            # se baja el catálogo entero.
+            ropero_phase "Modelos"
+            ropero_download_default_models "$only" || return $?
+            ropero_install_finisher "models $only"; return $?
+        fi
+        ropero_phase "Modelos"
         _ropero_do_models
-        ropero_ok "ropero --install models OK"
-        return 0
+        ropero_install_finisher "models"; return $?
     fi
 
+    if [[ -n "$only" ]]; then
+        # `ropero --install engines <engine>`: uno solo, sin preguntar.
+        ropero_phase "Engines"
+        _ropero_install_one_engine "$only" "$os" || return $?
+        ropero_install_finisher "engines $only"; return $?
+    fi
+
+    ropero_phase "Engines"
     _ropero_install_engines "$os"
 
     # 3. modelos por defecto (lógica en 21-download-models.sh). Con target
     #    `engines` no se llega aquí: ya hemos salido por el return de arriba.
     if [[ "$target" == "all" ]]; then
+        ropero_phase "Modelos"
         _ropero_do_models
     fi
 
-    ropero_ok "ropero --install $target OK"
+    ropero_install_finisher "$target"; return $?
 }
 
 # -----------------------------------------------------------------------------
