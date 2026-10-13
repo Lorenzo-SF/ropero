@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # ropero_download_gguf "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF" \
-#     "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf" "Qwen3 Coder" "17.7 GB"
+#     "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf" "Qwen3 Coder UD-IQ3_XXS" "12.8 GB"
 
 # ==============================================================================
 # Qwen3-Coder-30B-A3B-Instruct — Config calibrada
 # ==============================================================================
-# Modelo: Qwen/Qwen3-Coder-30B-A3B-Instruct (UD-Q4_K_XL GGUF)
+# Modelo: Qwen/Qwen3-Coder-30B-A3B-Instruct (UD-IQ3_XXS GGUF)
 #   - MoE 30.5B / 3.3B activo (128 expertos, 8 activados)
 #   - 48 layers, GQA 32Q / 4KV
 #   - Hidden (no especificado en card, inferido de Qwen3)
@@ -17,6 +17,27 @@
 #   - Sampling canónico Qwen3: temp=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05
 #   - Output recomendado: 65,536 tokens
 # ==============================================================================
+# UD-IQ3_XXS (12,8 GB) en vez de UD-Q4_K_XL (17,7 GB)
+# ─────────────────────────────────────────────────
+# Son 1,3 GB menos de pesos, y en una tarjeta de 16 GB eso no es un detalle:
+#
+#   Q4_K_XL  17,7 GB  →  deja ~0,3 GB de VRAM para el KV cache  ⇒ inusable
+#   IQ3_XXS  12,8 GB  →  deja ~3,2 GB                            ⇒ con n-cpu-moe=30
+#
+# El contexto de 44K es un REQUISITO DURO de este rol (un repo entero no cabe en
+# 8K), y el contexto vive en el KV cache, que vive en la VRAM. Escribir para no
+# tener dónde meterlo sería cambiar el problema para que pareciera resuelto.
+#
+# IQ3 cuantiza a la baja lo que no es importante y sube el embedding y
+# lm_head; para un MoE de 3,3B activos la diferencia de calidad está en el
+# orden del 3%, que es poco para 4,9 GB de VRAM.
+#
+# Si el test de tool calling salta del 93%, cambia a UD-Q3_K_XL (13,8 GB):
+# sigue siendo 1 GB más pequeño que el Q4_K_XL. Y para eso hay que cambiar
+# TAMBIÉN la entrada del catálogo en 21-download-models.sh, o el script y el
+# catálogo se quedarían apuntando a modelos distintos (el fallo que la cabecera del catálogo
+# describe).
+# ==============================================================================
 # Peculiaridades críticas:
 #   1. MoE 30B en 16GB VRAM: requiere --n-cpu-moe (no cabe entero)
 #   2. Modelo denso de atención, NO hybrid Gated DeltaNet como Qwen3-Coder-Next
@@ -24,7 +45,7 @@
 # ==============================================================================
 
 MODEL_ENGINE="llama-server"
-MODEL_GGUF="Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
+MODEL_GGUF="Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
 MODEL_GGUF="$MODEL_GGUF"
 MODEL_CTX="${ROPERO_CODER_CTX:-131072}"
 

@@ -87,6 +87,31 @@ _ROPERO_CAT_POSTCOPY=()
 _ropero_cat_build() {
     (( ${#_ROPERO_CAT_KEY[@]} == 0 )) || return 0
 
+    # ── LANE DEL VAULT (posadero) ─────────────────────────────────────────────
+    # Los cuatro viven en CPU por diseño (ver los .sh: --n-gpu-layers 0), así
+    # que no compiten por la VRAM con el coder. La key de cada entrada es el
+    # nombre FINAL del fichero, que es lo que declara MODEL_GGUF en el .sh —
+    # si uno de los dos lados cambia y el otro no, `ropero --install models`
+    # descarga un fichero que el modelo luego no encuentra.
+    _cat_gguf "Qwen3-Embedding-0.6B-Q8_0.gguf" \
+        "Qwen/Qwen3-Embedding-0.6B-GGUF" "Qwen3-Embedding-0.6B-Q8_0.gguf" "Qwen3 Embedding 0.6B Q8" "639 MB"
+
+    _cat_gguf "qwen3-reranker-0.6b-q8_0.gguf" \
+        "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF" "qwen3-reranker-0.6b-q8_0.gguf" "Qwen3 Reranker 0.6B Q8" "639 MB"
+
+    _cat_gguf "Ministral-3-14B-Instruct-2512-UD-Q5_K_XL.gguf" \
+        "unsloth/Ministral-3-14B-Instruct-2512-GGUF" "Ministral-3-14B-Instruct-2512-UD-Q5_K_XL.gguf" "Ministral 3 14B UD-Q5_K_XL" "9.64 GB"
+
+    _cat_gguf "gpt-oss-20b-UD-Q8_K_XL.gguf" \
+        "unsloth/gpt-oss-20b-GGUF" "gpt-oss-20b-UD-Q8_K_XL.gguf" "gpt-oss 20B UD-Q8_K_XL" "13.2 GB"
+
+    # El projector de visión de Ministral 3 va aparte y NO se descarga por
+    # defecto: son ~800 MB para algo que el 95% de las notas no usa. Para
+    # activarlo, descomenta esto y añade `--mmproj` en ministral.sh (que lo
+    # documenta):
+    #   _cat_gguf "mmproj-ministral-3-14b-f16.gguf" \
+    #       "unsloth/Ministral-3-14B-Instruct-2512-GGUF" "mmproj-F16.gguf" "Ministral 3 mmproj" "800 MB"
+
     # Embeddings + chat
     _cat_gguf "jina-code-embeddings-1.5b-Q8_0.gguf" \
         "jinaai/jina-code-embeddings-1.5b-GGUF" "jina-code-embeddings-1.5b-Q8_0.gguf" "jina-code 1.5B Q8" "1.6 GB"
@@ -119,8 +144,11 @@ _ropero_cat_build() {
 
     _cat_gguf "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" \
         "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
-    _cat_gguf "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf" \
-        "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF" "Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf" "Qwen3 Coder UD-Q4_K_XL" "17.7 GB"
+    # IQ3_XXS y no Q4_K_XL: 12,8 GB en vez de 17,7, que en una RTX 5080 de
+    # 16 GB es lo que deja sitio para el KV cache del contexto largo. El
+    # razonamiento está en qwencoder.sh; si cambias uno, cambia el otro.
+    _cat_gguf "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf" \
+        "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF" "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf" "Qwen3 Coder UD-IQ3_XXS" "12.8 GB"
     _cat_gguf "agentica-org_DeepCoder-14B-Preview-Q4_K_L.gguf" \
         "bartowski/agentica-org_DeepCoder-14B-Preview-GGUF" "agentica-org_DeepCoder-14B-Preview-Q4_K_L.gguf" "DeepCoder Q4_K_L" "9.57 GB"
 
