@@ -140,7 +140,7 @@ _ropero_cat_build() {
     _cat_gguf "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" \
         "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" "Qwen2.5-VL 7B" "4.79 GB"
     _cat_gguf "Qwen2.5-VL-mmproj.gguf" \
-        "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "mmproj-F16.gguf" "Qwen2.5-VL mmproj" "1.35 GB"
+        "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "mmproj-F16.gguf" "Qwen2.5-VL mmproj" "1.35 GB" "$HOME/models/gguf" "Qwen2.5-VL-mmproj.gguf"
 
     _cat_gguf "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" \
         "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
