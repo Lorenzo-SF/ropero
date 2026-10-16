@@ -43,17 +43,10 @@ ropero_counters() { _ropero_log "  $ROPERO_OK ok · $ROPERO_WARN avisos · $ROPE
 # también parchó esto, pero lo hacemos aquí en la fuente para que NO HAYA
 # FORMA de que un parche posterior se pierda.
 ropero_ask() {
-    # Traza diagnóstica: siempre a stderr, fácil de grep. Dice qué modo
-    # estamos viendo. Útil para debug si la pregunta sigue saliendo.
-    printf '  [trace-ropero_ask] prompt="%s" AUTO_YES=%s SETUP_MODE=%s CI=%s tty=%s\n' \
-        "$1" "${AUTO_YES:-0}" "${SETUP_MODE:-}" "${CI:-0}" \
-        "$([[ -t 0 ]] && echo yes || echo no)" >&2
     if [[ "${AUTO_YES:-0}" == "1" || "${SETUP_MODE:-}" == "full" || "${CI:-0}" == "1" ]]; then
-        printf '  [trace-ropero_ask] → auto-yes (sin prompt)\n' >&2
         return 0
     fi
     if [[ ! -t 0 ]]; then
-        printf '  [trace-ropero_ask] → auto-yes (no-TTY)\n' >&2
         return 0
     fi
     local prompt="$1"

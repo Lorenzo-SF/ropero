@@ -163,20 +163,21 @@ Variables de entorno por modelo: `ROPERO_<MODELO>_CTX`, `_PORT`. El nombre se no
 ```
 ropero <modelo> [--background] [--force] [--port N]   # --cpu: solo llama-server
 ropero list | templates | status [--craft] [--watch [ms]] | stop <modelo>|all
-ropero models
-ropero --install [all|models|engines|link] [--force] | ropero --check
+ropero --install [--force]                            # solo ropero
+ropero install [engines|models|link] [selección] [--force]
+ropero models | ropero --check
 ```
 
 - `--cpu` es **exclusivo de llama-server**: mapea a `--n-gpu-layers 0 --threads N`, flags que no existen en los demás. En un engine con servidor propio da error explicándolo, en vez de ignorarse y dejarte pensando que tienes la CPU.
 - `--port N` funciona en todos los engines: salta `MODEL_PORT` y los slots, y registra el puerto como ad-hoc para que `status` y `stop` lo vean.
 - `--force` rota el modelo del puerto destino (SIGTERM primero, para que un proxy con engine detrás apague el árbol entero).
-- `ropero --install` instala engine por engine y **enlaza sus ejecutables en `~/.local/bin` al terminar**, no al final. Acepta un target: `all` (defecto), `engines` (sin pesos), `models` (solo pesos, sin sudo) y `link` (solo rehacer symlinks de lo ya instalado + verificar). `--force` lo hace sin preguntar nada.
+- `ropero --install` instala solo ropero y sus enlaces. `ropero install engines` instala engines compatibles; `ropero install models` descarga los pesos seleccionables y `ropero link` rehace enlaces. `--force` hace la selección sin preguntas, pero conserva las protecciones destructivas.
 - `ropero --check` hace un probe real de cada engine (importa el paquete, no solo mira el fichero).
-- **Los argumentos que no existen son un error**, no se ignoran: `ropero --install models` hace solo los modelos, y `ropero --install mdoels` falla con exit 2 antes de instalar nada. Error de uso = 2, fallo de ejecución = 1.
+- **Los argumentos que no existen son un error**, no se ignoran: `ropero --install models` falla con exit 2; usa `ropero install models`. Error de uso = 2, fallo de ejecución = 1.
 
 ## Descargar modelos
 
-`ropero models` (o `ropero --install models`) los descarga todos (GGUF siempre;
+`ropero models` (o `ropero install models`) permite seleccionar modelos (GGUF siempre;
 el checkpoint MLX solo en macOS). A mano:
 
 ```bash
@@ -212,7 +213,7 @@ mlx_lm.convert --hf-path /tmp/src --mlx-path ~/models/safetensors/qwen3-8b-4bit
 ```
 
 Un directorio se considera descargado si tiene **pesos + `config.json`**, no por un
-marcador: si borras un shard, `ropero --install` vuelve a bajarlo. Los pesos se
+marcador: si borras un shard, `ropero install models` vuelve a bajarlo. Los pesos se
 detectan en los tres formatos (`*.safetensors`, `pytorch_model*.bin`, `*.npz`) porque hay
 checkpoints válidos sin un solo safetensors.
 

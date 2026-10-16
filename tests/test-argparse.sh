@@ -1,293 +1,358 @@
 #!/usr/bin/env bash
-# =============================================================================
-# tests/test-argparse.sh — el contrato de parsing de la CLI de ropero.
-# =============================================================================
-#
-# POR QUÉ ESTE FICHERO EXISTE
-#
-# No es tests-por-deporte. Es la red de seguridad de UN bug concreto: hasta
-# 2026-10, `ropero --install models` ejecutaba el install entero —compilando
-# llama.cpp si hacía falta— porque cmd_install nunca miraba "$@". Todos los
-# subcomandos aceptaban cualquier cosa detrás y la tiraban a la basura sin
-# decir nada. El síntoma (media hora de compilación en vez de una descarga) no
-# apuntaba ni de lejos a la causa, porque el mensaje de error que podría haberlo
-# delatado no existía.
-#
-# Por eso el battery comprueba DOS cosas de cada invocación:
-#   1. a qué función se despachó y con qué argumentos (el parseo)
-#   2. el código de salida (que un error de uso sea 2 y no 0)
-# El segundo importa tanto como el primero: un `--install mdoels` que sale con
-# 0 es indistinguible de un `--install mdoels` que salió bien.
-#
-# CÓMO FUNCIONA (y por qué no puede tocar tu máquina)
-#
-# Copia `ropero` + `ropero.d/` a un temporal e INSTRUMENTA la copia: cada
-# cmd_* y cada ropero_install_*/link_* se sustituye por una función que
-# imprime `CALL <nombre> <args>` y devuelve. Así se puede preguntar "¿qué haría
-# este comando?" sin que la respuesta sea "compila 40 minutos".
-#
-# Uso: tests/test-argparse.sh [-v]     (exit 0 = todo PASS, 1 = algún FAIL)
-# =============================================================================
+# Contract and safety tests for ropero's v2 CLI parser.
 
-set -u
+set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
+BASH_BIN="$(command -v bash)"
+PYTHON_BIN="$(python3 -c 'import sys; print(sys.executable)')"
 
 VERBOSE=0
 [[ "${1:-}" == "-v" ]] && VERBOSE=1
-
 PASS=0
 FAIL=0
 FAILED_CASES=()
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ropero-argparse.XXXXXX")"
+REAL_HOME="${HOME:-}"
 trap 'rm -rf "$WORK"' EXIT
 
-# -----------------------------------------------------------------------------
-# _instrument — copia instrumentada de ropero en $WORK/ropero
-# -----------------------------------------------------------------------------
-# Sustituye el cuerpo de cada función por un eco. Se hace por patrón de
-# definición (`^nombre() {` … hasta la llave de cierre de nivel superior) y no
-# por números de línea, porque los números se mueven en cuanto se edita el
-# entrypoint y un test que hay que recolocar cada vez es un test que nadie
-# actualiza.
-_instrument() {
-    local src="$REPO/ropero" dst="$WORK/ropero"
-    mkdir -p "$WORK"
-    cp "$src" "$dst"
-    cp -r "$REPO/ropero.d" "$WORK/ropero.d"
+RUN_DIR="$WORK/run"
+HOME_DIR="$WORK/home"
+GGUF_DIR_TEST="$WORK/models/gguf"
+SAFETENSORS_DIR_TEST="$WORK/models/safetensors"
+LOG_DIR_TEST="$WORK/logs"
+LLAMA_DIR_TEST="$WORK/llama.cpp"
+BIN_DIR_TEST="$WORK/bin"
+BLOCK_DIR="$WORK/blocked-bin"
+SENTINEL_LOG="$WORK/external-effects.log"
+STATE_FILE="$WORK/engine-state"
+mkdir -p "$RUN_DIR" "$HOME_DIR" "$GGUF_DIR_TEST" "$SAFETENSORS_DIR_TEST" \
+    "$LOG_DIR_TEST" "$LLAMA_DIR_TEST" "$BIN_DIR_TEST" "$BLOCK_DIR" "$WORK/tmp"
+: >"$SENTINEL_LOG"
+: >"$STATE_FILE"
 
-    python3 - "$dst" <<'PYEOF'
-import io, re, sys
+# A second safety net. If a production path escapes the leaf stubs, these
+# executables record it and fail instead of touching the network or host.
+for tool in curl wget git cmake ninja make brew pacman paru sudo pkg apt apt-get \
+    dnf pip pip3 python python3 uv hf huggingface-cli flm; do
+    cat >"$BLOCK_DIR/$tool" <<'EOF'
+#!/usr/bin/env bash
+printf '%s' "$(basename "$0")" >>"${ROPERO_TEST_SENTINEL:?}"
+printf ' [%s]' "$@" >>"${ROPERO_TEST_SENTINEL:?}"
+printf '\n' >>"${ROPERO_TEST_SENTINEL:?}"
+exit 125
+EOF
+    chmod +x "$BLOCK_DIR/$tool"
+done
+
+# Copy production and inject overrides immediately before main. Appending after
+# main would be too late; replacing function bodies is brittle around nested
+# braces. The parser and its orchestration remain production code. Only leaves
+# that perform work are replaced.
+_instrument() {
+    cp "$REPO/ropero" "$WORK/ropero"
+    cp -R "$REPO/ropero.d" "$WORK/ropero.d"
+    "$PYTHON_BIN" - "$WORK/ropero" <<'PY'
+import io
+import sys
 
 path = sys.argv[1]
-s = io.open(path, encoding='utf-8').read()
+source = io.open(path, encoding="utf-8").read()
+needle = '\nmain "$@"\n'
+if source.count(needle) != 1:
+    raise SystemExit("expected exactly one main call")
 
-# Funciones cuyo TRABAJO se sustituye por un `CALL <nombre> <args>` inofensivo.
-#
-# El criterio es "esta función hace algo", NO "esta función es un comando". Los
-# cmd_* NO se stubbean: su parseo es justo lo que este fichero comprueba, y un
-# test que sustituye la función que quiere verificar no verifica nada — Sólo
-# comprueba que el stub se ha llamado. Lo que se stubea son las capas de abajo
-# (arrancar servers, compilar, descargar 50 GB, matar procesos) para que la
-# pregunta "¿qué haría este comando?" se pueda contestar sin contestarla de verdad.
-STUBS = [
-    # apagado: sin esto, `ropero stop all` mataría lo que hubiera vivo
-    '_kill_port', '_stop_port',
-    # fases del install
-    '_ropero_install_engines', '_ropero_do_models',
-    'ropero_download_default_models', 'ropero_env_setup', 'ropero_link_self',
-    'ropero_compile_llama',
-    'ropero_install_llama', 'ropero_install_airllm', 'ropero_install_tensorrt',
-    'ropero_install_mlx', 'ropero_install_fastflowlm',
-    'ropero_link_llamacpp', 'ropero_link_tensorrt', 'ropero_link_airllm',
-    'ropero_link_mlx', 'ropero_link_fastflowlm',
-    # el probe real tarda ~1s por engine y no es lo que este test comprueba
-    'ropero_engine_probe',
-]
-
-# Encuentra `^fn() {` y avanza hasta su llave de cierre de primer nivel,
-# contando llaves: los bodies tienen if/for anidados, así que contar líneas
-# no vale y una llave de más deja el resto del fichero dentro del stub.
-def cut(s, name):
-    m = re.search(r'^%s\(\) \{$' % re.escape(name), s, re.M)
-    if not m:
-        return None
-    i = m.end()
-    depth = 1
-    while i < len(s) and depth:
-        if s[i] == '{':
-            depth += 1
-        elif s[i] == '}':
-            depth -= 1
-        i += 1
-    return m.start(), i
-
-for fn in STUBS:
-    span = cut(s, fn)
-    if span is None:
-        continue
-    a, b = span
-    stub = ('%s() { printf "CALL %s:"; printf " [%%s]" "$@"; echo; return 0; }'
-            % (fn, fn))
-    s = s[:a] + stub + s[b:]
-
-io.open(path, 'w', encoding='utf-8').write(s)
-PYEOF
-    chmod +x "$dst"
+stubs = r'''
+# test-only leaf overrides (injected into the temporary copy)
+_ropero_test_call() {
+    local name="$1"; shift
+    printf 'CALL %s:' "$name"
+    printf ' [%s]' "$@"
+    printf ' FORCE=%s\n' "${ROPERO_FORCE:-0}"
 }
 
-if ! _instrument; then
-    echo "FATAL: no se pudo instrumentar la copia de ropero" >&2
+ropero_env_setup() { _ropero_test_call ropero_env_setup "$@"; }
+ropero_link_self() { _ropero_test_call ropero_link_self "$@"; }
+ropero_link_llamacpp() { _ropero_test_call ropero_link_llamacpp "$@"; }
+ropero_link_tensorrt() { _ropero_test_call ropero_link_tensorrt "$@"; }
+ropero_link_airllm() { _ropero_test_call ropero_link_airllm "$@"; }
+ropero_link_mlx() { _ropero_test_call ropero_link_mlx "$@"; }
+ropero_link_fastflowlm() { _ropero_test_call ropero_link_fastflowlm "$@"; }
+ropero_compile_llama() { _ropero_test_call ropero_compile_llama "$@"; }
+
+_ropero_test_engine_installed() {
+    printf '%s\n' "$1" >>"${ROPERO_TEST_STATE:?}"
+}
+ropero_install_llama() {
+    _ropero_test_call ropero_install_llama "$@"
+    _ropero_test_engine_installed llama-server
+}
+ropero_install_airllm() {
+    _ropero_test_call ropero_install_airllm "$@"
+    _ropero_test_engine_installed airllm
+}
+ropero_install_mlx() {
+    _ropero_test_call ropero_install_mlx "$@"
+    _ropero_test_engine_installed mlx_lm
+}
+ropero_install_tensorrt() {
+    _ropero_test_call ropero_install_tensorrt "$@"
+    _ropero_test_engine_installed tensorrt-llm
+}
+ropero_install_fastflowlm() {
+    _ropero_test_call ropero_install_fastflowlm "$@"
+    _ropero_test_engine_installed fastflowlm
+}
+ropero_engine_probe() {
+    local engine="${1:-}"
+    if grep -qx "$engine" "${ROPERO_TEST_STATE:?}" 2>/dev/null; then
+        printf ok
+        return 0
+    fi
+    printf missing
+    return 1
+}
+
+# Legacy bulk phase contains package-manager calls before its installer leaves.
+# v2 must not use it, but stubbing it makes an accidental regression observable
+# rather than destructive.
+_ropero_install_engines() { _ropero_test_call _ropero_install_engines "$@"; }
+
+ropero_download_gguf() { _ropero_test_call ropero_download_gguf "$@"; }
+ropero_download_safetensors() { _ropero_test_call ropero_download_safetensors "$@"; }
+_ropero_cat_download() {
+    local i="${1:?catalog index required}" kind dest name
+    _ropero_cat_build
+    _ropero_test_call _ropero_cat_download "$@"
+    kind="${_ROPERO_CAT_KIND[$i]}"
+    dest="${_ROPERO_CAT_DEST[$i]:-}"
+    case "$dest" in
+        '') [[ "$kind" == gguf ]] && dest="$GGUF_DIR" || dest="$SAFETENSORS_DIR/${_ROPERO_CAT_KEY[$i]}" ;;
+        '~') dest="$HOME" ;;
+        '~/'*) dest="$HOME/${dest#\~/}" ;;
+    esac
+    if [[ "$kind" == gguf ]]; then
+        name="${_ROPERO_CAT_DNAME[$i]:-${_ROPERO_CAT_ARG2[$i]}}"
+        mkdir -p "$dest/$(dirname "$name")"
+        printf stub >"$dest/$name"
+    else
+        mkdir -p "$dest"
+        printf stub >"$dest/model.safetensors"
+        printf '{}\n' >"$dest/config.json"
+    fi
+}
+_ropero_cat_postcopy() { _ropero_test_call _ropero_cat_postcopy "$@"; }
+
+_kill_port() { _ropero_test_call _kill_port "$@"; }
+_stop_port() { _ropero_test_call _stop_port "$@"; }
+# Preserve production's unknown-model validation, which occurs inside this
+# leaf, while replacing launch work for models that passed that validation.
+eval "$(declare -f start_model | sed '1s/start_model/_ropero_real_start_model/')"
+start_model() {
+    local model_key="${1//-/_}"
+    if [[ ! " ${MODEL_NAMES[*]} " =~ " $model_key " ]]; then
+        _ropero_real_start_model "$@"
+        return $?
+    fi
+    _ropero_test_call start_model "$@"
+}
+'''
+source = source.replace(needle, "\n" + stubs + '\nmain "$@"\n')
+io.open(path, "w", encoding="utf-8").write(source)
+PY
+    chmod +x "$WORK/ropero"
+}
+
+if ! _instrument || ! "$BASH_BIN" -n "$WORK/ropero"; then
+    printf 'FATAL: no se pudo crear una copia instrumentada válida\n' >&2
     exit 1
 fi
 
-if ! bash -n "$WORK/ropero"; then
-    echo "FATAL: la copia instrumentada no parsea" >&2
-    exit 1
-fi
+# Portable watchdog. Popen starts a new process group; timeout terminates and,
+# if necessary, kills that whole group so grandchildren cannot survive a case.
+_watchdog() {
+    "$PYTHON_BIN" - "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
 
-# -----------------------------------------------------------------------------
-# _ropero <args...> — invoca la copia instrumentada con un entorno que no
-# puede tocar nada real: GGUF_DIR y LOG_DIR al temporal, AUTO_YES para que
-# ninguna ropero_ask pueda quedarse esperando una tecla.
-# -----------------------------------------------------------------------------
+cmd = sys.argv[1:]
+proc = subprocess.Popen(cmd, start_new_session=True)
+try:
+    rc = proc.wait(timeout=30)
+except subprocess.TimeoutExpired:
+    os.killpg(proc.pid, signal.SIGTERM)
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+    print("TIMEOUT: " + " ".join(cmd), file=sys.stderr)
+    raise SystemExit(124)
+raise SystemExit(rc)
+PY
+}
+
 _ropero() {
-    AUTO_YES=1 \
-    GGUF_DIR="$WORK/nogguf" \
-    SAFETENSORS_DIR="$WORK/nosa" \
-    LOG_DIR="$WORK/logs" \
-    LLAMA_DIR="$WORK/no-llama" \
-    ROPERO_GPU_PORT=9999 \
-    ROPERO_CPU_PORT=9998 \
-    timeout 30 bash "$WORK/ropero" "$@" 2>&1
+    (
+        cd "$RUN_DIR" || exit 98
+        export HOME="$HOME_DIR"
+        export GGUF_DIR="$GGUF_DIR_TEST"
+        export SAFETENSORS_DIR="$SAFETENSORS_DIR_TEST"
+        export LOG_DIR="$LOG_DIR_TEST"
+        export LLAMA_DIR="$LLAMA_DIR_TEST"
+        export BIN_DIR="$BIN_DIR_TEST"
+        export TMPDIR="$WORK/tmp"
+        export PATH="$BLOCK_DIR:$BIN_DIR_TEST:/usr/bin:/bin:/usr/sbin:/sbin"
+        export AUTO_YES=1 CI=1 ROPERO_GPU_PORT=59999 ROPERO_CPU_PORT=59998
+        export ROPERO_TEST_SENTINEL="$SENTINEL_LOG"
+        export ROPERO_TEST_STATE="$STATE_FILE"
+        : >"$STATE_FILE"
+        _watchdog "$BASH_BIN" "$WORK/ropero" "$@" 2>&1
+    )
 }
 
-# -----------------------------------------------------------------------------
-# check <descripción> <rc esperado> <grep esperado> -- <args de ropero>
-# -----------------------------------------------------------------------------
+_pass() {
+    PASS=$((PASS + 1))
+    (( VERBOSE )) && printf '  ok   %s\n' "$1"
+    return 0
+}
+
+_fail() {
+    local desc="$1" why="$2" out="${3:-}"
+    FAIL=$((FAIL + 1))
+    FAILED_CASES+=("$desc — $why")
+    printf '  FAIL %s\n       → %s\n' "$desc" "$why"
+    [[ -n "$out" ]] && printf '       salida: %s\n' "$(printf '%s' "$out" | head -c 600 | tr '\n' '|')"
+}
+
+# check DESC RC REGEX -- ARGS...
 check() {
-    local desc="$1" want_rc="$2" want_grep="$3"
+    local desc="$1" want_rc="$2" want_re="$3" out rc why=""
     shift 3
-    [[ "${1:-}" == "--" ]] && shift
-
-    (( VERBOSE )) && printf '  ... %s
-' "$desc"
-    local out rc
-    out="$(_ropero "$@")"
-    rc=$?
-
-    local ok=1 why=""
-
-    if [[ "$want_rc" != "*" && "$rc" != "$want_rc" ]]; then
-        ok=0; why="rc esperado $want_rc, obtenido $rc"
+    [[ "${1:-}" == -- ]] && shift
+    out="$(_ropero "$@")"; rc=$?
+    [[ "$rc" == "$want_rc" ]] || why="rc esperado $want_rc, obtenido $rc"
+    if [[ -n "$want_re" ]] && ! grep -qE -- "$want_re" <<<"$out"; then
+        why="${why:+$why · }no matchea /$want_re/"
     fi
-    if [[ -n "$want_grep" ]] && ! grep -qE -- "$want_grep" <<<"$out"; then
-        ok=0; why="${why:+$why · }no matchea /$want_grep/"
+    if [[ "$want_rc" == 2 ]]; then
+        grep -q 'ERROR' <<<"$out" || why="${why:+$why · }falta ERROR"
     fi
-    # Un error de USO (rc 2) tiene que decir ERROR y enseñar el uso: es lo
-    # que un humano (o un wrapper) lee para saber qué escribir después. Un rc
-    # de ejecución (p. ej. "modelo desconocido", rc 1) tiene su propio mensaje
-    # y no se le exige la palabra ERROR.
-    if [[ "$want_rc" == "2" ]]; then
-        grep -qE 'ERROR' <<<"$out" || { ok=0; why="${why:+$why · }aborta sin mensaje ERROR"; }
-        grep -qE 'USO:' <<<"$out" || { ok=0; why="${why:+$why · }aborta sin decir cuál es el uso"; }
-    fi
-
-    if (( ok == 1 )); then
-        PASS=$((PASS + 1))
-        (( VERBOSE )) && printf '  ok   %s\n' "$desc"
-    else
-        FAIL=$((FAIL + 1))
-        FAILED_CASES+=("$desc — $why")
-        printf '  FAIL %s\n       → %s\n' "$desc" "$why"
-        printf '       salida: %s\n' "$(head -c 400 <<<"$out" | tr '\n' '|')"
-    fi
+    [[ -z "$why" ]] && _pass "$desc" || _fail "$desc" "$why" "$out"
 }
 
-# -----------------------------------------------------------------------------
-# check_not <descripción> <grep que NO debe aparecer> -- <args>
-# -----------------------------------------------------------------------------
-# La mitad del valor de este battery es negativa. Que `--install models` NO
-# llame a la fase de engines no se comprueba mirando que llame a la de
-# modelos: se comprueba mirando que la otra no aparece. Un `--install models`
-# que además compilara llama.cpp habría "pasado" el test de arriba.
+# check_not DESC REGEX -- ARGS... (also requires rc 0)
 check_not() {
-    local desc="$1" bad_grep="$2"
+    local desc="$1" bad_re="$2" out rc why=""
     shift 2
-    [[ "${1:-}" == "--" ]] && shift
-
-    local out
-    out="$(_ropero "$@")"
-    if grep -qE -- "$bad_grep" <<<"$out"; then
-        FAIL=$((FAIL + 1))
-        FAILED_CASES+=("$desc — pasó algo que no debía: /$bad_grep/")
-        printf '  FAIL %s\n       →不该 pasar: %s\n' "$desc" "$bad_grep"
-        printf '       salida: %s\n' "$(head -c 400 <<<"$out" | tr '\n' '|')"
-    else
-        PASS=$((PASS + 1))
-        (( VERBOSE )) && printf '  ok   %s\n' "$desc"
+    [[ "${1:-}" == -- ]] && shift
+    out="$(_ropero "$@")"; rc=$?
+    [[ "$rc" == 0 ]] || why="rc esperado 0, obtenido $rc"
+    if grep -qE -- "$bad_re" <<<"$out"; then
+        why="${why:+$why · }apareció /$bad_re/"
     fi
+    [[ -z "$why" ]] && _pass "$desc" || _fail "$desc" "$why" "$out"
 }
 
-# -----------------------------------------------------------------------------
-# Los casos
-# -----------------------------------------------------------------------------
-echo "== ropero: contrato de parsing =="
+echo '== ropero: contrato CLI v2 =='
 
-# ── el bug que motivó todo ───────────────────────────────────────────────────
-check "--install models → fase de modelos"          0 "_ropero_do_models"             -- --install models
-check "--install engines → fase de engines"         0 "_ropero_install_engines"       -- --install engines
-check "--install link → fase de relink"             '*' "relinkeando ejecutables"    -- --install link
-check "--install (sin target) = all"                0 "_ropero_install_engines"       -- --install
-check "--install all → engines Y modelos"           0 "_ropero_do_models"             -- --install all
+# Global help.
+check 'sin argumentos muestra help' 0 'USO: ropero <modelo>' --
+check '--help muestra help' 0 'únicamente ropero' -- --help
+check 'help muestra help' 0 'install.*engines.*models.*link' -- help
 
-# ── la mitad del contrato: lo que un target NO hace ───────────────────────
-# Sin esto, `--install models` que además compila llama.cpp pasaría el test de
-# arriba. Es exactamente el bug original con un disfraz nuevo.
-check_not "--install models NO toca engines"        "_ropero_install_engines"  -- --install models
-check_not "--install engines NO baja pesos"         "_ropero_do_models"        -- --install engines
-check_not "--install link NO instala nada"          "_ropero_install_engines|_ropero_do_models" -- --install link
-check_not "models NO toca engines"                  "_ropero_install_engines"  -- models
-check_not "ningún target llama a pacman/sudo"       "pacman|brew install"      -- --install models
-check_not "models NO pide sudo"                     "sudo"                     -- models
+# --install is self-install only. Old v1 targets must fail before effects.
+check '--install instala sólo ropero' 0 'CALL ropero_link_self:' -- --install
+check '--install --force llega al self installer' 0 'CALL ropero_link_self:.*FORCE=1' -- --install --force
+check '--install --help específico' 0 'USO: ropero --install.*solo ropero' -- --install --help
+check '--install rechaza models antiguo' 2 'argumento desconocido para --install' -- --install models
+check '--install rechaza engines antiguo' 2 'argumento desconocido para --install' -- --install engines
+check '--install rechaza link antiguo' 2 'argumento desconocido para --install' -- --install link
+check '--install rechaza all antiguo' 2 'argumento desconocido para --install' -- --install all
+check_not '--install no toca engines/modelos' 'ropero_install_|_ropero_cat_download' -- --install
 
-# ── --install --force: antes se ignoraba en silencio ────────────────────────
-check "--install --force no es error"               0 "_ropero_install_engines"       -- --install --force
-check "--install --force no salta los pesos" 0 "_ropero_do_models"     -- --install --force
-check "--install -f (alias corto)"                  0 "_ropero_install_engines"       -- --install -f
-check "--install models --force (orden indiferente)" 0 "_ropero_do_models"                -- --install models --force
+# install orchestration and aliases. Empty selection is deliberately non-TTY:
+# all compatible engines and all selectable models must be reached.
+check 'install sin target recorre engines y modelos noTTY' 0 'CALL ropero_install_(llama|airllm|mlx):' -- install
+check 'install sin target alcanza modelos' 0 'CALL _ropero_cat_download:' -- install
+check 'install engines selecciona múltiples nombres' 0 'CALL ropero_install_airllm:' -- install engines llama,airllm
+check 'install engines también instala llama seleccionado' 0 'CALL ropero_install_llama:.*FORCE=0' -- install engines llama,airllm
+check 'install engines propaga force' 0 'CALL ropero_install_airllm:.*FORCE=1' -- install engines llama,airllm --force
+check_not 'install engines no descarga modelos' '_ropero_cat_download' -- install engines llama,airllm
+check 'install models selecciona múltiples nombres' 0 '▸ \[2/2\]' -- install models embed,vector
+check 'install models alcanza hojas de catálogo' 0 'CALL _ropero_cat_download:.*FORCE=0' -- install models embed,vector
+check 'install models propaga force' 0 'CALL _ropero_cat_download:.*FORCE=1' -- install models embed,vector --force
+check_not 'install models no instala engines' 'CALL ropero_install_' -- install models embed
+check 'install link relinkea hojas' 0 'CALL ropero_link_airllm:' -- install link
+check_not 'install link no instala ni descarga' 'CALL ropero_install_|_ropero_cat_download' -- install link
 
-# ── typos: fallan ANTES de instalar nada ───────────────────────────────────
-check "typo de target (mdoels)"                     2 "target.*desconocido|argumento desconocido" -- --install mdoels
-check "flag inventado en --install"                 2 "ERROR"                        -- --install --por
-check "--install --help muestra el help"            0 "USO|ropero"                    -- --install --help
+check 'alias engines' 0 'CALL ropero_install_airllm:' -- engines airllm
+check 'alias models' 0 'CALL _ropero_cat_download:' -- models embed
+check 'alias link' 0 'CALL ropero_link_airllm:' -- link
+check 'alias check despacha check' 1 '== ropero --check ==' -- check
+check '--check alias despacha check' 1 '== ropero --check ==' -- --check
 
-# ── targets que existen pero no ought combinarse ───────────────────────────
-check "--check no acepta target"                    2 "ERROR"                        -- --check models
-check "list no acepta argumentos"                   2 "no acepta argumentos"          -- list extra
-check "templates no acepta argumentos"              2 "no acepta argumentos"          -- templates extra
-check "models no acepta argumentos"                 2 "no acepta argumentos"          -- models extra
+# Nested help must be command-specific, rc 0, and effect-free.
+check 'help install' 0 'USO: ropero install' -- install --help
+check 'help install engines específico' 0 'USO: ropero engines' -- install --help engines
+check 'help engines' 0 'USO: ropero engines' -- engines --help
+check 'help models' 0 'USO: ropero models' -- models --help
+check 'help link' 0 'USO: ropero link' -- link --help
+check 'help check' 0 'USO: ropero check' -- check --help
+check 'help config' 0 'USO: ropero config' -- config --help
+check 'help status' 0 'USO: ropero status' -- status --help
+check 'help stop' 0 'USO: ropero stop' -- stop --help
+check 'help list' 0 'USO: ropero list' -- list --help
+check 'help templates' 0 'USO: ropero templates' -- templates --help
+check_not 'help anidado no inicializa entorno' 'CALL ropero_env_setup' -- install models --help
 
-# ── ropero models: subcomando top-level ────────────────────────────────────
-check "models descarga los pesos"                   0 "_ropero_do_models"             -- models
+# Usage errors: rc 2 and useful command usage.
+check 'opción top-level inválida' 2 'opción desconocida' -- --bogus
+check 'target install repetido' 2 'destino repetido' -- install engines models
+check 'link rechaza selección' 2 'link no acepta selección' -- link extra
+check 'check rechaza argumentos' 2 'check no acepta argumentos' -- check models
+check 'list rechaza argumentos' 2 'list no acepta argumentos' -- list extra
+check 'templates rechaza argumentos' 2 'templates no acepta argumentos' -- templates extra
+check 'config rechaza dos argumentos' 2 'argumento desconocido' -- config llama extra
+check 'config engine desconocido devuelve 2' 2 'engine desconocido' -- config inexistente
 
-# ── stop ───────────────────────────────────────────────────────────────────
-check "stop sin args = all (no es error de uso)"      0 ""                             -- stop
-check "stop <modelo> recorre los puertos"            '*' "no encontrado en ningún puerto" -- stop embed
-check "stop con guion (nombre de script)"           '*' "no encontrado en ningún puerto" -- stop gptoss-high
-check "stop con flag = error de uso"                2 "ERROR"                        -- stop embed --force
-check "stop con 2 args = error de uso"              2 "como mucho un argumento"       -- stop embed gptoss-high
-check "stop de modelo inexistente = error"          2 "modelo desconocido"           -- stop noexiste
+# Model launcher parsing. start_model is the effect leaf; parsing remains real.
+check 'launcher sin flags pasa defaults' 0 'CALL start_model: \[embed\] \[0\] \[0\] \[0\] \[\]' -- embed
+check 'launcher combina flags y puerto' 0 'CALL start_model: \[embed\] \[1\] \[1\] \[1\] \[54321\]' -- embed --background --cpu --force --port 54321
+check 'launcher --help' 0 'USO: ropero <modelo>' -- embed --help
+check 'launcher flag desconocido rc2' 2 'opción desconocida' -- embed --foc
+check 'launcher --port sin valor' 1 'requiere un número de puerto' -- embed --port
+check 'launcher --port inválido' 1 'no es un puerto válido' -- embed --port=abc
+check 'modelo inexistente' 1 'Modelo desconocido' -- inexistente
 
-# ── opciones desconocidas ──────────────────────────────────────────────────
-check "--badflag = opción desconocida"              2 "opción desconocida"           -- --badflag
-check "opción de modelo desconocida"                2 "opción desconocida"           -- --foc
-check "modelo inexistente = Modelo desconocido"     1 "Modelo desconocido"           -- noexiste
-
-# ── status: el que YA funcionaba, fijado para que no se rompa ──────────────
-check "status --badopt = error de uso (unificado)" 2 "opción desconocida"          -- status --badopt
-check "status --watch abc = error de ms"           2 "requiere milisegundos"        -- status --watch abc
-
-# ── --port ─────────────────────────────────────────────────────────────────
-check "embed --port (sin valor) = error"            1 "requiere un número de puerto"  -- embed --port
-check "embed --port=abc = puerto inválido"          1 "puerto válido"                -- embed --port=abc
-check "--port repetido avisa y gana el último"      '*' "AVISO: --port repetido"      -- embed --port 9995 --port 9996
-
-# ── modelo <--help> ────────────────────────────────────────────────────────
-check "embed --help responde con el uso"            0 "USO: ropero <modelo>"         -- embed --help
-
-# ── help ───────────────────────────────────────────────────────────────────
-check "help"                                        0 "ropero"                       -- help
-check "--help"                                      0 "ropero"                       -- --help
-check "sin argumentos = help"                       0 "ropero"                       --
-
-# -----------------------------------------------------------------------------
+# Final safety assertions.
 echo
+if [[ -s "$SENTINEL_LOG" ]]; then
+    _fail 'seguridad: ninguna herramienta externa peligrosa' 'se alcanzó una sentinel externa' "$(cat "$SENTINEL_LOG")"
+else
+    _pass 'seguridad: ninguna herramienta externa peligrosa'
+fi
+
+roots=("$HOME_DIR" "$GGUF_DIR_TEST" "$SAFETENSORS_DIR_TEST" "$LOG_DIR_TEST" "$LLAMA_DIR_TEST" "$BIN_DIR_TEST" "$RUN_DIR" "$WORK/tmp")
+outside=0
+for root in "${roots[@]}"; do
+    case "$root" in "$WORK"/*) ;; *) outside=1 ;; esac
+done
+if (( outside == 0 )) && [[ "$REAL_HOME" != "$HOME_DIR" ]]; then
+    _pass 'seguridad: ninguna ruta de escritura configurada sale de WORK'
+else
+    _fail 'seguridad: roots temporales' 'algún root no está bajo WORK'
+fi
+
 if (( FAIL == 0 )); then
-    printf 'PASS — %d casos\n' "$PASS"
+    printf 'PASS — %d casos; sin sentinel externa ni escrituras configuradas fuera de WORK\n' "$PASS"
     exit 0
 fi
+
 printf 'FAIL — %d ok, %d fallos\n' "$PASS" "$FAIL"
+printf '  - %s\n' "${FAILED_CASES[@]}"
 exit 1

@@ -51,6 +51,36 @@
 # -----------------------------------------------------------------------------
 ROPERO_ENGINES="airllm mlx_lm tensorrt-llm fastflowlm"
 
+ropero_engine_canonical() {
+    case "${1:-}" in
+        llama|llamacpp|llama_cpp|llama-cpp|llama-server) printf 'llama-server' ;;
+        airllm)                                           printf 'airllm' ;;
+        mlx|mlx_lm|mlx-lm)                                printf 'mlx_lm' ;;
+        tensorrt|trtllm|tensorrt-llm|tensorrt_llm)        printf 'tensorrt-llm' ;;
+        flm|fastflowlm|fastflow_lm)                       printf 'fastflowlm' ;;
+        *) return 1 ;;
+    esac
+}
+
+ropero_engine_compatible() {
+    local engine os
+    engine=$(ropero_engine_canonical "${1:-}") || return 1
+    os=$(ropero_detect_os 2>/dev/null || echo unknown)
+    case "$engine" in
+        llama-server) [[ "$os" != "termux" ]] ;;
+        airllm) return 0 ;;
+        mlx_lm)
+            # mlx-lm requiere Metal/Apple Silicon; Darwin x86_64 no es
+            # compatible aunque el sistema operativo se anuncie como macOS.
+            [[ "$os" == "macos" && "$(uname -m 2>/dev/null)" == "arm64" ]]
+            ;;
+        tensorrt-llm)
+            [[ "$os" == "cachy" || "$os" == "arch" ]] && command -v nvidia-smi >/dev/null 2>&1
+            ;;
+        fastflowlm) [[ "$os" == "cachy" || "$os" == "arch" ]] && ropero_has_amd_npu ;;
+    esac
+}
+
 # ropero_engine_list → una línea por engine no-llama soportado.
 ropero_engine_list() { printf '%s\n' $ROPERO_ENGINES; }
 
@@ -176,6 +206,18 @@ ropero_engine_resolve() {
     local engine="${1:-}"
     local cand d
     case "$engine" in
+        llama-server)
+            # llama.cpp se compila fuera de este registro, pero el instalador
+            # seleccionado necesita el mismo contrato de probe que los demás
+            # engines. Preferimos el artefacto de build (fuente de verdad) y
+            # después el enlace/PATH para instalaciones ya existentes.
+            for cand in "${LLAMA_DIR:-$HOME/llama.cpp}/build/bin/llama-server" "$BIN_DIR/llama-server"; do
+                if [[ -x "$cand" ]]; then printf '%s' "$cand"; return 0; fi
+            done
+            if command -v llama-server >/dev/null 2>&1; then
+                command -v llama-server; return 0
+            fi
+            ;;
         airllm)
             # Servidor NUESTRO (airllm es librería pura). Se linkea como un
             # ejecutable más, exactamente igual que llama-server.
@@ -241,20 +283,17 @@ ropero_engine_probe() {
 
     case "$engine" in
         airllm)
-            # El server es nuestro, así que basta con que exista. Que airllm
-            # esté ROTO no lo tumba: el server sirve igual, solo pierde el
-            # offload a disco capa a capa que es lo que hace útil a airllm.
+            # El server es nuestro, pero su backend es airllm: sin los tres
+            # imports no puede cargar ni servir inferencia.
             if ! py=$(ropero_python_bin); then
                 printf 'broken'; ropero_info "  airllm: sin intérprete python3"
                 return 1
             fi
-            if ! out=$("$py" -c 'import airllm; print(getattr(airllm,"__version__","?"))' 2>&1); then
-                printf 'ok'
-                ropero_warn "  airllm: server OK, pero la LIBRERÍA no importa"
-                ropero_warn "    $(printf '%s' "$out" | tail -1)"
-                ropero_warn "    Sin airllm no hay offload capa a capa: infiere lento pero funciona."
-                ropero_warn "    Arreglo: pip install 'transformers<5'  (airllm 2.11.0 usa LlamaForCausalLM)"
-                return 0
+            if ! out=$("$py" -c 'import airllm, fastapi, uvicorn; print(getattr(airllm,"__version__","?"))' 2>&1); then
+                printf 'broken'
+                ropero_info "  airllm: no se pueden importar airllm, fastapi y uvicorn"
+                ropero_info "    $(printf '%s' "$out" | tail -1)"
+                return 1
             fi
             ;;
         mlx_lm)

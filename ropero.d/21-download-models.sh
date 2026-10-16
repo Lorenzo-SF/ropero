@@ -127,14 +127,14 @@ _ropero_cat_build() {
 
     # Los tres siguientes solo si el MTP ya está en disco: son el juego de
     # projector/multimodal del Qwen y sin el MTP base no sirven de nada.
-    if [[ -e "$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" ]]; then
+    if [[ -e "$GGUF_DIR/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" ]]; then
         _cat_gguf "mtp-Qwen3.8-27B-Q4_0.gguf" \
             "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB"
         _cat_gguf "qwen3.8-mmproj-BF16.gguf" \
             "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB"
         # El MTP además se copia a la raíz de GGUF: es donde lo buscan los
         # .sh de modelo, no dentro de MTP/.
-        _ROPERO_CAT_POSTCOPY+=("$HOME/models/gguf/MTP/mtp-Qwen3.8-27B-Q4_0.gguf:$HOME/models/gguf/")
+        _ROPERO_CAT_POSTCOPY+=("$GGUF_DIR/MTP/mtp-Qwen3.8-27B-Q4_0.gguf:$GGUF_DIR/")
     fi
 
     _cat_gguf "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" \
@@ -314,7 +314,7 @@ ropero_models_catalog() {
 # desde repos.yaml.
 # -----------------------------------------------------------------------------
 ropero_download_default_models() {
-    local filter="${1:-}" os idx
+    local filter="${1:-}" os idx rc=0
 
     _ropero_cat_build
 
@@ -327,7 +327,8 @@ ropero_download_default_models() {
         fi
         ropero_info "descargando solo: ${_ROPERO_CAT_NAME[$idx]} (${_ROPERO_CAT_KEY[$idx]})"
         ROPERO_FORCE="${ROPERO_FORCE:-0}"
-        _ropero_cat_download "$idx"
+        _ropero_cat_download "$idx" || return $?
+        _ropero_cat_postcopy
         return $?
     fi
 
@@ -338,7 +339,7 @@ ropero_download_default_models() {
     n=${#_ROPERO_CAT_KEY[@]}
     for ((i=0;i<n;i++)); do
         [[ "${_ROPERO_CAT_KIND[$i]}" == "gguf" ]] || continue
-        _ropero_cat_download "$i"
+        _ropero_cat_download "$i" || rc=1
     done
 
     # El set de safetensors es PLATAFORM-DEPENDIENTE y va aparte a propósito:
@@ -350,14 +351,14 @@ ropero_download_default_models() {
         ropero_info "-- checkpoints safetensors (mlx_lm) --"
         for ((i=0;i<n;i++)); do
             [[ "${_ROPERO_CAT_KIND[$i]}" == "safetensors" ]] || continue
-            _ropero_cat_download "$i"
+            _ropero_cat_download "$i" || rc=1
         done
     else
         ropero_info "safetensors/MLX: solo macOS (mlx_lm es Apple Silicon). Omitido en $os."
     fi
 
+    (( rc == 0 )) || return "$rc"
     _ropero_cat_postcopy
-    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -372,10 +373,19 @@ _ropero_cat_postcopy() {
     (( ${#_ROPERO_CAT_POSTCOPY[@]} == 0 )) && return 0
     for spec in "${_ROPERO_CAT_POSTCOPY[@]}"; do
         src="${spec%%:*}"; dst="${spec#*:}"
-        [[ -f "$src" ]] || continue
-        cp "$src" "$dst" 2>/dev/null \
-            && ropero_ok "$(basename "$src") copiado a $dst" \
-            || ropero_warn "no se pudo copiar $src a $dst"
+        if [[ ! -f "$src" ]]; then
+            ropero_err "falta el origen requerido para postcopy: $src"
+            return 1
+        fi
+        if ! cp "$src" "$dst" 2>/dev/null; then
+            ropero_err "no se pudo copiar $src a $dst"
+            return 1
+        fi
+        if [[ ! -f "$dst/$(basename "$src")" ]]; then
+            ropero_err "postcopy no dejó $(basename "$src") en $dst"
+            return 1
+        fi
+        ropero_ok "$(basename "$src") copiado a $dst"
     done
     return 0
 }

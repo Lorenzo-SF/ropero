@@ -21,52 +21,43 @@ un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
 ## Instalación
 
 ```bash
-ropero --install              # todo: engines + modelos
-ropero --install engines      # solo engines y dependencias
-ropero --install models       # solo descargar los pesos
-ropero --install link         # solo rehacer symlinks y verificar
-ropero models                 # igual que --install models
-ropero --check
+ropero --install              # SOLO ropero: entorno y sus symlinks
+ropero install                # menú de engines y después menú de modelos
+ropero install engines        # sólo engines compatibles
+ropero install models         # catálogo de pesos seleccionables
+ropero link                   # rehacer enlaces de lo ya instalado
+ropero check                  # alias de --check, sólo lectura
 ```
 
-`--install` acepta un **target** y hace una de estas cuatro cosas:
+`--install` ya no acepta targets: instala exclusivamente el lanzador y
+`ropero.d`. El antiguo flujo de targets se sustituye por `ropero install`.
+En una entrada sin TTY, `AUTO_YES=1` o `--force`, los menús eligen todos los
+elementos compatibles; las confirmaciones destructivas continúan siendo
+conservadoras.
 
-| target   | qué hace                                                        | sudo | descarga pesos |
-| -------- | --------------------------------------------------------------- | ---- | -------------- |
-| `all`    | todo lo de abajo (defecto)                                      | sí   | sí (~50 GB)    |
-| `engines`| pasos 1-3                                                       | sí   | no             |
-| `models` | paso 4                                                         | no   | sí             |
-| `link`   | rehace los symlinks de lo ya instalado y verifica. Instala nada  | no   | no             |
+| comando | qué hace |
+| --- | --- |
+| `ropero --install [--force]` | entorno y enlaces propios de ropero |
+| `ropero install engines [selección]` | instala `llama`, `airllm`, `mlx`, `tensorrt` o `flm` compatibles |
+| `ropero install models [selección]` | descarga modelos del catálogo |
+| `ropero config [engine]` | muestra configuración efectiva, puertos y disco |
 
-1. Enlaza el propio ropero (`ropero`, `ropero.d`) en `~/.local/bin`.
-   **Siempre**, sea cual sea el target: aunque declines todo lo demás, desde
-   ese punto `ropero` ya es utilizable.
-2. Instala dependencias (pacman/brew según OS).
-3. Engines, uno a uno y en este orden — **cada uno enlaza sus ejecutables en
-   `~/.local/bin` en cuanto termina**, no al final del install:
-   - `llama.cpp` (todos los OS salvo termux): clona y compila con CUDA/Metal
-     (20-40 min la primera vez).
-   - `airllm` (todos los OS salvo termux).
-   - `tensorrt-llm` (solo CachyOS/Arch) **o** `mlx-lm` (solo macOS).
-4. Descarga los GGUF por defecto (~50 GB).
+El menú de engines usa `1 llama`, `2 airllm`, `3 mlx` (macOS Apple Silicon), `4 tensorrt`
+(Linux + NVIDIA RTX), `5 flm` (Linux + CPU AMD), `9 todos` y `0 salir`.
+Admite varias selecciones por coma, punto y coma o espacio. El de modelos usa
+las mismas separaciones, `99 todos` y `0 salir`; las filas incompatibles o sin
+descarga no se pueden seleccionar.
 
-`--force` hace el install **sin preguntar nada** (es `AUTO_YES=1` con otro
-nombre). No es destructivo: las preguntas que borran —recompilar llama.cpp
-desde cero, recrear el venv de tensorrt— siguen respondiendo "no" por su cuenta.
+> **Migración externa:** `../repos.yaml` todavía contiene `./ropero --install`.
+> Ahora sólo instalará ropero; si necesita engines/modelos deberá migrarse a
+> `./ropero install` según la política del repo padre.
 
-El target `link` existe para un caso concreto: los binarios están compilados
-pero `~/.local/bin` está vacío (lo borraste, o instalaste ropero en otra
-máquina). Rehacer `--install engines` para eso significa cinco preguntas y un
-`sudo pacman` de propina; `ropero --install link` no instala nada, rehace los
-enlaces de lo que YA está y termina con el check.
-
-Es idempotente: si un engine ya está instalado, pregunta si quieres rehacerlo
-en vez de repetirlo a ciegas. Si reintentas uno, solo se relinkea ese.
-
-Que cada engine.linkee al terminar es lo que evita el fallo de antes: los
-symlinks eran un paso único al final que recorría todos los backends, así que
-instalar solo `llama.cpp` acababa tocando también los ejecutables de
-`tensorrt-llm`. Ver [la tabla de qué se linkea](#cada-engine-linkea-lo-suyo-al-terminar-de-instalarse).
+`install link` existe para rehacer los symlinks de lo ya instalado sin instalar
+paquetes ni pesos. Las selecciones explícitas no interactivas aceptan alias,
+nombres de catálogo o sus números; los modelos incompatibles/no descargables se
+omiten y cuentan en el resumen. Las entradas de catálogo sin launcher se pueden
+pedir por su clave o nombre explícito: se descargan, pero no reciben número si
+no se puede inferir con seguridad el engine que las usaría.
 
 `--check` verifica:
 
@@ -79,7 +70,7 @@ instalar solo `llama.cpp` acababa tocando también los ejecutables de
 
 ### Cada engine linkea lo suyo al terminar de instalarse
 
-`ropero --install` recorre los engines uno a uno, y **cada uno enlaza sus
+`ropero install engines` recorre los engines uno a uno, y **cada uno enlaza sus
 ejecutables en cuanto acaba** — no hay un paso final "enlaza todo":
 
 | Engine | Dónde vive | Qué se linkea |
@@ -356,7 +347,7 @@ Convención: `ROPERO_<MODELO>_<PARAM>`, con el nombre del modelo en
 
 ## Dependencias
 
-- **llama.cpp** compilado con CUDA (CachyOS) o Metal (macOS). Lo instala `--install`.
+- **llama.cpp** compilado con CUDA (CachyOS) o Metal (macOS). Lo instala `ropero install engines`.
 - **Python 3.11+** para AirLLM / MLX / TensorRT (opcional).
 - **Homebrew** (macOS) o **pacman/paru** (CachyOS) para paquetes base.
 - **jq**, **curl** (para checks).
@@ -380,9 +371,9 @@ Convención: `ROPERO_<MODELO>_<PARAM>`, con el nombre del modelo en
 
 | Problema                     | Causa                 | Fix                                       |
 | ---------------------------- | --------------------- | ----------------------------------------- |
-| `Archivo GGUF no encontrado` | Modelo no descargado  | `ropero --install` o descargar manual     |
+| `Archivo GGUF no encontrado` | Modelo no descargado  | `ropero install models` o descargar manual |
 | `Puerto :9999 ocupado por X` | Otro modelo en GPU    | `ropero stop X` o `ropero Y --force`      |
-| `llama-server no en PATH`    | No compilado          | `ropero --install`                        |
+| `llama-server no en PATH`    | No compilado          | `ropero install engines`                  |
 | Modelo tarda mucho en cargar | Normal la primera vez | Espera 60-180s, logs en `~/.logs/ropero/` |
 | `OOM` en GPU                 | Modelo no cabe entero | Subir `--n-cpu-moe` o bajar `MODEL_CTX`   |
 

@@ -23,6 +23,13 @@
 #                       HuggingFace.
 #   · puerto y host   → los mismos de ropero.
 #
+# IMPLEMENTACIÓN: FastAPI + uvicorn (un solo worker). Antes era http.server
+# puro de la stdlib (BaseHTTPRequestHandler/ThreadingHTTPServer); se migró
+# para tener async real, streaming SSE sobre ASGI y el log de acceso estándar
+# de uvicorn (ver sección LOGGING más abajo). Mantiene la compatibilidad de los
+# endpoints de API soportados; no pretende preservar el comportamiento
+# implícito de métodos HTTP no implementados.
+#
 # QUÉ TIENE QUE TENER EL MODELO (esto es lo que decide si esto sirve)
 #
 #   · Formato:  checkpoint de HuggingFace en safetensors o pytorch_model*.bin
@@ -62,6 +69,41 @@
 #                        solo si el disco va justo de RAM; por defecto
 #                        prefetching=True porque es lo que gana.
 #
+# DEPENDENCIAS NUEVAS (no las instala este fichero: las instala quien gestione
+# el entorno de airllm, vía `uv pip install fastapi uvicorn` o `pip install
+# fastapi uvicorn`). Si no están, `main()` sale con mensaje claro a stderr y
+# rc=2 ANTES de tocar el modelo — ver sección "SI FALTAN FASTAPI/UVICORN".
+#
+# LOGGING — formato de las líneas que emite el server, para quien le haga un
+# colorize (patrones a buscar; todo va a stderr salvo que se indique otra
+# cosa):
+#
+#   · Arranque de uvicorn (logger "uvicorn.error", formato por defecto
+#     "INFO:     <mensaje>"):
+#       INFO:     Started server process [<pid>]
+#       INFO:     Waiting for application startup.
+#       INFO:     Application startup complete.
+#       INFO:     Uvicorn running on http://<host>:<port> (Press CTRL+C to quit)
+#   · Apagado (SIGTERM — ropero manda SIGTERM y espera 10s, ver `ropero.d`):
+#       INFO:     Shutting down
+#       INFO:     Waiting for application shutdown.
+#       INFO:     Application shutdown complete.
+#       INFO:     Finished server process [<pid>]
+#   · Acceso (logger "uvicorn.access", uno por request, access_log=True):
+#       INFO:     127.0.0.1:PUERTO - "GET /v1/models HTTP/1.1" 200 OK
+#       INFO:     127.0.0.1:PUERTO - "POST /v1/chat/completions HTTP/1.1" 200 OK
+#   · Carga del modelo y errores — las emite ESTE módulo con `log()`, formato
+#     "[airllm-server HH:MM:SS] <mensaje>":
+#       [airllm-server 12:34:56] cargando /ruta (compression=none max_seq_len=32768 prefetch=True)
+#       [airllm-server 12:34:56] modelo listo en 12.3s (contrato HF=True)
+#       [airllm-server 12:34:56] architectures: Qwen2ForCausalLM
+#       [airllm-server 12:34:56] AVISO: macOS → airllm usa SIEMPRE AirLLMLlamaMlx...
+#       [airllm-server 12:34:56] ERROR: el modelo no existe: /ruta
+#       [airllm-server 12:34:56] ERROR al cargar el modelo: ModuleNotFoundError: ...
+#       [airllm-server 12:34:56] error generando: ValueError(...)
+#       [airllm-server 12:34:56] error en stream: ValueError(...)
+#       [airllm-server 12:34:56] OpenAI-compatible en http://host:port/v1 (model=..., auth=on)
+#
 # USO
 #   airllm-server --model ~/models/safetensors/gpt-oss-120b \
 #                  --model-id airgptoss --host 0.0.0.0 --port 9999 \
@@ -69,17 +111,45 @@
 # =============================================================================
 
 import argparse
+import asyncio
 import json
 import os
+import queue
 import sys
 import threading
 import time
 import uuid
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# -----------------------------------------------------------------------------
+# SI FALTAN FASTAPI/UVICORN
+# -----------------------------------------------------------------------------
+# airllm es una librería; FastAPI y uvicorn son dependencias NUEVAS de este
+# server, no de ropero ni de airllm. Si no están instaladas en el intérprete
+# que ropero usa para airllm (ver ropero_python_bin en _engines.sh), hay que
+# fallar con un mensaje claro ANTES de intentar cargar el modelo — un
+# ImportError sin más, 2 minutos después de haber cargado 60GB de pesos en
+# RAM, es la peor forma de enterarse de que falta un `pip install`.
+# -----------------------------------------------------------------------------
+try:
+    import uvicorn
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse, StreamingResponse
+
+    _IMPORT_ERROR: Exception | None = None
+except ImportError as _e:  # noqa: N818 — se usa como dato, no se relanza aquí
+    uvicorn = None  # type: ignore[assignment]
+    FastAPI = None  # type: ignore[assignment,misc]
+    Request = None  # type: ignore[assignment,misc]
+    JSONResponse = None  # type: ignore[assignment,misc]
+    StreamingResponse = None  # type: ignore[assignment,misc]
+    _IMPORT_ERROR = _e
+
 
 # Un lock global y no uno por request: airllm mueve el modelo entero capa a
 # capa por la GPU/RAM. Dos generaciones a la vez no es "más rápido", es
-# "el mismo throughput repartido y el doble de swap".
+# "el mismo throughput repartido y el doble de swap". Es un threading.Lock
+# (no un asyncio.Lock) a propósito: la generación real corre en un hilo aparte
+# (ver _locked_generate / _stream_worker), nunca en el loop de asyncio.
 _LOCK = threading.Lock()
 
 _MODEL = None
@@ -88,7 +158,7 @@ _HF_STYLE = True     # True → GenerationMixin (HF contract). False → AirLLML
 _ARGS = None
 
 
-def log(msg):
+def log(msg: str) -> None:
     sys.stderr.write("[airllm-server %s] %s\n" % (time.strftime("%H:%M:%S"), msg))
     sys.stderr.flush()
 
@@ -96,12 +166,15 @@ def log(msg):
 # -----------------------------------------------------------------------------
 # Carga
 # -----------------------------------------------------------------------------
-def load_backend():
+def load_backend() -> None:
     """Carga el modelo una vez al arrancar.
 
     Se hace en el arranque y no en el primer request a propósito: si fallase,
     es en el arranque donde quieres enterarte, con el stack completo, y no
-    tres minutos después con un opencode esperando el primer token.
+    tres minutos después con un opencode esperando el primer token. Por eso
+    `main()` llama a esto ANTES de arrancar uvicorn: el puerto no se abre
+    hasta que el modelo está listo, exactamente igual que con el server
+    anterior basado en http.server.
     """
     global _MODEL, _TOKENIZER, _HF_STYLE
 
@@ -215,6 +288,12 @@ def generate_text(messages, a):
     return text, int(gen.shape[-1])
 
 
+def _locked_generate(messages, a):
+    """generate_text bajo _LOCK, para llamar desde asyncio.to_thread."""
+    with _LOCK:
+        return generate_text(messages, a)
+
+
 def stream_text(messages, a):
     """Generador de tokens, para `stream: true`.
 
@@ -249,7 +328,6 @@ def stream_text(messages, a):
     dev = getattr(_MODEL, "device", None)
     if dev is not None:
         ids = {k: v.to(dev) for k, v in ids.items()}
-    n_in = ids["input_ids"].shape[-1]
 
     streamer = TextIteratorStreamer(
         _TOKENIZER, skip_prompt=True, skip_special_tokens=True
@@ -264,6 +342,40 @@ def stream_text(messages, a):
     for piece in streamer:
         yield piece
     t.join()
+
+
+# -----------------------------------------------------------------------------
+# Puente generador-síncrono → asíncrono, para el streaming SSE
+# -----------------------------------------------------------------------------
+# stream_text() es un generador BLOQUEANTE (HF y MLX). FastAPI/uvicorn corren
+# sobre asyncio: iterarlo directamente dentro de una ruta `async def` bloquea
+# el loop entero y mata la concurrencia (incluido /health mientras se genera).
+# La alternativa de "ejecutarlo entero en un hilo y devolver la lista" no vale:
+# eso convierte el streaming en "espera todo y vuelca todo", que es justo lo
+# que `stream: true` promete NO hacer.
+#
+# Por eso stream_text() se consume en un threading.Thread propio (no en el
+# executor de asyncio.to_thread, para no competir por ese pool) y las piezas
+# se entregan a través de una queue.Queue clásica; el lado async solo hace
+# `await asyncio.to_thread(q.get)` por cada pieza, que ocupa un hilo del
+# executor brevemente y punto. El orden de eventos replica EXACTAMENTE el del
+# servidor anterior: piezas → chunk de cierre (solo si no hubo error) →
+# objeto de error (solo si lo hubo) → siempre un {"done": true} final.
+# -----------------------------------------------------------------------------
+def _stream_worker(messages, a) -> "queue.Queue":
+    q: "queue.Queue" = queue.Queue()
+
+    def run():
+        try:
+            with _LOCK:
+                for piece in stream_text(messages, a):
+                    q.put(("piece", piece))
+            q.put(("finished", None))
+        except Exception as e:  # noqa: BLE001 — se reporta al cliente
+            q.put(("error", e))
+
+    threading.Thread(target=run, daemon=True).start()
+    return q
 
 
 # -----------------------------------------------------------------------------
@@ -289,179 +401,271 @@ def _msg_text(content):
     return str(content)
 
 
-class Handler(BaseHTTPRequestHandler):
-    protocol_version = "HTTP/1.1"
-    server_version = "airllm-server"
-    sys_version = ""
+def _err(code: int, message: str, type_: str | None = None) -> "JSONResponse":
+    body = {"error": {"message": message}}
+    if type_:
+        body["error"]["type"] = type_
+    return JSONResponse(body, status_code=code)
 
-    def log_message(self, fmt, *args):
-        pass
 
-    def _authed(self):
-        want = _ARGS.api_key
-        if not want:
-            return True
-        h = self.headers.get("Authorization", "")
-        return h.startswith("Bearer ") and h[7:].strip() == want
+def _authed(request: "Request") -> bool:
+    want = _ARGS.api_key
+    if not want:
+        return True
+    h = request.headers.get("Authorization", "")
+    return h.startswith("Bearer ") and h[7:].strip() == want
 
-    def _json(self, code, obj):
-        body = json.dumps(obj).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
-    def _body(self):
-        n = int(self.headers.get("Content-Length") or 0)
-        if not n:
-            return {}
-        try:
-            return json.loads(self.rfile.read(n))
-        except ValueError:
-            return {}
+async def _read_body(request: "Request"):
+    """Devuelve (payload, error).
 
-    def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path == "/health":
-            self._json(200, {"status": "ok", "engine": "airllm"})
-            return
-        if path == "/v1/models":
-            if not self._authed():
-                self._json(401, {"error": {"message": "invalid api key"}})
-                return
-            self._json(200, {"object": "list", "data": [{
+    Las rutas de OpenAI aceptan únicamente un objeto JSON como body. Separar
+    aquí JSON inválido de un objeto vacío evita que una forma de request normal
+    llegue a ``.get()`` y termine como un 500.
+    """
+    raw = await request.body()
+    if not raw:
+        return {}, None
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return None, "JSON inválido"
+    if not isinstance(payload, dict):
+        return None, "el body JSON debe ser un objeto"
+    return payload, None
+
+
+def _normalise_messages(value):
+    """Convierte mensajes OpenAI estructurados al formato interno o devuelve None."""
+    if not isinstance(value, list):
+        return None
+    messages = []
+    for message in value:
+        if not isinstance(message, dict):
+            return None
+        role = message.get("role")
+        content = message.get("content")
+        if not isinstance(role, str) or not role or not isinstance(content, (str, list)):
+            return None
+        messages.append({"role": role, "content": _msg_text(content)})
+    return messages
+
+
+def _normalise_responses_input(value):
+    """Normaliza el subconjunto compatible de ``/v1/responses``.
+
+    Este servidor histórico trata responses como un alias de chat, no como la
+    Response API completa. Se admite el input string habitual y una lista de
+    mensajes ``{role, content}``; el resultado sigue siendo chat.completion.
+    """
+    if isinstance(value, str):
+        return [{"role": "user", "content": value}]
+    return _normalise_messages(value)
+
+
+async def _chat(messages, payload):
+    """El chat de verdad: valida, decide streaming o no, y responde.
+
+    Función compartida por /v1/completions, /v1/chat/completions y
+    /v1/responses — igual que en el servidor anterior.
+    """
+    if not messages:
+        return _err(400, "messages vacío")
+    if payload.get("tools"):
+        # airllm no tiene template de herramientas: un endpoint de texto que
+        # finge soportarlas hace que el cliente se cuelgue esperando un
+        # tool_call que no va a llegar. Se dice explícitamente.
+        return _err(400,
+            "airllm no implementa tool calling (no es un motor "
+            "de inferencia, es un offloader de capas). Las tools "
+            "del request se ignorarían y el cliente colgaría.")
+
+    cid = "chatcmpl-" + uuid.uuid4().hex[:24]
+    created = int(time.time())
+    model_id = _ARGS.model_id
+    want_stream = bool(payload.get("stream"))
+
+    if want_stream:
+        return StreamingResponse(
+            _sse(cid, created, model_id, messages),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    try:
+        text, ntok = await asyncio.to_thread(_locked_generate, messages, _ARGS)
+    except Exception as e:  # noqa: BLE001 — al cliente le sirve el motivo
+        log("error generando: %r" % (e,))
+        return _err(500, "%s: %s" % (type(e).__name__, e), type_="server_error")
+
+    return {
+        "id": cid,
+        "object": "chat.completion",
+        "created": created,
+        "model": model_id,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": text},
+            "finish_reason": "stop",
+        }],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": ntok,
+            "total_tokens": ntok,
+        },
+    }
+
+
+async def _sse(cid, created, model_id, messages):
+    def event(obj) -> bytes:
+        return ("data: %s\n\n" % json.dumps(obj)).encode()
+
+    q = _stream_worker(messages, _ARGS)
+    try:
+        while True:
+            kind, val = await asyncio.to_thread(q.get)
+            if kind == "piece":
+                yield event({
+                    "id": cid, "object": "chat.completion.chunk",
+                    "created": created, "model": model_id,
+                    "choices": [{"index": 0,
+                                 "delta": {"content": val},
+                                 "finish_reason": None}],
+                })
+            elif kind == "finished":
+                yield event({
+                    "id": cid, "object": "chat.completion.chunk",
+                    "created": created, "model": model_id,
+                    "choices": [{"index": 0, "delta": {},
+                                 "finish_reason": "stop"}],
+                })
+                break
+            elif kind == "error":
+                log("error en stream: %r" % (val,))
+                yield event({"error": {"message": "%s: %s" % (type(val).__name__, val),
+                                        "type": "server_error"}})
+                break
+    finally:
+        yield event({"done": True})
+
+
+def create_app() -> "FastAPI":
+    """Construye la app ASGI. Solo se llama si fastapi/uvicorn importan.
+
+    Starlette resuelve las rutas en el ORDEN en que se registran (no por
+    especificidad), así que las rutas literales van primero y los catch-all
+    (`/{full_path:path}`) se registran al final: si fueran antes, se
+    comerían toda petición, incluidas /v1/models o /ropero/engine, y las
+    rutas literales nunca se alcanzarían.
+    """
+    app = FastAPI(title="airllm-server", docs_url=None, redoc_url=None)
+
+    @app.get("/health")
+    async def health():
+        return {"status": "ok", "engine": "airllm"}
+
+    @app.get("/v1/models")
+    async def list_models(request: Request):
+        if not _authed(request):
+            return _err(401, "invalid api key")
+        return {
+            "object": "list",
+            "data": [{
                 "id": _ARGS.model_id,
                 "object": "model",
                 "created": int(os.path.getmtime(_ARGS.model)
                                if os.path.exists(_ARGS.model) else time.time()),
                 "owned_by": "ropero/airllm",
-            }]})
-            return
-        if path == "/ropero/engine":
-            # Ruta de diagnóstico para `_collect_slots`: sin ella, la columna
-            # ENGINE del status tendría que deducir el engine del nombre del
-            # proceso, que aquí es un `python3` y no dice nada. Los engines sin
-            # auth propia (mlx_lm, trtllm-serve, flm) la tienen a través del
-            # proxy; airllm sirve en el puerto de ropero directamente, así que
-            # la publica él mismo.
-            self._json(200, {
-                "engine": "airllm",
-                "model": _ARGS.model_id,
-                "target_host": self.server.server_address[0],
-                "target_port": self.server.server_address[1],
-                "child_pid": 0,
-                "child_alive": True,
-            })
-            return
-        self._json(404, {"error": {"message": "no such route: %s" % path}})
-
-    def do_POST(self):
-        path = self.path.split("?", 1)[0]
-        if not self._authed():
-            self._json(401, {"error": {"message": "invalid api key"}})
-            return
-        if path == "/v1/completions":
-            payload = self._body()
-            prompt = payload.get("prompt", "")
-            if isinstance(prompt, list):
-                prompt = prompt[0] if prompt else ""
-            messages = [{"role": "user", "content": _msg_text(prompt)}]
-            return self._chat(messages, payload)
-        if path in ("/v1/chat/completions", "/v1/responses"):
-            payload = self._body()
-            if path == "/v1/responses":
-                # /v1/responses lleva `input` en vez de `messages`.
-                payload.setdefault("messages", payload.pop("input", []))
-            msgs = [{"role": m.get("role", "user"),
-                     "content": _msg_text(m.get("content", ""))}
-                    for m in payload.get("messages", [])]
-            return self._chat(msgs, payload)
-        self._json(404, {"error": {"message": "no such route: %s" % path}})
-
-    # ── el chat de verdad ──────────────────────────────────────────────────
-    def _chat(self, messages, payload):
-        if not messages:
-            return self._json(400, {"error": {"message": "messages vacío"}})
-        if payload.get("tools"):
-            # airllm no tiene template de herramientas: un endpoint de texto que
-            # finge soportarlas hace que el cliente se cuelgue esperando un
-            # tool_call que no va a llegar. Se dice explícitamente.
-            return self._json(400, {"error": {
-                "message": "airllm no implementa tool calling (no es un motor "
-                           "de inferencia, es un offloader de capas). Las tools "
-                           "del request se ignorarían y el cliente colgaría."}})
-
-        cid = "chatcmpl-" + uuid.uuid4().hex[:24]
-        created = int(time.time())
-        model_id = _ARGS.model_id
-        want_stream = bool(payload.get("stream"))
-
-        if want_stream:
-            return self._stream(cid, created, model_id, messages)
-
-        try:
-            with _LOCK:
-                text, ntok = generate_text(messages, _ARGS)
-        except Exception as e:  # noqa: BLE001 — al cliente le sirve el motivo
-            log("error generando: %r" % (e,))
-            return self._json(500, {"error": {
-                "message": "%s: %s" % (type(e).__name__, e), "type": "server_error"}})
-
-        self._json(200, {
-            "id": cid,
-            "object": "chat.completion",
-            "created": created,
-            "model": model_id,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": text},
-                "finish_reason": "stop",
             }],
-            "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": ntok,
-                "total_tokens": ntok,
-            },
-        })
+        }
 
-    def _stream(self, cid, created, model_id, messages):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Transfer-Encoding", "chunked")
-        self.end_headers()
+    @app.get("/ropero/engine")
+    async def ropero_engine(request: Request):
+        # Ruta de diagnóstico para `_collect_slots`: sin ella, la columna
+        # ENGINE del status tendría que deducir el engine del nombre del
+        # proceso, que aquí es un `python3` y no dice nada. Los engines sin
+        # auth propia (mlx_lm, trtllm-serve, flm) la tienen a través del
+        # proxy; airllm sirve en el puerto de ropero directamente, así que
+        # la publica él mismo. Sin auth a propósito: es local y de
+        # diagnóstico, igual que antes.
+        host, port = request.scope.get("server") or (_ARGS.host, _ARGS.port)
+        return {
+            "engine": "airllm",
+            "model": _ARGS.model_id,
+            "target_host": host,
+            "target_port": port,
+            "child_pid": 0,
+            "child_alive": True,
+        }
 
-        def send(obj):
-            payload = ("data: %s\n\n" % json.dumps(obj)).encode()
-            self.wfile.write(b"%x\r\n" % len(payload) + payload + b"\r\n")
-            self.wfile.flush()
+    @app.post("/v1/completions")
+    async def completions(request: Request):
+        if not _authed(request):
+            return _err(401, "invalid api key")
+        payload, error = await _read_body(request)
+        if error:
+            return _err(400, error, type_="invalid_request_error")
+        prompt = payload.get("prompt", "")
+        if isinstance(prompt, list):
+            prompt = prompt[0] if prompt else ""
+        messages = [{"role": "user", "content": _msg_text(prompt)}]
+        return await _chat(messages, payload)
 
-        try:
-            with _LOCK:
-                for piece in stream_text(messages, _ARGS):
-                    send({"id": cid, "object": "chat.completion.chunk",
-                          "created": created, "model": model_id,
-                          "choices": [{"index": 0,
-                                       "delta": {"content": piece},
-                                       "finish_reason": None}]})
-            send({"id": cid, "object": "chat.completion.chunk",
-                  "created": created, "model": model_id,
-                  "choices": [{"index": 0, "delta": {},
-                               "finish_reason": "stop"}]})
-        except Exception as e:  # noqa: BLE001
-            log("error en stream: %r" % (e,))
-            send({"error": {"message": "%s: %s" % (type(e).__name__, e),
-                            "type": "server_error"}})
-        finally:
-            send({"done": True})
-            self.wfile.write(b"0\r\n\r\n")
-            self.wfile.flush()
+    async def _chat_like(request: Request):
+        if not _authed(request):
+            return _err(401, "invalid api key")
+        payload, error = await _read_body(request)
+        if error:
+            return _err(400, error, type_="invalid_request_error")
+        if request.url.path == "/v1/responses":
+            # Alias de chat limitado compatible con el contrato histórico:
+            # responses usa `input`, pero no pretende implementar objetos,
+            # tools ni eventos propios de la Response API.
+            msgs = _normalise_responses_input(payload.get("input", []))
+            if msgs is None:
+                return _err(400, "input debe ser un string o una lista de mensajes {role, content}",
+                            type_="invalid_request_error")
+        else:
+            msgs = _normalise_messages(payload.get("messages", []))
+            if msgs is None:
+                return _err(400, "messages debe ser una lista de mensajes {role, content}",
+                            type_="invalid_request_error")
+        return await _chat(msgs, payload)
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request):
+        return await _chat_like(request)
+
+    @app.post("/v1/responses")
+    async def responses(request: Request):
+        return await _chat_like(request)
+
+    @app.post("/{full_path:path}")
+    async def handle_post(full_path: str, request: Request):
+        # Mismo orden que el servidor anterior: la API key se exige ANTES de
+        # mirar si la ruta existe, para cualquier POST que no case con las
+        # rutas explícitas de arriba.
+        path = "/" + full_path
+        if not _authed(request):
+            return _err(401, "invalid api key")
+        return _err(404, "no such route: %s" % path)
+
+    @app.get("/{full_path:path}")
+    async def handle_get(full_path: str):
+        # Catch-all para GET: el servidor anterior respondía 404 con este
+        # mismo cuerpo JSON para cualquier ruta que no fuera /health,
+        # /v1/models o /ropero/engine (ninguna otra GET exigía auth, así que
+        # aquí tampoco se comprueba).
+        path = "/" + full_path
+        return _err(404, "no such route: %s" % path)
+
+    return app
 
 
-def main():
+def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Servidor OpenAI-compatible sobre airllm (lo que airllm no trae)")
+        description="Servidor OpenAI-compatible sobre airllm (FastAPI + uvicorn, "
+                    "lo que airllm no trae)")
     ap.add_argument("--model", required=True,
                     help="ruta al checkpoint de HF (safetensors/bin), no gguf")
     ap.add_argument("--model-id", required=True,
@@ -485,6 +689,15 @@ def main():
     args = ap.parse_args()
     _ARGS = args
 
+    # Antes de tocar el modelo: sin fastapi/uvicorn no hay nada que servir.
+    if _IMPORT_ERROR is not None:
+        sys.stderr.write(
+            "ERROR: faltan dependencias para airllm-server: %s\n" % _IMPORT_ERROR
+        )
+        sys.stderr.write("pip install fastapi uvicorn\n")
+        sys.stderr.flush()
+        return 2
+
     if not os.path.exists(args.model):
         log("ERROR: el modelo no existe: %s" % args.model)
         return 2
@@ -504,15 +717,26 @@ def main():
             "transformers<5 (importa LlamaForCausalLM del nivel superior).")
         return 1
 
-    class Server(ThreadingHTTPServer):
-        daemon_threads = True
-        allow_reuse_address = True
-
-    srv = Server((args.host, args.port), Handler)
+    app = create_app()
     log("OpenAI-compatible en http://%s:%d/v1 (model=%s, auth=%s)"
         % (args.host, args.port, args.model_id, "on" if args.api_key else "off"))
     try:
-        srv.serve_forever(poll_interval=0.5)
+        # Un solo worker (sin multiprocessing: el modelo ya está cargado en
+        # ESTE proceso y airllm/transformers no se comparten entre procesos
+        # sin recargar todo). uvicorn instala sus propios handlers de
+        # SIGINT/SIGTERM al correr en el hilo principal. El límite de apagado
+        # graceful es deliberadamente de 5 s, inferior a los 10 s que ropero
+        # reserva antes de su SIGKILL de respaldo: las requests activas no
+        # pueden hacer que uvicorn espere indefinidamente.
+        uvicorn.run(
+            app,
+            host=args.host,
+            port=args.port,
+            workers=1,
+            log_level="info",
+            access_log=True,
+            timeout_graceful_shutdown=5,
+        )
     except KeyboardInterrupt:
         pass
     return 0
