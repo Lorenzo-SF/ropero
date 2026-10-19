@@ -222,6 +222,24 @@ flowchart LR
 
 ---
 
+## Gemma 4 26B-A4B QAT (experimental)
+
+Según la [guía de Unsloth](https://unsloth.ai/docs/models/gemma-4/qat), se usan tres archivos del mismo repositorio en `GGUF_DIR` (por defecto `~/models/gguf`):
+- Modelo: `gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf`.
+- MTP: `mtp-gemma-4-26B-A4B-it.gguf`.
+- Proyector: `gemma-4-26B-A4B-it-mmproj-BF16.gguf` (nombre propio para evitar colisiones).
+
+```bash
+./ropero install models gemma4
+./ropero gemma4      # Rápido: CTX 49152, todo en GPU, sin offload a CPU.
+./ropero gemma4-ctx  # CTX 262144, --n-cpu-moe 5 y proyector en CPU; MTP en GPU.
+```
+
+Ambos incluyen visión y MTP; requieren un build reciente de llama.cpp con `gemma4-assistant`, sin autocompilación.
+Configuraciones orientativas: sin garantía de ajuste en CUDA de 16 GiB ni de contexto lleno.
+
+---
+
 ## Estructura del repo
 
 ```mermaid
