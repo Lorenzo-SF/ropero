@@ -8,3 +8,12 @@ __pycache__/
 # Lock files de runtime (vault, cron, procesos efímeros)
 *.lock
 .lock/
+
+# Artefactos de crash (Erlang, Java, Python). No son código: son el
+# equivalente de un volcado de memoria que alguien dejó en el directorio de
+# trabajo, y se cuelan en un `git add -A` sin que nadie los mire.
+erl_crash.dump
+hs_err_pid*.log
+replay_pid*.log
+core
+core.*
