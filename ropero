@@ -361,7 +361,17 @@ get_model_on_port() {
 # -----------------------------------------------------------------------------
 engine_on_port() {
     local p="$1" j
-    j=$(curl -sf --max-time 2 "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
+    # La cabecera de auth va también aquí, no solo en /v1/models: llama-server
+    # exige la key en TODAS sus rutas, así que un /ropero/engine sin ella
+    # devolvía 401 — y, peor, escribía "unauthorized: Invalid API Key" en el
+    # log del server en cada consulta. Con `ropero status --watch` eso era un
+    # warning por segundo y por slot, llenando el log de basura.
+    #
+    # En el proxy de auth la cabecera no molesta: /ropero/engine es una ruta
+    # local de diagnóstico y el proxy no la valida.
+    j=$(curl -sf --max-time 2 \
+        -H "Authorization: Bearer $LLAMA_API_KEY" \
+        "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
     [[ -n "$j" ]] || return 1
     printf '%s' "$j" | grep -oE '"engine"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
         | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
@@ -372,7 +382,11 @@ engine_on_port() {
 # Lo usa el apagado para no dejar engines huérfanos.
 child_pid_on_port() {
     local p="$1" j
-    j=$(curl -sf --max-time 2 "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
+    # Misma cabecera que en engine_on_port: llama-server la exige en todas
+    # sus rutas, y sin ella el log del server se llenaba de 401.
+    j=$(curl -sf --max-time 2 \
+        -H "Authorization: Bearer $LLAMA_API_KEY" \
+        "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
     [[ -n "$j" ]] || return 1
     printf '%s' "$j" | grep -oE '"child_pid"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 \
         | grep -oE '[0-9]+' || true
