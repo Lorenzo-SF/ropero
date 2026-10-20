@@ -88,7 +88,22 @@ _ropero_cat_build() {
     (( ${#_ROPERO_CAT_KEY[@]} == 0 )) || return 0
 
     _cat_gguf "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" \
-        "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" "Gemma4" "15.70 GB"
+        "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" "Gemma4" "14.2 GB"
+
+
+    # Los tres siguientes solo si el MTP ya está en disco: son el juego de
+    # projector/multimodal del Qwen y sin el MTP base no sirven de nada.
+    if [[ -e "$GGUF_DIR/Gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" ]]; then
+          _cat_gguf "mtp-gemma-4-26B-A4B-it.gguf" \
+        "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "mtp-gemma-4-26B-A4B-it.gguf" "Gemma4 MTP" "0.5 GB"
+
+        _cat_gguf "mmproj-BF16.gguf" \
+            "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "mmproj-BF16.gguf" "Gemma4 MMPROJ" "1.2 GB"
+        
+        _ROPERO_CAT_POSTCOPY+=("$GGUF_DIR/mmproj-BF16.gguf:$GGUF_DIR/gemma-4-26B-A4B-it-mmproj-BF16.gguf")
+    fi
+
+
 
     # ── LANE DEL VAULT (posadero) ─────────────────────────────────────────────
     # Los cuatro viven en CPU por diseño (ver los .sh: --n-gpu-layers 0), así
@@ -130,7 +145,7 @@ _ropero_cat_build() {
 
     # Los tres siguientes solo si el MTP ya está en disco: son el juego de
     # projector/multimodal del Qwen y sin el MTP base no sirven de nada.
-    if [[ -e "$GGUF_DIR/MTP/mtp-Qwen3.8-27B-Q4_0.gguf" ]]; then
+    if [[ -e "$GGUF_DIR/Qwen3.8-27B-UD-Q3_K_XL.gguf" ]]; then
         _cat_gguf "mtp-Qwen3.8-27B-Q4_0.gguf" \
             "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB"
         _cat_gguf "qwen3.8-mmproj-BF16.gguf" \
@@ -276,55 +291,14 @@ _ropero_cat_index() {
     return 1
 }
 
-# Gemma4 es una sola selección: el consentimiento del GGUF incluye MTP y visión.
-# El subshell limita AUTO_YES y el trap al bundle. Sólo el proyector necesita
-# staging: mmproj-BF16.gguf en la raíz puede pertenecer a otro modelo.
-_ropero_cat_download_gemma4() (
-    local i="$1" dir="${GGUF_DIR:-$HOME/models/gguf}"
-    local repo="${_ROPERO_CAT_REPO[$i]}" main="${_ROPERO_CAT_KEY[$i]}"
-    local mtp="mtp-gemma-4-26B-A4B-it.gguf"
-    local projector="gemma-4-26B-A4B-it-mmproj-BF16.gguf" staging
-    case "$dir" in
-        \~) dir="$HOME" ;;
-        \~/*) dir="$HOME/${dir#\~/}" ;;
-    esac
-    ropero_download_gguf "$repo" "$main" "Gemma4 (GGUF + MTP + mmproj)" \
-        "${_ROPERO_CAT_SIZE[$i]}" "$dir" "$main" || return $?
-    # El descargador devuelve 0 también si el usuario omite el principal.
-    [[ -s "$dir/$main" ]] || return 0
-
-    # ropero_ask lee esta variable por el scope dinámico de Bash.
-    # shellcheck disable=SC2034
-    local AUTO_YES=1
-    ropero_download_gguf "$repo" "$mtp" "Gemma4 MTP" "252 MB" "$dir" "$mtp" || return $?
-    if [[ ! -s "$dir/$mtp" ]]; then
-        ropero_err "Gemma4: falta $mtp tras la descarga"
-        return 1
-    fi
-    if [[ -s "$dir/$projector" && "${ROPERO_FORCE:-0}" != 1 ]]; then
-        ropero_ok "$projector ya descargado"
-        return 0
-    fi
-    staging=$(mktemp -d "$dir/.gemma4-mmproj.XXXXXXXX") || return 1
-    trap 'find "$staging" -depth -delete' EXIT
-    ropero_download_gguf "$repo" "mmproj-BF16.gguf" "Gemma4 mmproj" "1.19 GB" \
-        "$staging" "mmproj-BF16.gguf" || return $?
-    if [[ ! -s "$staging/mmproj-BF16.gguf" ]]; then
-        ropero_err "Gemma4: falta mmproj-BF16.gguf tras la descarga"
-        return 1
-    fi
-    mv -f "$staging/mmproj-BF16.gguf" "$dir/$projector"
-)
-
 # -----------------------------------------------------------------------------
 # _ropero_cat_download <índice> — descarga una entrada del catálogo.
 # -----------------------------------------------------------------------------
 _ropero_cat_download() {
     local i="$1"
     _ropero_cat_build
-    if [[ "${_ROPERO_CAT_KEY[$i]}" == "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" ]]; then
-        _ropero_cat_download_gemma4 "$i"
-    elif [[ "${_ROPERO_CAT_KIND[$i]}" == "safetensors" ]]; then
+
+    if [[ "${_ROPERO_CAT_KIND[$i]}" == "safetensors" ]]; then
         ropero_download_safetensors \
             "${_ROPERO_CAT_REPO[$i]}" "${_ROPERO_CAT_ARG2[$i]}" "${_ROPERO_CAT_SIZE[$i]}" \
             "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_EXCLUDES[$i]}"
