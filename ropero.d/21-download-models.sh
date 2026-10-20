@@ -33,6 +33,22 @@
 # no hay una segunda tabla de alias que pueda desincronizarse de la primera:
 # el catálogo se indexa por el mismo dato que el loader de modelos ya carga.
 #
+# UN MODELO = UN BUNDLE, NO UN FICHERO
+#
+# Un modelo multimodal con MTP no se despliega con un fichero. Gemma4 son tres:
+# el GGUF principal, el MTP (decoding especulativo) y el mmproj (proyector de
+# visión). Los tres se descargan JUNTOS, con un único consentimiento, porque
+# con dos de tres el modelo no arranca: llama-server acepta --model-draft y
+# --mmproj con un fichero que no existe y se cae al usarlo.
+#
+# Por eso el catálogo tiene dos cosas:
+#   · la entrada (kind/key/repo/filename/...), que es el fichero principal;
+#   · los ficheros SECUNDARIOS (aux) de esa entrada, que son parte del mismo
+#     bundle y se bajan con él.
+#
+# Los aux NO son entradas del catálogo: no se pueden seleccionar por separado
+# y no aparecen en la tabla. Son parte de la entrada que los declara.
+#
 # SCOPE BASE v4.1 (2026-09-10):
 #   - qwen     (Qwen3.8-27B, broad multi-stack, único 8/8 bloques)
 #   - fable    (Fable Coder 35B-A3B, MTP nativo, elliot/coder)
@@ -51,6 +67,13 @@ _ROPERO_CAT_NAME=()    # nombre legible
 _ROPERO_CAT_SIZE=()
 _ROPERO_CAT_DEST=()
 _ROPERO_CAT_DNAME=()
+# Ficheros SECUNDARIOS de cada entrada (MTP, mmproj...). Formato por fichero:
+#   "ruta/en/repo|nombre final|tamaño|etiqueta"
+# y la lista de ficheros separada por ";". Vacío = la entrada no tiene aux.
+#
+# Se guardan aparte de las entradas a propósito: un aux NO es seleccionable
+# ni aparece en la tabla. Es parte del bundle de la entrada que lo declara.
+_ROPERO_CAT_AUX=()
 
 # _cat_gguf <fichero_final> <repo> <filename> <nombre> <size> [dest_dir] [dest_name]
 # El key (1er argumento) es el nombre FINAL del fichero, que es lo que declara
@@ -66,6 +89,7 @@ _cat_gguf() {
     _ROPERO_CAT_SIZE+=("$size")
     _ROPERO_CAT_DEST+=("$dest_dir")
     _ROPERO_CAT_DNAME+=("$dest_name")
+    _ROPERO_CAT_AUX+=("")
 }
 
 # _cat_safetensors <dir_name> <repo> <modelname> <size> [dest_dir] [excludes]
@@ -78,34 +102,64 @@ _cat_safetensors() {
     _ROPERO_CAT_SIZE+=("$4")
     _ROPERO_CAT_DEST+=("${5:-}")
     _ROPERO_CAT_DNAME+=("")
+    _ROPERO_CAT_AUX+=("")
     _ROPERO_CAT_EXCLUDES+=("${6:-}")
 }
 _ROPERO_CAT_EXCLUDES=()
 _ROPERO_CAT_POSTCOPY=()
 
+# _cat_aux <key> <aux> — cuelga ficheros secundarios de una entrada existente.
+#
+# <aux> = "ruta/en/repo|nombre final|tamaño|etiqueta;otro|..."
+#
+# El repo es el de la entrada: los aux son ficheros del MISMO repo (el MTP y el
+# mmproj de Gemma4 están junto al GGUF principal, no en un repo aparte).
+#
+# POR QUÉ NO ES "UNA ENTRADA MÁS" DEL CATÁLOGO
+# Un MTP suelto en el catálogo es una entrada seleccionable, y eso miente:
+# bajarse el MTP sin el modelo principal no sirve para nada. Y el caso que de
+# verdad rompía era peor: las entradas de MTP/mmproj se declaraban DENTRO de
+# un `if [[ -e "$GGUF_DIR/el-principal" ]]`, que se evalúa cuando se CONSTRUYE
+# el catálogo — es decir, ANTES de descargar el principal. En la primera
+# descarga nunca existían; en la segunda ya no hacía falta. Es decir: nunca.
+#
+# (En Gemma4 el `if` además comparaba "Gemma-4-..." con mayúscula contra el
+# fichero real "gemma-4-...", así que en Linux la condición era falsa SIEMPRE.)
+_cat_aux() {
+    local key="$1" aux="$2" i
+    for ((i=0;i<${#_ROPERO_CAT_KEY[@]};i++)); do
+        if [[ "${_ROPERO_CAT_KEY[$i]}" == "$key" ]]; then
+            _ROPERO_CAT_AUX[$i]="${_ROPERO_CAT_AUX[$i]:+${_ROPERO_CAT_AUX[$i]};}$aux"
+            return 0
+        fi
+    done
+    ropero_err "no se pudo colgar el aux de '$key': no está en el catálogo"
+    return 1
+}
+
 # _ropero_cat_build — rellena el catálogo. Se llama una vez por proceso.
 _ropero_cat_build() {
     (( ${#_ROPERO_CAT_KEY[@]} == 0 )) || return 0
 
+    # ── GEMMA4 ──────────────────────────────────────────────────────────────
+    # El GGUF principal son 14.2 GB, pero Gemma4 NO es un fichero: el MTP
+    # (decoding especulativo) y el mmproj (proyector de visión) son parte del
+    # modelo. Los tres se bajan con UN consentimiento, porque con dos de tres
+    # llama-server arranca igual y se cae al primer uso (--model-draft y
+    # --mmproj apuntan a ficheros que no existen).
+    #
+    # Los tamaños son los REALES del repo, medidos contra la API de HF:
+    #   principal 14.25 GB + mmproj 1.19 GB + mtp 0.25 GB = 15.70 GB
     _cat_gguf "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" \
-        "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" "Gemma4" "14.2 GB"
+        "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" "Gemma4" "15.7 GB"
 
-
-    # Los tres siguientes solo si el MTP ya está en disco: son el juego de
-    # projector/multimodal del Qwen y sin el MTP base no sirven de nada.
-    if [[ -e "$GGUF_DIR/Gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" ]]; then
-          _cat_gguf "mtp-gemma-4-26B-A4B-it.gguf" \
-        "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "mtp-gemma-4-26B-A4B-it.gguf" "Gemma4 MTP" "0.5 GB"
-
-        _cat_gguf "mmproj-BF16.gguf" \
-            "unsloth/gemma-4-26B-A4B-it-qat-GGUF" "mmproj-BF16.gguf" "Gemma4 MMPROJ" "1.2 GB"
-        
-        _ROPERO_CAT_POSTCOPY+=("$GGUF_DIR/mmproj-BF16.gguf:$GGUF_DIR/gemma-4-26B-A4B-it-mmproj-BF16.gguf")
-    fi
-
-
-
-    # ── LANE DEL VAULT (posadero) ─────────────────────────────────────────────
+    # El MTP se llama igual en su repo y en el destino (gemma4.sh lo busca por
+    # ese nombre). El mmproj se llama "mmproj-BF16.gguf" en TODOS los repos de
+    # GGUF multimodal —Qwen3.8 también tiene uno con ese nombre exacto—, así
+    # que su nombre final lleva el prefijo del modelo. Si no, el último
+    # mmproj descargado pisa al anterior y el primer modelo deja de ver visión.
+    _cat_aux "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf" \
+        "mtp-gemma-4-26B-A4B-it.gguf|mtp-gemma-4-26B-A4B-it.gguf|252 MB|Gemma4 MTP;mmproj-BF16.gguf|gemma-4-26B-A4B-it-mmproj-BF16.gguf|1.19 GB|Gemma4 mmproj"    # ── LANE DEL VAULT (posadero) ─────────────────────────────────────────────
     # Los cuatro viven en CPU por diseño (ver los .sh: --n-gpu-layers 0), así
     # que no compiten por la VRAM con el coder. La key de cada entrada es el
     # nombre FINAL del fichero, que es lo que declara MODEL_GGUF en el .sh —
@@ -140,25 +194,29 @@ _ropero_cat_build() {
     _cat_gguf "fable-coder-35B-A3B-Q4_K_M.gguf" \
         "Achilles1089/fable-coder-35B-A3B-GGUF" "fable-coder-35B-A3B-Q4_K_M.gguf" "Fable Coder Q4" "21.7 GB"
 
+    # Qwen3.8 también es un bundle: el MTP (que usa fired/qwen.sh con
+    # --model-draft) y el mmproj de visión. El MTP vive en el subdirectorio
+    # MTP/ del repo, pero el .sh del modelo lo busca en la RAÍZ de GGUF_DIR,
+    # así que el nombre final es el plano.
+    #
+    # Tamaños reales: 13.15 GB + 1.37 GB (MTP) + 0.93 GB (mmproj) = 15.45 GB
     _cat_gguf "Qwen3.8-27B-UD-Q3_K_XL.gguf" \
-        "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "13.1 GB"
+        "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "15.4 GB"
 
-    # Los tres siguientes solo si el MTP ya está en disco: son el juego de
-    # projector/multimodal del Qwen y sin el MTP base no sirven de nada.
-    if [[ -e "$GGUF_DIR/Qwen3.8-27B-UD-Q3_K_XL.gguf" ]]; then
-        _cat_gguf "mtp-Qwen3.8-27B-Q4_0.gguf" \
-            "unsloth/Qwen3.8-27B-GGUF" "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" "Qwen 3.8 MTP (Q4_0)" "1.37 GB"
-        _cat_gguf "qwen3.8-mmproj-BF16.gguf" \
-            "unsloth/Qwen3.8-27B-GGUF" "mmproj-BF16.gguf" "Qwen 3.8 MMPROJ(BF16)" "0.9 GB"
-        # El MTP además se copia a la raíz de GGUF: es donde lo buscan los
-        # .sh de modelo, no dentro de MTP/.
-        _ROPERO_CAT_POSTCOPY+=("$GGUF_DIR/MTP/mtp-Qwen3.8-27B-Q4_0.gguf:$GGUF_DIR/")
-    fi
+    # El mmproj de Qwen3.8 se llama "mmproj-BF16.gguf" igual que el de Gemma4:
+    # si aterrizara en la raíz de GGUF_DIR, pisaría al de Gemma4 (o al revés).
+    # Por eso el nombre final lleva el prefijo del modelo.
+    _cat_aux "Qwen3.8-27B-UD-Q3_K_XL.gguf" \
+        "MTP/mtp-Qwen3.8-27B-Q4_0.gguf|mtp-Qwen3.8-27B-Q4_0.gguf|1.37 GB|Qwen 3.8 MTP (Q4_0);mmproj-BF16.gguf|qwen3.8-mmproj-BF16.gguf|931 MB|Qwen 3.8 MMPROJ(BF16)"
 
     _cat_gguf "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" \
-        "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" "Qwen2.5-VL 7B" "4.79 GB"
-    _cat_gguf "Qwen2.5-VL-mmproj.gguf" \
-        "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "mmproj-F16.gguf" "Qwen2.5-VL mmproj" "1.35 GB" "$HOME/models/gguf" "Qwen2.5-VL-mmproj.gguf"
+        "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" "Qwen2.5-VL 7B" "6.1 GB"
+    # El mmproj también es parte del bundle: el .sh del modelo pasa --mmproj
+    # siempre, así que sin él el modelo arranca pero no ve. Su nombre final
+    # lleva el prefijo porque "mmproj-F16.gguf" existe también en el repo de
+    # Ministral: sin renombrar, uno pisa al otro.
+    _cat_aux "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" \
+        "mmproj-F16.gguf|Qwen2.5-VL-mmproj.gguf|1.35 GB|Qwen2.5-VL mmproj"
 
     _cat_gguf "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" \
         "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
@@ -292,7 +350,131 @@ _ropero_cat_index() {
 }
 
 # -----------------------------------------------------------------------------
-# _ropero_cat_download <índice> — descarga una entrada del catálogo.
+# _ropero_cat_dest_dir <índice> — directorio final de una entrada, ya resuelto
+# (default $GGUF_DIR y "~/..." expandido). Lo usan tanto la descarga como las
+# comprobaciones de "ya está en disco", para que ambas miren el MISMO sitio.
+# -----------------------------------------------------------------------------
+_ropero_cat_dest_dir() {
+    local i="$1" dest="${_ROPERO_CAT_DEST[$i]:-}"
+    [[ -n "$dest" ]] || dest="${GGUF_DIR:-$HOME/models/gguf}"
+    case "$dest" in
+        "~")     dest="$HOME" ;;
+        "~/"*)   dest="$HOME/${dest#\~/}" ;;
+    esac
+    printf '%s\n' "$dest"
+}
+
+# _ropero_cat_dest_name <índice> — nombre final del fichero principal.
+_ropero_cat_dest_name() {
+    printf '%s\n' "${_ROPERO_CAT_DNAME[$1]:-${_ROPERO_CAT_ARG2[$1]:-}}"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_cat_aux_paths <índice> — rutas finales de los ficheros SECUNDARIOS
+# de la entrada, uno por línea. Vacío si la entrada no tiene aux.
+# -----------------------------------------------------------------------------
+_ropero_cat_aux_paths() {
+    local i="$1" spec dest_dir rest name
+    local specs="${_ROPERO_CAT_AUX[$i]:-}"
+    [[ -n "$specs" ]] || return 0
+    dest_dir="$(_ropero_cat_dest_dir "$i")"
+    local -a list=()
+    local IFS=';'
+    # shellcheck disable=SC2206
+    local -a parts=($specs)
+    unset IFS
+    for spec in "${parts[@]}"; do
+        [[ -n "$spec" ]] || continue
+        rest="${spec#*|}"
+        name="${rest%%|*}"
+        [[ -n "$name" ]] || continue
+        printf '%s/%s\n' "$dest_dir" "$name"
+    done
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_cat_download_aux <índice> — descarga los ficheros SECUNDARIOS (MTP,
+# mmproj) de una entrada.
+#
+# POR QUÉ UN STAGING Y NO DIRECTO AL DESTINO
+# El projector de Gemma4 se llama "mmproj-BF16.gguf" en su repo y el de
+# Qwen3.8 se llama EXACTAMENTE IGUAL en el suyo. Descargados directos a
+# $GGUF_DIR, el segundo sobrescribe al primero: dos modelos, un fichero, y el
+# que se rompió no dice nada (además el nombre "mmproj-BF16.gguf" no es el que
+# busca ningún .sh de modelo, así que el fallo aparece al arrancar y no al
+# descargar). Por eso se baja a un temporal y de ahí se mueve al nombre final
+# con el prefijo del modelo.
+#
+# EL CONSENTIMIENTO ES EL DEL PRINCIPAL
+# `ropero install models gemma4` pregunta UNA vez por el bundle entero: si
+# aceptas el GGUF de 14 GB, aceptas el MTP de 252 MB y el mmproj de 1.19 GB
+# que sin él no sirven para nada. Por eso AUTO_YES=1 en local durante el
+# bundle: si no, el descargador preguntaría por cada fichero.
+#
+# Si el principal NO está (usuario lo rechaza, o la descarga falla), los aux
+# no se tocan: un MTP sin modelo es un fichero de 252 MB que no sirve para
+# nada y confunde el resumen.
+# -----------------------------------------------------------------------------
+_ropero_cat_download_aux() {
+    local i="$1" specs="${_ROPERO_CAT_AUX[$i]:-}"
+    [[ -n "$specs" ]] || return 0
+
+    local repo="${_ROPERO_CAT_REPO[$i]}" dest_dir="$(_ropero_cat_dest_dir "$i")"
+    local spec src name size label staged staged_file final rc=0
+    local -a parts=()
+    local IFS=';'
+    # shellcheck disable=SC2206
+    parts=($specs)
+    unset IFS
+
+    for spec in "${parts[@]}"; do
+        [[ -n "$spec" ]] || continue
+        src="${spec%%|*}"; spec="${spec#*|}"
+        name="${spec%%|*}"; spec="${spec#*|}"
+        size="${spec%%|*}"; label="${spec#*|}"
+        [[ -n "$src" && -n "$name" ]] || continue
+        final="$dest_dir/$name"
+
+        if [[ -s "$final" && "${ROPERO_FORCE:-0}" != "1" ]]; then
+            ropero_ok "$label ya descargado"
+            continue
+        fi
+
+        staged="$(mktemp -d "${TMPDIR:-/tmp}/ropero-aux.XXXXXXXX")" \
+            || { ropero_err "no se pudo crear el temporal para $label"; return 1; }
+        # `local` + subshell: el consentimiento del principal cubre el bundle.
+        local AUTO_YES=1
+        if ! ropero_download_gguf "$repo" "$src" "$label" "$size" "$staged" "$(basename "$name")"; then
+            rm -rf "$staged" 2>/dev/null || true
+            return 1
+        fi
+        staged_file="$staged/$(basename "$name")"
+        if [[ ! -s "$staged_file" ]]; then
+            ropero_err "$label: no aparece $(basename "$name") tras la descarga"
+            rm -rf "$staged" 2>/dev/null || true
+            return 1
+        fi
+        if [[ ! -d "$dest_dir" ]] && ! mkdir -p "$dest_dir"; then
+            ropero_err "no se pudo crear $dest_dir"
+            rm -rf "$staged" 2>/dev/null || true
+            return 1
+        fi
+        # mv y no cp: el fichero descargado no se queda ahí occupying el doble.
+        if ! mv -f "$staged_file" "$final"; then
+            ropero_err "no se pudo mover $label a $final"
+            rm -rf "$staged" 2>/dev/null || true
+            return 1
+        fi
+        rm -rf "$staged" 2>/dev/null || true
+        [[ -s "$final" ]] || { ropero_err "$label: no quedó en $final"; return 1; }
+        ropero_ok "$label → $name"
+    done
+    return "$rc"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_cat_download <índice> — descarga una entrada del catálogo: el
+# fichero principal y, si tiene, sus ficheros secundarios (bundle completo).
 # -----------------------------------------------------------------------------
 _ropero_cat_download() {
     local i="$1"
@@ -302,11 +484,27 @@ _ropero_cat_download() {
         ropero_download_safetensors \
             "${_ROPERO_CAT_REPO[$i]}" "${_ROPERO_CAT_ARG2[$i]}" "${_ROPERO_CAT_SIZE[$i]}" \
             "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_EXCLUDES[$i]}"
-    else
-        ropero_download_gguf \
-            "${_ROPERO_CAT_REPO[$i]}" "${_ROPERO_CAT_ARG2[$i]}" "${_ROPERO_CAT_NAME[$i]}" \
-            "${_ROPERO_CAT_SIZE[$i]}" "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_DNAME[$i]}"
+        return $?
     fi
+
+    local dest_dir dest_name final
+    dest_dir="$(_ropero_cat_dest_dir "$i")"
+    dest_name="$(_ropero_cat_dest_name "$i")"
+    final="$dest_dir/$dest_name"
+
+    ropero_download_gguf \
+        "${_ROPERO_CAT_REPO[$i]}" "${_ROPERO_CAT_ARG2[$i]}" "${_ROPERO_CAT_NAME[$i]}" \
+        "${_ROPERO_CAT_SIZE[$i]}" "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_DNAME[$i]}" || return 1
+
+    # El descargador devuelve 0 también cuando el usuario RECHAZA la descarga.
+    # Sin este check, un "no" del usuario se tomaría por un bundle descargado
+    # y los aux se bajarían igualmente (252 MB + 1.19 GB que nadie pidió).
+    if [[ ! -s "$final" ]]; then
+        ropero_err "${_ROPERO_CAT_NAME[$i]}: el fichero principal ($dest_name) no está en disco"
+        return 1
+    fi
+
+    _ropero_cat_download_aux "$i"
 }
 
 # -----------------------------------------------------------------------------

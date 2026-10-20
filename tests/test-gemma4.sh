@@ -186,7 +186,12 @@ class GemmaContract(unittest.TestCase):
 
     def test_default_directory_and_curl(self) -> None:
         del self.env['GGUF_DIR']
-        (self.work / 'bin' / 'hf').unlink()
+        # El camino sin 'hf' se fuerza con ROPERO_DOWNLOADER=curl en vez de
+        # borrar el binario: si la máquina donde corre el test tiene 'hf' de
+        # sistema (en /usr/bin, como en la mayoría), quitar el stub de verdad
+        # lo dejaba encontrar el de sistema y se ponía a descargar 14 GB de
+        # verdad. Con el override, el test dice lo que quiere decir.
+        self.env['ROPERO_DOWNLOADER'] = 'curl'
         self.executable('curl', '#!' + sys.executable + '\n' + TRANSPORT)
         self.run_ropero('qa-fetch', 'gemma4')
         self.trio(self.work / 'home' / 'models' / 'gguf')

@@ -207,8 +207,27 @@ ropero_download_gguf() {
     # ── Descarga ────────────────────────────────────────────────────────────
     # `filename` puede traer subdirectorios en el repo ("MTP/x.gguf"). hf los
     # reproduce bajo dest_dir, así que hay que buscarlos ahí, no en la raíz.
+    #
+    # QUÉ DESCARGADOR SE USA
+    #   auto (por defecto) → hf si está en el PATH, curl si no.
+    #   hf                  → obliga a usar hf (error si no está).
+    #   curl                → obliga a usar curl (error si no está).
+    #
+    # El override existe por dos motivos: hay máquinas donde el `hf` está
+    # instalado pero roto (o es una versión antigua que no habla con el repo),
+    # y los tests necesitan fijar el camino para no depender de lo que haya
+    # instalado en la máquina donde corren.
+    local dl="${ROPERO_DOWNLOADER:-auto}" use_hf=0
+    case "$dl" in
+        auto) command -v hf &>/dev/null && use_hf=1 ;;
+        hf)   command -v hf &>/dev/null || { ropero_err "ROPERO_DOWNLOADER=hf pero no hay 'hf' en el PATH"; return 1; }
+              use_hf=1 ;;
+        curl) use_hf=0 ;;
+        *)    ropero_err "ROPERO_DOWNLOADER inválido: '$dl' (valores: auto, hf, curl)"; return 1 ;;
+    esac
+
     local staged_dir="$dest_dir"
-    if command -v hf &>/dev/null; then
+    if (( use_hf == 1 )); then
         hf download "$repo" "$filename" --local-dir "$staged_dir" \
             || { ropero_err "falló $name"; return 1; }
         local downloaded="$staged_dir/$filename"
@@ -393,6 +412,14 @@ ropero_download_safetensors() {
     # ── hf ANTES de preguntar ──────────────────────────────────────────────
     # Preguntar "¿descargo 12 GB?" y luego decir que no se puede es la peor
     # secuencia posible: el usuario contesta sí y no entiende el fallo.
+    #
+    # Un checkpoint de safetensors NO se puede bajar con curl: son varios
+    # shards más un índice, y el índice es lo que dice cuál va con cuál.
+    if [[ "${ROPERO_DOWNLOADER:-auto}" == "curl" ]]; then
+        ropero_err "ROPERO_DOWNLOADER=curl pero $modelname es un checkpoint de safetensors:"
+        ropero_info "  los checkpoints con shards solo se pueden bajar con 'hf' (curl no resuelve el índice)"
+        return 1
+    fi
     if ! command -v hf >/dev/null 2>&1; then
         ropero_err "no se puede descargar $modelname: falta 'hf' (huggingface_hub)"
         ropero_info "  instalarlo:  pip install -U 'huggingface_hub[cli]'"

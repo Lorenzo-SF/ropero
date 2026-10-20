@@ -3288,8 +3288,12 @@ _ropero_model_catalog_index() {
 # usa el instalador seleccionado antes y después de descargar. No depende de
 # que haya launcher: una entrada del catálogo puede ser pesos descargables sin
 # script de modelo asociado.
+#
+# Para un GGUF con ficheros SECUNDARIOS (MTP, mmproj) el bundle está completo
+# solo si están TODOS: un Gemma4 con el GGUF pero sin el MTP arranca (y luego
+# falla al usarlo), así que "sí" en la columna disco mentiría.
 _ropero_model_artifact_present() {
-    local idx="${1:-}" kind dest name
+    local idx="${1:-}" kind dest name aux
     [[ "$idx" =~ ^[0-9]+$ ]] || return 1
     kind="${_ROPERO_CAT_KIND[$idx]:-}"
     case "$kind" in
@@ -3300,7 +3304,12 @@ _ropero_model_artifact_present() {
                 '~') dest="$HOME" ;;
                 '~/'*) dest="$HOME/${dest#\~/}" ;;
             esac
-            [[ -s "$dest/$name" ]]
+            [[ -s "$dest/$name" ]] || return 1
+            while read -r aux; do
+                [[ -n "$aux" ]] || continue
+                [[ -s "$aux" ]] || return 1
+            done < <(_ropero_cat_aux_paths "$idx")
+            return 0
             ;;
         safetensors)
             dest="${_ROPERO_CAT_DEST[$idx]:-$SAFETENSORS_DIR/${_ROPERO_CAT_KEY[$idx]:-}}"
@@ -3340,27 +3349,251 @@ _ropero_model_artifact_id() {
     printf '%s:%s/%s' "$kind" "$dest" "$name"
 }
 
+# -----------------------------------------------------------------------------
+# TABLA — render artesanal en bash (sin depender de alaja).
+#
+# El diseño es el de `alaja table --border rounded`: caja de esquinas
+# redondeadas, cabecera separada por una línea y dos espacios de padding por
+# celda. Se implementa aquí, en bash, para que la tabla se vea IGUAL en
+# cualquier máquina —por SSH sin alaja, en un contenedor, en un servidor sin
+# TUI— y para que cargue los datos REALES de cada modelo en vez de un texto
+# fijo. alaja queda como referencia de diseño, no como dependencia.
+#
+# POR QUÉ NO SE USA alaja EN EL RUNTIME
+# Porque alaja puede no estar instalado (y entonces la tabla desaparece) y
+# porque su render es un proceso extra por cada tabla. Además, alaja se come
+# las filas cuyo primer campo empieza por "-": justo el caso de las filas sin
+# número de selección, que en esta tabla son la mitad.
+#
+# COLORES
+# Se apagan si stdout no es un TTY o si NO_COLOR está puesto: una tabla
+# redirigida a un fichero sale limpia, sin ANSI dentro. El resto del CLI ya
+# usa la paleta de arriba (BOLD/DIM/GREEN/...), así que la tabla no
+# introduce colores nuevos.
+#
+# ANCHOS
+# El ancho de una celda se mide sobre el texto SIN los escapes: printf no
+# cuenta los ANSI, así que medir la cadena entera descuadraría la tabla en
+# cuanto una celda lleve color.
+# -----------------------------------------------------------------------------
+_ROPERO_TBL_SEP=$'\x1f'
+_ROPERO_TBL_HDR=()
+_ROPERO_TBL_ROWS=()
+_ROPERO_VLEN=0
+
+# _ropero_vlen <texto> — ancho VISIBLE (sin ANSI) → $_ROPERO_VLEN.
+# extglob se activa solo mientras dura la función y se restaura después: es
+# lo único que permite decir "quita los \033[...m" sin lanzar un sed por
+# celda (una tabla de 25 filas son 175 forks que no hacen falta).
+_ropero_vlen() {
+    local s="$1" restore=0
+    shopt -q extglob || { shopt -s extglob; restore=1; }
+    s="${s//$'\033'\[*([0-9;])m/}"
+    (( restore == 1 )) && shopt -u extglob
+    _ROPERO_VLEN=${#s}
+}
+
+_ropero_table_reset() {
+    _ROPERO_TBL_HDR=()
+    _ROPERO_TBL_ROWS=()
+}
+
+_ropero_table_header() { _ROPERO_TBL_HDR=("$@"); }
+
+_ropero_table_row() {
+    local out="" c first=1
+    for c in "$@"; do
+        if (( first == 1 )); then out="$c"; first=0; else out+="${_ROPERO_TBL_SEP}${c}"; fi
+    done
+    _ROPERO_TBL_ROWS+=("$out")
+}
+
+# _ropero_table_rule <izq> <centro> <der> <anchos...> — línea horizontal.
+_ropero_table_rule() {
+    local left="$1" mid="$2" right="$3"; shift 3
+    local -a w=("$@")
+    local i seg rule="$left"
+    for ((i=0;i<${#w[@]};i++)); do
+        printf -v seg '%*s' $(( ${w[i]} + 4 )) ''
+        rule+="${seg// /─}"
+        (( i < ${#w[@]} - 1 )) && rule+="$mid"
+    done
+    rule+="$right"
+    printf '%s%s%s%s\n' "$_ROPERO_TBL_INDENT" "$_ROPERO_TBL_FRAME" "$rule" "$_ROPERO_TBL_RESET"
+}
+
+# _ropero_table_render <alineaciones csv: l|c|r> — dibuja la tabla.
+_ROPERO_TBL_FRAME=""      # ANSI del marco (vacío = sin color)
+_ROPERO_TBL_RESET=""
+_ROPERO_TBL_INDENT="  "
+
+_ropero_table_render() {
+    local align_csv="${1:-}"
+    local -a hdr=("${_ROPERO_TBL_HDR[@]}") rows=("${_ROPERO_TBL_ROWS[@]}")
+    local ncol=${#hdr[@]}
+    (( ncol > 0 )) || return 0
+
+    local -a widths=() aligns=()
+    local IFS=','
+    # shellcheck disable=SC2206
+    aligns=(${align_csv})
+    unset IFS
+
+    local i j r w seg pad l
+    local -a cells=()
+    for ((i=0;i<ncol;i++)); do
+        _ropero_vlen "${hdr[i]}"
+        widths[i]=$_ROPERO_VLEN
+    done
+    for r in "${rows[@]}"; do
+        IFS=$_ROPERO_TBL_SEP read -r -a cells <<<"$r"
+        for ((j=0;j<ncol && j<${#cells[@]};j++)); do
+            _ropero_vlen "${cells[j]}"
+            w=$_ROPERO_VLEN
+            (( w > widths[j] )) && widths[j]=$w
+        done
+    done
+
+    # ── borde superior ────────────────────────────────────────────────────
+    _ropero_table_rule "╭" "┬" "╮" "${widths[@]}"
+
+    # ── cabecera ──────────────────────────────────────────────────────────
+    local hline="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+    for ((i=0;i<ncol;i++)); do
+        _ropero_vlen "${hdr[i]}"
+        pad=$(( ${widths[i]} - _ROPERO_VLEN ))
+        (( pad < 0 )) && pad=0
+        printf -v seg '%*s' "$pad" ''
+        case "${aligns[i]:-l}" in
+            r) hline+="${seg}${hdr[i]}" ;;
+            c) l=$(( pad / 2 )); printf -v seg '%*s' "$l" ''
+               hline+="${seg}${hdr[i]}"; printf -v seg '%*s' $(( pad - l )) ''
+               hline+="${seg}" ;;
+            *) hline+="${hdr[i]}${seg}" ;;
+        esac
+        hline+="  "
+    done
+    hline+="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+    printf '%s%s\n' "$_ROPERO_TBL_INDENT" "$hline"
+
+    # ── separador ─────────────────────────────────────────────────────────
+    _ropero_table_rule "├" "┼" "┤" "${widths[@]}"
+
+    # ── filas ─────────────────────────────────────────────────────────────
+    for r in "${rows[@]}"; do
+        IFS=$_ROPERO_TBL_SEP read -r -a cells <<<"$r"
+        local line="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+        for ((i=0;i<ncol;i++)); do
+            local cell="${cells[i]:-}"
+            _ropero_vlen "$cell"
+            pad=$(( ${widths[i]} - _ROPERO_VLEN ))
+            (( pad < 0 )) && pad=0
+            printf -v seg '%*s' "$pad" ''
+            case "${aligns[i]:-l}" in
+                r) line+="${seg}${cell}" ;;
+                c) l=$(( pad / 2 )); printf -v seg '%*s' "$l" ''
+                   line+="${seg}${cell}"; printf -v seg '%*s' $(( pad - l )) ''
+                   line+="${seg}" ;;
+                *) line+="${cell}${seg}" ;;
+            esac
+            line+="  "
+        done
+        line+="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+        printf '%s%s\n' "$_ROPERO_TBL_INDENT" "$line"
+    done
+
+    # ── borde inferior ────────────────────────────────────────────────────
+    _ropero_table_rule "└" "┴" "┘" "${widths[@]}"
+}
+
+# _ropero_table_colors — decide si la tabla va en color y con qué paleta.
+#
+# Sin TTY (o con NO_COLOR) la tabla sale en texto plano: se puede redirigir a
+# un fichero, pasar por un pipe o leer en un log sin los escapes. ROPERO_COLOR=1
+# fuerza el color aunque no haya TTY (para `| less -R`).
+_ropero_table_colors() {
+    if [[ -n "${NO_COLOR:-}" ]] \
+       || { [[ ! -t 1 ]] && [[ "${ROPERO_COLOR:-0}" != "1" ]]; }; then
+        _ROPERO_TBL_FRAME=""; _ROPERO_TBL_RESET=""
+        _ROPERO_TBL_C_FRAME=""; _ROPERO_TBL_C_HDR=""
+        _ROPERO_TBL_C_NUM=""; _ROPERO_TBL_C_DIM=""; _ROPERO_TBL_C_GOOD=""
+        _ROPERO_TBL_C_WARN=""; _ROPERO_TBL_C_TITLE=""; _ROPERO_TBL_C_NAME=""
+        return 0
+    fi
+    _ROPERO_TBL_FRAME="$DIM"; _ROPERO_TBL_RESET="$NC"
+    _ROPERO_TBL_C_FRAME="$DIM"
+    _ROPERO_TBL_C_HDR="$BOLD$CYAN_B"
+    _ROPERO_TBL_C_NUM="$BOLD$CYAN_B"
+    _ROPERO_TBL_C_DIM="$DIM"
+    _ROPERO_TBL_C_GOOD="$GRN_B"
+    _ROPERO_TBL_C_WARN="$YEL_B"
+    _ROPERO_TBL_C_TITLE="$BOLD"
+    _ROPERO_TBL_C_NAME=""
+}
+
 _ropero_models_menu() {
     local mk idx i=1 engine state disk usage display seen=" " selectable
+    local n_sel=0 n_disk=0
     _ropero_cat_build
-    printf '%-4s %-18s %-14s %-9s %-10s %-11s %s\n' '#' 'nombre' 'engine' 'tamaño' 'uso' 'descarga' 'disco'
+    _ropero_table_colors
+    _ropero_table_reset
+    _ropero_table_header \
+        "${_ROPERO_TBL_C_HDR}#${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}nombre${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}engine${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}tamaño${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}uso${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}descarga${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}disco${_ROPERO_TBL_RESET}"
     for mk in "${MODEL_NAMES[@]}"; do
         [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" ]] && continue
         engine="${MODEL_ENGINE[$mk]}"; display="${MODEL_ALIAS[$mk]:-$mk}"; usage='activo'
         idx=$(_ropero_model_catalog_index "$mk" 2>/dev/null || true)
         if [[ -z "$idx" ]]; then
-            printf '%-4s %-18s %-14s %-9s %-10s %-11s %s\n' '-' "$display" "$engine" '-' "$usage" 'sin descarga' '-'
+            _ropero_table_row \
+                "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${display}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${engine}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${usage}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}sin descarga${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}·${_ROPERO_TBL_RESET}"
             continue
         fi
-        disk='no'; [[ "${_ROPERO_CAT_KIND[$idx]}" == gguf && -s "$GGUF_DIR/${_ROPERO_CAT_KEY[$idx]}" ]] && disk='sí'
-        [[ "${_ROPERO_CAT_KIND[$idx]}" == safetensors ]] && _ropero_dir_has_weights "${_ROPERO_CAT_DEST[$idx]:-$SAFETENSORS_DIR/${_ROPERO_CAT_KEY[$idx]}}" && disk='sí'
+        disk='no'
+        if _ropero_model_artifact_present "$idx"; then
+            disk='sí'; n_disk=$((n_disk + 1))
+        fi
         selectable=0
         if ropero_engine_compatible "$engine"; then state='seleccionable'; selectable=1; else state='incompatible'; fi
+        local color_num color_state color_disk
+        if (( selectable == 1 )); then color_num="$_ROPERO_TBL_C_NUM"; else color_num="$_ROPERO_TBL_C_DIM"; fi
+        case "$state" in
+            seleccionable) color_state="${_ROPERO_TBL_C_GOOD}"; n_sel=$((n_sel + 1)) ;;
+            incompatible)  color_state="${_ROPERO_TBL_C_WARN}" ;;
+            *)             color_state="${_ROPERO_TBL_C_DIM}" ;;
+        esac
+        if [[ "$disk" == 'sí' ]]; then color_disk="${_ROPERO_TBL_C_GOOD}✓${_ROPERO_TBL_RESET}"
+        else color_disk="${_ROPERO_TBL_C_DIM}·${_ROPERO_TBL_RESET}"; fi
         if (( selectable == 1 )); then
-            printf '%-4s %-18s %-14s %-9s %-10s %-11s %s\n' "$i" "$display" "$engine" "${_ROPERO_CAT_SIZE[$idx]}" "$usage" "$state" "$disk"
+            _ropero_table_row \
+                "${color_num}${i}${_ROPERO_TBL_RESET}" \
+                "${display}" \
+                "${_ROPERO_TBL_C_DIM}${engine}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_CAT_SIZE[$idx]}" \
+                "${_ROPERO_TBL_C_DIM}${usage}${_ROPERO_TBL_RESET}" \
+                "${color_state}${state}${_ROPERO_TBL_RESET}" \
+                "${color_disk}"
             ROPERO_MENU_MODELS[$i]="$mk"; i=$((i + 1))
         else
-            printf '%-4s %-18s %-14s %-9s %-10s %-11s %s\n' '-' "$display" "$engine" "${_ROPERO_CAT_SIZE[$idx]}" "$usage" "$state" "$disk"
+            _ropero_table_row \
+                "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${display}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${engine}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_CAT_SIZE[$idx]}" \
+                "${_ROPERO_TBL_C_DIM}${usage}${_ROPERO_TBL_RESET}" \
+                "${color_state}${state}${_ROPERO_TBL_RESET}" \
+                "${color_disk}"
         fi
         seen+="${_ROPERO_CAT_KEY[$idx]} "
     done
@@ -3368,9 +3601,22 @@ _ropero_models_menu() {
         [[ "$seen" == *"${_ROPERO_CAT_KEY[$idx]} "* ]] && continue
         # Las entradas sin launcher son descargables por su clave/nombre; no
         # hay forma segura de inferir su engine, así que no reciben número.
-        printf '%-4s %-18s %-14s %-9s %-10s %-11s %s\n' '-' "${_ROPERO_CAT_NAME[$idx]}" '-' "${_ROPERO_CAT_SIZE[$idx]}" '-' 'pesos sin launcher' '-'
+        _ropero_table_row \
+            "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}${_ROPERO_CAT_NAME[$idx]}${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_CAT_SIZE[$idx]}" \
+            "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}pesos sin launcher${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}·${_ROPERO_TBL_RESET}"
     done
-    printf '  99) todos seleccionables\n  0) salir\n'
+    printf '%s%sModelos%s %s· %d seleccionables · %d en disco%s\n' \
+        "$_ROPERO_TBL_INDENT" "$_ROPERO_TBL_C_TITLE" "$_ROPERO_TBL_RESET" \
+        "$_ROPERO_TBL_C_DIM" "$n_sel" "$n_disk" "$_ROPERO_TBL_RESET"
+    _ropero_table_render "r,l,l,r,l,l,c"
+    printf '%s%s99)%s todos seleccionables    %s0)%s salir\n' \
+        "$_ROPERO_TBL_INDENT" "$_ROPERO_TBL_C_HDR" "$_ROPERO_TBL_RESET" \
+        "$_ROPERO_TBL_C_HDR" "$_ROPERO_TBL_RESET"
 }
 
 _ropero_install_models_selected() {
