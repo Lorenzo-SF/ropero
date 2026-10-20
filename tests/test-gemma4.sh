@@ -251,13 +251,14 @@ class BundleContract(unittest.TestCase):
     def test_launcher_vision_is_opt_in_and_moe_adjustable(self) -> None:
         self.run_ropero('qa-fetch', 'gemma')
 
-        # 1) Sin --vision: el modelo arranca SIN torre de visión.
+        # 1) Sin --vision: el modelo arranca SIN torre de visión y con los
+        #    expertos MoE en la GPU (n-cpu-moe 0: la VRAM está libre).
         self.run_ropero('gemma')
         argv = self.argv()
         self.assertNotIn('--mmproj', argv)
         self.assertEqual(argv[argv.index('--ctx-size') + 1], '131072')
         self.assertEqual(argv[argv.index('--n-gpu-layers') + 1], '99')
-        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '5')
+        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '0')
         self.assertEqual(argv[argv.index('--cache-type-k') + 1], 'q8_0')
         self.assertEqual(argv[argv.index('--cache-type-v') + 1], 'q8_0')
         self.assertEqual(argv[argv.index('--spec-type') + 1], 'draft-mtp')
@@ -270,17 +271,23 @@ class BundleContract(unittest.TestCase):
         kwargs = argv[argv.index('--chat-template-kwargs') + 1]
         self.assertIn('"enable_thinking":true', kwargs)
 
-        # 2) Con --vision: aparece el mmproj.
+        # 2) Con --vision: aparece el mmproj y hacen falta capas de expertos
+        #    en la CPU para hacerle hueco (default 5).
         self.run_ropero('gemma', '--vision')
         argv = self.argv()
         self.assertEqual(argv.count('--mmproj'), 1)
         self.assertEqual(argv[argv.index('--mmproj') + 1], str(self.models / PROJ))
+        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '5')
 
-        # 3) --n-cpu-moe ajusta los expertos MoE en la CPU.
+        # 3) --n-cpu-moe ajusta los expertos MoE en la CPU, con y sin visión.
         self.run_ropero('gemma', '--vision', '--n-cpu-moe', '8')
         argv = self.argv()
         self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '8')
         self.assertEqual(argv.count('--mmproj'), 1)
+        self.run_ropero('gemma', '--n-cpu-moe', '2')
+        argv = self.argv()
+        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '2')
+        self.assertNotIn('--mmproj', argv)
 
         # 4) Un flag que el modelo NO declara es un error de uso.
         result = self.run_ropero('gemma', '--vision', '--inventado', ok=False)

@@ -292,10 +292,15 @@ directo a `GGUF_DIR` uno pisaría al otro.
 lo que se le pide a un modelo de texto no lo necesita. Con `--vision` el
 modelo lee imágenes.
 
-| config | VRAM | velocidad |
-|---|---:|---|
-| `ropero gemma` | ~14,6 GiB | 104-140 tok/s |
-| `ropero gemma --vision` | ~15,7 GiB | ídem |
+| config | mmproj | `--n-cpu-moe` (default) | VRAM |
+|---|:-:|---:|---:|
+| `ropero gemma` | no | 0 (todo en GPU) | ~14,6 GiB |
+| `ropero gemma --vision` | sí | 5 (5 capas de expertos a la CPU) | ~15,7 GiB |
+
+El default cambia **según el caso**, y `--n-cpu-moe N` lo ajusta en los dos
+(`ropero gemma --n-cpu-moe 2`, `ropero gemma --vision --n-cpu-moe 8`): cada
+capa de expertos MoE que baja a la RAM libera ~0,46 GB de VRAM, que es
+justo lo que necesita el mmproj para entrar.
 
 Medido en una RTX 5080 Laptop (16 GB) con la config de `ropero.d/gemma.sh`:
 104-140 tok/s y una aceptación de MTP del 49-88% según el prompt. La KV cache

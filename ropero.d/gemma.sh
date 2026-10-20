@@ -104,16 +104,26 @@ get_model_args_gemma() {
             ;;
     esac
 
-    # ---- MoE en CPU ----
-    # Cuántas capas de expertos MoE se quedan en la RAM. Es la palanca que
-    # hace hueco en la VRAM para el mmproj: los expertos son el 88% de los
-    # pesos (22,8B de 26B), así que cada capa que baja a la CPU libera
-    # ~0,46 GB por capa (22,8B params / 30 capas a 4,85 bits). Con 5 capas
-    # son ~2,3 GB liberados.
+    # ---- MoE en CPU: default POR CASO, ajustable en los dos ----
+    # Los expertos MoE son el 88% de los pesos (22,8B de 26B), así que cada
+    # capa que se queda en la RAM libera ~0,46 GB de VRAM. Ese hueco es
+    # exactamente el que necesita el mmproj cuando hay visión.
     #
-    # Coste: esas capas se calculan en la CPU, así que baja el tokens/s. Es
-    # el trueque de "más contexto y visión" contra "más velocidad".
-    local n_cpu_moe="${ROPERO_MODEL_OPT_N_CPU_MOE:-${ROPERO_GEMMA_N_CPU_MOE:-5}}"
+    #   sin --vision → 0 capas en la CPU: no hay mmproj que hospedar, la
+    #                   VRAM está libre y lo que se quiere es velocidad.
+    #   con --vision → 5 capas en la CPU: el mmproj son 1139 MiB y sin
+    #                   hacer hueco no entra.
+    #
+    # En los dos casos se puede forzar con --n-cpu-moe N (o con
+    # ROPERO_GEMMA_N_CPU_MOE=N), que manda sobre el default.
+    #
+    # Coste de bajar capas: se calculan en la CPU, así que baja el tokens/s.
+    # Es el trueque de "más contexto y visión" contra "más velocidad".
+    local n_cpu_moe_default=0
+    if [[ "${ROPERO_MODEL_FLAG_VISION:-0}" == "1" ]]; then
+        n_cpu_moe_default=5
+    fi
+    local n_cpu_moe="${ROPERO_MODEL_OPT_N_CPU_MOE:-${ROPERO_GEMMA_N_CPU_MOE:-$n_cpu_moe_default}}"
 
     # ---- MTP: cuántos tokens se especulan de golpe ----
     # Unsloth: "--spec-draft-n-max 2 es el mejor punto de partida, pero no lo
