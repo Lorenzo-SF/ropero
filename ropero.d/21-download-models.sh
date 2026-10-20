@@ -185,14 +185,14 @@ _ropero_cat_build() {
     #       "unsloth/Ministral-3-14B-Instruct-2512-GGUF" "mmproj-F16.gguf" "Ministral 3 mmproj" "800 MB"
 
     # Embeddings + chat
-    _cat_gguf "jina-code-embeddings-1.5b-Q8_0.gguf" \
-        "jinaai/jina-code-embeddings-1.5b-GGUF" "jina-code-embeddings-1.5b-Q8_0.gguf" "jina-code 1.5B Q8" "1.6 GB"
+    # _cat_gguf "jina-code-embeddings-1.5b-Q8_0.gguf" \
+    #     "jinaai/jina-code-embeddings-1.5b-GGUF" "jina-code-embeddings-1.5b-Q8_0.gguf" "jina-code 1.5B Q8" "1.6 GB"
 
-    _cat_gguf "openai_gpt-oss-20b-MXFP4.gguf" \
-        "bartowski/openai_gpt-oss-20b-GGUF-MXFP4-Experimental" "openai_gpt-oss-20b-MXFP4.gguf" "gpt-oss 20B MXFP4" "12.1 GB"
+    # _cat_gguf "openai_gpt-oss-20b-MXFP4.gguf" \
+    #     "bartowski/openai_gpt-oss-20b-GGUF-MXFP4-Experimental" "openai_gpt-oss-20b-MXFP4.gguf" "gpt-oss 20B MXFP4" "12.1 GB"
 
-    _cat_gguf "fable-coder-35B-A3B-Q4_K_M.gguf" \
-        "Achilles1089/fable-coder-35B-A3B-GGUF" "fable-coder-35B-A3B-Q4_K_M.gguf" "Fable Coder Q4" "21.7 GB"
+    # _cat_gguf "fable-coder-35B-A3B-Q4_K_M.gguf" \
+    #     "Achilles1089/fable-coder-35B-A3B-GGUF" "fable-coder-35B-A3B-Q4_K_M.gguf" "Fable Coder Q4" "21.7 GB"
 
     # Qwen3.8 también es un bundle: el MTP (que usa fired/qwen.sh con
     # --model-draft) y el mmproj de visión. El MTP vive en el subdirectorio
@@ -200,14 +200,14 @@ _ropero_cat_build() {
     # así que el nombre final es el plano.
     #
     # Tamaños reales: 13.15 GB + 1.37 GB (MTP) + 0.93 GB (mmproj) = 15.45 GB
-    _cat_gguf "Qwen3.8-27B-UD-Q3_K_XL.gguf" \
-        "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "15.4 GB"
+    # _cat_gguf "Qwen3.8-27B-UD-Q3_K_XL.gguf" \
+    #     "unsloth/Qwen3.8-27B-GGUF" "Qwen3.8-27B-UD-Q3_K_XL.gguf" "Qwen3.8" "15.4 GB"
 
     # El mmproj de Qwen3.8 se llama "mmproj-BF16.gguf" igual que el de Gemma4:
     # si aterrizara en la raíz de GGUF_DIR, pisaría al de Gemma4 (o al revés).
     # Por eso el nombre final lleva el prefijo del modelo.
-    _cat_aux "Qwen3.8-27B-UD-Q3_K_XL.gguf" \
-        "MTP/mtp-Qwen3.8-27B-Q4_0.gguf|mtp-Qwen3.8-27B-Q4_0.gguf|1.37 GB|Qwen 3.8 MTP (Q4_0);mmproj-BF16.gguf|qwen3.8-mmproj-BF16.gguf|931 MB|Qwen 3.8 MMPROJ(BF16)"
+    # _cat_aux "Qwen3.8-27B-UD-Q3_K_XL.gguf" \
+    #     "MTP/mtp-Qwen3.8-27B-Q4_0.gguf|mtp-Qwen3.8-27B-Q4_0.gguf|1.37 GB|Qwen 3.8 MTP (Q4_0);mmproj-BF16.gguf|qwen3.8-mmproj-BF16.gguf|931 MB|Qwen 3.8 MMPROJ(BF16)"
 
     _cat_gguf "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" \
         "unsloth/Qwen2.5-VL-7B-Instruct-GGUF" "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" "Qwen2.5-VL 7B" "6.1 GB"
@@ -218,9 +218,9 @@ _ropero_cat_build() {
     _cat_aux "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf" \
         "mmproj-F16.gguf|Qwen2.5-VL-mmproj.gguf|1.35 GB|Qwen2.5-VL mmproj"
 
-    _cat_gguf "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" \
-        "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
-    # IQ3_XXS y no Q4_K_XL: 12,8 GB en vez de 17,7, que en una RTX 5080 de
+    # _cat_gguf "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" \
+    #     "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF" "Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf" "Devstral Small UD-Q4_K_XL" "14.5 GB"
+    # # IQ3_XXS y no Q4_K_XL: 12,8 GB en vez de 17,7, que en una RTX 5080 de
     # 16 GB es lo que deja sitio para el KV cache del contexto largo. El
     # razonamiento está en qwencoder.sh; si cambias uno, cambia el otro.
     _cat_gguf "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf" \
@@ -228,8 +228,8 @@ _ropero_cat_build() {
     _cat_gguf "agentica-org_DeepCoder-14B-Preview-Q4_K_L.gguf" \
         "bartowski/agentica-org_DeepCoder-14B-Preview-GGUF" "agentica-org_DeepCoder-14B-Preview-Q4_K_L.gguf" "DeepCoder Q4_K_L" "9.57 GB"
 
-    _cat_safetensors "Qwen3.8-27B-NVFP4" \
-        "unsloth/Qwen3.8-27B-NVFP4" "Qwen3.8-27B-NVFP4" "23.4 GB"
+    # _cat_safetensors "Qwen3.8-27B-NVFP4" \
+    #     "unsloth/Qwen3.8-27B-NVFP4" "Qwen3.8-27B-NVFP4" "23.4 GB"
 
     # macOS → mlx_lm. El destino tiene que llamarse EXACTAMENTE como MODEL_PATH en
     # ropero.d/<modelo>.sh, porque el preflight de ropero comprueba ese directorio y

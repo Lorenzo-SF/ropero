@@ -153,6 +153,45 @@ ropero coder --force --background
 ropero embed --port 9995 --background
 ```
 
+### Argumentos que declara el modelo
+
+Además de los flags globales (`--background`, `--cpu`, `--force`, `--port`),
+cada modelo puede declarar **niveles**, **flags** y **opciones** propias. El
+CLI no tiene vocabulario propio: lo que el `.sh` del modelo no declara, es un
+error de uso.
+
+```bash
+ropero gptoss --high           # nivel (gptoss: low|medium|high)
+ropero gemma --vision          # flag booleano
+ropero gemma --n-cpu-moe 8     # opción con valor
+```
+
+Un alias público puede traer su nivel por defecto, y el flag explícito gana
+sobre él:
+
+| invocación | nivel |
+|---|---|
+| `ropero gptoss` | medium |
+| `ropero gptoss --high` | high |
+| `ropero verifier` | high (su alias) |
+| `ropero verifier --low` | low (el flag manda) |
+
+### gpt-oss: un solo modelo, el nivel por argumento
+
+Antes eran cuatro scripts (`gptoss_high` / `gptoss_medium` / `gptoss_low` /
+`gptossfallback`) con la misma tabla de n-gramas copiada en varios sitios. Ahora
+hay **un** `ropero.d/gptoss.sh` con el nivel como argumento, y la tabla vive en
+una sola función.
+
+- GGUF: `gpt-oss-20b-UD-Q8_K_XL.gguf` (13,2 GB). Es el que está en disco, y el
+  que ya usaba el fallback: con él como modelo único, el "seguro frío" deja de
+  ser un segundo modelo y era una duplicación que solo servía para tener dos
+  contextos que calibrar.
+- Contexto 65536 (no 131072): con el Q8_K_XL la KV en q8_0 a 131072 son 3,19
+  GiB y no caben en 16 GB junto a los pesos.
+- Aliases: `verifier` (high) y `designer` (medium) — los pide el
+  `opencode.jsonc` de gunter, no son nuestros.
+
 ### `--port` vs `MODEL_PORT`
 
 | | Cuándo | Dónde se define | Sobrevive al comando |
@@ -207,14 +246,14 @@ flowchart LR
     end
     subgraph CPU["CPU :9998<br/>(offload total)"]
         direction TB
-        CPU_MODELS["Solo gptoss_*:<br/>verifier<br/>designer"]
+        CPU_MODELS["Solo gptoss:<br/>verifier<br/>designer"]
     end
 ```
 
 **Reglas**:
 
 - GPU y CPU pueden coexistir con modelos distintos.
-- `gptoss_*` es el único que va bien en CPU. Los demás van a GPU.
+- `gptoss` (y sus alias `verifier` / `designer`) es el único que va bien en CPU. Los demás van a GPU.
 - `--cpu` arranca en `:9998` con todos los layers en CPU.
 - `--port N` arranca en `N`, saltándose `MODEL_PORT` y los slots. No edita el
   `.sh`: el siguiente arranque vuelve al puerto de siempre.
@@ -230,13 +269,60 @@ Según la [guía de Unsloth](https://unsloth.ai/docs/models/gemma-4/qat), se usa
 - Proyector: `gemma-4-26B-A4B-it-mmproj-BF16.gguf` (nombre propio para evitar colisiones).
 
 ```bash
-./ropero install models gemma4
-./ropero gemma4      # Rápido: CTX 49152, todo en GPU, sin offload a CPU.
-./ropero gemma4-ctx  # CTX 262144, --n-cpu-moe 5 y proyector en CPU; MTP en GPU.
+./ropero install models gemma     # descarga el bundle entero
+./ropero gemma                    # texto puro, sin visión
+./ropero gemma --vision           # añade el proyector: el modelo lee imágenes
+./ropero gemma --n-cpu-moe 8      # 8 capas de expertos MoE en la CPU (más hueco en VRAM)
+./ropero gemma --high             # razonamiento + CoT conservado en el historial
+./ropero gemma --low              # sin razonamiento: respuesta directa
 ```
 
-Ambos incluyen visión y MTP; requieren un build reciente de llama.cpp con `gemma4-assistant`, sin autocompilación.
-Configuraciones orientativas: sin garantía de ajuste en CUDA de 16 GiB ni de contexto lleno.
+Los tres archivos son un **bundle**: se descargan juntos y con **un solo
+consentimiento** (15.7 GB en total). No es un extra opcional: con el GGUF
+solo, `llama-server` arranca y se cae al primer uso, porque `--model-draft` y
+`--mmproj` apuntan a ficheros que no existen.
+
+El proyector se descarga a un temporal y se mueve a su nombre final: en el
+repo se llama `mmproj-BF16.gguf`, igual que el de Qwen3.8, y descargado
+directo a `GGUF_DIR` uno pisaría al otro.
+
+### La visión es opt-in
+
+`ropero gemma` arranca **sin** el mmproj: son 1139 MiB de VRAM, y el 95% de
+lo que se le pide a un modelo de texto no lo necesita. Con `--vision` el
+modelo lee imágenes.
+
+| config | VRAM | velocidad |
+|---|---:|---|
+| `ropero gemma` | ~14,6 GiB | 104-140 tok/s |
+| `ropero gemma --vision` | ~15,7 GiB | ídem |
+
+Medido en una RTX 5080 Laptop (16 GB) con la config de `ropero.d/gemma.sh`:
+104-140 tok/s y una aceptación de MTP del 49-88% según el prompt. La KV cache
+se queda en RAM a propósito (`--no-kv-offload`): a 131072 en q8_0 son 1139 MiB
+y en la tarjeta no caben junto al modelo.
+
+### El nivel de razonamiento
+
+Gemma 4 **no** tiene `reasoning_effort` como gpt-oss: su chat template solo
+conoce `enable_thinking` y `preserve_thinking`. Los niveles se traducen a sus
+knobs reales:
+
+| nivel | qué hace |
+|---|---|
+| `--low` | `enable_thinking=false` → respuesta directa, sin CoT |
+| `--medium` | `enable_thinking=true` → razona y responde (default) |
+| `--high` | `+ preserve_thinking` → conserva el CoT anterior en el historial (agentic con tool calls) |
+
+Con thinking activo, el CoT sale limpio en el campo `reasoning_content` de la
+API: `llama-server` sabe parsear el bloque `<|channel>thought` de Gemma 4.
+
+Requieren un build reciente de llama.cpp con `gemma4-assistant`, sin
+autocompilación. Configuraciones orientativas: sin garantía de ajuste en
+CUDA de 16 GiB ni de contexto lleno.
+
+> `ROPERO_DOWNLOADER=hf|curl` fuerza el descargador (`auto` por defecto: `hf`
+> si está, `curl` si no). Útil cuando el `hf` del sistema está roto.
 
 ---
 
@@ -251,7 +337,7 @@ flowchart TD
     root --> n1
     n2["_common.sh             helpers comunes"]
     n1 --> n2
-    n3["_gptoss_common.sh      helper específico de gptoss"]
+    n3["gptoss.sh               modelo: gpt-oss-20b (nivel por argumento)"]
     n1 --> n3
     n4["00-utils.sh            helpers de logging / prompts"]
     n1 --> n4
@@ -261,24 +347,18 @@ flowchart TD
     n1 --> n6
     n7["21-download-models.sh  descarga de los GGUF por defecto"]
     n1 --> n7
-    n8["devstral.sh            modelo: Devstral (alias \"coder\")"]
+    n8["gemma.sh               modelo: Gemma 4 26B-A4B (MTP + visión)"]
     n1 --> n8
     n9["qwencoder.sh           modelo: Qwen3-Coder-30B (alias \"analyst\")"]
     n1 --> n9
-    n10["qwen.sh                modelo: Qwen3.8-27B (alias \"analyst\" alt)"]
+    n10["ministral.sh           modelo: Ministral 3 14B (alias \"vault\")"]
     n1 --> n10
-    n11["gptoss_high.sh         modelo: gpt-oss reasoning high (alias \"verifier\")"]
+    n11["qwen3ranker.sh         modelo: reranker (alias \"ranker\")"]
     n1 --> n11
-    n12["gptoss_medium.sh       modelo: gpt-oss reasoning medium (alias \"designer\")"]
+    n12["qwen3vector.sh         modelo: embeddings (alias \"vector\")"]
     n1 --> n12
-    n13["gptoss_low.sh          modelo: gpt-oss reasoning low"]
+    n13["qwenvision.sh          modelo: Qwen2.5-VL (visión)"]
     n1 --> n13
-    n14["embed.sh               modelo: embeddings (jina-code)"]
-    n1 --> n14
-    n15["qwenvision.sh          modelo: Qwen2.5-VL (visión)"]
-    n1 --> n15
-    n16["fable.sh               modelo: Fable Coder 35B"]
-    n1 --> n16
     n17["fired/                 modelos fuera del scope actual (archivados)"]
     n1 --> n17
     n18["README.md                  este archivo"]

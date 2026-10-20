@@ -132,6 +132,15 @@ if [[ "${_ropero_unattended:-0}" == "1" ]]; then
 fi
 
 declare -A MODEL_GGUF MODEL_CTX MODEL_ENGINE MODEL_PATH MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_GPU MODEL_PORT MODEL_FORMAT MODEL_DL
+# MODEL_LEVELS: niveles que el modelo acepta por argumento (--high/--medium/--low).
+# MODEL_FLAGS:   flags booleanos que acepta (--vision).
+# MODEL_OPTIONS: opciones con valor que acepta (--n-cpu-moe 5).
+# MODEL_ALIAS_LEVEL: nivel por defecto de un alias público ("verifier" → high).
+#
+# Los tres primeros los DECLARA el .sh del modelo. El CLI no inventa
+# vocabulario: `--vision` es válido porque gemma dice que tiene visión, y
+# `ropero embed --vision` da error porque embed no la tiene.
+declare -A MODEL_LEVELS MODEL_ALIAS_LEVEL MODEL_FLAGS MODEL_OPTIONS
 declare -a MODEL_NAMES=()
 # puerto → script que lo reclamó. Solo para detectar colisiones al cargar.
 declare -A _MODEL_PORT_OWNER=()
@@ -165,6 +174,10 @@ for f in "$MODULES_DIR"/*.sh; do
     MODEL_ENGINE=
     MODEL_PATH=
     MODEL_ALIAS=
+    MODEL_ALIASES=
+    MODEL_LEVELS=
+    MODEL_FLAGS=
+    MODEL_OPTIONS=
     MODEL_PORT=
     MODEL_FORMAT=
     MODEL_DOWNLOAD=
@@ -232,6 +245,13 @@ for f in "$MODULES_DIR"/*.sh; do
     MODEL_CTX["$alias_name"]="${MODEL_CTX:-}"
     MODEL_PORT["$alias_name"]="${MODEL_PORT:-}"
     MODEL_FORMAT["$alias_name"]="${MODEL_FORMAT:-}"
+    # Niveles que este modelo acepta por argumento (`ropero gptoss --high`).
+    # Los declara el script; el CLI los valida antes de arrancar.
+    MODEL_LEVELS["$alias_name"]="${MODEL_LEVELS:-}"
+    # Flags booleanos (`ropero gemma --vision`) y opciones con valor
+    # (`ropero gemma --n-cpu-moe 5`). Mismo contrato: los declara el script.
+    MODEL_FLAGS["$alias_name"]="${MODEL_FLAGS:-}"
+    MODEL_OPTIONS["$alias_name"]="${MODEL_OPTIONS:-}"
     # MODEL_DOWNLOAD va en array y no como variable suelta por la misma razón que
     # MODEL_GGUF: el loader sourcea TODOS los scripts seguidos, así que una
     # variable normal se queda con el valor del ÚLTIMO script sourceado. Al
@@ -244,29 +264,62 @@ for f in "$MODULES_DIR"/*.sh; do
     # segunda key que apunta al mismo modelo. Permite `ropero coder` aunque
     # el script físico sea devstral.sh. La key del alias se normaliza igual
     # (guiones a guiones bajos) para mantener consistencia con MODEL_NAMES.
-    public_alias="${MODEL_ALIAS:-}"
-    if [[ -n "$public_alias" ]]; then
+    #
+    # MODEL_ALIASES es lo mismo pero para VARIOS alias, y cada uno puede
+    # llevar su nivel por defecto: "verifier:high designer:medium".
+    # Es lo que permite que un solo script físico (gptoss.sh) atienda tres
+    # invocaciones distintas — `ropero gptoss --high`, `ropero verifier` y
+    # `ropero designer` — sin tres scripts que se desincronicen.
+    public_alias=""
+    public_alias_def=""
+    for public_alias in ${MODEL_ALIAS:-} ${MODEL_ALIASES:-}; do
+        [[ -n "$public_alias" ]] || continue
+        public_alias_def=""
+        # "alias:nivel" → alias con nivel por defecto. El nivel NO se valida
+        # aquí contra MODEL_LEVELS: si el script declara niveles, se validan
+        # todos más abajo; un alias con un nivel que el script no acepta es un
+        # error de configuración, y se avisa en vez de aceptarlo en silencio.
+        if [[ "$public_alias" == *:* ]]; then
+            public_alias_def="${public_alias#*:}"
+            public_alias="${public_alias%%:*}"
+        fi
         public_alias="${public_alias//-/_}"
+        # Un alias que es el nombre del propio script no aporta nada (el
+        # script ya se registra con ese nombre) y choca con la comprobación
+        # de colisión de abajo, que avisaría de un conflicto inexistente.
+        # `if` y no `&&`: un `[[ ... ]] && continue` que no se cumple devuelve 1,
+        # y con `set -e` en el entrypoint eso aborta la carga de los modelos.
+        if [[ "$public_alias" == "$alias_name" ]]; then
+            continue
+        fi
         # Evitar colisión con un nombre de script ya cargado: si por error
         # un alias coincide con un modelo físico previo, gana el modelo y se
         # imprime WARN para no ocultar el conflicto.
         if [[ " ${MODEL_NAMES[*]} " =~ " $public_alias " ]]; then
-            echo "WARN: $f define MODEL_ALIAS='$public_alias' pero ese nombre ya está registrado por otro script; se omite" >&2
-        else
-            MODEL_NAMES+=("$public_alias")
-            MODEL_GGUF["$public_alias"]="${MODEL_GGUF:-}"
-            MODEL_CTX["$public_alias"]="${MODEL_CTX:-}"
-            MODEL_ENGINE["$public_alias"]="$engine"
-            MODEL_PORT["$public_alias"]="${MODEL_PORT:-}"
-            MODEL_FORMAT["$public_alias"]="${MODEL_FORMAT:-}"
-            MODEL_DL["$public_alias"]="${MODEL_DL[$alias_name]:-}"
-            # Key de redirección: si $model coincide con el alias público,
-            # start_model lo manda al script físico (alias_name).
-            MODEL_ALIAS_TARGET["$public_alias"]="$alias_name"
-            # Para que cmd_list muestre el alias público como nombre "humano"
-            MODEL_ALIAS["$public_alias"]="$public_alias"
+            echo "WARN: $f define el alias '$public_alias' pero ese nombre ya está registrado por otro script; se omite" >&2
+            continue
         fi
-    fi
+        MODEL_NAMES+=("$public_alias")
+        MODEL_GGUF["$public_alias"]="${MODEL_GGUF:-}"
+        MODEL_CTX["$public_alias"]="${MODEL_CTX:-}"
+        MODEL_ENGINE["$public_alias"]="$engine"
+        MODEL_PORT["$public_alias"]="${MODEL_PORT:-}"
+        MODEL_FORMAT["$public_alias"]="${MODEL_FORMAT:-}"
+        MODEL_DL["$public_alias"]="${MODEL_DL[$alias_name]:-}"
+        MODEL_LEVELS["$public_alias"]="${MODEL_LEVELS:-}"
+        MODEL_FLAGS["$public_alias"]="${MODEL_FLAGS:-}"
+        MODEL_OPTIONS["$public_alias"]="${MODEL_OPTIONS:-}"
+        # Key de redirección: si $model coincide con el alias público,
+        # start_model lo manda al script físico (alias_name).
+        MODEL_ALIAS_TARGET["$public_alias"]="$alias_name"
+        # Para que cmd_list muestre el alias público como nombre "humano"
+        MODEL_ALIAS["$public_alias"]="$public_alias"
+        # Nivel por defecto de este alias. Un alias sin nivel usa el default
+        # del propio script (MODEL_LEVEL_DEFAULT).
+        if [[ -n "$public_alias_def" ]]; then
+            MODEL_ALIAS_LEVEL["$public_alias"]="$public_alias_def"
+        fi
+    done
 done
 
 # -----------------------------------------------------------------------------
@@ -1321,6 +1374,9 @@ start_model() {
     local cpu_only="${3:-0}"
     local force="${4:-0}"
     local port_override="${5:-}"
+    local requested_level="${6:-}"
+    local model_flags="${7:-}"
+    local model_opts="${8:-}"
 
     # Normalizar nombre del modelo (guiones a guiones underscores) para buscar en arrays
     local model_key="${model//-/_}"
@@ -1329,6 +1385,40 @@ start_model() {
         echo "Modelo desconocido: $model" >&2
         cmd_list >&2
         return 1
+    fi
+
+    # ── Flags y opciones que pidió el usuario ───────────────────────────────
+    # Se exportan al .sh del modelo con nombres normalizados:
+    #   --vision       → ROPERO_MODEL_FLAG_VISION=1
+    #   --n-cpu-moe 5  → ROPERO_MODEL_OPT_N_CPU_MOE=5
+    #
+    # El guion se convierte en guion bajo para que el nombre sea una variable
+    # de shell válida. El .sh del modelo lee esas variables y decide.
+    local mf mo up
+    for mf in $model_flags; do
+        up="$(printf '%s' "$mf" | tr 'a-z-' 'A-Z_')"
+        export "ROPERO_MODEL_FLAG_${up}=1"
+    done
+    for mo in $model_opts; do
+        up="$(printf '%s' "${mo%%=*}" | tr 'a-z-' 'A-Z_')"
+        export "ROPERO_MODEL_OPT_${up}=${mo#*=}"
+    done
+
+    # ── Nivel de razonamiento ──────────────────────────────────────────────
+    # De dónde sale, por orden:
+    #   1. el que pidió el usuario en la línea de órdenes (--high/--medium/--low)
+    #   2. el que trae el alias público (verifier → high, designer → medium)
+    #   3. el default del propio script (MODEL_LEVEL_DEFAULT)
+    #
+    # El (1) gana sobre el (2) a propósito: `ropero verifier --low` es
+    # "el verifier pero con poco razonamiento", no un error por contradicción.
+    local alias_level=""
+    if [[ -n "${MODEL_ALIAS_TARGET[$model_key]:-}" ]]; then
+        alias_level="${MODEL_ALIAS_LEVEL[$model_key]:-}"
+    fi
+    [[ -n "$requested_level" ]] || requested_level="$alias_level"
+    if [[ -n "$requested_level" ]]; then
+        export ROPERO_MODEL_LEVEL="$requested_level"
     fi
 
     # Resolución de alias público: si el usuario invocó el alias (e.g. `coder`)
@@ -3726,6 +3816,48 @@ cmd_models() {
     ropero_env_setup; _ropero_install_models_selected "$raw" "$force"
 }
 
+# -----------------------------------------------------------------------------
+# _ropero_model_levels <modelo> — niveles que el modelo acepta por argumento.
+#
+# "nivel" es una palabra que el modelo declara en MODEL_LEVELS (el .sh del
+# modelo). No es un concepto del CLI: el CLI solo sabe que hay una lista, y
+# la lista la pone quien escribe el modelo. Así `ropero gptoss --high` es
+# "--high porque gptoss dice que tiene high", y no "--high porque el CLI se
+# lo inventó".
+#
+# Resuelve también el alias público: `ropero verifier --high` es el mismo
+# modelo físico que `ropero gptoss --high`.
+# -----------------------------------------------------------------------------
+_ropero_model_levels() {
+    local model="${1:-}" key="${1:-}"
+    key="${key//-/_}"
+    [[ " ${MODEL_NAMES[*]} " =~ " $key " ]] || return 1
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    [[ -n "$target" ]] && key="$target"
+    printf '%s\n' "${MODEL_LEVELS[$key]:-}"
+}
+
+# _ropero_model_decl <modelo> <flags|options> — lo que el modelo declara.
+#
+#   flags    → flags booleanos:  `ropero gemma --vision`
+#   options  → opciones con valor: `ropero gemma --n-cpu-moe 5`
+#
+# Igual que _ropero_model_levels: el CLI no tiene vocabulario propio, lo
+# tiene el .sh del modelo. Y resuelve el alias público igual que los niveles
+# (`ropero gemma` y su alias son el mismo modelo físico).
+_ropero_model_decl() {
+    local model="${1:-}" what="${2:-}" key="${1:-}"
+    key="${key//-/_}"
+    [[ " ${MODEL_NAMES[*]} " =~ " $key " ]] || return 1
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    [[ -n "$target" ]] && key="$target"
+    case "$what" in
+        flags)   printf '%s\n' "${MODEL_FLAGS[$key]:-}" ;;
+        options) printf '%s\n' "${MODEL_OPTIONS[$key]:-}" ;;
+        *) return 1 ;;
+    esac
+}
+
 cmd_install() {
     local target="" force=0 raw="" arg help_requested=0
     for arg in "$@"; do
@@ -3965,6 +4097,15 @@ main() {
         local cpu_only=0
         local force=0
         local port_override=""
+        local level=""
+        local model_flags_set=""
+        local model_opts_set=""
+        # Lo que el MODELO declara: niveles, flags booleanos y opciones con
+        # valor. Se resuelve una vez y se cachea: el bucle puede ver varios.
+        local model_levels="" model_flags_decl="" model_options_decl=""
+        model_levels="$(_ropero_model_levels "$model" 2>/dev/null || true)"
+        model_flags_decl="$(_ropero_model_decl "$model" flags 2>/dev/null || true)"
+        model_options_decl="$(_ropero_model_decl "$model" options 2>/dev/null || true)"
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --background) background=1 ;;
@@ -4025,11 +4166,52 @@ main() {
                     _ropero_usage ''
                     exit 0
                     ;;
+                --?*)
+                    # Todo lo que empieza por "--" y no es un flag global es
+                    # cosa del MODELO. Tres formas, y en este orden:
+                    #
+                    #   1. NIVEL       --high / --medium / --low   (sin valor)
+                    #   2. OPCIÓN     --n-cpu-moe 5 / --n-cpu-moe=5 (con valor)
+                    #   3. FLAG       --vision                    (sin valor)
+                    #
+                    # Los tres tienen que estar DECLARADOS por el .sh del
+                    # modelo. Un flag que el modelo no declara es un error de
+                    # uso, no algo que se ignore: si `ropero gemma --vision`
+                    # no encontrara el mmproj y siguiera como si nada, el
+                    # fallo aparecería en la primera imagen, no al arrancar.
+                    local want="${1#--}" want_val=""
+                    if [[ "$want" == *=* ]]; then
+                        want_val="${want#*=}"; want="${want%%=*}"
+                    fi
+                    if [[ -n "$model_levels" && " $model_levels " == *" $want "* ]]; then
+                        level="$want"
+                        shift
+                        continue
+                    fi
+                    if [[ -n "$model_options_decl" && " $model_options_decl " == *" $want "* ]]; then
+                        if [[ -z "$want_val" ]]; then
+                            shift
+                            if [[ $# -eq 0 ]]; then
+                                _ropero_usage_error '' "la opción --$want requiere un valor"
+                            fi
+                            want_val="$1"
+                        fi
+                        model_opts_set+="${model_opts_set:+ }${want}=${want_val}"
+                        shift
+                        continue
+                    fi
+                    if [[ -n "$model_flags_decl" && " $model_flags_decl " == *" $want "* ]]; then
+                        model_flags_set+="${model_flags_set:+ }${want}"
+                        shift
+                        continue
+                    fi
+                    _ropero_usage_error '' "opción desconocida: '$1'"
+                    ;;
                 *) _ropero_usage_error '' "opción desconocida: '$1'" ;;
             esac
             shift
         done
-        start_model "$model" "$background" "$cpu_only" "$force" "$port_override"
+        start_model "$model" "$background" "$cpu_only" "$force" "$port_override" "$level" "$model_flags_set" "$model_opts_set"
         exit $?
         ;;
     esac

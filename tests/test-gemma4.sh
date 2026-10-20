@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
-# Offline contract: three downloads, two fixed launchers. No weights or servers.
+# Offline contract: bundles de modelo (principal + ficheros secundarios).
+# Sin pesos ni servidores: todo el transporte es un stub.
+#
+# Cubre los DOS modelos del catálogo que se descargan como BUNDLE:
+#   · Gemma 4 26B-A4B  → GGUF + MTP + mmproj
+#   · Qwen3.8 27B      → GGUF + MTP + mmproj   (el MTP vive en MTP/ del repo)
+#
+# El segundo caso está aquí por un motivo concreto: el MTP de Qwen3.8 está en
+# un SUBDIRECTORIO del repo ("MTP/mtp-Qwen3.8-27B-Q4_0.gguf"), y ese camino
+# es el que rompía el rename al mover el fichero a la raíz de GGUF_DIR.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export QA_REPO QA_BASH
@@ -21,6 +30,14 @@ MAIN = 'gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf'
 PROJ = 'gemma-4-26B-A4B-it-mmproj-BF16.gguf'
 MTP = 'mtp-gemma-4-26B-A4B-it.gguf'
 REMOTES = [MAIN, 'mmproj-BF16.gguf', MTP]
+
+# Qwen3.8: el MTP está en un subdirectorio del repo y el mmproj comparte
+# nombre con el de Gemma ("mmproj-BF16.gguf") → de ahí el renombrado.
+QMAIN = 'Qwen3.8-27B-UD-Q3_K_XL.gguf'
+QMTP = 'mtp-Qwen3.8-27B-Q4_0.gguf'
+QPROJ = 'qwen3.8-mmproj-BF16.gguf'
+QREMOTES = [QMAIN, 'MTP/mtp-Qwen3.8-27B-Q4_0.gguf', 'mmproj-BF16.gguf']
+
 HOOK = r'''
 ropero_env_setup() { :; }
 ropero_detect_os() { printf unknown; }
@@ -46,9 +63,20 @@ case "${1:-}" in
         done
         exit 0 ;;
     qa-alias)
-        MODEL_NAMES+=(qa_alias); MODEL_ALIAS_TARGET[qa_alias]=gemma4
-        MODEL_GGUF[qa_alias]="${MODEL_GGUF[gemma4]}"
+        MODEL_NAMES+=(qa_alias); MODEL_ALIAS_TARGET[qa_alias]=gemma
+        MODEL_GGUF[qa_alias]="${MODEL_GGUF[gemma]}"
         _ropero_cat_index qa_alias; exit $? ;;
+    qa-aux-subdir)
+        # Entrada sintética con un aux cuyo fichero vive en un SUBDIRECTORIO
+        # del repo ("MTP/x.gguf"). El MTP de Qwen3.8 es exactamente ese caso,
+        # y es el que rompía el rename: al moverlo a la raíz de GGUF_DIR hay
+        # que sacarlo de MTP/ primero.
+        _ropero_cat_build
+        _cat_gguf "sintetico.gguf" "unsloth/ejemplo" "sintetico.gguf" "Sintetico" "1 MB"
+        _cat_aux "sintetico.gguf" \
+            "MTP/mtp-ejemplo-Q4_0.gguf|mtp-ejemplo-Q4_0.gguf|1.37 GB|MTP de ejemplo"
+        idx=$(_ropero_cat_index "sintetico.gguf") || exit
+        _ropero_cat_download "$idx"; exit $? ;;
 esac
 '''
 TRANSPORT = r'''
@@ -69,9 +97,9 @@ dest.write_bytes(b'GGUF tiny offline test\n')
 '''
 
 
-class GemmaContract(unittest.TestCase):
+class BundleContract(unittest.TestCase):
     def setUp(self) -> None:
-        tmp = tempfile.TemporaryDirectory(prefix='ropero-gemma4-', dir=os.environ.get('TMPDIR'))
+        tmp = tempfile.TemporaryDirectory(prefix='ropero-bundle-', dir=os.environ.get('TMPDIR'))
         self.addCleanup(tmp.cleanup)
         self.work = Path(tmp.name)
         shutil.copytree(REPO / 'ropero.d', self.work / 'ropero.d')
@@ -118,21 +146,25 @@ class GemmaContract(unittest.TestCase):
         path = self.work / 'transfers'
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
 
+    def argv(self) -> list[str]:
+        return (self.work / 'argv').read_bytes().decode().rstrip('\0').split('\0')
+
     def trio(self, root: Path | None = None) -> None:
         for name in (MAIN, PROJ, MTP):
             self.assertTrue(((root or self.models) / name).is_file(), name)
             self.assertGreater(((root or self.models) / name).stat().st_size, 0)
 
-    def test_catalog_and_two_scripts_share_single_primary(self) -> None:
+    # ── Catálogo ────────────────────────────────────────────────────────────
+    def test_catalog_has_single_primary(self) -> None:
         catalog = self.run_ropero('qa-catalog').stdout.splitlines()
         self.assertEqual(catalog.count(MAIN), 1)
         self.assertNotIn(PROJ, catalog)
         self.assertNotIn(MTP, catalog)
         index = self.run_ropero('qa-index', MAIN).stdout
-        for selector in ('gemma4', 'gemma4-ctx'):
-            self.assertEqual(self.run_ropero('qa-index', selector).stdout, index)
+        self.assertEqual(self.run_ropero('qa-index', 'gemma').stdout, index)
         self.assertEqual(self.run_ropero('qa-alias').stdout, index)
 
+    # ── Gemma 4 ────────────────────────────────────────────────────────────
     def test_named_download_and_projector_isolation(self) -> None:
         del self.env['AUTO_YES'], self.env['CI']
         generic = self.models / 'mmproj-BF16.gguf'
@@ -148,23 +180,23 @@ class GemmaContract(unittest.TestCase):
 
     def test_existing_primary_repairs_auxiliaries(self) -> None:
         (self.models / MAIN).write_bytes(b'existing primary')
-        self.run_ropero('qa-fetch', 'gemma4')
+        self.run_ropero('qa-fetch', 'gemma')
         self.trio()
         self.assertCountEqual(self.transfers(), REMOTES[1:])
         self.assertEqual((self.models / MAIN).read_bytes(), b'existing primary')
 
     def test_idempotence_and_force(self) -> None:
-        self.run_ropero('qa-fetch', 'gemma4')
-        self.run_ropero('qa-fetch', 'gemma4-ctx')
+        self.run_ropero('qa-fetch', 'gemma')
+        self.run_ropero('qa-fetch', 'gemma')
         self.assertCountEqual(self.transfers(), REMOTES)
         self.env['ROPERO_FORCE'] = '1'
-        self.run_ropero('qa-fetch', 'gemma4')
+        self.run_ropero('qa-fetch', 'gemma')
         self.assertCountEqual(self.transfers(), REMOTES * 2)
         self.trio()
 
     def test_primary_failure_does_not_download_auxiliaries(self) -> None:
         self.env['QA_FAIL'] = MAIN
-        self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma4', ok=False).returncode, 0)
+        self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma', ok=False).returncode, 0)
         self.assertEqual(self.transfers(), [MAIN])
         self.assertFalse((self.models / PROJ).exists())
         self.assertFalse((self.models / MTP).exists())
@@ -172,17 +204,17 @@ class GemmaContract(unittest.TestCase):
     def test_declined_primary_does_not_download_auxiliaries(self) -> None:
         del self.env['AUTO_YES'], self.env['CI']
         self.env['QA_DECLINE'] = '1'
-        self.run_ropero('qa-fetch', 'gemma4', ok=False)
+        self.run_ropero('qa-fetch', 'gemma', ok=False)
         self.assertEqual(self.transfers(), [])
         self.assertEqual(list(self.models.iterdir()), [])
 
     def test_projector_failure_propagates(self) -> None:
         self.env['QA_FAIL'] = REMOTES[1]
-        self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma4', ok=False).returncode, 0)
+        self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma', ok=False).returncode, 0)
 
     def test_mtp_failure_propagates(self) -> None:
         self.env['QA_FAIL'] = MTP
-        self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma4', ok=False).returncode, 0)
+        self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma', ok=False).returncode, 0)
 
     def test_default_directory_and_curl(self) -> None:
         del self.env['GGUF_DIR']
@@ -193,17 +225,17 @@ class GemmaContract(unittest.TestCase):
         # verdad. Con el override, el test dice lo que quiere decir.
         self.env['ROPERO_DOWNLOADER'] = 'curl'
         self.executable('curl', '#!' + sys.executable + '\n' + TRANSPORT)
-        self.run_ropero('qa-fetch', 'gemma4')
+        self.run_ropero('qa-fetch', 'gemma')
         self.trio(self.work / 'home' / 'models' / 'gguf')
         self.assertCountEqual(self.transfers(), REMOTES)
 
-    def test_selector_deduplicates_both_launchers(self) -> None:
-        self.run_ropero('models', 'gemma4,gemma4-ctx')
+    def test_selector_downloads_bundle(self) -> None:
+        self.run_ropero('models', 'gemma')
         self.assertCountEqual(self.transfers(), REMOTES)
         self.trio()
 
     def test_numeric_selector(self) -> None:
-        number = self.run_ropero('qa-menu', 'gemma4_ctx').stdout.strip()
+        number = self.run_ropero('qa-menu', 'gemma').stdout.strip()
         self.assertTrue(number.isdigit(), number)
         self.run_ropero('models', number)
         self.assertCountEqual(self.transfers(), REMOTES)
@@ -215,40 +247,108 @@ class GemmaContract(unittest.TestCase):
         for remote in REMOTES:
             self.assertEqual(self.transfers().count(remote), 1, remote)
 
-    def test_fixed_launcher_argv_and_standalone_scripts(self) -> None:
-        self.run_ropero('qa-fetch', 'gemma4')
-        for model, ctx in (('gemma4', '49152'), ('gemma4-ctx', '262144')):
-            with self.subTest(model=model):
-                # Source each script in isolation: no shared Gemma helper required.
-                script = self.work / 'ropero.d' / (model + '.sh')
-                standalone = subprocess.run(
-                    [BASH, '-c', 'source "$1"; "get_model_args_${2//-/_}"', '_', str(script), model],
-                    env=self.env, text=True, capture_output=True, timeout=10)
-                self.assertEqual(standalone.returncode, 0, standalone.stderr)
-                self.run_ropero(model)
-                argv = (self.work / 'argv').read_bytes().decode().rstrip('\0').split('\0')
-                pairs = {'--model': str(self.models / MAIN), '--ctx-size': ctx,
-                         '--n-gpu-layers': 'all', '--spec-draft-ngl': 'all',
-                         '--model-draft': str(self.models / MTP), '--spec-type': 'draft-mtp',
-                         '--spec-draft-n-max': '2', '--mmproj': str(self.models / PROJ),
-                         '--parallel': '1', '--fit': 'off', '--cache-type-k': 'q4_0',
-                         '--cache-type-v': 'q4_0', '--batch-size': '512', '--ubatch-size': '512',
-                         '--top-p': '0.95', '--top-k': '64'}
-                for flag, value in pairs.items():
-                    self.assertEqual(argv.count(flag), 1, flag)
-                    self.assertEqual(argv[argv.index(flag) + 1], value, flag)
-                self.assertIn('--jinja', argv)
-                self.assertEqual(argv.count('--temp'), 1)
-                self.assertEqual(float(argv[argv.index('--temp') + 1]), 1.0)
-                if model == 'gemma4':
-                    self.assertNotIn('--n-cpu-moe', argv)
-                    self.assertIn('--mmproj-offload', argv)
-                    self.assertNotIn('--no-mmproj-offload', argv)
-                else:
-                    self.assertEqual(argv.count('--n-cpu-moe'), 1)
-                    self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '5')
-                    self.assertIn('--no-mmproj-offload', argv)
-                    self.assertNotIn('--mmproj-offload', argv)
+    # ── Launcher: la visión es opt-in y el MoE se puede ajustar ────────────
+    def test_launcher_vision_is_opt_in_and_moe_adjustable(self) -> None:
+        self.run_ropero('qa-fetch', 'gemma')
+
+        # 1) Sin --vision: el modelo arranca SIN torre de visión.
+        self.run_ropero('gemma')
+        argv = self.argv()
+        self.assertNotIn('--mmproj', argv)
+        self.assertEqual(argv[argv.index('--ctx-size') + 1], '131072')
+        self.assertEqual(argv[argv.index('--n-gpu-layers') + 1], '99')
+        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '5')
+        self.assertEqual(argv[argv.index('--cache-type-k') + 1], 'q8_0')
+        self.assertEqual(argv[argv.index('--cache-type-v') + 1], 'q8_0')
+        self.assertEqual(argv[argv.index('--spec-type') + 1], 'draft-mtp')
+        self.assertEqual(argv[argv.index('--model-draft') + 1], str(self.models / MTP))
+        self.assertIn('--jinja', argv)
+        self.assertEqual(float(argv[argv.index('--temp') + 1]), 1.0)
+        self.assertEqual(argv[argv.index('--top-p') + 1], '0.95')
+        self.assertEqual(argv[argv.index('--top-k') + 1], '64')
+        # El thinking va en las kwargs del chat template.
+        kwargs = argv[argv.index('--chat-template-kwargs') + 1]
+        self.assertIn('"enable_thinking":true', kwargs)
+
+        # 2) Con --vision: aparece el mmproj.
+        self.run_ropero('gemma', '--vision')
+        argv = self.argv()
+        self.assertEqual(argv.count('--mmproj'), 1)
+        self.assertEqual(argv[argv.index('--mmproj') + 1], str(self.models / PROJ))
+
+        # 3) --n-cpu-moe ajusta los expertos MoE en la CPU.
+        self.run_ropero('gemma', '--vision', '--n-cpu-moe', '8')
+        argv = self.argv()
+        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '8')
+        self.assertEqual(argv.count('--mmproj'), 1)
+
+        # 4) Un flag que el modelo NO declara es un error de uso.
+        result = self.run_ropero('gemma', '--vision', '--inventado', ok=False)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_launcher_levels_map_to_thinking(self) -> None:
+        self.run_ropero('qa-fetch', 'gemma')
+        for level, thinking, preserve in (('low', 'false', 'false'),
+                                          ('medium', 'true', 'false'),
+                                          ('high', 'true', 'true')):
+            with self.subTest(level=level):
+                self.run_ropero('gemma', '--' + level)
+                argv = self.argv()
+                kwargs = argv[argv.index('--chat-template-kwargs') + 1]
+                self.assertIn(f'"enable_thinking":{thinking}', kwargs)
+                self.assertIn(f'"preserve_thinking":{preserve}', kwargs)
+
+    # ── Alias con nivel por defecto ────────────────────────────────────────
+    def test_alias_carries_its_default_level(self) -> None:
+        # `ropero verifier` es `ropero gptoss --high`: el alias público lleva
+        # su nivel por defecto. Y el flag explícito gana sobre el del alias.
+        (self.models / 'gpt-oss-20b-UD-Q8_K_XL.gguf').write_bytes(b'fake gptoss')
+        self.run_ropero('verifier')
+        argv = self.argv()
+        kwargs = argv[argv.index('--chat-template-kwargs') + 1]
+        self.assertIn('"reasoning_effort":"high"', kwargs)
+        # El flag explícito manda sobre el default del alias.
+        self.run_ropero('verifier', '--low')
+        argv = self.argv()
+        kwargs = argv[argv.index('--chat-template-kwargs') + 1]
+        self.assertIn('"reasoning_effort":"low"', kwargs)
+        # Y `designer` es medium, no high.
+        self.run_ropero('designer')
+        argv = self.argv()
+        kwargs = argv[argv.index('--chat-template-kwargs') + 1]
+        self.assertIn('"reasoning_effort":"medium"', kwargs)
+
+    # ── Aux en un SUBDIRECTORIO del repo (el caso del MTP de Qwen3.8) ──────
+    def test_aux_in_repo_subdirectory_lands_in_root(self) -> None:
+        # El MTP de Qwen3.8 está en "MTP/mtp-Qwen3.8-27B-Q4_0.gguf" dentro
+        # del repo, pero el .sh del modelo lo busca en la RAÍZ de GGUF_DIR.
+        # Si el rename no sacase el fichero de MTP/ primero, se quedaría
+        # anidado y el modelo no encontraría el drafter.
+        self.run_ropero('qa-aux-subdir')
+        self.assertIn('MTP/mtp-ejemplo-Q4_0.gguf', self.transfers())
+        self.assertTrue((self.models / 'mtp-ejemplo-Q4_0.gguf').is_file())
+        self.assertFalse((self.models / 'MTP').exists(),
+                         'el MTP no debe quedar anidado en MTP/ dentro de GGUF_DIR')
+
+    # ── Qwen3.8: el bundle completo cuando su entrada está activa ──────────
+    def test_qwen38_bundle_with_subdirectory_mtp(self) -> None:
+        catalog = self.run_ropero('qa-catalog').stdout.splitlines()
+        if QMAIN not in catalog:
+            self.skipTest('la entrada de Qwen3.8 está desactivada en el catálogo')
+        # Un mmproj genérico ya presente NO se pisa: el de Qwen3.8 va a su
+        # propio nombre (qwen3.8-mmproj-BF16.gguf).
+        generic = self.models / 'mmproj-BF16.gguf'
+        generic.write_bytes(b'unrelated projector')
+        before = generic.stat()
+        self.run_ropero('qa-fetch', QMAIN)
+        self.assertCountEqual(self.transfers(), QREMOTES)
+        self.assertTrue((self.models / QMAIN).is_file())
+        self.assertTrue((self.models / QMTP).is_file())
+        self.assertTrue((self.models / QPROJ).is_file())
+        # El MTP venía de MTP/ en el repo y ha acabado en la raíz.
+        self.assertFalse((self.models / 'MTP').exists())
+        self.assertEqual(generic.read_bytes(), b'unrelated projector')
+        self.assertEqual(generic.stat().st_ino, before.st_ino)
 
 
 unittest.main(argv=[sys.argv[0], *sys.argv[1:]], verbosity=2)

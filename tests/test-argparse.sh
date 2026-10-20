@@ -137,6 +137,16 @@ _ropero_cat_download() {
         name="${_ROPERO_CAT_DNAME[$i]:-${_ROPERO_CAT_ARG2[$i]}}"
         mkdir -p "$dest/$(dirname "$name")"
         printf stub >"$dest/$name"
+        # El bundle deja además los ficheros SECUNDARIOS (MTP, mmproj). El stub
+        # tiene que imitar al descargador real: si no, la comprobación de "el
+        # artefacto está en disco" falla por los aux que faltan y el install
+        # se da por roto con los pesos ahí.
+        local aux
+        while read -r aux; do
+            [[ -n "$aux" ]] || continue
+            mkdir -p "$(dirname "$aux")"
+            printf stub >"$aux"
+        done < <(_ropero_cat_aux_paths "$i")
     else
         mkdir -p "$dest"
         printf stub >"$dest/model.safetensors"
@@ -283,15 +293,15 @@ check 'install engines selecciona múltiples nombres' 0 'CALL ropero_install_air
 check 'install engines también instala llama seleccionado' 0 'CALL ropero_install_llama:.*FORCE=0' -- install engines llama,airllm
 check 'install engines propaga force' 0 'CALL ropero_install_airllm:.*FORCE=1' -- install engines llama,airllm --force
 check_not 'install engines no descarga modelos' '_ropero_cat_download' -- install engines llama,airllm
-check 'install models selecciona múltiples nombres' 0 '▸ \[2/2\]' -- install models embed,vector
-check 'install models alcanza hojas de catálogo' 0 'CALL _ropero_cat_download:.*FORCE=0' -- install models embed,vector
-check 'install models propaga force' 0 'CALL _ropero_cat_download:.*FORCE=1' -- install models embed,vector --force
-check_not 'install models no instala engines' 'CALL ropero_install_' -- install models embed
+check 'install models selecciona múltiples nombres' 0 '▸ \[2/2\]' -- install models ranker,vector
+check 'install models alcanza hojas de catálogo' 0 'CALL _ropero_cat_download:.*FORCE=0' -- install models ranker,vector
+check 'install models propaga force' 0 'CALL _ropero_cat_download:.*FORCE=1' -- install models ranker,vector --force
+check_not 'install models no instala engines' 'CALL ropero_install_' -- install models ranker
 check 'install link relinkea hojas' 0 'CALL ropero_link_airllm:' -- install link
 check_not 'install link no instala ni descarga' 'CALL ropero_install_|_ropero_cat_download' -- install link
 
 check 'alias engines' 0 'CALL ropero_install_airllm:' -- engines airllm
-check 'alias models' 0 'CALL _ropero_cat_download:' -- models embed
+check 'alias models' 0 'CALL _ropero_cat_download:' -- models ranker
 check 'alias link' 0 'CALL ropero_link_airllm:' -- link
 check 'alias check despacha check' 1 '== ropero --check ==' -- check
 check '--check alias despacha check' 1 '== ropero --check ==' -- --check
@@ -321,13 +331,32 @@ check 'config rechaza dos argumentos' 2 'argumento desconocido' -- config llama 
 check 'config engine desconocido devuelve 2' 2 'engine desconocido' -- config inexistente
 
 # Model launcher parsing. start_model is the effect leaf; parsing remains real.
-check 'launcher sin flags pasa defaults' 0 'CALL start_model: \[embed\] \[0\] \[0\] \[0\] \[\]' -- embed
-check 'launcher combina flags y puerto' 0 'CALL start_model: \[embed\] \[1\] \[1\] \[1\] \[54321\]' -- embed --background --cpu --force --port 54321
-check 'launcher --help' 0 'USO: ropero <modelo>' -- embed --help
-check 'launcher flag desconocido rc2' 2 'opción desconocida' -- embed --foc
-check 'launcher --port sin valor' 1 'requiere un número de puerto' -- embed --port
-check 'launcher --port inválido' 1 'no es un puerto válido' -- embed --port=abc
+check 'launcher sin flags pasa defaults' 0 'CALL start_model: \[ranker\] \[0\] \[0\] \[0\] \[\]' -- ranker
+check 'launcher combina flags y puerto' 0 'CALL start_model: \[ranker\] \[1\] \[1\] \[1\] \[54321\]' -- ranker --background --cpu --force --port 54321
+check 'launcher --help' 0 'USO: ropero <modelo>' -- ranker --help
+check 'launcher flag desconocido rc2' 2 'opción desconocida' -- ranker --foc
+check 'launcher --port sin valor' 1 'requiere un número de puerto' -- ranker --port
+check 'launcher --port inválido' 1 'no es un puerto válido' -- ranker --port=abc
 check 'modelo inexistente' 1 'Modelo desconocido' -- inexistente
+
+# -----------------------------------------------------------------------------
+# NIVEL, FLAG Y OPCIÓN QUE DECLARA EL MODELO
+#
+# El CLI no tiene vocabulario propio: lo que el .sh del modelo no declara, es
+# un error de uso. Estos casos fijan ese contrato:
+#   · --high/--medium/--low   → nivel (gptoss, gemma)
+#   · --vision                → flag booleano (gemma)
+#   · --n-cpu-moe N           → opción con valor (gemma)
+# -----------------------------------------------------------------------------
+check 'launcher nivel del modelo' 0 'CALL start_model: \[gptoss\] \[0\] \[0\] \[0\] \[\] \[high\]' -- gptoss --high
+check 'launcher nivel por defecto si no se pide' 0 'CALL start_model: \[gptoss\] \[0\] \[0\] \[0\] \[\] \[\]' -- gptoss
+check 'launcher flag del modelo' 0 'CALL start_model: \[gemma\] \[0\] \[0\] \[0\] \[\] \[\] \[vision\]' -- gemma --vision
+check 'launcher opcion del modelo' 0 'CALL start_model: \[gemma\] \[0\] \[0\] \[0\] \[\] \[\] \[\] \[n-cpu-moe=8\]' -- gemma --n-cpu-moe 8
+check 'launcher opcion con igual' 0 'CALL start_model: \[gemma\].*\[n-cpu-moe=8\]' -- gemma --n-cpu-moe=8
+check 'launcher nivel no declarado es error' 2 'opción desconocida' -- ranker --high
+check 'launcher flag no declarado es error' 2 'opción desconocida' -- ranker --vision
+check 'launcher opcion no declarada es error' 2 'opción desconocida' -- ranker --n-cpu-moe 8
+check 'launcher opcion sin valor es error' 2 'requiere un valor' -- gemma --n-cpu-moe
 
 # Final safety assertions.
 echo
