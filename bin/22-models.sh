@@ -494,6 +494,18 @@ ropero_model_retired() {
 }
 
 # -----------------------------------------------------------------------------
+# _ropero_model_dir <modelo> → subdirectorio bajo $GGUF_DIR donde viven los
+# ficheros de ese modelo (el nombre del modelo, normalizado).
+# -----------------------------------------------------------------------------
+_ropero_model_dir() {
+    local key="${1:-}"
+    key="${key//-/_}"
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    [[ -n "$target" ]] && key="$target"
+    printf '%s' "${MODEL_ALIAS[$key]:-$key}"
+}
+
+# -----------------------------------------------------------------------------
 # ropero_model_check_limits <modelo> <ctx>
 #
 # Aplica los límites declarados en [limits] del TOML. Devuelve 1 si el modelo
@@ -541,7 +553,8 @@ ropero_model_check_limits() {
             weights_mb="${weights_mb:-0}"
         fi
     else
-        local gguf_path="$GGUF_DIR/${MODEL_GGUF[$model_key]:-}"
+        local _mdir; _mdir="$(_ropero_model_dir "$model_key")"
+        local gguf_path="$GGUF_DIR/$_mdir/${MODEL_GGUF[$model_key]:-}"
         if [[ -f "$gguf_path" ]]; then
             # stat da bytes; a MiB con la misma aritmética entera.
             local bytes

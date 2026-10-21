@@ -181,9 +181,10 @@ class BundleContract(unittest.TestCase):
         return (self.work / 'argv').read_bytes().decode().rstrip('\0').split('\0')
 
     def trio(self, root: Path | None = None) -> None:
+        base = (root or self.models) / 'gemma'
         for name in (MAIN, PROJ, MTP):
-            self.assertTrue(((root or self.models) / name).is_file(), name)
-            self.assertGreater(((root or self.models) / name).stat().st_size, 0)
+            self.assertTrue((base / name).is_file(), name)
+            self.assertGreater((base / name).stat().st_size, 0)
 
     # ── Catálogo ────────────────────────────────────────────────────────────
     def test_catalog_has_single_primary(self) -> None:
@@ -198,7 +199,8 @@ class BundleContract(unittest.TestCase):
     # ── Gemma 4 ────────────────────────────────────────────────────────────
     def test_named_download_and_projector_isolation(self) -> None:
         del self.env['AUTO_YES'], self.env['CI']
-        generic = self.models / 'mmproj-BF16.gguf'
+        generic = self.models / 'gemma' / 'mmproj-BF16.gguf'
+        generic.parent.mkdir(parents=True, exist_ok=True)
         generic.write_bytes(b'unrelated projector')
         before = generic.stat()
         self.run_ropero('qa-fetch', MAIN)
@@ -210,11 +212,12 @@ class BundleContract(unittest.TestCase):
         self.assertEqual(generic.stat().st_mtime_ns, before.st_mtime_ns)
 
     def test_existing_primary_repairs_auxiliaries(self) -> None:
-        (self.models / MAIN).write_bytes(b'existing primary')
+        (self.models / 'gemma').mkdir(parents=True, exist_ok=True)
+        (self.models / 'gemma' / MAIN).write_bytes(b'existing primary')
         self.run_ropero('qa-fetch', 'gemma')
         self.trio()
         self.assertCountEqual(self.transfers(), REMOTES[1:])
-        self.assertEqual((self.models / MAIN).read_bytes(), b'existing primary')
+        self.assertEqual((self.models / 'gemma' / MAIN).read_bytes(), b'existing primary')
 
     def test_idempotence_and_force(self) -> None:
         self.run_ropero('qa-fetch', 'gemma')
@@ -365,7 +368,7 @@ class BundleContract(unittest.TestCase):
         # anidado y el modelo no encontraría el drafter.
         self.run_ropero('qa-aux-subdir')
         self.assertIn('MTP/mtp-ejemplo-Q4_0.gguf', self.transfers())
-        self.assertTrue((self.models / 'mtp-ejemplo-Q4_0.gguf').is_file())
+        self.assertTrue((self.models / 'gemma' / 'mtp-ejemplo-Q4_0.gguf').is_file())
         self.assertFalse((self.models / 'MTP').exists(),
                          'el MTP no debe quedar anidado en MTP/ dentro de GGUF_DIR')
 
@@ -376,7 +379,8 @@ class BundleContract(unittest.TestCase):
             self.skipTest('la entrada de Qwen3.8 está desactivada en el catálogo')
         # Un mmproj genérico ya presente NO se pisa: el de Qwen3.8 va a su
         # propio nombre (qwen3.8-mmproj-BF16.gguf).
-        generic = self.models / 'mmproj-BF16.gguf'
+        generic = self.models / 'gemma' / 'mmproj-BF16.gguf'
+        generic.parent.mkdir(parents=True, exist_ok=True)
         generic.write_bytes(b'unrelated projector')
         before = generic.stat()
         self.run_ropero('qa-fetch', QMAIN)

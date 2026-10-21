@@ -1427,14 +1427,15 @@ start_model() {
     local pre_gguf_path=""
     case "$engine" in
         "llama-server")
-            pre_gguf_path="$GGUF_DIR/${MODEL_GGUF[$model_key]}"
+            local _mdir; _mdir="$(_ropero_model_dir "$model_key")"
+            pre_gguf_path="$GGUF_DIR/$_mdir/${MODEL_GGUF[$model_key]}"
             # ROPERO_<MODELO>_GGUF permite apuntar a otra cuantización del
             # mismo repo. La comprobación tiene que ver el MISMO fichero que
             # se le va a pasar a llama-server, o el preflight daría por bueno
             # un modelo que luego no se encuentra.
             local gguf_override_env="ROPERO_$(printf '%s' "${model_key//-/_}" | tr '[:lower:]' '[:upper:]')_GGUF"
             if [[ -n "${!gguf_override_env:-}" ]]; then
-                pre_gguf_path="$GGUF_DIR/${!gguf_override_env}"
+                pre_gguf_path="$GGUF_DIR/$_mdir/${!gguf_override_env}"
             fi
             if [[ ! -f "$pre_gguf_path" ]]; then
                 echo "Archivo GGUF no encontrado: $pre_gguf_path" >&2
@@ -3588,7 +3589,7 @@ cmd_config() {
     for mk in "${MODEL_NAMES[@]}"; do
         [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" || "${MODEL_ENGINE[$mk]}" != "$engine" ]] && continue
         p=$(_model_port "$mk" 2>/dev/null || printf '%s' "$PORT")
-        local disk=no; [[ -n "${MODEL_GGUF[$mk]}" && -s "$GGUF_DIR/${MODEL_GGUF[$mk]}" ]] && disk=sí; [[ -n "${MODEL_PATH[$mk]:-}" ]] && _ropero_dir_has_weights "${MODEL_PATH[$mk]}" && disk=sí
+        local disk=no; local _mdir; _mdir="$(_ropero_model_dir "$mk")"; [[ -n "${MODEL_GGUF[$mk]}" && -s "$GGUF_DIR/$_mdir/${MODEL_GGUF[$mk]}" ]] && disk=sí; [[ -n "${MODEL_PATH[$mk]:-}" ]] && _ropero_dir_has_weights "${MODEL_PATH[$mk]}" && disk=sí
         printf '%s\t:%s\thttp://%s:%s/v1\t%s\t%s\n' "${MODEL_ALIAS[$mk]:-$mk}" "$p" "$url_host" "$p" "${MODEL_ALIAS[$mk]:-$mk}" "$disk"
     done
 }
