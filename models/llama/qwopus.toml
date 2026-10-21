@@ -30,32 +30,25 @@ base = [
     "--n-gpu-layers", "99",
     "--jinja",
     "--chat-template-file", "${chat_template}",
-
-    "--n-cpu-moe", "18",
-
+    "--n-cpu-moe", "20",
     "--temp", "0.60",
     "--top-k", "40",
     "--top-p", "0.95",
     "--min-p", "0.05",
-
     "--dry-multiplier", "0.8",
     "--dry-base", "1.75",
     "--dry-allowed-length", "5",
     "--dry-penalty-last-n", "1024",
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
-
     "--samplers", "min_p;top_k;top_p;temp;dry",
-
     "--reasoning", "off",
-    "--chat-template-kwargs", '{"enable_thinking": false}',
-
+    "--chat-template-kwargs", '{"enable_thinking": true}',
     "--cache-type-k", "q8_0",
     "--cache-type-v", "q8_0",
     "--kv-unified",
-
     "--n-predict", "8192",
-    "--batch-size", "2048",
-    "--ubatch-size", "256",
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
     "--parallel", "1",
     "--load-mode", "none",
 ]
@@ -64,7 +57,7 @@ base = [
 chat_template_kwargs = { enable_thinking = false }
 
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = false }
+chat_template_kwargs = { enable_thinking = true }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }

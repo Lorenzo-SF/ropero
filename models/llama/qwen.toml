@@ -25,7 +25,7 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 32768
+context = 131072
 
 [files]
 gguf   = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
