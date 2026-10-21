@@ -1,503 +1,287 @@
-# ropero — lanzador de modelos locales
+# ropero
 
-> Gestor simplificado de modelos de lenguaje. Añadir un modelo = añadir un
-> archivo `.sh`. Ropera (de ahí el nombre) todos los motores bajo una misma CLI.
+Un lanzador de modelos de IA locales. Instalas una vez, y luego escribes
+`ropero gemma` y tienes un servidor OpenAI-compatible escuchando en tu
+máquina.
 
----
+No es un framework ni una biblioteca: es un lanzador con opinión sobre cómo se
+deberían vivir los modelos locales.
 
-## ¿Qué es ropero?
-
-**El problema**: tener 14 modelos con configuraciones distintas (llama-server,
-MLX, AirLLM, TensorRT), cada uno con sus flags, sus GGUFs, sus contextos,
-es un infierno.
-
-**La solución**: un directorio de scripts (`ropero.d/`), cada uno describiendo
-un modelo. `ropero` los descubre, los indexa y los lanza con la CLI correcta.
-
-**Filosofía**: añadir un modelo = añadir un `.sh`. Nada más.
+```bash
+ropero gemma                     # arranca Gemma 4 en :9999
+ropero gemma --vision            # además, lee imágenes
+ropero gemma --high              # más razonamiento
+ropero status                    # qué está corriendo
+ropero stop gemma                # pararlo
+```
 
 ---
 
 ## Instalación
 
+Ropero se instala con una línea. El script descarga la versión publicada, la
+extrae y deja el lanzador en el PATH:
+
 ```bash
-ropero --install              # SOLO ropero: entorno y sus symlinks
-ropero install                # menú de engines y después menú de modelos
-ropero install engines        # sólo engines compatibles
-ropero install models         # catálogo de pesos seleccionables
-ropero link                   # rehacer enlaces de lo ya instalado
-ropero check                  # alias de --check, sólo lectura
+curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
 ```
 
-`--install` ya no acepta targets: instala exclusivamente el lanzador y
-`ropero.d`. El antiguo flujo de targets se sustituye por `ropero install`.
-En una entrada sin TTY, `AUTO_YES=1` o `--force`, los menús eligen todos los
-elementos compatibles; las confirmaciones destructivas continúan siendo
-conservadoras.
+Eso instala **el lanzador**. Ni los engines ni los modelos: esos se instalan
+después, y a propósito, porque son compilaciones y descargas de gigas que
+deben ser una decisión explícita.
 
-| comando | qué hace |
-| --- | --- |
-| `ropero --install [--force]` | entorno y enlaces propios de ropero |
-| `ropero install engines [selección]` | instala `llama`, `airllm`, `mlx`, `tensorrt` o `flm` compatibles |
-| `ropero install models [selección]` | descarga modelos del catálogo |
-| `ropero config [engine]` | muestra configuración efectiva, puertos y disco |
+```bash
+ropero install engines           # llama.cpp, airllm, tensorrt-llm, mlx-lm, flm
+ropero install models            # los pesos de los modelos
+ropero list                      # qué hay disponible
+```
 
-El menú de engines usa `1 llama`, `2 airllm`, `3 mlx` (macOS Apple Silicon), `4 tensorrt`
-(Linux + NVIDIA RTX), `5 flm` (Linux + CPU AMD), `9 todos` y `0 salir`.
-Admite varias selecciones por coma, punto y coma o espacio. El de modelos usa
-las mismas separaciones, `99 todos` y `0 salir`; las filas incompatibles o sin
-descarga no se pueden seleccionar.
+Si el repositorio es privado, el instalador necesita un token:
 
-> **Migración externa:** `../repos.yaml` todavía contiene `./ropero --install`.
-> Ahora sólo instalará ropero; si necesita engines/modelos deberá migrarse a
-> `./ropero install` según la política del repo padre.
+```bash
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
+  https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
+```
 
-`install link` existe para rehacer los symlinks de lo ya instalado sin instalar
-paquetes ni pesos. Las selecciones explícitas no interactivas aceptan alias,
-nombres de catálogo o sus números; los modelos incompatibles/no descargables se
-omiten y cuentan en el resumen. Las entradas de catálogo sin launcher se pueden
-pedir por su clave o nombre explícito: se descargan, pero no reciben número si
-no se puede inferir con seguridad el engine que las usaría.
+### Opciones del instalador
 
-`--check` verifica:
-
-- Symlinks en `~/.local/bin/`.
-- Que los ejecutables de los backends estén linkeados.
-- Modelos GGUF descargados.
-- `llama-server` compilado, en PATH, y **con su versión** (importa, ver más
-  abajo).
-- `BIN_DIR` en PATH.
-
-### Cada engine linkea lo suyo al terminar de instalarse
-
-`ropero install engines` recorre los engines uno a uno, y **cada uno enlaza sus
-ejecutables en cuanto acaba** — no hay un paso final "enlaza todo":
-
-| Engine | Dónde vive | Qué se linkea |
+| Flag | Qué hace | Por defecto |
 |---|---|---|
-| `llama.cpp` | `~/llama.cpp/build/bin/` | los 23+ (`llama-server`, `llama-cli`, `llama-bench`, `llama-quantize`…) |
-| `tensorrt-llm` | `~/.venv-tensorrt/bin/` | **sólo** los `trtllm-*` (CachyOS) |
-| `airllm` | el `bin` del Python que lo instaló | `airllm`, `airllm-server` |
-| `mlx-lm` | el `bin` del Python que lo instaló | `mlx_lm`, `mlx_lm.generate`, `mlx_lm.chat` |
+| `--prefix <dir>` | dónde se instala ropero | `~/.local/share/ropero` |
+| `--bin-dir <dir>` | dónde se crea el symlink | `~/.local/bin` |
+| `--version <ref>` | versión a instalar (`main` o un tag) | `main` |
+| `--force` | reinstala aunque ya exista | — |
+| `--no-link` | no crea el symlink | — |
 
-La relación es 1:1. Si instalas sólo `llama.cpp`, los enlaces que aparecen son
-los de `llama.cpp`; saltarte un engine no deja ninguno suyo suelto.
+Los equivalentes como variables de entorno son `ROPERO_PREFIX`,
+`ROPERO_BIN_DIR`, `ROPERO_VERSION`, `ROPERO_FORCE`, `ROPERO_NO_LINK` y
+`ROPERO_REPO`. El flag siempre manda sobre la variable.
 
-**Por qué importa el link.** `mlx_lm` vivía sólo detrás del shim de asdf. Si esa
-versión de Python se reinstalaba, el shim apuntaba al vacío y `mlx_lm`
-desaparecía sin aviso. Con el symlink, sobrevive al Python.
-
-**Por qué `tensorrt-llm` sólo linkea `trtllm-*`.** `~/.venv-tensorrt/bin` es un
-venv, no un directorio de herramientas: dentro hay 69 ejecutables, pero sólo 7
-son de tensorrt. Los otros 62 son activadores y scripts de Python que el venv
-trae de paso — incluidos `python`, `python3` y `pydoc.bat`. Enlazarlos pondría el
-`python3` del venv por delante del shim de asdf en el PATH de todo el sistema, y
-a partir de ahí cualquier `python3` ejecutaría el venv de tensorrt.
-
-**AirLLM y mlx-lm se buscan por nombre.** La ruta no se puede escribir de
-antemano: cambia según si se instalaron con `uv` o con `pip`, y según qué Python
-esté activo. Se resuelve en runtime (preguntando a los Pythons de asdf dónde
-ponen sus console scripts) y se enlaza **por nombre exacto**, nunca "lo que haya
-en el directorio": un paquete de Python trae dependencias que se instalan como
-ejecutables (`ninja`, `hf`, `wheel`…) y linkearlas ganaría al resto del sistema.
-
-**Aviso de shadowing.** Al linkear, ropero **tapa** cualquier binario del mismo
-nombre que ya estuviera en el PATH. Casi siempre es lo que se quiere, pero
-puede ser un downgrade sin que se note: si tienes un `llama-server` de Homebrew
-más nuevo que el que compila ropero, el de ropero pasa a ganar. El install avisa
-cuando lo detecta, y `--check` imprime la versión para que el cambio sea visible.
+No hace falta `sudo`. Todo va a `--prefix`, `--bin-dir` o `~/.cache`.
 
 ---
 
-## Uso
+## Cómo funciona
 
-### Listar modelos
+Ropero tiene cuatro piezas y ninguna más:
+
+```
+ropero/
+├── install.sh        el instalador de una línea
+├── bin/              el lanzador y sus módulos
+│   ├── ropero            el CLI
+│   ├── 22-models.sh      carga los modelos (los TOML)
+│   ├── 21-download-models.sh   la máquina de descarga
+│   └── _engines.sh       el registro de engines
+├── endpoints/        el servidor OpenAI-compatible
+│   └── server.py
+└── models/           la configuración de cada modelo
+    ├── llama/
+    │   ├── gptoss.toml
+    │   ├── gemma.toml
+    │   └── fired/        (modelos retirados)
+    └── ...
+```
+
+### 1. Los modelos son datos, no código
+
+Cada modelo es un fichero TOML en `models/<engine>/`. El mismo formato para
+todos los engines, activos y retirados:
+
+```toml
+[model]
+name    = "gemma"
+engine  = "llama-server"
+context = 131072
+
+[files]
+gguf   = "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+mtp    = "mtp-gemma-4-26B-A4B-it.gguf"
+mmproj = "gemma-4-26B-A4B-it-mmproj-BF16.gguf"
+
+[download]
+repo = "unsloth/gemma-4-26B-A4B-it-qat-GGUF"
+file = "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+size = "15.7 GB"
+
+[args]
+base = ["--n-gpu-layers", "99", "--jinja", "--temp", "1.0"]
+```
+
+Antes esto eran scripts de bash que se cargaban con `source`, y eso convertía
+la configuración en código ejecutable. Ahora un modelo es un fichero de datos
+que no puede hacer nada por su cuenta, y **el catálogo de descargas sale de
+los mismos TOML**: no hay dos listas que se puedan desincronizar. Antes pasaba
+—y pasaba— que `ropero install models` bajaba un fichero que el modelo luego
+no encontraba.
+
+La plantilla con el esquema completo está en `models/_template.toml`, y
+`ropero template` la enseña.
+
+### 2. Sólo los modelos de `models/` se pueden usar
+
+Los que cuelgan de `models/<engine>/fired/` están **retirados**: no se
+arrancan, no se descargan y no aparecen en el catálogo. Pero no son
+desconocidos:
+
+```console
+$ ropero devstral
+El modelo 'devstral' ya no está disponible (está retirado).
+  engine: llama-server
+  config: .../models/llama/fired/devstral.toml
+```
+
+La diferencia importa. "No existe" hace que busques otro; "está retirado" te
+dice que no busques nada porque no va a funcionar.
+
+### 3. Los engines que no traen endpoint, lo tienen
+
+AirLLM es una biblioteca, no un servidor. TensorRT-LLM y FLM traen uno, pero
+ninguno de los dos comprueba la API key. Los tres pasan por
+`endpoints/server.py`, un único servidor FastAPI que pone la API key, el
+nombre del modelo y el ciclo de vida por igual:
+
+```
+opencode ──► :9999 (endpoint, exige la key) ──► backend en 127.0.0.1
+```
+
+El único proceso que escucha en la red es el de ropero, y exige la key. El
+backend nativo se queda siempre en loopback.
+
+### 4. Todo habla la misma API
+
+`llama-server`, el endpoint unificado y el proxy de auth exponen lo mismo:
+`/v1/models`, `/v1/chat/completions`, `/v1/completions`. Por eso cambiar de
+engine no cambia tu cliente.
 
 ```bash
-ropero list
+curl http://localhost:9999/v1/chat/completions \
+  -H "Authorization: Bearer $LLAMA_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemma","messages":[{"role":"user","content":"hola"}]}'
 ```
 
-Salida:
+---
 
-```
-Modelos disponibles:
-  devstral     ctx=131072  gguf=Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf  engine=llama-server
-  coder        ctx=131072  gguf=Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf  engine=llama-server
-  analyst      ctx=131072  gguf=Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf  engine=llama-server
-  ...
-```
+## Comandos
 
-**Ojo**: cada modelo puede tener **dos nombres**:
-
-- El nombre del script (`devstral`) → modelo físico.
-- El alias público (`coder`) → nombre que usan los agentes de `gunter`.
-
-Ambos apuntan al mismo proceso.
-
-### Arrancar un modelo
-
-```bash
-# Primer plano (logs en pantalla, coloreados)
-ropero analyst
-
-# Background (logs a ~/.logs/ropero/)
-ropero analyst --background
-
-# En CPU (slot :9998, sin GPU)
-ropero verifier --cpu --background
-
-# Forzar si el slot destino está ocupado por otro
-ropero coder --force --background
-
-# Puerto puntual, sin editar el .sh del modelo
-ropero embed --port 9995 --background
-```
-
-### Argumentos que declara el modelo
-
-Además de los flags globales (`--background`, `--cpu`, `--force`, `--port`),
-cada modelo puede declarar **niveles**, **flags** y **opciones** propias. El
-CLI no tiene vocabulario propio: lo que el `.sh` del modelo no declara, es un
-error de uso.
-
-```bash
-ropero gptoss --high           # nivel (gptoss: low|medium|high)
-ropero gemma --vision          # flag booleano
-ropero gemma --n-cpu-moe 8     # opción con valor
-```
-
-Un alias público puede traer su nivel por defecto, y el flag explícito gana
-sobre él:
-
-| invocación | nivel |
+| Comando | Qué hace |
 |---|---|
-| `ropero gptoss` | medium |
-| `ropero gptoss --high` | high |
-| `ropero verifier` | high (su alias) |
-| `ropero verifier --low` | low (el flag manda) |
+| `ropero <modelo>` | arranca el modelo |
+| `ropero list` | los modelos disponibles y los retirados |
+| `ropero status` | qué está corriendo, en qué puerto, con qué RAM |
+| `ropero stop <modelo>\|all` | para lo que esté corriendo |
+| `ropero install [engines\|models\|link]` | instala engines, modelos o enlaces |
+| `ropero config [engine]` | la configuración actual |
+| `ropero check` | verifica la instalación (no modifica nada) |
+| `ropero template` | enseña la plantilla de un modelo |
 
-### gpt-oss: un solo modelo, el nivel por argumento
+`ropero install` sin destino pasa por los engines y luego por los modelos.
 
-Antes eran cuatro scripts (`gptoss_high` / `gptoss_medium` / `gptoss_low` /
-`gptossfallback`) con la misma tabla de n-gramas copiada en varios sitios. Ahora
-hay **un** `ropero.d/gptoss.sh` con el nivel como argumento, y la tabla vive en
-una sola función.
+### Flags del lanzador
 
-- GGUF: `gpt-oss-20b-UD-Q8_K_XL.gguf` (13,2 GB). Es el que está en disco, y el
-  que ya usaba el fallback: con él como modelo único, el "seguro frío" deja de
-  ser un segundo modelo y era una duplicación que solo servía para tener dos
-  contextos que calibrar.
-- Contexto 65536 (no 131072): con el Q8_K_XL la KV en q8_0 a 131072 son 3,19
-  GiB y no caben en 16 GB junto a los pesos.
-- Aliases: `verifier` (high) y `designer` (medium) — los pide el
-  `opencode.jsonc` de gunter, no son nuestros.
-
-### `--port` vs `MODEL_PORT`
-
-| | Cuándo | Dónde se define | Sobrevive al comando |
-|---|---|---|---|
-| `MODEL_PORT` | el modelo SIEMPRE vive en ese puerto | en su `.sh` de `ropero.d/` | sí |
-| `--port N` | solo este arranque | en la línea de comandos | no |
-
-Precedencia: `--port` > `MODEL_PORT` > `--cpu` (`:9998`) > `:9999` (GPU).
-
-Los puertos de `--port` se recuerdan en `~/.logs/ropero/ad-hoc-ports`, para que
-`ropero status` los liste (columna `SLOT` = `ad-hoc`) y `ropero stop <modelo>` los
-encuentre. Se borran del registro al parar el modelo, así que no se acumulan.
-
-
-### Estado
-
-```bash
-ropero status              # resumen de ambos slots
-ropero status --craft      # render artesanal (sin alaja)
-ropero status --watch      # refresco continuo cada 1s
-ropero status --watch 500  # refresco cada 500ms
-```
-
-Muestra:
-
-- CPU/GPU GHz, RAM/VRAM, temp, fan RPM.
-- **Todos los puertos configurados**, no solo los activos: los dos slots por
-  defecto (`:9999` GPU, `:9998` CPU) más los que hayan pineado los modelos con
-  `MODEL_PORT`. Cada fila indica si está `ON` u `OFF`, su modelo, PID, uptime y
-  engine. La columna `SLOT` dice quién vive en ese puerto.
-- Modelo, PID, uptime, engine.
-
-`status` delega en `alaja` para el render, y cae al render artesanal si no está
-o si no imprime nada (p. ej. un binario de `alaja` a medio compilar).
-
-### Parar
-
-```bash
-ropero stop analyst   # un modelo concreto
-ropero stop all       # ambos slots
-```
-
----
-
-## Arquitectura — dual-slot
-
-```mermaid
-flowchart LR
-    subgraph GPU["GPU :9999<br/>(dGPU RTX / Apple GPU)"]
-        direction TB
-        GPU_MODELS["Cualquier modelo:<br/>coder (Devstral)<br/>analyst (Qwen3-Coder)<br/>qwen<br/>qwenvision<br/>fable"]
-    end
-    subgraph CPU["CPU :9998<br/>(offload total)"]
-        direction TB
-        CPU_MODELS["Solo gptoss:<br/>verifier<br/>designer"]
-    end
-```
-
-**Reglas**:
-
-- GPU y CPU pueden coexistir con modelos distintos.
-- `gptoss` (y sus alias `verifier` / `designer`) es el único que va bien en CPU. Los demás van a GPU.
-- `--cpu` arranca en `:9998` con todos los layers en CPU.
-- `--port N` arranca en `N`, saltándose `MODEL_PORT` y los slots. No edita el
-  `.sh`: el siguiente arranque vuelve al puerto de siempre.
-- `--force` mata el slot destino si está ocupado por otro modelo (no toca el otro slot).
-
----
-
-## Gemma 4 26B-A4B QAT (experimental)
-
-Según la [guía de Unsloth](https://unsloth.ai/docs/models/gemma-4/qat), se usan tres archivos del mismo repositorio en `GGUF_DIR` (por defecto `~/models/gguf`):
-- Modelo: `gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf`.
-- MTP: `mtp-gemma-4-26B-A4B-it.gguf`.
-- Proyector: `gemma-4-26B-A4B-it-mmproj-BF16.gguf` (nombre propio para evitar colisiones).
-
-```bash
-./ropero install models gemma     # descarga el bundle entero
-./ropero gemma                    # texto puro, sin visión
-./ropero gemma --vision           # añade el proyector: el modelo lee imágenes
-./ropero gemma --n-cpu-moe 8      # 8 capas de expertos MoE en la CPU (más hueco en VRAM)
-./ropero gemma --high             # razonamiento + CoT conservado en el historial
-./ropero gemma --low              # sin razonamiento: respuesta directa
-```
-
-Los tres archivos son un **bundle**: se descargan juntos y con **un solo
-consentimiento** (15.7 GB en total). No es un extra opcional: con el GGUF
-solo, `llama-server` arranca y se cae al primer uso, porque `--model-draft` y
-`--mmproj` apuntan a ficheros que no existen.
-
-El proyector se descarga a un temporal y se mueve a su nombre final: en el
-repo se llama `mmproj-BF16.gguf`, igual que el de Qwen3.8, y descargado
-directo a `GGUF_DIR` uno pisaría al otro.
-
-### La visión es opt-in
-
-`ropero gemma` arranca **sin** el mmproj: son 1139 MiB de VRAM, y el 95% de
-lo que se le pide a un modelo de texto no lo necesita. Con `--vision` el
-modelo lee imágenes.
-
-| config | mmproj | `--n-cpu-moe` (default) | VRAM |
-|---|:-:|---:|---:|
-| `ropero gemma` | no | 0 (todo en GPU) | ~14,6 GiB |
-| `ropero gemma --vision` | sí | 5 (5 capas de expertos a la CPU) | ~15,7 GiB |
-
-El default cambia **según el caso**, y `--n-cpu-moe N` lo ajusta en los dos
-(`ropero gemma --n-cpu-moe 2`, `ropero gemma --vision --n-cpu-moe 8`): cada
-capa de expertos MoE que baja a la RAM libera ~0,46 GB de VRAM, que es
-justo lo que necesita el mmproj para entrar.
-
-Medido en una RTX 5080 Laptop (16 GB) con la config de `ropero.d/gemma.sh`:
-104-140 tok/s y una aceptación de MTP del 49-88% según el prompt. La KV cache
-se queda en RAM a propósito (`--no-kv-offload`): a 131072 en q8_0 son 1139 MiB
-y en la tarjeta no caben junto al modelo.
-
-### El nivel de razonamiento
-
-Gemma 4 **no** tiene `reasoning_effort` como gpt-oss: su chat template solo
-conoce `enable_thinking` y `preserve_thinking`. Los niveles se traducen a sus
-knobs reales:
-
-| nivel | qué hace |
+| Flag | Qué hace |
 |---|---|
-| `--low` | `enable_thinking=false` → respuesta directa, sin CoT |
-| `--medium` | `enable_thinking=true` → razona y responde (default) |
-| `--high` | `+ preserve_thinking` → conserva el CoT anterior en el historial (agentic con tool calls) |
+| `--background` | arranca en segundo plano y sigue |
+| `--cpu` | fuerza CPU, sin GPU |
+| `--port N` | el puerto en el que escuchar |
+| `--force` | rotura el puerto si está ocupado |
+| `--low` / `--medium` / `--high` | nivel de razonamiento |
+| `--vision` | activa la torre de visión (si el modelo la tiene) |
+| `--n-cpu-moe N` | ajustes propios de un modelo |
 
-Con thinking activo, el CoT sale limpio en el campo `reasoning_content` de la
-API: `llama-server` sabe parsear el bloque `<|channel>thought` de Gemma 4.
-
-Requieren un build reciente de llama.cpp con `gemma4-assistant`, sin
-autocompilación. Configuraciones orientativas: sin garantía de ajuste en
-CUDA de 16 GiB ni de contexto lleno.
-
-> `ROPERO_DOWNLOADER=hf|curl` fuerza el descargador (`auto` por defecto: `hf`
-> si está, `curl` si no). Útil cuando el `hf` del sistema está roto.
+El vocabulario es del modelo, no del CLI: si un modelo no declara `--vision`,
+`ropero <modelo> --vision` es un error de uso, no un flag ignorado.
 
 ---
 
-## Estructura del repo
+## Los modelos
 
-```mermaid
-flowchart TD
-    root["ropero/"]
-    n0["ropero                     entry point (bash, dispatch)"]
-    root --> n0
-    n1["ropero.d/                  módulos"]
-    root --> n1
-    n2["_common.sh             helpers comunes"]
-    n1 --> n2
-    n3["gptoss.sh               modelo: gpt-oss-20b (nivel por argumento)"]
-    n1 --> n3
-    n4["00-utils.sh            helpers de logging / prompts"]
-    n1 --> n4
-    n5["01-env.sh              defaults de entorno (BIN_DIR, GGUF_DIR...)"]
-    n1 --> n5
-    n6["20-compile-llama.sh    compilación de llama.cpp (CMake flags)"]
-    n1 --> n6
-    n7["21-download-models.sh  descarga de los GGUF por defecto"]
-    n1 --> n7
-    n8["gemma.sh               modelo: Gemma 4 26B-A4B (MTP + visión)"]
-    n1 --> n8
-    n9["qwencoder.sh           modelo: Qwen3-Coder-30B (alias \"analyst\")"]
-    n1 --> n9
-    n10["ministral.sh           modelo: Ministral 3 14B (alias \"vault\")"]
-    n1 --> n10
-    n11["qwen3ranker.sh         modelo: reranker (alias \"ranker\")"]
-    n1 --> n11
-    n12["qwen3vector.sh         modelo: embeddings (alias \"vector\")"]
-    n1 --> n12
-    n13["qwenvision.sh          modelo: Qwen2.5-VL (visión)"]
-    n1 --> n13
-    n17["fired/                 modelos fuera del scope actual (archivados)"]
-    n1 --> n17
-    n18["README.md                  este archivo"]
-    root --> n18
-    n19["CHANGELOG.md"]
-    root --> n19
-    n20["docs/"]
-    root --> n20
-    n21["model-eval.md          benchmarking de modelos"]
-    n20 --> n21
-```
+Activos:
+
+| Modelo | Engine | Notas |
+|---|---|---|
+| `gemma` | llama-server | Gemma 4 26B-A4B, con MTP y visión |
+| `gptoss` | llama-server | GPT-OSS 20B, alias `verifier` y `designer` |
+| `qwencoder` | llama-server | Qwen3-Coder 30B, alias `coder` |
+| `qwenvision` | llama-server | Qwen2.5-VL 7B |
+| `agents-a1-4b` | llama-server | InternScience Agents-A1 4B |
+| `agents-a1-35b` | llama-server | InternScience Agents-A1 35B-A3B |
+| `qwen38-apex` | llama-server | Qwen3.8 27B, con MTP y visión |
+| `airllm` | airllm | GPT-OSS 120B sobre AirLLM |
+| `metaloss` | mlx_lm | GPT-OSS 20B en MLX (Apple Silicon) |
+
+Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
+`ropero verifier` es `ropero gptoss --high`.
+
+### Overrides por entorno
+
+| Variable | Qué hace |
+|---|---|
+| `ROPERO_<MODELO>_CTX` | el contexto del modelo |
+| `ROPERO_<MODELO>_GGUF` | otra cuantización del mismo repo |
+| `ROPERO_<MODELO>_PORT` | el puerto del modelo |
+| `ROPERO_MODEL_OPT_<OPCIÓN>` | el valor de una opción con valor |
+| `LLAMA_API_KEY` | la clave de la API (por defecto `sk-local-dev-key`) |
+| `HOST` | dónde escuchar (por defecto `0.0.0.0`) |
+| `GGUF_DIR` | dónde están los GGUF (por defecto `~/models/gguf`) |
+| `SAFETENSORS_DIR` | dónde están los checkpoints (por defecto `~/models/safetensors`) |
+
+Los overrides propios de cada modelo (temperatura del drafter, tipo de KV…)
+también existen: `ROPERO_GEMMA_TEMP`, `ROPERO_GEMMA_MTP_NMAX`,
+`ROPERO_GPTOSS_KV`… y están declarados en el TOML de cada modelo.
 
 ---
 
-## Añadir un modelo nuevo
+## Engines
 
-### 1. Crear el script
+| Engine | Sistema | Qué necesita |
+|---|---|---|
+| `llama-server` (llama.cpp) | todos | GPU NVIDIA en Linux, Metal en macOS |
+| `airllm` | todos | mucha RAM: inferencia capa a capa |
+| `tensorrt-llm` | Linux NVIDIA | un `trtllm-serve` compatible |
+| `mlx_lm` | macOS Apple Silicon | `mlx-lm` |
+| `fastflowlm` | Linux con NPU AMD | `flm` |
+
+`ropero install engines` instala sólo los que tu máquina soporta.
+
+---
+
+## Requisitos
+
+- **bash 4+**, `curl` o `wget`, `tar`
+- **python3 ≥ 3.8**: los modelos se configuran en TOML y su lector es un
+  script de Python. Es la única dependencia de ropero que no viene con el
+  sistema. Si tienes varios, `ROPERO_PYTHON=/ruta/a/python3` dice cuál.
+- engines: cada uno tiene los suyos (ver la tabla de arriba)
+
+---
+
+## Desarrollo
 
 ```bash
-cat > ropero.d/mi-modelo.sh <<'EOF'
-#!/usr/bin/env bash
-# mi-modelo.sh — Descripción del modelo
-
-MODEL_ENGINE="llama-server"
-MODEL_GGUF="mi-modelo-Q4_K_M.gguf"
-MODEL_CTX="${ROPERO_MI_MODELO_CTX:-131072}"
-
-# Alias público opcional (ropero lo registra como nombre alternativo)
-MODEL_ALIAS="${MODEL_ALIAS:-mi-alias}"
-
-get_model_args_mi_modelo() {
-    local -a args=(
-        --n-gpu-layers 999
-        --no-kv-offload
-        --cache-type-k q8_0
-        --cache-type-v q8_0
-        --jinja
-        --temp 0.6
-        --top-p 0.95
-        --n-predict 4096
-    )
-    printf '%s\n' "${args[@]}"
-}
-EOF
+bash -n bin/ropero                 # sintaxis
+python3 bin/_modelconf.py validate --root models   # esquema de los modelos
+bash tests/test-argparse.sh        # contrato del CLI (66 casos)
+bash tests/test-gemma4.sh          # descarga de bundles (17 casos)
 ```
 
-### 2. (Opcional) Añadir descarga automática
+Las pruebas son offline: no tocan la red ni la máquina. Todo lo que podría
+salir (curl, wget, git, pip…) está bloqueado por stubs que lo anotan si se
+llega a llamar.
 
-En `ropero.d/21-download-models.sh`, añadir una línea:
+### Añadir un modelo
 
-```bash
-ropero_download_gguf "repositorio/org/mi-modelo-GGUF" \
-    "mi-modelo-Q4_K_M.gguf" "Mi Modelo Q4" "10 GB"
-```
+1. Copia `models/_template.toml` a `models/<engine>/<nombre>.toml`.
+2. Rellena `[model]`, `[files]`, `[download]` y `[args]`.
+3. `ropero template` y `models/_template.toml` tienen el esquema completo.
+4. `python3 bin/_modelconf.py validate --root models` te dice si te falta algo.
 
-### 3. Probar
-
-```bash
-ropero list | grep mi-modelo
-ropero mi-modelo --background
-```
-
----
-
-## Overrides por env
-
-Cada modelo admite variables para no editar el `.sh`:
-
-```bash
-# Cambiar contexto
-ROPERO_ANALYST_CTX=65536 ropero analyst
-
-# Cambiar n-cpu-moe (offload a CPU)
-ROPERO_CODER_N_CPU_MOE=40 ropero coder
-
-# Ver todas las variables por modelo
-grep -oE 'ROPERO_[A-Z_]+' ropero.d/*.sh | sort -u
-```
-
-Convención: `ROPERO_<MODELO>_<PARAM>`, con el nombre del modelo en
-`UPPER_SNAKE_CASE` (guiones → guiones bajos).
-
----
-
-## Dependencias
-
-- **llama.cpp** compilado con CUDA (CachyOS) o Metal (macOS). Lo instala `ropero install engines`.
-- **Python 3.11+** para AirLLM / MLX / TensorRT (opcional).
-- **Homebrew** (macOS) o **pacman/paru** (CachyOS) para paquetes base.
-- **jq**, **curl** (para checks).
-
----
-
-## Motores soportados
-
-| Engine         | Plataforma            | Modelo típico                     |
-| -------------- | --------------------- | --------------------------------- |
-| `llama-server` | Linux + macOS         | GGUF (Qwen, Devstral, gpt-oss...) |
-| `mlx_lm`       | macOS (Apple Silicon) | safetensors MLX                   |
-| `airllm`       | Cross-platform        | safetensors 120B                  |
-| `tensorrt-llm` | CachyOS               | optimizado NVIDIA                 |
-
-`llama-server` es el motor por defecto. Los demás son para casos concretos.
-
----
-
-## Troubleshooting
-
-| Problema                     | Causa                 | Fix                                       |
-| ---------------------------- | --------------------- | ----------------------------------------- |
-| `Archivo GGUF no encontrado` | Modelo no descargado  | `ropero install models` o descargar manual |
-| `Puerto :9999 ocupado por X` | Otro modelo en GPU    | `ropero stop X` o `ropero Y --force`      |
-| `llama-server no en PATH`    | No compilado          | `ropero install engines`                  |
-| Modelo tarda mucho en cargar | Normal la primera vez | Espera 60-180s, logs en `~/.logs/ropero/` |
-| `OOM` en GPU                 | Modelo no cabe entero | Subir `--n-cpu-moe` o bajar `MODEL_CTX`   |
-
----
-
-## Integración con gunter
-
-`gunter` (entorno IA) usa ropero para modelos locales:
-
-- `_shunt-lib.sh` invoca `ropero <alias> --background` para `bulk-read` / `code-write`.
-- `ropero status` es la fuente de verdad para saber qué modelo está en qué slot.
-- Los aliases (`coder`, `analyst`, `verifier`, `designer`) son los que pide el `opencode.jsonc` de gunter.
-
-Cambiar el modelo asociado a `coder`:
-
-1. Editar `ropero.d/devstral.sh` (o el que sea).
-2. `opencode.jsonc` y gunter no se enteran.
-3. La próxima vez que se arranque `coder`, carga el nuevo modelo.
+No hay que tocar ningún `.sh`: el catálogo de descargas, la lista de modelos
+y el launcher se entero. Un modelo nuevo es un fichero nuevo.
 
 ---
 
 ## Licencia
 
-Uso personal. Repo privado.
+Ver el repositorio.

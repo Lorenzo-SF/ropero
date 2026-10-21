@@ -1,0 +1,67 @@
+# =============================================================================
+# 🔥 FIRED — qwen3ranker (Qwen3-Reranker-0.6B)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/llama/fired/qwen3ranker.toml models/llama/
+# y descargando el GGUF.
+#
+# Cross-encoder del vault. Etapa 2 del retrieval: lee (consulta, nota) JUNTAS
+# y devuelve un score. Lento a propósito, y por eso NUNCA recorre las 10.000
+# notas — solo las ~50 que el embedder devolvió.
+#
+# 10.000 notas --[vector, bi-encoder]--> 50 --[ranker, cross-encoder]--> 8 --[LLM]--> respuesta
+#
+# POR QUÉ NO ES OPCIONAL
+#   embeder  bi-encoder      ve cada texto SOLO          → vector   (barato)
+#   ranker   cross-encoder   ve consulta Y documento     → score    (caro)
+#
+# La doc de BGE lo dice literalmente: "As cross-encoder models, re-ranker
+# demonstrates higher accuracy than bi-encoder embedding model."
+#
+# MTEB-R, mismo protocolo:
+#     Qwen3-Reranker-0.6B   65,80      ← este
+#     BGE-reranker-v2-m3    57,03
+#
+# No se puede sustituir por un LLM generativo: la cabecera de cross-encoder se
+# entrena sobre pares, no sobre títulos. Un embedder NO puede hacer este papel.
+#
+# Puerto fijo (:9994). Va forzado a CPU: son 639 MB y podrían ir a la GPU, pero
+# si el coder satura la VRAM el retrieval se cae entero. El retrieval tiene que
+# estar siempre vivo; el coder no.
+#
+# El override del contexto es el canónico ROPERO_QWEN3RANKER_CTX.
+# =============================================================================
+
+[model]
+name    = "qwen3ranker"
+engine  = "llama-server"
+context = 8192
+port    = 9994
+alias   = "ranker"
+
+[files]
+gguf = "qwen3-reranker-0.6b-q8_0.gguf"
+
+[download]
+repo = "ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF"
+file = "qwen3-reranker-0.6b-q8_0.gguf"
+size = "639 MB"
+
+[args]
+base = [
+    # ---- FORZADO A CPU ----
+    "--n-gpu-layers", "0",
+
+    # ---- Lo que hace que sea un reranker y no un embedder ----
+    "--reranking",
+
+    # ---- Batching ----
+    # Aquí SÍ genera (un score por par), pero son scores de 1 token. Batch
+    # alto para no pagar el coste fijo por cada uno de los 50 pares.
+    "--batch-size", "2048",
+    "--ubatch-size", "2048",
+    "--parallel", "4",
+
+    "--jinja",
+]

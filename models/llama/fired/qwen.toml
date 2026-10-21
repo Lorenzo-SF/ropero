@@ -1,0 +1,117 @@
+# =============================================================================
+# 🔥 FIRED — qwen (Qwen3.8-27B Q3_K_XL + MTP draft)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/llama/fired/qwen.toml models/llama/
+# y descargando GGUF + MTP + mmproj.
+#
+# Config validada en test extremo 2026-09-11:
+#   - KV q8_0 (mejor precision, +2.3 GB vs q4_0, pero vale la pena)
+#   - MTP draft externo con --spec-type draft-mtp + --model-draft
+#   - Acceptance rate ~70% en mini-test (1020/1443 drafts)
+#   - Mean accepted len 2.84 tokens (suficiente)
+#
+# Por que esta config es optima:
+#   - Q3_K_XL (12.23 GiB) cabe en 16 GB con margen para KV cache q8_0
+#   - MTP aporta calidad sin perder velocidad neta
+#   - Context 131072 default = maximo rendimiento con 128k prompt reales
+#   - ngl 99 = todos los layers en GPU; el fitting auto-ajusta el draft (-1)
+#   - n-predict 16384 = no corta respuestas largas
+#
+# Peculiaridades:
+#   1. Spec-type draft-mtp: MTP head nativo (qwen35.nextn_predict_layers = 1)
+#   2. Model-draft: el fichero mtp-Qwen3.8-27B-Q4_0.gguf (1.37 GB, 3.66 BPW),
+#      que vive en el subdirectorio MTP/ del repo pero se guarda plano en la
+#      raíz de $GGUF_DIR (de ahí el ${mtp}).
+#   3. KV q8_0: recomendado repo para tool use / precision en contexto largo
+#   4. Sin thinking mode (enable_thinking=false) = instruct puro
+#
+# El override del contexto es el canónico ROPERO_QWEN_CTX.
+# =============================================================================
+
+[model]
+name    = "qwen"
+engine  = "llama-server"
+context = 131072
+alias   = "analyst"
+
+[files]
+gguf   = "Qwen3.8-27B-UD-Q3_K_XL.gguf"
+mtp    = "mtp-Qwen3.8-27B-Q4_0.gguf"
+mmproj = "qwen3.8-mmproj-BF16.gguf"
+
+# El tamaño es el del BUNDLE completo, tal y como figura en el catálogo:
+# 13.15 GB + 1.37 GB (MTP) + 0.93 GB (mmproj) = 15.45 GB
+[download]
+repo = "unsloth/Qwen3.8-27B-GGUF"
+file = "Qwen3.8-27B-UD-Q3_K_XL.gguf"
+size = "15.4 GB"
+
+[download.aux.mtp]
+file = "MTP/mtp-Qwen3.8-27B-Q4_0.gguf"
+name = "mtp-Qwen3.8-27B-Q4_0.gguf"
+size = "1.37 GB"
+
+# El mmproj se llama "mmproj-BF16.gguf" igual que el de Gemma4: si aterrizara
+# en la raíz de GGUF_DIR, pisaría al de Gemma4 (o al revés). Por eso el nombre
+# final lleva el prefijo.
+[download.aux.mmproj]
+file = "mmproj-BF16.gguf"
+name = "qwen3.8-mmproj-BF16.gguf"
+size = "931 MB"
+
+[args]
+base = [
+    # ---- GPU offload ----
+    # ngl 99: todos los layers del target en GPU (64 layers + 1 MTP head = 65)
+    # -1 NO funciona aqui: el fitting se cuelga con ctx 131k + draft
+    "--n-gpu-layers", "99",
+    "--no-kv-offload",
+
+    # ---- Atencion ----
+    # -fa on lo pone ropero entry globalmente
+
+    # ---- KV cache (q8_0 = precision sobre velocidad en contexto largo) ----
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--cache-prompt",
+    "--context-shift",
+    "--kv-unified",                                    # single user, unified buffer
+
+    # ---- Speculative decoding (MTP nativo + draft externo) ----
+    "--spec-type", "draft-mtp",
+    "--model-draft", "${mtp}",
+    "--n-gpu-layers-draft", "-1",                      # auto-fit del draft
+    "--spec-draft-n-max", "5",
+    "--spec-draft-n-min", "1",
+    "--spec-draft-backend-sampling",
+
+    # ---- Modelo / carga ----
+    "--jinja",                                         # chat template Qwen3.8
+    "--reasoning-format", "deepseek",                  # limpia tags <think>
+    "--chat-template-kwargs", '{"enable_thinking": false}',  # THINKING OFF
+    "--load-mode", "none",
+
+    # ---- Sampling (modo INSTRUCT, canonico Qwen3.8) ----
+    "--temp", "0.7",
+    "--top-p", "0.80",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.5",                       # reduce repeticiones
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+
+    # ---- Batching / threads ----
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+
+    # ---- Generacion ----
+    # Subido a 16384: permite respuestas largas sin cortar
+    "--n-predict", "16384",
+    "--keep", "1024",
+
+    # ---- Misc ----
+    # --log-verbosity lo pone ropero entry (default 4)
+]

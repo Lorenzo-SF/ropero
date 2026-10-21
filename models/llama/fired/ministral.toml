@@ -1,0 +1,98 @@
+# =============================================================================
+# 🔥 FIRED — ministral (Ministral 3 14B Instruct)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/llama/fired/ministral.toml models/llama/
+# y descargando el GGUF.
+#
+# El cerebro del vault. Cubría DOS roles con un solo modelo:
+#
+#   · CLASIFICADOR  — dónde va esta nota (¿inbox o archive? ¿GTD o PARA?)
+#   · ENRIQUECEDOR  — lee la nota + las 8 que devolvió el ranker y ESCRIBE
+#                     prosa sobre ellas
+#
+# ── Lo que SÍ es, medido (unsloth.ai/docs, docs.mistral.ai) ──
+#   · denso 14B (13,5B LM + 0,4B encoder de visión) — NO es MoE
+#   · contexto nativo 256K — en CPU eso no se ve: 32768 es el número honesto
+#     para esta máquina
+#   · function calling NATIVO
+#   · salida JSON NATIVA
+#
+# Y lo que NO es: NO es rápido. Es un modelo de LOTE, pensado para que el cron
+# lo ejecute, no para conversar con él.
+#
+# Puerto fijo (:9995). Va forzado a CPU (--n-gpu-layers 0): 9,6 GB de pesos en
+# la VRAM mientras el coder la necesita. El procesamiento del vault es un cron
+# horario, y si compartiera GPU desalojaría al modelo con el que estás
+# trabajando.
+#
+# ── VISIÓN (opcional, no incluida a propósito) ──────────────────────────────
+# El modelo trae un encoder de visión de 0,4B, pero va SEPARADO, en un mmproj.
+# Sin él el servidor arranca igual y solo lee texto — que es el 95% de un vault
+# de Obsidian, así que la arranque sin visión es la opción por defecto.
+#
+# El override del contexto es el canónico ROPERO_MINISTRAL_CTX.
+# =============================================================================
+
+[model]
+name    = "ministral"
+engine  = "llama-server"
+context = 32768
+port    = 9995
+alias   = "vault"
+
+[files]
+gguf = "Ministral-3-14B-Instruct-2512-UD-Q5_K_XL.gguf"
+
+[download]
+repo = "unsloth/Ministral-3-14B-Instruct-2512-GGUF"
+file = "Ministral-3-14B-Instruct-2512-UD-Q5_K_XL.gguf"
+size = "9.64 GB"
+
+[args]
+base = [
+    # ---- FORZADO A CPU ----
+    "--n-gpu-layers", "0",
+
+    # ---- KV cache ----
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--cache-prompt",
+    "--context-shift",
+    "--kv-unified",
+
+    # ---- Plantilla / salida estructurada ----
+    "--jinja",                                          # chat template Mistral 3
+    "--reasoning-format", "none",                       # Instruct: no emite <think>
+
+    # ---- Sampling ----
+    # Un valor para tres roles distintos, y por eso NO está al extremo:
+    #   clasificador  → quiere determinismo (aquí gana el --temp bajo)
+    #   enriquecedor   → quiere prosa que no suene a plantilla
+    #   ask           → quiere variedad
+    # El ejemplo oficial de Unsloth para Instruct es temp 0.15; eso es correcto
+    # para clasificar y seco para escribir. 0,3 es el punto medio.
+    #
+    # Y si un rol necesita otro valor, se lo pasa POR PETICIÓN: llama-server
+    # acepta temp/seed en el body. Este es el default, no una obligación.
+    "--temp", "0.3",
+    "--top-p", "0.95",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+
+    # ---- Batching / threads ----
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+    "--threads", "12",
+    "--threads-batch", "16",
+
+    # ---- Generación ----
+    "--n-predict", "4096",        # suficiente para una nota enriquecida; la
+                                   # doc pide 16384 para Instruct, pero eso es
+                                   # para salidas masivas
+    "--keep", "1024",
+
+    "--load-mode", "none",
+]

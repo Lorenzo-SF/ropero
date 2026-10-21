@@ -6,7 +6,25 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 BASH_BIN="$(command -v bash)"
-PYTHON_BIN="$(python3 -c 'import sys; print(sys.executable)')"
+# Un python que FUNCIONE. El shim de asdf puede estar en el PATH y estar roto
+# ("No version is set for command python3"), así que se prueban los candidatos
+# en vez de coger el primero que aparece.
+PYTHON_BIN=""
+for _cand in python3 python /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+    if "$_cand" -c 'import sys' >/dev/null 2>&1; then
+        PYTHON_BIN="$("$_cand" -c 'import sys; print(sys.executable)')"
+        break
+    fi
+done
+if [[ -z "$PYTHON_BIN" ]]; then
+    for _cand in "$HOME"/.asdf/installs/python/*/bin/python3; do
+        if [[ -x "$_cand" ]] && "$_cand" -c 'import sys' >/dev/null 2>&1; then
+            PYTHON_BIN="$("$_cand" -c 'import sys; print(sys.executable)')"
+            break
+        fi
+    done
+fi
+[[ -n "$PYTHON_BIN" ]] || { printf 'FATAL: no hay python3 utilizable\n' >&2; exit 1; }
 
 VERBOSE=0
 [[ "${1:-}" == "-v" ]] && VERBOSE=1
@@ -35,8 +53,11 @@ mkdir -p "$RUN_DIR" "$HOME_DIR" "$GGUF_DIR_TEST" "$SAFETENSORS_DIR_TEST" \
 
 # A second safety net. If a production path escapes the leaf stubs, these
 # executables record it and fail instead of touching the network or host.
+# python3 NO se bloquea: los modelos se configuran en TOML y su lector es un
+# script de Python. Lo que se bloquea es todo lo que puede RED (curl, wget,
+# git, hf, pip) o tocar el sistema. El lector de TOML no hace red.
 for tool in curl wget git cmake ninja make brew pacman paru sudo pkg apt apt-get \
-    dnf pip pip3 python python3 uv hf huggingface-cli flm; do
+    dnf pip pip3 uv hf huggingface-cli flm; do
     cat >"$BLOCK_DIR/$tool" <<'EOF'
 #!/usr/bin/env bash
 printf '%s' "$(basename "$0")" >>"${ROPERO_TEST_SENTINEL:?}"
@@ -52,9 +73,19 @@ done
 # braces. The parser and its orchestration remain production code. Only leaves
 # that perform work are replaced.
 _instrument() {
-    cp "$REPO/ropero" "$WORK/ropero"
-    cp -R "$REPO/ropero.d" "$WORK/ropero.d"
-    "$PYTHON_BIN" - "$WORK/ropero" <<'PY'
+    # Estructura nueva: el entrypoint y los módulos van en bin/, los modelos en
+    # models/ y el servidor de endpoints en endpoints/.
+    # "cp -R origen destino" copia DENTRO de destino si destino ya existe
+    # ($WORK/bin existe: es el BIN_DIR de pruebas). Por eso se copia el
+    # contenido con "origen/." y no el directorio.
+    # Ojo: $WORK/models YA existe (porque GGUF_DIR_TEST es $WORK/models/gguf).
+    # "cp -R origen destino" con destino existente copia DENTRO de él, y
+    # acabaría en $WORK/models/models/. Por eso se copia el contenido.
+    mkdir -p "$WORK/models" "$WORK/endpoints"
+    cp -R "$REPO/bin/." "$WORK/bin/"
+    cp -R "$REPO/models/." "$WORK/models/"
+    cp -R "$REPO/endpoints/." "$WORK/endpoints/"
+    "$PYTHON_BIN" - "$WORK/bin/ropero" <<'PY'
 import io
 import sys
 
@@ -172,10 +203,10 @@ start_model() {
 source = source.replace(needle, "\n" + stubs + '\nmain "$@"\n')
 io.open(path, "w", encoding="utf-8").write(source)
 PY
-    chmod +x "$WORK/ropero"
+    chmod +x "$WORK/bin/ropero"
 }
 
-if ! _instrument || ! "$BASH_BIN" -n "$WORK/ropero"; then
+if ! _instrument || ! "$BASH_BIN" -n "$WORK/bin/ropero"; then
     printf 'FATAL: no se pudo crear una copia instrumentada válida\n' >&2
     exit 1
 fi
@@ -221,7 +252,7 @@ _ropero() {
         export ROPERO_TEST_SENTINEL="$SENTINEL_LOG"
         export ROPERO_TEST_STATE="$STATE_FILE"
         : >"$STATE_FILE"
-        _watchdog "$BASH_BIN" "$WORK/ropero" "$@" 2>&1
+        _watchdog "$BASH_BIN" "$WORK/bin/ropero" "$@" 2>&1
     )
 }
 
@@ -255,6 +286,21 @@ check() {
     [[ -z "$why" ]] && _pass "$desc" || _fail "$desc" "$why" "$out"
 }
 
+# check_not_rc DESC WANT_RC BAD_RE -- ARGS...
+# Como check_not, pero fijando el código de salida: hay casos de uso que
+# deben fallar (rc 2) Y no dejar rastro.
+check_not_rc() {
+    local desc="$1" want_rc="$2" bad_re="$3" out rc why=""
+    shift 3
+    [[ "${1:-}" == -- ]] && shift
+    out="$(_ropero "$@")"; rc=$?
+    [[ "$rc" == "$want_rc" ]] || why="rc esperado $want_rc, obtenido $rc"
+    if grep -qE -- "$bad_re" <<<"$out"; then
+        why="${why:+$why · }apareció /$bad_re/"
+    fi
+    [[ -z "$why" ]] && _pass "$desc" || _fail "$desc" "$why" "$out"
+}
+
 # check_not DESC REGEX -- ARGS... (also requires rc 0)
 check_not() {
     local desc="$1" bad_re="$2" out rc why=""
@@ -272,18 +318,21 @@ echo '== ropero: contrato CLI v2 =='
 
 # Global help.
 check 'sin argumentos muestra help' 0 'USO: ropero <modelo>' --
-check '--help muestra help' 0 'únicamente ropero' -- --help
+check '--help muestra help' 0 'install\.sh' -- --help
 check 'help muestra help' 0 'install.*engines.*models.*link' -- help
 
-# --install is self-install only. Old v1 targets must fail before effects.
-check '--install instala sólo ropero' 0 'CALL ropero_link_self:' -- --install
-check '--install --force llega al self installer' 0 'CALL ropero_link_self:.*FORCE=1' -- --install --force
-check '--install --help específico' 0 'USO: ropero --install.*solo ropero' -- --install --help
-check '--install rechaza models antiguo' 2 'argumento desconocido para --install' -- --install models
-check '--install rechaza engines antiguo' 2 'argumento desconocido para --install' -- --install engines
-check '--install rechaza link antiguo' 2 'argumento desconocido para --install' -- --install link
-check '--install rechaza all antiguo' 2 'argumento desconocido para --install' -- --install all
-check_not '--install no toca engines/modelos' 'ropero_install_|_ropero_cat_download' -- --install
+# El entrypoint ya NO se autoinstala: eso lo hace install.sh (curl … | bash).
+# `--install` y `--check` con guiones son, por tanto, opciones desconocidas, y
+# tienen que fallar ANTES de cualquier efecto. OJO: `install` (sin guiones)
+# sigue existiendo y es otra cosa: instala engines y modelos.
+check '--install ya no existe' 2 'opción desconocida' -- --install
+check '--install --force ya no existe' 2 'opción desconocida' -- --install --force
+check '--install --help ya no existe' 2 'opción desconocida' -- --install --help
+check '--install rechaza models antiguo' 2 'opción desconocida' -- --install models
+check '--install rechaza engines antiguo' 2 'opción desconocida' -- --install engines
+check '--install rechaza link antiguo' 2 'opción desconocida' -- --install link
+check '--install rechaza all antiguo' 2 'opción desconocida' -- --install all
+check_not_rc '--install no toca engines/modelos' 2 'ropero_install_|_ropero_cat_download|CALL ropero_link_self' -- --install
 
 # install orchestration and aliases. Empty selection is deliberately non-TTY:
 # all compatible engines and all selectable models must be reached.
@@ -293,18 +342,20 @@ check 'install engines selecciona múltiples nombres' 0 'CALL ropero_install_air
 check 'install engines también instala llama seleccionado' 0 'CALL ropero_install_llama:.*FORCE=0' -- install engines llama,airllm
 check 'install engines propaga force' 0 'CALL ropero_install_airllm:.*FORCE=1' -- install engines llama,airllm --force
 check_not 'install engines no descarga modelos' '_ropero_cat_download' -- install engines llama,airllm
-check 'install models selecciona múltiples nombres' 0 '▸ \[2/2\]' -- install models ranker,vector
-check 'install models alcanza hojas de catálogo' 0 'CALL _ropero_cat_download:.*FORCE=0' -- install models ranker,vector
-check 'install models propaga force' 0 'CALL _ropero_cat_download:.*FORCE=1' -- install models ranker,vector --force
-check_not 'install models no instala engines' 'CALL ropero_install_' -- install models ranker
+check 'install models selecciona múltiples nombres' 0 '▸ \[2/2\]' -- install models gemma,gptoss
+check 'install models alcanza hojas de catálogo' 0 'CALL _ropero_cat_download:.*FORCE=0' -- install models gemma,gptoss
+check 'install models propaga force' 0 'CALL _ropero_cat_download:.*FORCE=1' -- install models gemma,gptoss --force
+check_not 'install models no instala engines' 'CALL ropero_install_' -- install models gemma
 check 'install link relinkea hojas' 0 'CALL ropero_link_airllm:' -- install link
 check_not 'install link no instala ni descarga' 'CALL ropero_install_|_ropero_cat_download' -- install link
 
 check 'alias engines' 0 'CALL ropero_install_airllm:' -- engines airllm
-check 'alias models' 0 'CALL _ropero_cat_download:' -- models ranker
+check 'alias models' 0 'CALL _ropero_cat_download:' -- models gemma
 check 'alias link' 0 'CALL ropero_link_airllm:' -- link
-check 'alias check despacha check' 1 '== ropero --check ==' -- check
-check '--check alias despacha check' 1 '== ropero --check ==' -- --check
+check 'alias check despacha check' 0 '== ropero check ==' -- check
+# `--check` (con guiones) ya no existe: la verificación la hace install.sh al
+# instalar. `check` (sin guiones) sigue siendo el diagnóstico.
+check '--check ya no existe' 2 'opción desconocida' -- --check
 
 # Nested help must be command-specific, rc 0, and effect-free.
 check 'help install' 0 'USO: ropero install' -- install --help
@@ -317,7 +368,7 @@ check 'help config' 0 'USO: ropero config' -- config --help
 check 'help status' 0 'USO: ropero status' -- status --help
 check 'help stop' 0 'USO: ropero stop' -- stop --help
 check 'help list' 0 'USO: ropero list' -- list --help
-check 'help templates' 0 'USO: ropero templates' -- templates --help
+check 'help template' 0 'USO: ropero template' -- template --help
 check_not 'help anidado no inicializa entorno' 'CALL ropero_env_setup' -- install models --help
 
 # Usage errors: rc 2 and useful command usage.
@@ -326,17 +377,17 @@ check 'target install repetido' 2 'destino repetido' -- install engines models
 check 'link rechaza selección' 2 'link no acepta selección' -- link extra
 check 'check rechaza argumentos' 2 'check no acepta argumentos' -- check models
 check 'list rechaza argumentos' 2 'list no acepta argumentos' -- list extra
-check 'templates rechaza argumentos' 2 'templates no acepta argumentos' -- templates extra
+check 'template rechaza argumentos' 2 'template no acepta argumentos' -- template extra
 check 'config rechaza dos argumentos' 2 'argumento desconocido' -- config llama extra
 check 'config engine desconocido devuelve 2' 2 'engine desconocido' -- config inexistente
 
 # Model launcher parsing. start_model is the effect leaf; parsing remains real.
-check 'launcher sin flags pasa defaults' 0 'CALL start_model: \[ranker\] \[0\] \[0\] \[0\] \[\]' -- ranker
-check 'launcher combina flags y puerto' 0 'CALL start_model: \[ranker\] \[1\] \[1\] \[1\] \[54321\]' -- ranker --background --cpu --force --port 54321
-check 'launcher --help' 0 'USO: ropero <modelo>' -- ranker --help
-check 'launcher flag desconocido rc2' 2 'opción desconocida' -- ranker --foc
-check 'launcher --port sin valor' 1 'requiere un número de puerto' -- ranker --port
-check 'launcher --port inválido' 1 'no es un puerto válido' -- ranker --port=abc
+check 'launcher sin flags pasa defaults' 0 'CALL start_model: \[qwencoder\] \[0\] \[0\] \[0\] \[\]' -- qwencoder
+check 'launcher combina flags y puerto' 0 'CALL start_model: \[qwencoder\] \[1\] \[1\] \[1\] \[54321\]' -- qwencoder --background --cpu --force --port 54321
+check 'launcher --help' 0 'USO: ropero <modelo>' -- qwencoder --help
+check 'launcher flag desconocido rc2' 2 'opción desconocida' -- qwencoder --foc
+check 'launcher --port sin valor' 1 'requiere un número de puerto' -- qwencoder --port
+check 'launcher --port inválido' 1 'no es un puerto válido' -- qwencoder --port=abc
 check 'modelo inexistente' 1 'Modelo desconocido' -- inexistente
 
 # -----------------------------------------------------------------------------
@@ -353,9 +404,9 @@ check 'launcher nivel por defecto si no se pide' 0 'CALL start_model: \[gptoss\]
 check 'launcher flag del modelo' 0 'CALL start_model: \[gemma\] \[0\] \[0\] \[0\] \[\] \[\] \[vision\]' -- gemma --vision
 check 'launcher opcion del modelo' 0 'CALL start_model: \[gemma\] \[0\] \[0\] \[0\] \[\] \[\] \[\] \[n-cpu-moe=8\]' -- gemma --n-cpu-moe 8
 check 'launcher opcion con igual' 0 'CALL start_model: \[gemma\].*\[n-cpu-moe=8\]' -- gemma --n-cpu-moe=8
-check 'launcher nivel no declarado es error' 2 'opción desconocida' -- ranker --high
-check 'launcher flag no declarado es error' 2 'opción desconocida' -- ranker --vision
-check 'launcher opcion no declarada es error' 2 'opción desconocida' -- ranker --n-cpu-moe 8
+check 'launcher nivel no declarado es error' 2 'opción desconocida' -- qwencoder --high
+check 'launcher flag no declarado es error' 2 'opción desconocida' -- qwencoder --vision
+check 'launcher opcion no declarada es error' 2 'opción desconocida' -- qwencoder --n-cpu-moe 8
 check 'launcher opcion sin valor es error' 2 'requiere un valor' -- gemma --n-cpu-moe
 
 # Final safety assertions.

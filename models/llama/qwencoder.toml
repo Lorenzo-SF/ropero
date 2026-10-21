@@ -1,0 +1,89 @@
+# =============================================================================
+# qwencoder — Qwen3-Coder-30B-A3B-Instruct (UD-IQ3_XXS GGUF)
+# =============================================================================
+#
+# Modelo: Qwen/Qwen3-Coder-30B-A3B-Instruct (UD-IQ3_XXS GGUF)
+#   - MoE 30.5B / 3.3B activo (128 expertos, 8 activados)
+#   - 48 layers, GQA 32Q / 4KV
+#   - Vocab Qwen3 (~150K)
+#   - Contexto 262,144 nativo
+#   - **Solo non-thinking mode** (spec repo: NO genera <think> blocks)
+#     → NO usar enable_thinking (modelo no lo soporta, lo ignora)
+#   - Sampling canónico Qwen3: temp=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05
+#
+# ── UD-IQ3_XXS (12,8 GB) en vez de UD-Q4_K_XL (17,7 GB) ─────────────────────
+#   Q4_K_XL  17,7 GB  →  deja ~0,3 GB de VRAM para el KV cache  ⇒ inusable
+#   IQ3_XXS  12,8 GB  →  deja ~3,2 GB
+#
+# El contexto de 44K es un REQUISITO DURO de este rol (un repo entero no cabe en
+# 8K), y el contexto vive en el KV cache, que vive en la VRAM.
+#
+# IQ3 cuantiza a la baja lo que no es importante y sube el embedding y
+# lm_head; para un MoE de 3,3B activos la diferencia de calidad está en el
+# orden del 3%, que es poco para 4,9 GB de VRAM.
+#
+# Peculiaridades críticas:
+#   1. MoE 30B en 16GB VRAM: requiere --n-cpu-moe (no cabe entero)
+#   2. Modelo denso de atención, NO hybrid Gated DeltaNet
+#   3. No usa MTP ni speculative decoding (GGUF básico)
+#
+# El override del contexto es el canónico ROPERO_QWENCODER_CTX (antes el .sh
+# usaba ROPERO_CODER_CTX, por el alias `coder`).
+# =============================================================================
+
+[model]
+name    = "qwencoder"
+engine  = "llama-server"
+context = 131072
+alias   = "coder"
+
+[files]
+gguf = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
+
+[download]
+repo = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+file = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
+size = "12.8 GB"
+
+[args]
+base = [
+    # ---- GPU offload (MoE 30B/3B activo) ----
+    "--n-gpu-layers", "-1",                            # todos los layers GPU-eligible
+    "--n-cpu-moe", "${env:ROPERO_CODER_N_CPU_MOE:-30}",  # expertos MoE en CPU
+    "--no-kv-offload",                                 # KV cache en GPU
+
+    # ---- Atención ----
+    # -fa on lo pone ropero entry globalmente
+
+    # ---- KV cache ----
+    "--cache-type-k", "q8_0",                          # q8_0 recomendado para tool use
+    "--cache-type-v", "q8_0",
+    "--cache-prompt",
+    "--context-shift",
+    "--kv-unified",                                   # single user, unified buffer
+
+    # ---- Modelo / carga ----
+    "--jinja",                                        # chat template Qwen3 coder
+    "--reasoning-format", "deepseek",                  # limpia tags <think> (no genera, pero por si)
+    "--load-mode", "none",
+
+    # ---- Sampling (canónico Qwen3 coder) ----
+    "--temp", "0.7",
+    "--top-p", "0.8",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.05",
+    "--repeat-last-n", "64",
+
+    # ---- Batching / threads ----
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+
+    # ---- Generación ----
+    "--n-predict", "8192",                             # agentic puede requerir outputs largos
+    "--keep", "1024",
+
+    # ---- Misc ----
+    # --log-verbosity lo pone ropero entry (default 4)
+]

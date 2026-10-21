@@ -1,0 +1,186 @@
+# =============================================================================
+# gemma — Gemma-4-26B-A4B-it-qat-UD-Q4_K_XL + MTP draft + mmproj (visión)
+# =============================================================================
+#
+# Config basada en la del script de Qwen3.8-27B, adaptada a Gemma 4 MoE:
+#   - Modelo MoE (26B totales, ~4B activos) -> Q4_K_XL ocupa poco espacio
+#   - MTP drafter externo con --spec-type draft-mtp
+#   - Multimodal: --mmproj para entrada de imágenes (SOLO con --vision)
+#   - Acceptance rate medido en esta máquina: 49-88% según el prompt
+#
+# ── USO ─────────────────────────────────────────────────────────────────────
+#   ropero gemma                      → texto puro, sin visión
+#   ropero gemma --vision             → añade el mmproj (lee imágenes)
+#   ropero gemma --n-cpu-moe 8        → 8 capas de expertos MoE en la CPU
+#   ropero gemma --vision --n-cpu-moe 8
+#   ropero gemma --high               → razonamiento + CoT conservado
+#   ropero gemma --low                → sin razonamiento (respuesta directa)
+#
+# Override env vars (sin editar este fichero):
+#   ROPERO_GEMMA_CTX=262144 ropero gemma     # 256k context
+#   ROPERO_GEMMA_TEMP=0.7 ropero gemma       # más determinista
+#   ROPERO_GEMMA_MTP_NMAX=6 ropero gemma     # menos especulación
+#   ROPERO_GEMMA_MTP_PMIN=0.0 ropero gemma   # drafter sin umbral (comport. antiguo)
+#   ROPERO_GEMMA_N_CPU_MOE=8 ropero gemma    # experts MoE en CPU por defecto
+#
+# ── POR QUÉ 5 CAPAS DE EXPERTOS EN CPU (FIJO, NO SE TOCA) ───────────────────
+# Los expertos MoE son el 88% de los pesos (22,8B de 26B), así que cada capa que
+# se queda en la RAM libera ~0,46 GB de VRAM. En esta máquina (RTX 5080 Laptop,
+# 16 GB) el modelo completo + KV + overhead no cabe en VRAM, así que 5 capas de
+# expertos se quedan en CPU tanto con visión como sin ella. Sin ese hueco hay
+# OOM. Medido: con visión 15732 MiB de 16303; sin visión ~14593 MiB.
+#
+# Por eso --n-cpu-moe va en [args].base con su valor por defecto: si no
+# estuviera, `ropero gemma` arrancaría sin él y reventaría. La opción
+# `--n-cpu-moe N` (o ROPERO_GEMMA_N_CPU_MOE=N) va después, y en llama-server
+# gana la última aparición del flag.
+#
+# ── NIVELES ─────────────────────────────────────────────────────────────────
+# Gemma 4 NO tiene "reasoning_effort" como gpt-oss: su chat template sólo
+# conoce enable_thinking y preserve_thinking.
+#
+#   low     → enable_thinking=false              → respuesta directa, sin CoT
+#   medium  → enable_thinking=true               → razona y responde (default)
+#   high    → enable_thinking + preserve_thinking → además conserva el CoT
+#                                                anterior en el historial
+#
+# MEDIDO en esta máquina (RTX 5080 Laptop, 16 GB):
+#   enable_thinking=false → 0 caracteres de razonamiento
+#   enable_thinking=true  → ~500 caracteres en reasoning_content
+# =============================================================================
+
+[model]
+name    = "gemma"
+engine  = "llama-server"
+context = 131072
+alias   = "gemma"
+
+[files]
+gguf   = "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+mtp    = "mtp-gemma-4-26B-A4B-it.gguf"
+mmproj = "gemma-4-26B-A4B-it-mmproj-BF16.gguf"
+
+# El GGUF principal son 14.2 GB, pero Gemma4 NO es un fichero: el MTP
+# (decoding especulativo) y el mmproj (proyector de visión) son parte del
+# modelo. Los tres se bajan con UN consentimiento, porque con dos de tres
+# llama-server arranca igual y se cae al primer uso (--model-draft y --mmproj
+# apuntan a ficheros que no existen).
+#
+# El tamaño es el del BUNDLE completo, tal y como figura en el catálogo:
+#   principal 14.25 GB + mmproj 1.19 GB + mtp 0.25 GB = 15.70 GB
+[download]
+repo = "unsloth/gemma-4-26B-A4B-it-qat-GGUF"
+file = "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+size = "15.7 GB"
+
+# El MTP se llama igual en su repo y en el destino. El mmproj se llama
+# "mmproj-BF16.gguf" en TODOS los repos de GGUF multimodal —Qwen3.8 también
+# tiene uno con ese nombre exacto—, así que su nombre final lleva el prefijo
+# del modelo. Si no, el último mmproj descargado pisa al anterior y el primer
+# modelo deja de ver visión.
+[download.aux.mtp]
+file = "mtp-gemma-4-26B-A4B-it.gguf"
+name = "mtp-gemma-4-26B-A4B-it.gguf"
+size = "252 MB"
+
+[download.aux.mmproj]
+file = "mmproj-BF16.gguf"
+name = "gemma-4-26B-A4B-it-mmproj-BF16.gguf"
+size = "1.19 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "medium"
+
+[flags]
+list = ["vision"]
+
+[options]
+list = ["n-cpu-moe"]
+
+[options.default]
+n-cpu-moe = "5"
+
+[args]
+base = [
+    # ---- GPU offload ----
+    # ngl 99: todos los layers en GPU (30 layers + MTP head)
+    "--n-gpu-layers", "99",
+    # La KV cache se QUEDA EN LA RAM, no en la VRAM. No es un descuido:
+    # a 131072 en q8_0 la KV son 1139 MiB, y con ella dentro la tarjeta
+    # (15,9 GiB útiles) no llega. En RAM sí cabe, y el penalty medido es
+    # bajo: 104-140 tok/s con la GPU al 95% de ocupación.
+    "--kv-unified",
+    "--n-cpu-moe", "${env:ROPERO_GEMMA_N_CPU_MOE:-5}",
+
+    # ---- Atención ----
+    "--flash-attn", "on",
+
+    # ---- KV cache (q8_0 para precisión en contexto largo) ----
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--cache-prompt",
+    "--context-shift",
+    "--kv-unified",                    # single user, unified buffer
+
+    # ---- Speculative decoding (MTP nativo) ----
+    # El drafter se carga desde ${mtp} (ruta absoluta bajo $GGUF_DIR).
+    "--spec-type", "draft-mtp",
+    "--model-draft", "${mtp}",
+    "--n-gpu-layers-draft", "-1",     # auto-fit del draft
+    "--spec-draft-n-max", "${env:ROPERO_GEMMA_MTP_NMAX:-8}",  # 8: más profundidad
+    "--spec-draft-n-min", "${env:ROPERO_GEMMA_MTP_NMIN:-1}",
+    "--spec-draft-p-min", "${env:ROPERO_GEMMA_MTP_PMIN:-0.6}",  # corta cuando baja confianza
+    "--spec-draft-backend-sampling",
+
+    # ---- Modelo / carga ----
+    "--jinja",                         # chat template de Gemma
+    "--load-mode", "none",
+
+    # ---- Sampling (canónico Gemma 4) ----
+    "--temp", "${env:ROPERO_GEMMA_TEMP:-1.0}",
+    "--top-p", "0.95",
+    "--top-k", "64",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.5",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+
+    # ---- Batching / threads ----
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+
+    # ---- Generación ----
+    "--n-predict", "16384",
+    "--keep", "1024",
+]
+
+# ---- Thinking (Gemma 4 es híbrido: razona y responde) ----
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false, preserve_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = true, preserve_thinking = false }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true, preserve_thinking = true }
+
+# ---- Multimodal (visión): SOLO si se pide ----
+# El mmproj son 1139 MiB de VRAM. El 95% de lo que se le pide a un modelo de
+# texto no lo necesita, así que por defecto el servidor arranca SIN torre de
+# visión: 14593 MiB en vez de 15732.
+[args.flag.vision]
+base = ["--mmproj", "${mmproj}"]
+requires = ["mmproj"]
+
+# ---- MoE en CPU: 5 por defecto (obligatorio en esta máquina) ----
+# El valor por defecto de la opción; con --n-cpu-moe N gana el N del usuario.
+#
+# replace: el valor del usuario SUSTITUYE el "--n-cpu-moe" del base en vez de
+# añadirse detrás. Duplicarlo funcionaría (llama.cpp se queda con el último),
+# pero dejaría dos "--n-cpu-moe" en el argv, y eso es una trampa para quien lea
+# el argv. Con replace hay exactamente uno.
+[args.option.n-cpu-moe]
+replace = "--n-cpu-moe"
+base = ["--n-cpu-moe", "${value}"]

@@ -1,0 +1,158 @@
+# =============================================================================
+# PLANTILLA DE UN MODELO DE ROPERO
+# =============================================================================
+#
+# Copia este fichero a `models/<engine>/<nombre>.toml` y ajusta lo que aplique.
+# Los modelos retired (los que ya no deben usarse) viven en
+# `models/<engine>/fired/<nombre>.toml` con EXACTAMENTE el mismo formato: la
+# diferencia es la carpeta, no el esquema.
+#
+# El punto de este formato es que un modelo es DATOS, no código. Nada de lo
+# que hay aquí se ejecuta: el CLI lo lee, lo carga en variables y decide.
+#
+# ---------------------------------------------------------------------------
+# ESQUEMA
+# ---------------------------------------------------------------------------
+#
+# [model]  (obligatoria)
+#   name      Identificador único del modelo. Kebab-case. Es el nombre que se
+#             escribe en `ropero <name>`. Ej.: "gptoss", "qwen38-apex".
+#   engine    Motor que lo ejecuta. Uno de:
+#               llama-server  → GGUF, servidor propio con --api-key
+#               airllm        → checkpoint safetensors, endpoint propio de ropero
+#               mlx_lm        → checkpoint MLX (safetensors), macOS/Apple Silicon
+#               tensorrt-llm  → checkpoint TRT, NVIDIA
+#               fastflowlm    → modelo del almacén de FLM, AMD NPU
+#   context   Tokens de contexto por defecto.
+#   alias     Alias público adicional (sin nivel). Ej.: "coder".
+#   port      Puerto fijo del modelo. Si no se declara, usa el slot por defecto
+#             (:9999 GPU / :9998 CPU) o el --port que se pase en la línea de
+#             órdenes.
+#   format    "gguf" (por defecto) o "safetensors" (engines con checkpoint).
+#   path      Sólo para format = "safetensors". Ruta del checkpoint, relativa a
+#             $SAFETENSORS_DIR.
+#
+# [files]  (obligatoria)
+#   gguf      Nombre final del GGUF principal en disco. Vacío si format=safetensors.
+#   mtp       Nombre final del fichero MTP (decoding especulativo). Opcional.
+#   mmproj    Nombre final del proyector de visión. Opcional.
+#
+# [download]  (obligatoria salvo que el modelo no se descargue)
+#   repo      Repositorio de HuggingFace, "owner/repo".
+#   file      Nombre exacto del fichero dentro del repo.
+#   name      Nombre final en disco. Si se omite, vale lo mismo que file.
+#   size      Tamaño legible del fichero. Informativo: sale en las tablas.
+#   excludes  Patrones a excluir (sólo checkpoints). Ej.: ["original/*"].
+#
+# [download.aux.mtp] / [download.aux.mmproj]  (opcionales)
+#   file      Ruta del fichero dentro del repo. Puede llevar subdirectorio.
+#   name      Nombre final en disco. Si se omite, vale lo mismo que file.
+#   size      Tamaño legible. Informativo.
+#
+# [levels]  (opcional)
+#   list      Niveles de razonamiento que acepta el modelo por argumento.
+#             `ropero <modelo> --high` sólo vale si "high" está en la lista.
+#   default   Nivel por defecto.
+#
+# [flags]  (opcional)
+#   list      Flags booleanos que acepta. Ej.: ["vision"].
+#
+# [options]  (opcional)
+#   list      Opciones con valor que acepta. Ej.: ["n-cpu-moe"].
+#
+# [options.default]  (opcional)
+#   <opcion> = "<valor>"  Valor por defecto de la opción si el usuario no la pasa.
+#
+# [aliases]  (opcional)
+#   <alias> = "<nivel>"  Alias público con nivel de razonamiento por defecto.
+#                        El nivel debe estar en [levels].list.
+#
+# [limits]  (opcional)
+#   min_ram_gb  RAM unificada mínima (GB) para poder arrancar. El CLI lo
+#               comprueba antes de arrancar: en macOS un modelo que no cabe
+#               empieza a paginar contra el disco y da ~0.2 tok/s, que parece
+#               un modelo roto pero es falta de RAM. Es un LÍMITE, no un
+#               requisito de hardware: sin esta sección no hay límite.
+#
+# [args]  (obligatoria)
+#   base      Lista de argumentos, UNO POR ELEMENTO (no string partido).
+#             Son SIEMPRE "los argumentos del servidor que sirve este modelo":
+#
+#               · engine = "llama-server" → flags de llama-server
+#               · engine = "airllm" | "mlx_lm" | "tensorrt-llm" | "fastflowlm"
+#                 → flags del servidor de ese engine
+#
+#             El CLI los pasa tal cual, sin reordenar.
+#
+# [args.level.<nivel>]  (opcional)
+#   base      Argumentos extra al arrancar con ese nivel.
+#   reasoning_effort    Atajo: se traduce a
+#                       --chat-template-kwargs {"reasoning_effort": "<valor>"}
+#   chat_template_kwargs  Diccionario que se traduce a
+#                       --chat-template-kwargs <json>
+#
+# [args.flag.<flag>]  (opcional)
+#   base      Argumentos extra al arrancar con ese flag.
+#   requires  Ficheros que tienen que estar en disco. Si falta alguno, el
+#             arranque falla con un mensaje claro en vez de caerse al usarlo.
+#
+# [args.option.<opcion>]  (opcional)
+#   base      Argumentos extra cuando se pasa esa opción. Puede usar ${value}.
+#
+# ---------------------------------------------------------------------------
+# PLACEHOLDERS DISPONIBLES EN LOS ARGUMENTOS
+# ---------------------------------------------------------------------------
+#   ${gguf}      Ruta absoluta del GGUF principal ($GGUF_DIR/<files.gguf>).
+#   ${mtp}       Ruta absoluta del MTP ($GGUF_DIR/<files.mtp>).
+#   ${mmproj}    Ruta absoluta del mmproj ($GGUF_DIR/<files.mmproj>).
+#   ${ctx}       Contexto efectivo (el de [model].context, o el override).
+#   ${value}     Valor de la opción (sólo en [args.option.*]).
+#   ${env:VAR}           Valor de la variable de entorno VAR.
+#   ${env:VAR:-defecto}  Lo mismo, con defecto.
+#
+# ---------------------------------------------------------------------------
+# ORDEN DE MONTAJE DE LOS ARGUMENTOS
+# ---------------------------------------------------------------------------
+#   1. [args].base
+#   2. [args.level.<nivel>]        (si el modelo tiene niveles)
+#   3. [args.flag.<flag>]          (por cada flag pedido, en el orden pedido)
+#   4. [args.option.<opcion>]      (por cada opción pedida)
+#
+# ---------------------------------------------------------------------------
+# EJEMPLO MÍNIMO (modelo de texto, llama-server)
+# ---------------------------------------------------------------------------
+#   [model]
+#   name    = "ejemplo"
+#   engine  = "llama-server"
+#   context = 32768
+#
+#   [files]
+#   gguf = "ejemplo-Q4_K_M.gguf"
+#
+#   [download]
+#   repo = "owner/ejemplo-GGUF"
+#   file = "ejemplo-Q4_K_M.gguf"
+#   size = "2.1 GB"
+#
+#   [args]
+#   base = ["--n-gpu-layers", "99", "--temp", "0.7"]
+# =============================================================================
+
+[model]
+name    = "nombre-del-modelo"
+engine  = "llama-server"
+context = 32768
+
+[files]
+gguf = "nombre-del-modelo.gguf"
+
+[download]
+repo = "owner/nombre-del-modelo-GGUF"
+file = "nombre-del-modelo.gguf"
+size = "0.0 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--jinja",
+]

@@ -1,0 +1,81 @@
+# =============================================================================
+# 🔥 FIRED — next (Qwen3-Coder-Next)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/llama/fired/next.toml models/llama/
+# y descargando el GGUF.
+#
+# Qwen3-Coder-Next — Config calibrada (16GB VRAM MUY ajustado)
+#   - 80B MoE / 3B activo (gigante: 512 expertos, 10 activos, 1 shared)
+#   - 48 layers, hybrid Gated DeltaNet + Gated Attention + MoE
+#   - Hidden 2048
+#   - Context 256K nativo
+#   - **NO thinking mode** (modelo no genera <think> blocks, especificación repo)
+#   - Sampling canónico Qwen3: temp=1.0, top_p=0.95, top_k=40
+#   - Hardware recomendado: >45GB unified memory (aquí 16GB VRAM + 30GB RAM = 46GB JUSTO)
+#
+# Peculiaridades críticas:
+#   1. 80B MoE en 16GB VRAM: NECESARIO offload CPU masivo de expertos
+#   2. Q3_K_S quant (33 GB en disco): ni entero cabe en RAM unificada
+#   3. Context 256K nativo pero en 16GB VRAM solo llegamos a 65K con offload
+#   4. NO usar enable_thinking (modelo no soporta; lo ignora)
+#
+# El override del contexto es el canónico ROPERO_NEXT_CTX.
+# =============================================================================
+
+[model]
+name    = "next"
+engine  = "llama-server"
+context = 65536
+
+[files]
+gguf = "Qwen3-Coder-Next-UD-Q3_K_S.gguf"
+
+[download]
+repo = "unsloth/Qwen3-Coder-Next-GGUF"
+file = "Qwen3-Coder-Next-UD-Q3_K_S.gguf"
+size = "33.3 GB"
+
+[args]
+base = [
+    # ---- GPU offload (80B MoE, casi todo a CPU) ----
+    "--n-gpu-layers", "-1",                            # todos los layers GPU-eligible
+    "--n-cpu-moe", "${env:ROPERO_NEXT_N_CPU_MOE:-44}",  # 44 de 48 layers con expertos en CPU
+    "--no-kv-offload",                                 # KV cache en GPU
+
+    # ---- Atención ----
+    # -fa on lo pone ropero entry globalmente
+    # Gated DeltaNet layers: comportamiento SSM-like (llama.cpp lo gestiona)
+
+    # ---- KV cache (mínimo para liberar VRAM) ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--cache-prompt",
+    "--context-shift",
+    "--kv-unified",                                    # single user, unified buffer
+
+    # ---- Modelo / carga ----
+    "--jinja",                                         # chat template Qwen3 Next
+    "--load-mode", "mmap",                             # mmap ON (33GB no cabe en RAM upfront)
+
+    # ---- Sampling (canónico Qwen3 instruct) ----
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "40",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+
+    # ---- Batching / threads (reducido por VRAM) ----
+    "--batch-size", "2048",
+    "--ubatch-size", "512",
+    "--parallel", "1",
+
+    # ---- Generación ----
+    "--n-predict", "4096",
+    "--keep", "1024",
+
+    # ---- Misc ----
+    # --log-verbosity lo pone ropero entry (default 4)
+]

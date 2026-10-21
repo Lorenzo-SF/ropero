@@ -1,0 +1,182 @@
+# =============================================================================
+# metaloss — gpt-oss-20b en MLX (Metal), el slot de razonamiento rápido
+# =============================================================================
+#
+# POR QUÉ ESTE MODELO EXISTE Y POR QUÉ SE LLAMA metaloss
+#
+# En ropero ya tienes gpt-oss-20b en varios sitios sobre GGUF con
+# llama-server. Este es el MISMO modelo por otro camino:
+#
+#   GGUF + llama.cpp  → Metal también, pero pasa por el backend de ggml, con su
+#                       propia implementación de MoE, su propia cuantización y
+#                       su propio sampler.
+#   MLX + mlx_lm      → el backend nativo de Apple. Para un MoE como este, donde
+#                       el 90% de los parámetros son expertos que se eligen 4 de
+#                       32 en cada token, MLX gana: cuantización mxfp4 nativa,
+#                       prompt cache de verdad y sin capas de traducción entre
+#                       el modelo y la GPU.
+#
+# El nombre es para que no se confunda con los otros: `metaloss` = "gpt-oss en
+# Metal". Si quisieras el mismo modelo en dos motores a la vez, este pinea su
+# propio puerto y no pelea por :9999.
+#
+# ⚠️ ESTE MODELO LLEVA PROXY DE AUTH (ya lo pone ropero, no tienes que hacer nada)
+# `mlx_lm.server` NO tiene `--api-key`: ni flag ni variable de entorno. ropero
+# le pone delante bin/_authproxy.py, que sí exige tu LLAMA_API_KEY. El
+# mlx_lm.server real escucha solo en 127.0.0.1, en :10992.
+#
+# ⚠️ Y EL NOMBRE DEL MODELO LO REESCRIBE EL PROXY
+# `mlx_lm.server` sólo acepta "default_model" como nombre de modelo: su
+# ModelProvider registra `{"default_model": <lo que sea --model>}` y resuelve con
+# `_model_map.get(nombre, nombre)`, así que lo que no está en el mapa se usa
+# como si fuera una ruta o un REPO_ID de HuggingFace. ropero lo resuelve en el
+# proxy: /v1/models anuncia "metaloss" y además reescribe el campo `model` del
+# body a "default_model". POR ESO en el opencode.jsonc puedes llamar a este
+# modelo como quieras — "gptoss", "metaloss" — y funciona igual.
+#
+# -----------------------------------------------------------------------------
+# QUÉ MODELO ES ESTE
+#
+# ⚠️ el repo `unsloth/gpt-oss-20b` NO es el correcto aquí: es un checkpoint
+# BF16 de 21B que Unsloth publica para vLLM/transformers. Para MLX el repo es
+# el de `mlx-community`, y el criterio NO es "el más pequeño" sino cuál pierde
+# menos calidad. Medido sobre los config.json reales:
+#
+#   repo                                   pesos    reparto de bits
+#   ─────────────────────────────────────────────────────────────────────────
+#   mlx-community/gpt-oss-20b-MXFP4-Q4     10.4 GB  MoE mxfp4-4 · resto affine-4
+#   mlx-community/gpt-oss-20b-MXFP4-Q8     11.2 GB  MoE mxfp4-4 · resto affine-8   ← este
+#   lmstudio-community/gpt-oss-20b-MLX-8bit 20.7 GB  TODO affine-8, sin mxfp4
+#   BMP / mrtoots (fp16)                    39.0 GB  no cabe
+#
+# Y aquí está el argumento: **ir a `lmstudio ... MLX-8bit` cuesta 9.5 GB más para
+# subir a 8 bits unos 2B parámetros, dejando los 19B de expertos exactamente
+# igual que en MXFP4-Q8**. Es un intercambio terrible. MXFP4-Q8 ya tiene la
+# atención y el router en 8 bits, que es donde una cuantización agresiva se nota.
+#
+# El argumento definitivo: **mxfp4 es el formato NATIVO del modelo**. OpenAI
+# post-entrenó gpt-oss con cuantización MXFP4 de los pesos MoE, y TODAS sus
+# evaluaciones se hicieron con ella. MXFP4-Q8 no es un MXFP4 re-cuantizado a
+# posteriori: es el mismo formato, con las capas no-MoE a 8 bits para no perder
+# lo que el modelo sí aprendió con precisión.
+#
+# ── ARQUITECTURA Y FORMATO (lo que tiene que ser el directorio) ─────────────
+# FORMATO: pesos YA convertidos a MLX (safetensors). NO es GGUF (eso es
+# llama.cpp) y NO es el checkpoint bf16 de HuggingFace tal cual.
+# ARQUITECTURA: gpt_oss (GptOssForCausalLM). MoE: 32 expertos, 4 activos por
+# token, 3.6B activos de 21B. 24 capas, hidden 2880, 64 cabezas de atención, 8
+# cabezas KV, head_dim 64. Contexto máximo 131072.
+#
+# El directorio DEBE llamarse como [model].path. Es el preflight de ropero: si
+# no existe, no arranca y te lo dice.
+# =============================================================================
+
+[model]
+name    = "metaloss"
+engine  = "mlx_lm"
+context = 65536
+format  = "safetensors"
+path    = "gpt-oss-20b-MXFP4-Q8"
+port    = 9992
+
+[files]
+# Este engine carga un checkpoint safetensors (pesos ya convertidos a MLX), no
+# un GGUF: [files].gguf se queda vacío a propósito.
+
+# ── LÍMITES (dato, no lógica) ──────────────────────────────────────────────
+# macOS no avisa de que le falta memoria: el modelo carga lo que puede y
+# empieza a paginar, y un modelo de 12 GB paginando sobre 36 GB da ~0.2 tok/s
+# con el disco a tope (parece un modelo roto, no uno sin RAM). Peor aún, deja
+# el resto de la máquina inutilizable.
+#
+# El guard original era bash con aritmética entera (por el locale de awk) y
+# disparaba al 80% de la RAM total. Aquí ese límite es DATO — [limits] — y lo
+# aplica el CLI. Si un modelo no declara [limits], no hay límite.
+#
+# min_ram_gb         RAM unificada mínima (GB) que necesita el modelo.
+# ram_fraction       fracción de la RAM unificada que se puede ocupar.
+# kv_kib_per_token   KV cache por token de contexto, según la config real del
+#                    modelo (24 capas × 8 cabezas KV × head_dim 64 × 2 bytes ×
+#                    K y V = 49.152 bytes = 48 KiB).
+[limits]
+min_ram_gb = 28
+ram_fraction = 0.8
+kv_kib_per_token = 48
+
+[download]
+repo = "mlx-community/gpt-oss-20b-MXFP4-Q8"
+file = "gpt-oss-20b-MXFP4-Q8"
+size = "12.1 GB"
+
+# -----------------------------------------------------------------------------
+# PARÁMETROS DE INFERENCIA (los de mlx_lm.server)
+#
+# Los tres de sampling son los que recomienda OpenAI para gpt-oss:
+#
+#   --temp 1.0   gpt-oss se post-entrenó con temperature 1.0. Bajarla a 0.6 o
+#                0.7 (que es lo habitual en este repo para otros modelos)
+#                DEGRADA el razonamiento: el modelo deja de explorar y las trazas
+#                CoT salen mal. No pongas 0.0 por costumbre.
+#   --top-p 1.0
+#   --top-k 0    desactiva el corte por top-k. Con un MoE, descartar candidatos
+#                por frecuencia tiende a descartar el experto que iba bien.
+#
+# OJO: opencode manda temperature y top_p en CADA request, así que estos son los
+# defaults del servidor y solo se aplican si el cliente no los especifica.
+#
+# ── LO QUE NO HAY QUE PONER, Y POR QUÉ ─────────────────────────────────────
+# · --draft-model (speculative decoding): tentador, pero aquí no compensa.
+#   gpt-oss-20b decodifica rápido y el draft necesita EL MISMO vocabulario.
+# · --trust-remote-code: los repos de mlx-community para gpt-oss no traen código
+#   remoto; el tokenizer es un tokenizer.json estándar.
+# · --min-p: OpenAI especifica temp 1.0 / top_p 1.0 / top_k 0. Añadir min-p
+#   encima es inventar una política de muestreo que el modelo no fue entrenado
+#   con.
+# -----------------------------------------------------------------------------
+
+[args]
+base = [
+    # ── Sampling: los de OpenAI para gpt-oss ──
+    "--temp", "1.0",
+    "--top-p", "1.0",
+    "--top-k", "0",
+
+    # ── Reasoning effort ──
+    # El knob más importante del modelo. gpt-oss usa el formato Harmony con
+    # canales `analysis` y `final`, y su presupuesto de razonamiento lo fija
+    # este valor (low / medium / high; por defecto medium).
+    #
+    # high es lo que quieres aquí: este es el slot de razonar. Cuesta latencia,
+    # que es exactamente el trato que ofrece el modelo. Para respuestas rápidas
+    # y baratas usa los gptoss_low/medium de GGUF, que ya tienes.
+    #
+    # OJO: mlx_lm.server usa --chat-template-args (no --chat-template-kwargs) y
+    # no lo puede cambiar por request: hay que pasarlo al arrancar.
+    "--chat-template-args", '{"reasoning_effort":"${env:ROPERO_METALOSS_EFFORT:-high}"}',
+
+    # ── Tope de tokens generados ──
+    # mlx_lm.server por defecto genera SÓLO 512 tokens si el request no trae
+    # max_tokens. Para un modelo de razonamiento eso es un error garantizado:
+    # la traza CoT se come el presupuesto y la respuesta llega cortada a mitad.
+    "--max-tokens", "4096",
+
+    # ── Prompt cache ──
+    # Cache de prompts YA tokenizados, por prefijo. El system prompt de un
+    # agente (skills, reglas, tool schemas) es largo y no cambia entre turnos.
+    # Son 128 MB de RAM a cambio de nada, en una máquina de 36 GB.
+    "--prompt-cache-size", "32",
+    "--prompt-cache-bytes", "134217728",
+
+    # ── Prefill ──
+    # 2048 es el default de mlx_lm. Con ctx de 65536 son 32 pasos por prompt
+    # largo; a 4096 son 16, con menos overhead por paso.
+    "--prefill-step-size", "4096",
+
+    # ── Pipelining ──
+    # En vez de tensor parallelism. En un Mac la GPU y la CPU comparten memoria
+    # y hay UN solo device, así que el reparto por devices no tiene nada que
+    # repartir; el pipelining es lo que corresponde.
+    "--pipeline",
+
+    "--log-level", "INFO",
+]

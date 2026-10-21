@@ -1,0 +1,27 @@
+# =============================================================================
+# 🔥 FIRED — mlx_lm (MLX LLM, legacy)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/mlx/fired/mlx_lm.toml models/mlx/
+# y descargando los safetensors.
+#
+# (NO estaba en el catálogo de descargas — es legacy MLX.)
+#
+# Configura el entorno para MLX LLM. El modelo se encuentra en SAFETENSORS_DIR
+# con la ruta relativa especificada en [model].path.
+#
+# El .sh original declaraba MODEL_GGUF="peo": era un marcador de posición, no
+# un fichero real (este engine no carga GGUF). Por eso aquí no hay [files].
+# =============================================================================
+
+[model]
+name    = "mlx_lm"
+engine  = "mlx_lm"
+context = 131072
+format  = "safetensors"
+path    = "mlx-llama-7b"
+
+[files]
+# Este engine carga un checkpoint safetensors, no un GGUF: [files].gguf se
+# queda vacío a propósito.

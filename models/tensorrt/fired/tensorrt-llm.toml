@@ -1,0 +1,37 @@
+# =============================================================================
+# 🔥 FIRED — tensorrt-llm (TensorRT-LLM, legacy)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/tensorrt/fired/tensorrt-llm.toml models/tensorrt/
+# y descargando el modelo TensorRT-LLM.
+#
+# (NO estaba en el catálogo de descargas — es legacy.)
+#
+# Configura el entorno para TensorRT-LLM. El modelo se encuentra en
+# SAFETENSORS_DIR con la ruta relativa especificada en [model].path.
+# =============================================================================
+
+[model]
+name    = "tensorrt-llm"
+engine  = "tensorrt-llm"
+context = 131072
+format  = "safetensors"
+path    = "tensorrt-llm-model"
+
+[files]
+# Este engine carga un checkpoint, no un GGUF: [files].gguf se queda vacío a
+# propósito.
+
+# ── Flags del servidor de TensorRT-LLM ──────────────────────────────────────
+# Para un engine con servidor propio, [args].base son los flags de SU
+# servidor, no flags de llama-server.
+[args]
+base = [
+    "--max_seq_len", "131072",
+    "--kv_cache_dtype", "fp8",
+    "--free_gpu_memory_fraction", "0.88",
+    "--enable_chunked_prefill",
+    "--num_postprocess_workers", "4",
+    "--log_level", "INFO",
+]

@@ -14,7 +14,27 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export QA_REPO QA_BASH
 QA_REPO="$(cd "$HERE/.." && pwd)"
 QA_BASH="$(command -v bash)"
-python3 - "$@" <<'PY'
+
+# Un python3 que FUNCIONE. El shim de asdf puede estar en el PATH y estar roto
+# ("No version is set for command python3"), así que se prueban los candidatos
+# en vez de coger el primero que aparece.
+QA_PYTHON=""
+for cand in python3 python /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+    if "$cand" -c 'import sys' >/dev/null 2>&1; then QA_PYTHON="$cand"; break; fi
+done
+if [[ -z "$QA_PYTHON" ]]; then
+    for cand in "$HOME"/.asdf/installs/python/*/bin/python3; do
+        if [[ -x "$cand" ]] && "$cand" -c 'import sys' >/dev/null 2>&1; then
+            QA_PYTHON="$cand"; break
+        fi
+    done
+fi
+if [[ -z "$QA_PYTHON" ]]; then
+    echo "no encuentro un python3 utilizable" >&2
+    exit 1
+fi
+
+"$QA_PYTHON" - "$@" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -31,12 +51,12 @@ PROJ = 'gemma-4-26B-A4B-it-mmproj-BF16.gguf'
 MTP = 'mtp-gemma-4-26B-A4B-it.gguf'
 REMOTES = [MAIN, 'mmproj-BF16.gguf', MTP]
 
-# Qwen3.8: el MTP está en un subdirectorio del repo y el mmproj comparte
-# nombre con el de Gemma ("mmproj-BF16.gguf") → de ahí el renombrado.
-QMAIN = 'Qwen3.8-27B-UD-Q3_K_XL.gguf'
-QMTP = 'mtp-Qwen3.8-27B-Q4_0.gguf'
-QPROJ = 'qwen3.8-mmproj-BF16.gguf'
-QREMOTES = [QMAIN, 'MTP/mtp-Qwen3.8-27B-Q4_0.gguf', 'mmproj-BF16.gguf']
+# Qwen3.8: el MTP está en un subdirectorio del repo ("speculative/…") y el
+# mmproj tiene nombre propio → de ahí el renombrado.
+QMAIN = 'Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf'
+QMTP = 'dflash2-qwen38-27b-Q4_K_M.gguf'
+QPROJ = 'mmproj-Qwen3.8-27B-Q4_K_M.gguf'
+QREMOTES = [QMAIN, 'speculative/dflash2-qwen38-27b-Q4_K_M.gguf', 'mmproj-Qwen3.8-27B-Q4_K_M.gguf']
 
 HOOK = r'''
 ropero_env_setup() { :; }
@@ -71,10 +91,12 @@ case "${1:-}" in
         # del repo ("MTP/x.gguf"). El MTP de Qwen3.8 es exactamente ese caso,
         # y es el que rompía el rename: al moverlo a la raíz de GGUF_DIR hay
         # que sacarlo de MTP/ primero.
+        #
+        # El formato del aux es "repo|ruta/en/repo|nombre final|tamaño|etiqueta".
         _ropero_cat_build
         _cat_gguf "sintetico.gguf" "unsloth/ejemplo" "sintetico.gguf" "Sintetico" "1 MB"
         _cat_aux "sintetico.gguf" \
-            "MTP/mtp-ejemplo-Q4_0.gguf|mtp-ejemplo-Q4_0.gguf|1.37 GB|MTP de ejemplo"
+            "unsloth/ejemplo|MTP/mtp-ejemplo-Q4_0.gguf|mtp-ejemplo-Q4_0.gguf|1.37 GB|MTP de ejemplo"
         idx=$(_ropero_cat_index "sintetico.gguf") || exit
         _ropero_cat_download "$idx"; exit $? ;;
 esac
@@ -102,12 +124,17 @@ class BundleContract(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(prefix='ropero-bundle-', dir=os.environ.get('TMPDIR'))
         self.addCleanup(tmp.cleanup)
         self.work = Path(tmp.name)
-        shutil.copytree(REPO / 'ropero.d', self.work / 'ropero.d')
-        source = (REPO / 'ropero').read_text()
+        # Estructura nueva: el entrypoint y los módulos van en bin/, los
+        # modelos en models/ y el servidor de endpoints en endpoints/.
+        shutil.copytree(REPO / 'bin', self.work / 'bin')
+        shutil.copytree(REPO / 'models', self.work / 'models')
+        shutil.copytree(REPO / 'endpoints', self.work / 'endpoints')
+        source = (self.work / 'bin' / 'ropero').read_text()
         needle = '\nmain "$@"\n'
         self.assertEqual(source.count(needle), 1, 'instrument only the main call')
-        (self.work / 'ropero').write_text(source.replace(needle, '\n' + HOOK + needle))
-        for directory in ('home', 'models with spaces', 'bin', 'tmp', 'logs'):
+        (self.work / 'bin' / 'ropero').write_text(source.replace(needle, '\n' + HOOK + needle))
+        # 'bin' ya existe: lo ha creado el copytree del árbol de ropero.
+        for directory in ('home', 'models with spaces', 'tmp', 'logs'):
             (self.work / directory).mkdir()
         self.models = self.work / 'models with spaces'
         self.env = {'PATH': str(self.work / 'bin') + ':/usr/bin:/bin',
@@ -120,8 +147,12 @@ class BundleContract(unittest.TestCase):
                     'QA_BLOCKED': str(self.work / 'blocked'),
                     'LLAMA_BIN': str(self.work / 'bin' / 'llama-server')}
         block = '#!/bin/bash\nprintf "%s\\n" "$0" >> "$QA_BLOCKED"\nexit 125\n'
+        # python3 NO se bloquea: los modelos se configuran en TOML y su
+        # lector es un script de Python. Lo que sigue bloqueado es todo lo
+        # que puede RED (curl, wget, git, hf, pip) y lo que puede tocar el
+        # sistema. El lector de TOML no hace red.
         for tool in ('curl wget git cmake ninja make brew sudo pip pip3 uv huggingface-cli '
-                     'flm lsof ss nc ssh python python3 apt apt-get dnf pacman paru pkg').split():
+                     'flm lsof ss nc ssh apt apt-get dnf pacman paru pkg').split():
             self.executable(tool, block)
         self.executable('hf', '#!' + sys.executable + '\n' + TRANSPORT)
         self.executable('llama-server', '#!/bin/bash\nprintf "%s\\0" "$@" > "$QA_ARGV"\n')
@@ -136,7 +167,7 @@ class BundleContract(unittest.TestCase):
         path.chmod(0o755)
 
     def run_ropero(self, *args: str, ok: bool = True) -> subprocess.CompletedProcess:
-        result = subprocess.run([BASH, str(self.work / 'ropero'), *args], env=self.env,
+        result = subprocess.run([BASH, str(self.work / 'bin' / 'ropero'), *args], env=self.env,
                                 cwd=self.work, text=True, capture_output=True, timeout=20)
         if ok:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -251,14 +282,15 @@ class BundleContract(unittest.TestCase):
     def test_launcher_vision_is_opt_in_and_moe_adjustable(self) -> None:
         self.run_ropero('qa-fetch', 'gemma')
 
-        # 1) Sin --vision: el modelo arranca SIN torre de visión y con los
-        #    expertos MoE en la GPU (n-cpu-moe 0: la VRAM está libre).
+        # 1) Sin --vision: el modelo arranca SIN torre de visión. El
+        #    --n-cpu-moe 5 viene por defecto SIEMPRE (con visión o sin ella):
+        #    en esta máquina (16 GB de VRAM) sin ese hueco hay OOM.
         self.run_ropero('gemma')
         argv = self.argv()
         self.assertNotIn('--mmproj', argv)
         self.assertEqual(argv[argv.index('--ctx-size') + 1], '131072')
         self.assertEqual(argv[argv.index('--n-gpu-layers') + 1], '99')
-        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '0')
+        self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '5')
         self.assertEqual(argv[argv.index('--cache-type-k') + 1], 'q8_0')
         self.assertEqual(argv[argv.index('--cache-type-v') + 1], 'q8_0')
         self.assertEqual(argv[argv.index('--spec-type') + 1], 'draft-mtp')

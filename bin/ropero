@@ -1,0 +1,3812 @@
+#!/usr/bin/env bash
+
+# =============================================================================
+# ropero — lanzador de modelos de IA locales
+# =============================================================================
+# USO:
+#   ropero <modelo> [--background] [--cpu] [--force] [--port N]
+#   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
+#   ropero models      (descarga solo los modelos, sin engines)
+#   ropero install [engines|models|link] [selección] [--force]
+#   ropero check      (verifica la instalación, no modifica nada)
+#
+# La instalación de ropero la hace install.sh (curl … | bash), no este script.
+# =============================================================================
+
+# Directorios y binarios
+GGUF_DIR="${GGUF_DIR:-$HOME/models/gguf}"
+SAFETENSORS_DIR="${SAFETENSORS_DIR:-$HOME/models/safetensors}"
+LOG_DIR="${LOG_DIR:-$HOME/.logs/ropero}"
+LLAMA_BIN="${LLAMA_BIN:-llama-server}"
+LLAMA_API_KEY="${LLAMA_API_KEY:-sk-local-dev-key}"
+HOST="${HOST:-0.0.0.0}"
+
+# -----------------------------------------------------------------------------
+# Puertos "slot" por defecto (los dos únicos que existían antes de MODEL_PORT).
+#   $PORT     → GPU  :9999
+#   $CPU_PORT → CPU  :9998  (offload forzado a CPU)
+#
+# Cualquier modelo puede además pinear un puerto propio declarando MODEL_PORT
+# en su .sh de bin/. Si lo hace, ESE puerto gana siempre: da igual si se
+# invoca con --cpu o sin él. Sin MODEL_PORT, se aplica la lógica de dos slots
+# de aquí (--cpu → $CPU_PORT, si no → $PORT).
+# Ambos son sobrescribibles por entorno para tests: ROPERO_GPU_PORT / ROPERO_CPU_PORT.
+# -----------------------------------------------------------------------------
+PORT="${ROPERO_GPU_PORT:-9999}"
+CPU_PORT="${ROPERO_CPU_PORT:-9998}"
+
+# Colores (ANSI-C quoting $'...' para que \033 se interprete como ESC,
+# NO como literal — verificado con hexdump: "..." daba los 4 chars "\033".
+# Bug histórico: el help mostraba escapes literales en pantalla.)
+# Paleta completa: la usan cmd_help y _render_status_compact (versión
+# artesanal del status con etiquetas CPU/GPU coloreadas y tabla padded).
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+NC=$'\033[0m'
+GREEN=$'\033[0;32m'
+GRN_B=$'\033[1;32m'
+RED=$'\033[0;31m'
+YELLOW=$'\033[1;33m'
+YEL_B=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+BLUE_B=$'\033[1;34m'
+CYAN=$'\033[0;36m'
+CYAN_B=$'\033[1;36m'
+GREY=$'\033[0;90m'
+
+# -----------------------------------------------------------------------------
+# Limpieza de los marcadores de "aviso una sola vez" (ver _ropero_warn_once).
+# Se engancha AQUÍ, en el entrypoint, porque es el único punto que se ejecuta
+# siempre en el proceso principal: si se registrara dentro de la función que
+# los crea, quedaría atrapado en el subshell que la llamó primero y no se
+# ejecutaría nunca, dejando ficheros en /tmp.
+# -----------------------------------------------------------------------------
+_ropero_warn_cleanup() {
+    local f="${TMPDIR:-/tmp}/.ropero_warn_$$"
+    rm -f "$f" "$f.born" 2>/dev/null || true
+}
+trap '_ropero_warn_cleanup' EXIT INT TERM
+
+# -----------------------------------------------------------------------------
+# Modo desatendido: override de ropero_ask / ropero_ask_keep
+# -----------------------------------------------------------------------------
+# 1) Detección FUERTE al inicio del entrypoint (no en funciones sourceadas).
+#    Si setup nos invoca con AUTO_YES=1 / SETUP_MODE=full / CI=1, lo
+#    reflejamos en una variable interna _ropero_unattended y en env.
+# 2) Sobrescribimos las funciones ANTES de sourcear módulos.
+# 3) Re-aplicamos el override DESPUÉS de sourcear (defensa en profundidad:
+#    si un módulo redefine ropero_ask, lo devolvemos a no-interactive).
+if [[ "${AUTO_YES:-0}" == "1" || "${SETUP_MODE:-}" == "full" || "${CI:-0}" == "1" ]]; then
+    _ropero_unattended=1
+    # Exportar para que sub-procesos (cmake, git clone, etc.) hereden
+    export AUTO_YES=1
+    export SETUP_MODE=full
+fi
+# Si el usuario llamó ropero --install interactivamente y quiere que le
+# preguntemos, no tocamos nada. _ropero_unattended queda en 0.
+
+# -----------------------------------------------------------------------------
+# Cargar módulos
+# -----------------------------------------------------------------------------
+# Canonicalizar SCRIPT_DIR: si el script se ejecuta desde un symlink (caso
+# típico: ~/.local/bin/ropero -> ~/.local/share/ropero/current/bin/ropero),
+# BASH_SOURCE[0] apunta al symlink y SCRIPT_DIR terminaría en ~/.local/bin/,
+# donde NO están los módulos. Resolvemos con readlink -f (GNU) o perl
+# (BSD/macOS) para apuntar al path real.
+# Cross-platform: readlink -f || perl abs_path || $_SELF sin resolver.
+# Cross-shell (bash + zsh): BASH_SOURCE[0] no existe en zsh; $0 = path
+# del script sourceado en zsh.
+_SELF="${BASH_SOURCE[0]:-$0}"
+_REAL="$(readlink -f "$_SELF" 2>/dev/null \
+    || perl -MCwd -e 'print Cwd::abs_path shift' "$_SELF" 2>/dev/null \
+    || echo "$_SELF")"
+SCRIPT_DIR="$(cd "$(dirname "$_REAL")" && pwd)"
+MODULES_DIR="$SCRIPT_DIR"
+
+# Los módulos (NN-xxx.sh) viven junto al entrypoint, en bin/. Antes estaban en
+# bin/, un directorio hermano. Tenerlos en el mismo sitio hace que
+# "ropero" sea una carpeta autocontenida y que el layout del instalador
+# (<prefix>/current/bin + <prefix>/current/models) no dependa de una
+# convención de nombres.
+#
+# El árbol del repo: models/ y endpoints/ son hermanos de bin/.
+ROPERO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+MODELS_DIR="${ROPERO_MODELS_DIR:-$ROPERO_ROOT/models}"
+ENDPOINTS_DIR="${ROPERO_ENDPOINTS_DIR:-$ROPERO_ROOT/endpoints}"
+
+if [[ -f "$MODULES_DIR/_common.sh" ]]; then
+    source "$MODULES_DIR/_common.sh"
+else
+    echo "ERROR: no se encuentra $MODULES_DIR/_common.sh" >&2
+    exit 1
+fi
+
+# Utilidades mínimas propias + entorno (spec migración: réplica 00-utils + 01-env).
+# Se sourcean explícitos; el loop de modelos los salta (no definen MODEL_*).
+[[ -f "$MODULES_DIR/00-utils.sh" ]] && source "$MODULES_DIR/00-utils.sh"
+[[ -f "$MODULES_DIR/01-env.sh" ]] && source "$MODULES_DIR/01-env.sh"
+
+# Sourcear explícitamente los módulos de soporte/infra del install.
+# El loop de modelos los salta (no definen MODEL_*).
+[[ -f "$MODULES_DIR/20-compile-llama.sh" ]]  && source "$MODULES_DIR/20-compile-llama.sh"
+[[ -f "$MODULES_DIR/21-download-models.sh" ]] && source "$MODULES_DIR/21-download-models.sh"
+# Registro de engines que NO son llama-server (airllm, mlx_lm, tensorrt-llm,
+# fastflowlm). Define cómo se resuelve cada binario, qué flags acepta de verdad
+# y si valida la API key por sí mismo o necesita el proxy de _authproxy.py.
+# Sin esto, cada sitio que nombraba un engine repetía su comando a mano.
+[[ -f "$MODULES_DIR/_engines.sh" ]] && source "$MODULES_DIR/_engines.sh"
+
+# Re-aplicar override de desatendido DESPUÉS de sourcear módulos. Si los
+# módulos redefinen ropero_ask / ropero_ask_keep (no deberían, pero por si),
+# dejamos nuestras versiones blindadas.
+if [[ "${_ropero_unattended:-0}" == "1" ]]; then
+    ropero_ask() { return 0; }
+    ropero_ask_keep() { return 1; }
+fi
+
+# -----------------------------------------------------------------------------
+# Modelos: se cargan desde los TOML de models/
+# -----------------------------------------------------------------------------
+# Cada modelo es un fichero TOML con el MISMO formato para todos los engines:
+#
+#   models/<engine>/<modelo>.toml          → activo    (se puede usar)
+#   models/<engine>/fired/<modelo>.toml    → retirado  (NO se puede usar)
+#
+# Antes eran scripts bash que se sourceaban, y eso convertía la configuración
+# del modelo en CÓDIGO ejecutable. Ahora es dato puro: el esquema vive en
+# `models/_template.toml`, el lector en `bin/22-models.sh` y el parser en
+# `bin/_modelconf.py`.
+# -----------------------------------------------------------------------------
+declare -A MODEL_GGUF MODEL_CTX MODEL_ENGINE MODEL_PATH MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_PORT MODEL_FORMAT MODEL_DL
+declare -A MODEL_LEVELS MODEL_ALIAS_LEVEL MODEL_FLAGS MODEL_OPTIONS
+# LEVEL_DEFAULT: nivel de razonamiento por defecto que declara el TOML.
+# MTP/MMPROJ:     ficheros auxiliares (decoding especulativo y proyección de visión).
+# REPO/FILE/DEST/SIZE: de dónde se descarga el modelo y cómo se llama en disco.
+declare -A MODEL_LEVEL_DEFAULT MODEL_MTP MODEL_MMPROJ
+declare -A MODEL_REPO MODEL_FILE MODEL_DEST MODEL_SIZE MODEL_EXCLUDES
+declare -A MODEL_AUX_MTP MODEL_AUX_MMPROJ MODEL_TOML
+# Límites declarados en [limits] del TOML (datos, no lógica):
+#   MODEL_MIN_RAM_GB        RAM unificada mínima (GB)
+#   MODEL_RAM_FRACTION      fracción de la RAM que se puede ocupar (0..1)
+#   MODEL_KV_KIB_PER_TOKEN  KV cache por token de contexto
+declare -A MODEL_MIN_RAM_GB MODEL_RAM_FRACTION MODEL_KV_KIB_PER_TOKEN
+# MODEL_MANUAL: el modelo existe pero su descarga no se ofrece en
+# `ropero install models` (checkpoints enormes). Lo declara el TOML.
+declare -A MODEL_MANUAL
+declare -a MODEL_NAMES=()
+# Modelos RETIRADOS: se indexan para poder explicar "este modelo ya no está
+# disponible" en vez de "modelo desconocido", pero no se registran como
+# utilizables. ROPERO_RETIRED[modelo] = engine.
+declare -A ROPERO_RETIRED=() ROPERO_RETIRED_PATH=() ROPERO_RETIRED_NAME=() ROPERO_RETIRED_GGUF=()
+# puerto → modelo que lo reclamó. Sólo para detectar colisiones al cargar.
+declare -A _MODEL_PORT_OWNER=()
+
+source "$MODULES_DIR/22-models.sh"
+ropero_models_load
+
+# -----------------------------------------------------------------------------
+# Validar los puertos declarados por los modelos.
+#
+# Se hace DESPUÉS de cargar todos, porque una colisión sólo se puede ver
+# cuando ya están todos: si dos modelos piden el mismo puerto, el segundo
+# que se carga avisa y cede el paso al primero.
+# -----------------------------------------------------------------------------
+for _mp in "${MODEL_NAMES[@]}"; do
+    # Los aliases heredan el puerto del modelo físico: no vuelven a validarlo.
+    [[ -n "${MODEL_ALIAS_TARGET[$_mp]:-}" ]] && continue
+    _mpv="${MODEL_PORT[$_mp]:-}"
+    [[ -n "$_mpv" ]] || continue
+    if ! [[ "$_mpv" =~ ^[0-9]+$ ]] || (( _mpv < 1 || _mpv > 65535 )); then
+        echo "WARN: ${MODEL_TOML[$_mp]:-}: puerto '$_mpv' inválido (entero 1-65535); se usa el slot por defecto" >&2
+        MODEL_PORT["$_mp"]=""
+    elif [[ "$_mpv" == "$PORT" || "$_mpv" == "$CPU_PORT" ]]; then
+        echo "WARN: ${MODEL_TOML[$_mp]:-}: puerto $_mpv ya es uno de los slots por defecto (:$PORT GPU / :$CPU_PORT CPU); se usa el slot por defecto" >&2
+        MODEL_PORT["$_mp"]=""
+    elif [[ -n "${_MODEL_PORT_OWNER[$_mpv]:-}" ]]; then
+        echo "WARN: ${MODEL_TOML[$_mp]:-}: puerto $_mpv ya reclamado por '${_MODEL_PORT_OWNER[$_mpv]}'; se usa el slot por defecto" >&2
+        MODEL_PORT["$_mp"]=""
+    else
+        _MODEL_PORT_OWNER["$_mpv"]="$_mp"
+    fi
+done
+unset _mp _mpv
+
+# -----------------------------------------------------------------------------
+# Funciones auxiliares
+# -----------------------------------------------------------------------------
+port_listening() { lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
+get_pid_for_port() { lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
+get_model_on_port() {
+    # El patrón tolera el espacio opcional alrededor de los dos puntos.
+    #
+    # No es parsería por el gusto de parsear: llama-server serializa JSON
+    # compacto ("id":"nombre") y el patrón viejo, que exigía exactamente eso,
+    # funcionaba solo por casualidad. Cualquier server que serialice con
+    # espacios —Python lo hace por defecto, y eso incluye al que escribe ropero
+    # para airllm y al proxy— devolvía vacío. Y un vacío aquí no es un detalle
+    # cosmético: el bucle de arranque de --background nunca daba el modelo por
+    # bueno y se comía los 180s de espera para luego decir que no había
+    # respondido; y `ropero stop <modelo>` no encontraba lo que estaba corriendo.
+    curl -sf --max-time 2 \
+        -H "Authorization: Bearer $LLAMA_API_KEY" \
+        "http://127.0.0.1:$1/v1/models" 2>/dev/null \
+        | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+}
+
+# -----------------------------------------------------------------------------
+# engine_on_port <port> → qué engine responde en ese puerto, o "" si no se sabe.
+#
+# Por qué hace falta si ya se mira el nombre del proceso: cuando un engine NO
+# valida la API key (mlx_lm, trtllm-serve, flm), ropero pone delante
+# _authproxy.py, y el proceso que escucha en el puerto de ropero es un
+# `python3` anónimo. `ps -o comm=` devolvería "Python" para los tres, y la
+# columna ENGINE del status mentiría. El proxy publica /ropero/engine, que es
+# la única fuente de verdad.
+#
+# Para llama-server y para airllm (que validan la key ellos mismos) la ruta
+# devuelve 404 y caemos al nombre del proceso, que ahí sí es informativo.
+# Sin auth, curl no manda nada: es una ruta local de diagnóstico.
+# -----------------------------------------------------------------------------
+engine_on_port() {
+    local p="$1" j
+    # La cabecera de auth va también aquí, no solo en /v1/models: llama-server
+    # exige la key en TODAS sus rutas, así que un /ropero/engine sin ella
+    # devolvía 401 — y, peor, escribía "unauthorized: Invalid API Key" en el
+    # log del server en cada consulta. Con `ropero status --watch` eso era un
+    # warning por segundo y por slot, llenando el log de basura.
+    #
+    # En el proxy de auth la cabecera no molesta: /ropero/engine es una ruta
+    # local de diagnóstico y el proxy no la valida.
+    j=$(curl -sf --max-time 2 \
+        -H "Authorization: Bearer $LLAMA_API_KEY" \
+        "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
+    [[ -n "$j" ]] || return 1
+    printf '%s' "$j" | grep -oE '"engine"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 \
+        | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+}
+
+# child_pid_on_port <port> → PID del engine hijo que el proxy de auth tiene
+# launching, o "" si no hay proxy (llama-server, airllm) o no responde.
+# Lo usa el apagado para no dejar engines huérfanos.
+child_pid_on_port() {
+    local p="$1" j
+    # Misma cabecera que en engine_on_port: llama-server la exige en todas
+    # sus rutas, y sin ella el log del server se llenaba de 401.
+    j=$(curl -sf --max-time 2 \
+        -H "Authorization: Bearer $LLAMA_API_KEY" \
+        "http://127.0.0.1:$p/ropero/engine" 2>/dev/null) || return 1
+    [[ -n "$j" ]] || return 1
+    printf '%s' "$j" | grep -oE '"child_pid"[[:space:]]*:[[:space:]]*[0-9]+' | head -1 \
+        | grep -oE '[0-9]+' || true
+}
+
+# _engine_from_comm <bin_name> → engine a partir del nombre del proceso.
+# Fallback para cuando /ropero/engine no contesta.
+_engine_from_comm() {
+    case "$1" in
+        *airllm*)       printf 'airllm' ;;
+        *mlx_lm*|*mlx*) printf 'mlx_lm' ;;
+        *trtllm*)       printf 'tensorrt-llm' ;;
+        *flm*|*fastflow*) printf 'fastflowlm' ;;
+        *llama-server*) printf 'llama-server' ;;
+        *)              printf 'llama-server' ;;
+    esac
+}
+
+# _engine_human <port> → engine del puerto, para poder nombrarlo al pararlo.
+_engine_human() {
+    local eng
+    eng=$(engine_on_port "$1" 2>/dev/null || true)
+    if [[ -n "$eng" ]]; then
+        ropero_engine_label "$eng"
+    else
+        local p comm
+        p=$(get_pid_for_port "$1" 2>/dev/null || true)
+        comm=$(ps -p "$p" -o comm= 2>/dev/null || true)
+        _engine_from_comm "$comm"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# _kill_port <port> — apaga lo que vive en <port>, incluido su engine hijo.
+# Por puerto, nunca por nombre de proceso: un `pkill -f trtllm` mataría los slots
+# paralelos. Devuelve 0 si había algo, 1 si el puerto estaba libre.
+#
+# ⚠️ SIGTERM primero, SIGKILL de recurso. No es puritanismo: es lo que sostiene
+# el árbol de procesos de los engines con proxy. El proxy (bin/_authproxy.py)
+# es el PADRE del engine, y es él quien, al recibir SIGTERM, apaga a su hijo y
+# suelta el puerto interno. Con `kill -9` —que era lo que había— el proxy moría
+# sin ejecutar su handler, el engine real se quedaba sirviendo en :10xxx para
+# siempre, y lo peor es que `ropero status` no lo enseña: no está en ningún puerto
+# gestionado. Se quedaba ahí comiéndose la GPU/RAM/NPU sin que nada lo dijera.
+#
+# El SIGKILL sigue como red de seguridad: si algo ignora SIGTERM, el puerto tiene
+# que quedar libre igual.
+#
+# Lo usan cmd_stop y el --force de start_model. Por eso es de nivel de archivo y
+# no una función anidada en cmd_stop: una función definida dentro de otra no
+# existe hasta que esa se ha ejecutado, y estos dos caminos nunca corren juntos.
+# -----------------------------------------------------------------------------
+_kill_port() {
+    local port="$1"
+    if ! port_listening "$port"; then
+        return 1
+    fi
+    local pid
+    pid=$(get_pid_for_port "$port")
+    if [[ -z "$pid" ]]; then
+        return 1
+    fi
+
+    # Red de seguridad explícita, antes de tocar el padre: si el proceso raíz no
+    # va a propagar (ignora SIGTERM, está zombi, o el proxy ya murió), el
+    # child_pid que publica /ropero/engine dice a quién hay que matar igualmente.
+    local cpid
+    cpid=$(child_pid_on_port "$port")
+    if [[ -n "$cpid" ]]; then
+        kill -TERM "$cpid" 2>/dev/null || true
+    fi
+
+    kill -TERM "$pid" 2>/dev/null || true
+    local waited=0
+    while (( waited < 10 )) && port_listening "$port"; do
+        sleep 1
+        (( waited++ ))
+    done
+    if port_listening "$port"; then
+        kill -9 "$pid" 2>/dev/null || true
+        sleep 1
+    fi
+    if [[ -n "$cpid" ]] && kill -0 "$cpid" 2>/dev/null; then
+        kill -9 "$cpid" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# _stop_port <port> — _kill_port + limpiar el registro de puertos ad-hoc.
+_stop_port() {
+    local port="$1"
+    _kill_port "$port" || return 1
+    # Si el puerto era ad-hoc (pedido con --port), ya no sirve para nada: sale
+    # del registro para que no siga saliendo en el status.
+    _ropero_adhoc_del "$port"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Puertos: registro, resolución y etiquetado.
+#
+# Hay TRES fuentes de puertos, en este orden de precedencia:
+#
+#   1. MODEL_PORT declarado en el .sh del modelo  → gana SIEMPRE
+#      (da igual --cpu o no: el puerto está pineado, el offload no se mueve).
+#      Es lo que permite tener N modelos vivos a la vez en lugar de 2.
+#   2. --cpu                                        → $CPU_PORT (:9998)
+#   3. resto                                       → $PORT (:9999)
+#
+# `ropero status` lista TODOS los puertos conocidos, no solo los dos slots:
+# los dos por defecto + los pineados por los scripts. Así se ve de un vistazo
+# qué está configurado y qué está encendido.
+# -----------------------------------------------------------------------------
+
+# _model_port <model_key> → puerto pineado por el modelo, o 1 si no lo tiene.
+# Acepta también el env por modelo (ROPERO_<MODELO>_PORT), igual que
+# ROPERO_<MODELO>_CTX. Silencioso si no hay puerto fijo: devuelve 1.
+_model_port() {
+    local mk="$1"
+    # El nombre del env se normaliza con guiones bajos: "agents-a1-4b" → ROPERO_AGENTS_A1_4B_PORT.
+    # Sin esta normalización, un modelo con guion produce un nombre de variable
+    # INVÁLIDO ("ROPERO_AGENTS-A1-4B_PORT") y bash se queja en cada consulta.
+    local env_name="ROPERO_$(printf '%s' "${mk//-/_}" | tr '[:lower:]' '[:upper:]')_PORT"
+    local env_val="${!env_name:-}"
+    local p="${MODEL_PORT[$mk]:-}"
+
+    # El env manda sobre el script, pero SOLO si es válido. Un typo en el env
+    # (ROPERO_EMBED_PORT=abc, o el 9990 que se te pasó sin querer) no puede
+    # dejar al modelo sin puerto: si el override es inservible se avisa y se
+    # cae al valor del .sh, que es lo que el autor del script pidió.
+    if [[ -n "$env_val" ]]; then
+        if _ropero_valid_port "$env_val"; then
+            p="$env_val"
+        elif _ropero_warn_once "port_$env_name"; then
+            # 0 = primera vez en este comando: avisamos.
+            echo "AVISO: $env_name='$env_val' no es un puerto válido (entero 1-65535); se usa el del script" >&2
+        fi
+    fi
+
+    if _ropero_valid_port "$p"; then
+        printf '%s' "$p"
+        return 0
+    fi
+    return 1
+}
+
+# _ropero_valid_port <valor> → 0 si es un puerto TCP usable.
+_ropero_valid_port() {
+    [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 ))
+}
+
+# _ropero_warn_once <clave> → 0 la primera vez que se llama en el comando, 1 las
+# siguientes.
+#
+# Por qué un fichero y no una variable: _model_port se llama desde
+# ropero_managed_ports y ropero_port_label, que se usan en process substitution
+# (`while read; do ... done < <(ropero_managed_ports)`). Cada uno corre en un
+# SUBSHELL, así que un flag en variable se perdería y el aviso se repetiría
+# tantas veces como modelos y puertos se recorren. El fichero se borra con el
+# trap del entrypoint (ver _ropero_warn_cleanup, enganchado arriba del todo).
+_ropero_warn_once() {
+    # Un ÚNICO fichero por proceso, con una línea por clave ya avisada. Uno por
+    # clave no vale: alCleanup correría en el subshell que lo creó, no en el
+    # proceso principal, y se quedarían ficheros en /tmp para siempre.
+    local f="${TMPDIR:-/tmp}/.ropero_warn_$$"
+    local key="$1"
+    if [[ -f "$f" ]] && grep -qxF -- "$key" "$f" 2>/dev/null; then
+        return 1
+    fi
+    printf '%s\n' "$key" >>"$f" 2>/dev/null || return 1
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Registro de puertos "ad-hoc" (los de `--port`).
+#
+# `ropero status` y `ropero stop` son OTROS procesos: no pueden saber que hace
+# un rato lanzaste `ropero embed --port 9995`. Sin este registro el modelo
+# arrancaba en 9995 pero su fila no salía en el status y `ropero stop embed` no
+# lo encontraba — vivo, invisible e imparable salvo a mano.
+#
+# Se añade al arrancar y se quita al parar (cmd_stop), no por antigüedad: así no
+# hay carrera con un arranque en curso, que tarda segundos en escuchar.
+# ---------------------------------------------------------------------------
+_ropero_adhoc_file() { printf '%s/ad-hoc-ports' "${LOG_DIR:-$HOME/.logs/ropero}"; }
+
+_ropero_adhoc_add() {
+    local port="$1" f
+    _ropero_valid_port "$port" || return 0
+    f=$(_ropero_adhoc_file)
+    mkdir -p "$(dirname "$f")" 2>/dev/null || return 0
+    if grep -qxF -- "$port" "$f" 2>/dev/null; then return 0; fi
+    printf '%s\n' "$port" >>"$f" 2>/dev/null || true
+}
+
+_ropero_adhoc_del() {
+    local port="$1" f
+    f=$(_ropero_adhoc_file)
+    [[ -f "$f" ]] || return 0
+    grep -vxF -- "$port" "$f" >"$f.tmp" 2>/dev/null || true
+    mv -f "$f.tmp" "$f" 2>/dev/null || rm -f "$f.tmp" 2>/dev/null || true
+}
+
+# ropero_managed_ports → todos los puertos que ropero conoce, ordenados y sin
+# duplicados: los dos slots por defecto + los pineados por cada modelo + los
+# ad-hoc de --port.
+# Es la lista canónica: la usan status (tabla), stop all y stop <modelo>.
+ropero_managed_ports() {
+    local -a ports=("$PORT" "$CPU_PORT")
+    local mk p extra f
+    if declare -p MODEL_PORT >/dev/null 2>&1; then
+        for mk in "${!MODEL_PORT[@]}"; do
+            if p=$(_model_port "$mk"); then
+                ports+=("$p")
+            fi
+        done
+    fi
+    f=$(_ropero_adhoc_file)
+    if [[ -f "$f" ]]; then
+        while read -r extra; do
+            [[ -n "$extra" ]] || continue
+            if _ropero_valid_port "$extra"; then
+                ports+=("$extra")
+            fi
+        done <"$f"
+    fi
+    printf '%s\n' "${ports[@]}" | sort -n -u
+}
+
+# ropero_port_label <port> → nombre "humano" de quien vive en ese puerto.
+# Se usa como columna SLOT del status. Para puertos pineados, el nombre del
+# modelo (alias si lo tiene); para los slots, "dGPU"/"CPU"; para puertos
+# configurados en env que no corresponden a ningún script, "env".
+ropero_port_label() {
+    local port="$1"
+    if [[ "$port" == "$PORT" ]]; then
+        printf 'dGPU'
+        return 0
+    fi
+    if [[ "$port" == "$CPU_PORT" ]]; then
+        printf 'CPU'
+        return 0
+    fi
+    local -a names=()
+    local mk p human
+    for mk in "${!MODEL_PORT[@]}"; do
+        if p=$(_model_port "$mk") && [[ "$p" == "$port" ]]; then
+            # Descartar la key de alias duplicada: mismo puerto, mismo
+            # modelo físico. Nos quedamos con el nombre físico del script.
+            [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" ]] && continue
+            human="${MODEL_ALIAS[$mk]:-$mk}"
+            names+=("$human")
+        fi
+    done
+    # Puerto que alguien pidió con --port y que no corresponde a ningún .sh:
+    # lo que está escuchando ahí lo dirá el status, no el nombre del modelo.
+    if [[ ${#names[@]} -eq 0 ]]; then
+        local f extra
+        f=$(_ropero_adhoc_file)
+        if [[ -f "$f" ]] && grep -qxF -- "$port" "$f" 2>/dev/null; then
+            printf 'ad-hoc'
+            return 0
+        fi
+    fi
+    if [[ ${#names[@]} -gt 0 ]]; then
+        printf '%s' "${names[*]}"
+        return 0
+    fi
+    printf 'env'
+}
+
+# _collect_slots → rellena ROPERO_SLOT_ROWS con tuplas planas de 7 campos
+# (slot, port, state, model, pid, uptime, engine) para TODOS los puertos
+# gestionados, y ROPERO_SLOT_BUSY con cuántos están encendidos.
+#
+# Extracción única de propósito: antes cmd_status y _render_status_compact
+# tenían cada una su propio bucle sobre "$PORT" + "${ROPERO_CPU_PORT:-9998}",
+# así que cualquier puerto pineado se caía de los dos a la vez (y el render de
+# alaja y el artesanal podían discrepar).
+ROPERO_SLOT_ROWS=()
+ROPERO_SLOT_BUSY=0
+_collect_slots() {
+    ROPERO_SLOT_ROWS=()
+    ROPERO_SLOT_BUSY=0
+    local _p _slot model pid uptime bin_name engine
+    while read -r _p; do
+        [[ -n "$_p" ]] || continue
+        _slot=$(ropero_port_label "$_p")
+        if port_listening "$_p"; then
+            model=$(get_model_on_port "$_p" 2>/dev/null || echo "?")
+            pid=$(get_pid_for_port "$_p")
+            uptime=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || echo "?")
+            bin_name=$(ps -p "$pid" -o comm= 2>/dev/null || echo "?")
+            # El engine se pregunta al endpoint, no al nombre del proceso: con
+            # proxy delante, el proceso es un `python3` que no dice nada (ver
+            # engine_on_port). El nombre del proceso queda de respaldo.
+            engine=$(engine_on_port "$_p" 2>/dev/null || true)
+            if [[ -z "$engine" ]]; then
+                engine=$(_engine_from_comm "$bin_name")
+            fi
+            engine=$(ropero_engine_label "$engine")
+            ROPERO_SLOT_ROWS+=("$_slot" "$_p" "ON" "$model" "$pid" "$uptime" "$engine")
+            ROPERO_SLOT_BUSY=$((ROPERO_SLOT_BUSY + 1))
+        else
+            ROPERO_SLOT_ROWS+=("$_slot" "$_p" "OFF" "-" "-" "-" "-")
+        fi
+    done < <(ropero_managed_ports)
+}
+
+# -----------------------------------------------------------------------------
+# Métricas de sistema — usadas SOLO por cmd_status (cabecera de alaja).
+# Devuelven "?" si la herramienta necesaria no está disponible (ej. macOS sin
+# nvidia-smi, o un sistema sin lm_sensors). Pensado para que el status siga
+# mostrándose aunque falte algo, sin abortar el script.
+# -----------------------------------------------------------------------------
+_get_cpu_ghz() {
+    # Promedio de MHz activos de los cores, en GHz (2 decimales).
+    # /proc/cpuinfo es lo más portable en Linux; macOS no lo tiene y caemos a "?"
+    # (lscpu en Mac tampoco suele dar freq actual). Si lscpu tampoco existe,
+    # "?". `|| mhz=""` necesario por set -e + pipefail (entrypoint ropero):
+    # la 2ª asignación NO usa `local`, así que un pipeline que falle aborta.
+    local mhz
+    mhz=$(awk '/^cpu MHz/ {sum+=$4; n++} END {if (n>0) print sum/n}' /proc/cpuinfo 2>/dev/null)
+    if [[ -z "$mhz" ]]; then
+        mhz=$(lscpu 2>/dev/null | awk '/^CPU MHz:/ {print $3}') || mhz=""
+    fi
+    awk -v m="${mhz:-0}" 'BEGIN {if (m+0>0) printf "%.2f", m/1000; else print "?"}'
+}
+
+_get_ram_used_mb() {
+    # RAM usada en MB. Portable Linux (free -m) + macOS (vm_stat).
+    # CRÍTICO bajo `set -e + pipefail` (entrypoint ropero): cualquier
+    # pipeline cuyo primer comando falle aborta el script aunque su salida
+    # se capture en $(). Por eso `|| used_mb=""` y comprobamos al final.
+    local used_mb=""
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        # macOS: vm_stat da páginas; multiplicamos por hw.pagesize. awk usa
+        # $3+0 para descartar el "." que vm_stat añade a cada cifra (ej.
+        # "Pages free: 12345." → gsub o sumar a 0 lo limpia).
+        local page_size
+        page_size=$(sysctl -n hw.pagesize 2>/dev/null) || page_size=4096
+        used_mb=$(vm_stat 2>/dev/null | awk -v ps="$page_size" '
+            /^Pages (free|active|inactive|speculative|wired down):/ {
+                if      (/^Pages free:/)        free    += $3+0
+                else if (/^Pages active:/)      active  += $3+0
+                else if (/^Pages inactive:/)    inactive += $3+0
+                else if (/^Pages speculative:/) spec    += $3+0
+                else if (/^Pages wired down:/)  wired   += $3+0
+            }
+            END {
+                used = (active + inactive + wired + spec) * ps
+                printf "%d\n", used / 1024 / 1024
+            }') || used_mb=""
+    else
+        used_mb=$(free -m 2>/dev/null | awk '/^Mem:/ {print $3}') || used_mb=""
+    fi
+    echo "${used_mb:-?}"
+}
+
+_get_cpu_temp() {
+    # Temperatura CPU. Linux: lm_sensors (Package id 0 / Tdie / Tctl) o
+    # sysfs thermal_zone* (miliºC → ºC). macOS no tiene ninguno → "?".
+    # `set -e + pipefail` (entrypoint ropero) requiere `|| t=""` en cada
+    # pipeline susceptible de fallar: el glob /sys/class/thermal/* no
+    # matchea en macOS → awk abre un literal con * → rc=1 con pipefail
+    # → abort. Lo mismo con sensors si está pero falla al leer.
+    local t=""
+    if command -v sensors >/dev/null 2>&1; then
+        t=$(sensors 2>/dev/null \
+            | grep -E '^(Package id 0|Tdie|Tctl):' \
+            | head -1 \
+            | grep -oE '[+-]?[0-9]+\.[0-9]+°C' \
+            | head -1 \
+            | tr -d '°C+') || t=""
+    fi
+    if [[ -z "$t" ]]; then
+        t=$(awk '{print int($1/1000)}' /sys/class/thermal/thermal_zone*/temp 2>/dev/null \
+            | sort -nr | head -1) || t=""
+    fi
+    echo "${t:-?}"
+}
+
+_get_gpu_ghz() {
+    # Clock actual del SM de la primera GPU NVIDIA, en GHz (2 decimales).
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo "?"
+        return
+    fi
+    local mhz
+    mhz=$(nvidia-smi --query-gpu=clocks.current.graphics \
+        --format=csv,noheader,nounits 2>/dev/null | head -1)
+    awk -v m="${mhz:-0}" 'BEGIN {if (m+0>0) printf "%.2f", m/1000; else print "?"}'
+}
+
+_get_vram_used_mb() {
+    # VRAM usada por la primera GPU NVIDIA, en MB (nvidia-smi ya da MB).
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo "?"
+        return
+    fi
+    nvidia-smi --query-gpu=memory.used \
+        --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "?"
+}
+
+_get_gpu_temp() {
+    if ! command -v nvidia-smi >/dev/null 2>&1; then
+        echo "?"
+        return
+    fi
+    nvidia-smi --query-gpu=temperature.gpu \
+        --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "?"
+}
+
+# -----------------------------------------------------------------------------
+# Fans: lectura directa desde sysfs (hwmon del driver msi_wmi_platform).
+# -----------------------------------------------------------------------------
+# Por qué sysfs y no `sensors` ni `nvidia-smi`:
+#   - `nvidia-smi --query-gpu=fan.speed` devuelve "[N/A]" en LAPTOPS porque
+#     el control del fan lo gestiona el OEM (MSI en este caso) vía WMI/EC,
+#     no el driver NVIDIA. Esto afecta a la mayoría de laptops gaming con
+#     GPU NVIDIA: la query de nvidia-smi siempre falla.
+#   - `sensors` (lm_sensors) parsea OK pero requiere instalar el paquete,
+#     y el formato de su output cambia entre versiones.
+#   - sysfs `/sys/class/hwmon/hwmonN/fanM_input` es la API universal: todos
+#     los drivers de fan (nvidia, amdgpu, msi_wmi, dell_smm, thinkpad, etc.)
+#     exponen los RPMs ahí si los conocen. Lectura: `cat` directo, <1ms.
+#
+# Convención msi_wmi_platform (verificado en este MSI):
+#   fan1_input → CPU fan
+#   fan2_input → GPU fan  (laptops MSI dual-fan; uno por subsistema)
+#   fan3/fan4 → pueden existir pero estar a 0 (sensores auxiliares/parados).
+#
+# Si el hwmon no existe (ej. desktop sin msi_wmi), fallback a "?". Si el
+# fan específico está a 0 (parado), también "?" — un fan parado no es
+# informativo y puede confundir.
+# -----------------------------------------------------------------------------
+
+_get_msi_fan_hwmon() {
+    # Devuelve el path del hwmon msi_wmi_platform (ej. /sys/.../hwmon6)
+    # o vacío si no existe. Cacheamos con variable global para no escanear
+    # sysfs en cada llamada (es muy lento sin cache: ~50ms en algunos sistemas).
+    if [[ -n "${_ROPERO_FAN_HWMON:-}" ]]; then
+        [[ -d "$_ROPERO_FAN_HWMON" ]] && echo "$_ROPERO_FAN_HWMON"
+        return
+    fi
+    local p
+    for p in /sys/class/hwmon/hwmon*/name; do
+        if [[ -f "$p" ]] && grep -qx 'msi_wmi_platform' "$p" 2>/dev/null; then
+            _ROPERO_FAN_HWMON="$(dirname "$p")"
+            echo "$_ROPERO_FAN_HWMON"
+            return
+        fi
+    done
+    _ROPERO_FAN_HWMON=""
+    echo ""
+}
+
+_get_cpu_fan_rpm() {
+    # CPU fan RPM. Prioriza sysfs (milisegundo); fallback a `sensors`
+    # si el hwmon msi_wmi no está disponible.
+    local hwmon
+    hwmon=$(_get_msi_fan_hwmon)
+    if [[ -n "$hwmon" && -r "$hwmon/fan1_input" ]]; then
+        local rpm
+        rpm=$(cat "$hwmon/fan1_input" 2>/dev/null)
+        if [[ -n "$rpm" && "$rpm" -gt 0 ]]; then
+            echo "$rpm"
+            return
+        fi
+        echo "?"
+        return
+    fi
+    # Fallback: lm_sensors (puede leer CPU fan desde otra fuente hwmon).
+    if ! command -v sensors >/dev/null 2>&1; then
+        echo "?"
+        return
+    fi
+    local rpm
+    rpm=$(sensors 2>/dev/null \
+        | awk '/^fan[0-9]+:/ {
+            for (i=1;i<=NF;i++) if ($i=="RPM") {
+                v=$(i-1); gsub(/[^0-9]/,"",v);
+                if (v+0>0) { print v; exit }
+            }
+        }')
+    echo "${rpm:-?}"
+}
+
+_get_gpu_fan_rpm() {
+    # GPU fan RPM. Lee fan2_input del mismo hwmon msi_wmi (convención de
+    # fan2 = GPU en laptops MSI dual-fan). Si no existe o está a 0, "?".
+    #
+    # NOTA: NO usamos nvidia-smi aquí. En laptops, el driver NVIDIA no
+    # controla el fan (lo hace el EC del OEM) y siempre devuelve "[N/A]".
+    # Verificado en esta RTX 5080 laptop: nvidia-smi fan.speed → [N/A],
+    # mientras sysfs → 4324 RPM real.
+    local hwmon
+    hwmon=$(_get_msi_fan_hwmon)
+    if [[ -n "$hwmon" && -r "$hwmon/fan2_input" ]]; then
+        local rpm
+        rpm=$(cat "$hwmon/fan2_input" 2>/dev/null)
+        if [[ -n "$rpm" && "$rpm" -gt 0 ]]; then
+            echo "$rpm"
+            return
+        fi
+    fi
+    echo "?"
+}
+
+# -----------------------------------------------------------------------------
+# Render artesanal del status (versión COMPACTA).
+# -----------------------------------------------------------------------------
+# Pensado para iterar el diseño ANTES de replicarlo con `alaja action`
+# (cuando el comando alaja action esté listo). NO usa alaja: solo echo /
+# printf / ANSI para que:
+#   - se pueda probar al instante sin recompilar nada,
+#   - las decisiones de diseño (anchos de columna, colores, jerarquía) sean
+#     explícitas y revisables a simple vista,
+#   - el output sea 100% portable a cualquier terminal / ssh.
+#
+# CUANDO `alaja action` madure, esta función será la REFERENCIA del layout
+# a replicar: mismas columnas, mismos colores (mapeados a themes), misma
+# jerarquía cabecera → sistema → slots.
+#
+# Convenciones de padding:
+#   - Los códigos ANSI van SIEMPRE fuera del campo %-Ns para no romper
+#     el cálculo de ancho (printf no strippea escapes).
+#   - Las columnas se dimensionan para el caso típico; nombres de modelo
+#     largos (>20 chars) se truncan con elipsis para no romper la tabla.
+# -----------------------------------------------------------------------------
+_render_status_compact() {
+    local cpu_ghz ram_mb cpu_temp cpu_fan gpu_ghz vram_mb gpu_temp gpu_fan
+    cpu_ghz=$(_get_cpu_ghz);    ram_mb=$(_get_ram_used_mb)
+    cpu_temp=$(_get_cpu_temp);  cpu_fan=$(_get_cpu_fan_rpm)
+    gpu_ghz=$(_get_gpu_ghz);    vram_mb=$(_get_vram_used_mb)
+    gpu_temp=$(_get_gpu_temp);  gpu_fan=$(_get_gpu_fan_rpm)
+
+    # Estado de TODOS los puertos gestionados (los dos slots por defecto +
+    # los pineados por los scripts vía MODEL_PORT). Extracción compartida con
+    # cmd_status: una sola fuente para los dos renders.
+    _collect_slots
+
+    # ── Cabecera ──────────────────────────────────────────────────────────
+    printf "${BOLD}${CYAN_B}─── ROPERO STATUS ───${NC}  ${DIM}%s${NC}\n" "$(date +%H:%M:%S)"
+    echo
+
+    # ── Sistema (resumen en 2 líneas) ─────────────────────────────────────
+    # Temperatura en amarillo para que llame la atención (es lo que más
+    # miramos). GHz en bold para jerarquía.
+    printf "  ${CYAN_B}CPU${NC}  ${BOLD}%s GHz${NC} · %s MB · ${YELLOW}%s°C${NC} · fan %s RPM\n" \
+        "$cpu_ghz" "$ram_mb" "$cpu_temp" "$cpu_fan"
+    printf "  ${GRN_B}GPU${NC}  ${BOLD}%s GHz${NC} · %s MB · ${YELLOW}%s°C${NC} · fan %s RPM\n" \
+        "$gpu_ghz" "$vram_mb" "$gpu_temp" "$gpu_fan"
+    echo
+
+    # ── Puertos (tabla padded) ────────────────────────────────────────────
+    # Cabecera + separador dim. Anchos: SLOT=9, PUERTO=6, ESTADO=6,
+    # MODELO=22 (con elipsis si >22), PID=7, UPTIME=8, ENGINE=15.
+    # SLOT lleva el dueño del puerto: "dGPU"/"CPU" para los slots por defecto,
+    # el nombre del modelo para los puertos pineados (MODEL_PORT).
+    printf "  ${YEL_B}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
+        "SLOT" "PORT" "ESTADO" "MODELO" "PID" "UPTIME" "ENGINE"
+    printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
+        "─────────" "──────" "──────" "──────────────────────" "───────" "────────" "───────────────"
+
+    # Filas
+    local i=0
+    while (( i < ${#ROPERO_SLOT_ROWS[@]} )); do
+        local slot="${ROPERO_SLOT_ROWS[$((i+0))]}"
+        local port="${ROPERO_SLOT_ROWS[$((i+1))]}"
+        local state="${ROPERO_SLOT_ROWS[$((i+2))]}"
+        local model="${ROPERO_SLOT_ROWS[$((i+3))]}"
+        local pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
+        local uptime="${ROPERO_SLOT_ROWS[$((i+5))]}"
+        local engine="${ROPERO_SLOT_ROWS[$((i+6))]}"
+
+        # Truncar slot/modelo largos (preservan ancho de columna)
+        if (( ${#slot} > 9 )); then
+            slot="${slot:0:6}..."
+        fi
+        if (( ${#model} > 22 )); then
+            model="${model:0:19}..."
+        fi
+
+        # Estado coloreado. Color FUERA del campo %-Ns para que el pad no
+        # cuente bytes ANSI.
+        if [[ "$state" == "ON" ]]; then
+            printf "  %-9s %-6s ${GRN_B}%-6s${NC} %-22s %-7s %-8s %-15s\n" \
+                "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
+        else
+            printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
+                "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
+        fi
+        i=$((i+7))
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Comandos
+# -----------------------------------------------------------------------------
+
+# _port_legend → listado "puerto → dueño" para `ropero help`. Se genera desde
+# la misma lista que usa status/stop, para que nunca se desincronicen.
+_port_legend() {
+    local _p
+    while read -r _p; do
+        if [[ -n "$_p" ]]; then
+            printf '  %-7s %s\n' ":$_p" "$(ropero_port_label "$_p")"
+        fi
+    done < <(ropero_managed_ports)
+}
+
+# -----------------------------------------------------------------------------
+# Uso y error de uso.
+#
+# A nivel de archivo, no anidados en el comando que los usa, por el mismo
+# motivo que _kill_port: una función definida dentro de otra no existe hasta
+# que esa se ha ejecutado.
+#
+# Por qué hace falta: hasta ahora los subcomandos aceptaban CUALQUIER cosa
+# detrás y la tiraban a la basura sin decir nada. `ropero --install models`
+# ejecutaba el install entero —compilando llama.cpp si hacía falta— porque
+# cmd_install nunca miraba "$@". Un typo, o un argumento de alguien que se
+#antasyaba otra cosa, se-convirtió en media hora de compilación sin aviso. Un
+# CLI que descarta lo que le pasan no es un CLI: es unalotería. Ahora todo lo
+# que no se reconoce falla, y falla ANTES de tocar nada.
+# -----------------------------------------------------------------------------
+_ropero_usage() {
+    case "${1:-}" in
+        install)   printf 'USO: ropero install [engines|models|link] [selección] [--force]\n' ;;
+        check)     printf 'USO: ropero --check\n' ;;
+        list)      printf 'USO: ropero list\n' ;;
+        templates) printf 'USO: ropero templates\n' ;;
+        stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        models)    printf 'USO: ropero models\n' ;;
+        status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        # Sin subcomando: la línea del modelo. Es lo que devuelven los typos de
+        # flag, y ropero help para el resto.
+        *)         printf 'USO: ropero <modelo> [--background] [--cpu] [--force] [--port N]\n' ;;
+    esac
+}
+
+# _ropero_usage_error <subcomando> <mensaje> → error a stderr y exit 2.
+#
+# exit 2 y no 1 a propósito: 2 es "error de uso" en la convención estándar de
+# Unix, 1 es "el comando se ejecutó y falló". Un wrapper necesita poder
+# distinguir `ropero noexiste` de `ropero --install` roto a medio.
+#
+# Se imprime la línea de uso de ESE comando y no el help entero: el help son
+# 200 líneas, y cuando ya sabes qué has tipeado mal, lo que quieres es la
+# línea que te dice qué escribir.
+_ropero_usage_error() {
+    echo "ERROR: $2" >&2
+    _ropero_usage "${1:-}" >&2
+    echo "  (ropero help → uso completo)" >&2
+    exit 2
+}
+
+cmd_list() {
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error list "list no acepta argumentos (recibido: '$1')"
+    fi
+    echo "Modelos disponibles:"
+    for m in "${MODEL_NAMES[@]}"; do
+        local engine="${MODEL_ENGINE[$m]:-llama-server}"
+        local alias="${MODEL_ALIAS[$m]:-$m}"
+        # Puerto: el pineado (MODEL_PORT) si el modelo lo declara; si no,
+        # "slot :$PORT / :$CPU_PORT" según se invoque con o sin --cpu.
+        local port_desc _p
+        if _p=$(_model_port "$m"); then
+            port_desc="port :$_p (fijado)"
+        else
+            port_desc="slot :$PORT / :$CPU_PORT"
+        fi
+        if [[ "$engine" == "llama-server" ]]; then
+            printf "  %-12s %-21s ctx=%-10s engine=%-14s gguf=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_GGUF[$m]}"
+        else
+            # Para los engines con servidor propio, lo útil ver de un vistazo
+            # es el formato del checkpoint: un .safetensors no se puede meter
+            # en un trtllm-serve y un GGUF tampoco, y el error que sale de ahí
+            # ("no se encontró ningún archivo de pesos") no lo dice.
+            local fmt="${MODEL_FORMAT[$m]:-dir}"
+            local auth="proxy"
+            if ropero_engine_auth_native "$engine"; then auth="api-key"; fi
+            printf "  %-12s %-21s ctx=%-10s engine=%-14s [%s/%s] path=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" \
+                "$fmt" "$auth" "${MODEL_PATH[$m]:-N/A}"
+        fi
+    done
+
+    # ── Modelos retirados ────────────────────────────────────────────────
+    # Los de models/<engine>/fired/ NO se pueden arrancar. Se listan aparte y
+    # marcados, porque "este modelo ya no existe" y "este modelo no se puede
+    # usar" son cosas distintas: la primera hace que el usuario busque otro,
+    # la segunda le dice que no busques nada porque no va a funcionar.
+    #
+    # Se muestra el fichero para que se distingan entre sí: puede haber dos
+    # retiring con el mismo nombre y distinta cuantización.
+    if (( ${#ROPERO_RETIRED[@]} > 0 )); then
+        printf "\nModelos retirados (no disponibles):\n"
+        local r
+        for r in "${!ROPERO_RETIRED[@]}"; do
+            printf "  %-18s %-12s engine=%-14s %s\n" \
+                "${ROPERO_RETIRED_NAME[$r]:-$r}" "no disponible" \
+                "${ROPERO_RETIRED[$r]}" "${ROPERO_RETIRED_GGUF[$r]:-}"
+        done
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# cmd_template → muestra la plantilla de ejemplo de un modelo.
+#
+# Antes había cuatro plantillas (30-template-<engine>.sh), una por engine, y
+# cada una era un script bash distinto. Con el formato TOML único ya no hace
+# falta una por engine: el esquema es el mismo para todos, así que hay UNA
+# plantilla, y está en models/_template.toml.
+# -----------------------------------------------------------------------------
+cmd_template() {
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error template "template no acepta argumentos (recibido: '$1')"
+    fi
+    local f="$MODELS_DIR/_template.toml"
+    if [[ ! -f "$f" ]]; then
+        printf 'No encuentro la plantilla en %s\n' "$f" >&2
+        return 1
+    fi
+    printf 'Plantilla de modelo: %s\n' "$f"
+    printf 'Copia a models/<engine>/<nombre>.toml y ajústala. Un modelo retirado\n'
+    printf 'va en models/<engine>/fired/<nombre>.toml, con el mismo formato.\n\n'
+    cat "$f"
+}
+
+cmd_status() {
+    # Flags locales:
+    #   --craft        fuerza el render artesanal (_render_status_compact) en
+    #                  vez de delegar en alaja. Útil para iterar el layout
+    #                  antes de replicarlo con `alaja action`.
+    #   --watch [ms]   refresco continuo cada N ms (default 1000). Delega en
+    #                  cmd_status_watch (que fuerza el render artesanal: alaja
+    #                  no soporta bien bordes selectivos/colores de fila, y es
+    #                  más lento — incompatible con un loop de refresh).
+    #                  Acepta `--watch` solo o `--watch 500`.
+    local force_craft=0
+    local watch_ms=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --craft)
+                force_craft=1
+                shift
+                ;;
+            --watch)
+                shift
+                # El argumento de --watch es OPCIONAL y numérico. Si el
+                # siguiente token es otro flag (ej. --craft) o no existe,
+                # default 1000. Si existe pero NO es número → error claro.
+                if [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; then
+                    watch_ms="$1"
+                    shift
+                elif [[ $# -gt 0 && "$1" == --* ]]; then
+                    # siguiente es flag, no valor de --watch → default
+                    watch_ms=1000
+                elif [[ $# -gt 0 ]]; then
+                    _ropero_usage_error status "--watch requiere milisegundos (entero positivo), recibido: $1"
+                else
+                    watch_ms=1000
+                fi
+                cmd_status_watch "$watch_ms"
+                return $?
+                ;;
+            *)
+                # El mismo helper que el resto de la CLI, y por el mismo
+                # motivo: `status --badopt` decía "Opción desconocida" sin la
+                # palabra ERROR y con otro código de salida que el resto de
+                # comandos, así que un wrapper no podía contarlo como error de
+                # uso. Ahora todos los comandos fallan igual.
+                _ropero_usage_error status "opción desconocida: '$1'"
+                ;;
+        esac
+    done
+
+    # Estado de TODOS los puertos gestionados (los dos slots por defecto +
+    # los pineados por MODEL_PORT). Extracción compartida con el render
+    # artesanal, así alaja y --craft no pueden discrepar.
+    _collect_slots
+
+    # El CSV de filas y las métricas de sistema solo hacen falta para el
+    # render de alaja: si vamos al artesanal, las calcula él mismo (y así no
+    # pagamos dos veces los ~10 forks de nvidia-smi/free/sensors).
+    #
+    # ── Decisión de render ─────────────────────────────────────────────────
+    # Prioridad: --craft > alaja disponible y funcional > fallback artesanal.
+    # El fallback artesanal (_render_status_compact) es ahora el MISMO layout
+    # que se va a replicar con alaja, así que el diseño queda coherente
+    # aunque alaja no esté instalado (SSH sin TUI, etc.).
+    #
+    # ¿Por qué el chequeo de salida vacía? Porque `alaja` puede estar PRESENTE
+    # y ser inútil: un release a medio compilar deja un binario de 0 bytes, que
+    # sale con 0 y no imprime nada. Con el `|| true` de antes, `ropero status`
+    # se quedaba mudo sin decir nada — mientras `ropero status --watch` (que
+    # fuerza el render artesanal) sí enseñaba la tabla. Bug real, no teórico.
+    # Ahora: si alaja no dice absolutamente nada, caemos al artesanal.
+    local _rendered=0
+    if (( force_craft == 0 )) && command -v alaja >/dev/null 2>&1; then
+        # Métricas de sistema para los separators. Si una herramienta falta
+        # (nvidia-smi en Mac, sensors sin instalar...) el helper devuelve "?"
+        # y el status sigue mostrándose.
+        local cpu_ghz ram_mb cpu_temp cpu_fan gpu_ghz vram_mb gpu_temp gpu_fan
+        cpu_ghz=$(_get_cpu_ghz)
+        ram_mb=$(_get_ram_used_mb)
+        cpu_temp=$(_get_cpu_temp)
+        cpu_fan=$(_get_cpu_fan_rpm)
+        gpu_ghz=$(_get_gpu_ghz)
+        vram_mb=$(_get_vram_used_mb)
+        gpu_temp=$(_get_gpu_temp)
+        gpu_fan=$(_get_gpu_fan_rpm)
+
+        # Empaquetar las filas como CSV para inyectar como args del comando
+        # table de alaja. En bash (sin jq) porque los valores son simples:
+        # números, palabras y "?". bin_name puede traer guiones pero no comillas.
+        local _rows_csv="" i=0
+        while (( i < ${#ROPERO_SLOT_ROWS[@]} )); do
+            local _slot="${ROPERO_SLOT_ROWS[$((i+0))]}"
+            local _p="${ROPERO_SLOT_ROWS[$((i+1))]}"
+            local _state="${ROPERO_SLOT_ROWS[$((i+2))]}"
+            local _model="${ROPERO_SLOT_ROWS[$((i+3))]}"
+            local _pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
+            local _uptime="${ROPERO_SLOT_ROWS[$((i+5))]}"
+            local _engine="${ROPERO_SLOT_ROWS[$((i+6))]}"
+            local _bin="$_engine"
+            if [[ "$_state" == "ON" ]]; then
+                _bin=$(ps -p "$_pid" -o comm= 2>/dev/null | tr -d ' ' || echo "?")
+            fi
+            [[ -n "$_rows_csv" ]] && _rows_csv+=","
+            _rows_csv+="\"--rows\",\"$_state;:$_p ($_slot);$_model;$_pid;$_uptime;$_bin;$_engine\""
+            i=$((i+7))
+        done
+
+        local _data _out
+        _data=$(printf '{"actions":[
+            {"order": "3", "command":"separator","args":["--text","CPU: %s GHz · %s MB · %s°C · fan %s RPM","--color","theme:gradient_1"]},
+            {"order": "2", "command":"separator","args":["--text","GPU: %s GHz · %s MB · %s°C · fan %s RPM","--color","theme:gradient_3"]},
+            {"order": "1", "command":"table","args":["--border","rounded","---border-color","hex:#ffca00","--headers","Slot;Puerto;Estado;Modelo;PID;Uptime;bin;engine"%s]}
+        ]}' \
+            "$cpu_ghz" "$ram_mb" "$cpu_temp" "$cpu_fan" \
+            "$gpu_ghz" "$vram_mb" "$gpu_temp" "$gpu_fan" \
+            "${_rows_csv:+,$_rows_csv}")
+        _out=$(alaja action --data "$_data" 2>&1 || true)
+        if [[ -n "${_out//[[:space:]]/}" ]]; then
+            printf '%s\n' "$_out"
+            _rendered=1
+        fi
+    fi
+    if (( _rendered == 0 )); then
+        # Render artesanal (mismo layout que se replicará con alaja). Lo
+        # usa también --craft para iterar el diseño sin alaja de por medio.
+        _render_status_compact
+    fi
+    return $(( ROPERO_SLOT_BUSY == 0 ? 1 : 0 ))
+}
+
+cmd_status_watch() {
+    # Refresco continuo del status. --craft IMPLÍCITO: usa siempre el render
+    # artesanal (alaja no soporta bien bordes selectivos/colores de fila, y
+    # en un loop es más lento y menos predecible).
+    #
+    # Implementación: delegamos en `watch(1)` (procps-ng). Es código C,
+    # robusto, estándar en Linux, y maneja correctamente:
+    #   - clear entre ejecuciones (sin parpadeo)
+    #   - Ctrl+C (sale limpio, restaura terminal)
+    #   - decimales en el intervalo (`-n` acepta floats)
+    # Reescribir esto en bash sería reinventar la rueda con bugs.
+    #
+    # Overhead: 1 fork+exec por intervalo. Con `--watch 1000` (1s) es
+    # despreciable; con `--watch 200` es ~5 forks/s, aún aceptable (cada
+    # ropero --craft tarda ~50-150ms por los forks internos de sensors,
+    # nvidia-smi, free, lsof — el fork externo es marginal).
+    #
+    # Validación:
+    #   - Entero positivo obligatorio. 0 o negativo → busy-loop mortal.
+    #   - < 100 ms avisamos: el render mide ~50-200 ms según el sistema,
+    #     con ms<100 el intervalo nunca llega y `watch` avisa "sh: sleep
+    #     interrupted".
+    local ms="${1:-1000}"
+
+    if ! [[ "$ms" =~ ^[0-9]+$ ]] || (( ms <= 0 )); then
+        echo "ERROR: --watch requiere milisegundos (entero positivo), recibido: $ms" >&2
+        return 2
+    fi
+    if (( ms < 100 )); then
+        echo "AVISO: --watch con ms<100 puede no dejar respirar al render (~50-200ms)." >&2
+        echo "       Si ves refresco errático, sube a ms>=200." >&2
+    fi
+    if ! command -v watch >/dev/null 2>&1; then
+        echo "ERROR: 'watch' (procps-ng) no está instalado. Paquetes:" >&2
+        echo "  - Cachy/Arch: pacman -S procps-ng" >&2
+        echo "  - Debian/Ubuntu: apt install procps" >&2
+        echo "  - macOS: brew install watch" >&2
+        return 3
+    fi
+
+    # watch -n toma segundos (con decimales). 1000 ms → 1.000 s.
+    local sec
+    sec=$(awk -v ms="$ms" 'BEGIN { printf "%.3f", ms/1000 }')
+
+    # Opciones:
+    #   -n SEC  intervalo (acepta decimales: 0.2, 0.5, 1, 2.5…)
+    #   -c      interpretar secuencias ANSI (preserva los colores del render)
+    #   -t      no mostrar la cabecera "Every Xs: …" (no la queremos encima)
+    #   -x      pasar el comando a exec en vez de sh -c (necesario si el
+    #           comando tiene redirecciones/comillas raras; aquí no hace
+    #           falta, pero es más seguro y rápido — un fork menos)
+    exec watch -n "$sec" -c -t -x -- "${ROPERO_BIN:-$0}" status --craft
+}
+
+cmd_stop() {
+    # Parseo ANTES de tocar ningún puerto. `ropero stop` acepta como mucho un
+    # argumento, y ese es el nombre del modelo (o "all"). Antes main le pasaba
+    # solo "${1:-all}", así que `ropero stop embed --force` recorría los puertos
+    # buscando un modelo llamado "embed" y descartaba el --force sin pestañear:
+    # el usuario veía "Modelo 'embed' no encontrado" cuando lo que había pasado
+    # es que el nombre estaba mal escrito. Ahora el --force es un error de uso
+    # claro, que es lo que es.
+    if [[ $# -gt 1 ]]; then
+        _ropero_usage_error stop "stop acepta como mucho un argumento (modelo o 'all'); recibidos $#: $*"
+    fi
+    local target="${1:-all}"
+    if [[ "$target" == -* ]]; then
+        _ropero_usage_error stop "stop no tiene opciones; '$target' no es un modelo (usa 'stop all')"
+    fi
+
+    # Nombre desconocido → typo casi seguro. Se comprueba contra MODEL_NAMES
+    # (que ya contiene tanto los scripts físicos como sus alias públicos, así
+    # que cubre los dos casos) y no contra lo que hay escuchando: stop compara
+    # el nombre que ropero publica en /v1/models, y ese nombre solo puede ser
+    # el de un modelo cargado. Sin esto, `ropero stop quezqui` se comportaba
+    # como un acierto hasta el final y luego decía "no encontrado en ningún
+    # puerto gestionado", que es un diagnóstico de runtime para lo que es un
+    # typo de teclado.
+    if [[ "$target" != "all" ]]; then
+        local _k="${target//-/_}"
+        if [[ ! " ${MODEL_NAMES[*]} " =~ " $_k " ]]; then
+            _ropero_usage_error stop "modelo desconocido: '$target' (mira 'ropero list')"
+        fi
+    fi
+
+    # _kill_port y _engine_human están a nivel de archivo (ver más arriba), no
+    # aquí dentro: --force, en start_model, también necesita apagarlos, y una
+    # función definida dentro de otra no existe hasta que esa se ha ejecutado.
+
+    if [[ "$target" == "all" ]]; then
+        # Mata en TODOS los puertos gestionados: :9999 (dGPU), :9998 (CPU), los
+        # pineados por MODEL_PORT y los ad-hoc de --port. Si están vacíos, no
+        # falla — solo imprime que no había nada. IMPORTANTE: por puerto, no
+        # por nombre de proceso (no usar pkill -f global: mataría los slots
+        # paralelos).
+        local _stopped=0 _p
+        while read -r _p; do
+            [[ -n "$_p" ]] || continue
+            local _eng
+            _eng=$(_engine_human "$_p" 2>/dev/null || echo "?")
+            if _stop_port "$_p"; then
+                _stopped=$((_stopped+1))
+                echo "  ✓ :$_p detenido ($_eng)"
+            fi
+        done < <(ropero_managed_ports)
+        if (( _stopped == 0 )); then
+            echo "Nada que detener (ningún puerto gestionado activo)"
+        else
+            echo "Detenidos $_stopped slot(s)"
+        fi
+        return 0
+    fi
+
+    # Stop <modelo>: buscar en qué puerto está ese modelo y matar SOLO ese.
+    # Itera todos los puertos gestionados, no solo los dos slots: un modelo
+    # pineado con MODEL_PORT, o lanzado con --port, podría estar en :9990/:9995
+    # y nos lo saltaríamos.
+    local _p
+    while read -r _p; do
+        [[ -n "$_p" ]] || continue
+        if port_listening "$_p"; then
+            local current
+            current=$(get_model_on_port "$_p" 2>/dev/null || echo "")
+            if [[ "$current" == "$target" ]]; then
+                local _eng
+                _eng=$(_engine_human "$_p" 2>/dev/null || echo "?")
+                _stop_port "$_p"
+                echo "Modelo '$target' ($_eng) detenido en :$_p"
+                return 0
+            fi
+        fi
+    done < <(ropero_managed_ports)
+
+    local _ports_human
+    _ports_human=$(ropero_managed_ports | paste -sd ' ' -)
+    echo "✗ Modelo '$target' no encontrado en ningún puerto gestionado ($_ports_human)" >&2
+    local _activos
+    _activos=$(ropero status 2>&1 | grep -E '\bON\b' | sed 's/^[[:space:]]*//' | paste -sd '|' - || true)
+    if [[ -n "$_activos" ]]; then
+        echo "  Activos ahora: ${_activos}" >&2
+    else
+        echo "  Activos ahora: ninguno" >&2
+    fi
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# Lanzamiento de modelo
+# -----------------------------------------------------------------------------
+start_model() {
+    local model="$1"
+    local background="$2"
+    local cpu_only="${3:-0}"
+    local force="${4:-0}"
+    local port_override="${5:-}"
+    local requested_level="${6:-}"
+    local model_flags="${7:-}"
+    local model_opts="${8:-}"
+
+    # Normalizar nombre del modelo (guiones a guiones underscores) para buscar en arrays
+    local model_key="${model//-/_}"
+
+    if [[ ! " ${MODEL_NAMES[*]} " =~ " $model_key " ]]; then
+        # Un modelo retirado NO es un modelo desconocido. La diferencia importa:
+        # "no existe" hace que el usuario busque otro; "está retirado" le dice
+        # que no va a funcionar y le ahorra la búsqueda. El modelo retirado
+        # sigue en el índice (models/<engine>/fired/), así que se puede nombrar.
+        if ropero_model_retired "$model"; then
+            local rkey="${model//-/_}"
+            echo "El modelo '$model' ya no está disponible (está retirado)." >&2
+            echo "  engine: ${ROPERO_RETIRED[$rkey]:-?}" >&2
+            echo "  config: ${ROPERO_RETIRED_PATH[$rkey]:-?}" >&2
+            echo "  Los modelos retirados están en models/<engine>/fired/ y no se pueden arrancar." >&2
+            echo "  Modelos disponibles:" >&2
+            cmd_list >&2
+            return 1
+        fi
+        echo "Modelo desconocido: $model" >&2
+        cmd_list >&2
+        return 1
+    fi
+
+    # ── Flags y opciones que pidió el usuario ───────────────────────────────
+    # Se exportan al .sh del modelo con nombres normalizados:
+    #   --vision       → ROPERO_MODEL_FLAG_VISION=1
+    #   --n-cpu-moe 5  → ROPERO_MODEL_OPT_N_CPU_MOE=5
+    #
+    # El guion se convierte en guion bajo para que el nombre sea una variable
+    # de shell válida. El .sh del modelo lee esas variables y decide.
+    local mf mo up
+    for mf in $model_flags; do
+        up="$(printf '%s' "$mf" | tr 'a-z-' 'A-Z_')"
+        export "ROPERO_MODEL_FLAG_${up}=1"
+    done
+    for mo in $model_opts; do
+        up="$(printf '%s' "${mo%%=*}" | tr 'a-z-' 'A-Z_')"
+        export "ROPERO_MODEL_OPT_${up}=${mo#*=}"
+    done
+
+    # ── Nivel de razonamiento ──────────────────────────────────────────────
+    # De dónde sale, por orden:
+    #   1. el que pidió el usuario en la línea de órdenes (--high/--medium/--low)
+    #   2. el que trae el alias público (verifier → high, designer → medium)
+    #   3. el default del propio script (MODEL_LEVEL_DEFAULT)
+    #
+    # El (1) gana sobre el (2) a propósito: `ropero verifier --low` es
+    # "el verifier pero con poco razonamiento", no un error por contradicción.
+    local alias_level=""
+    if [[ -n "${MODEL_ALIAS_TARGET[$model_key]:-}" ]]; then
+        alias_level="${MODEL_ALIAS_LEVEL[$model_key]:-}"
+    fi
+    [[ -n "$requested_level" ]] || requested_level="$alias_level"
+    if [[ -n "$requested_level" ]]; then
+        export ROPERO_MODEL_LEVEL="$requested_level"
+    fi
+
+    # Resolución de alias público: si el usuario invocó el alias (e.g. `coder`)
+    # y el loader registró una redirección a un script físico (e.g. devstral),
+    # trabajar contra el físico. Mantener el nombre "humano" para mensajes.
+    local public_alias_used=""
+    if [[ -n "${MODEL_ALIAS_TARGET[$model_key]:-}" ]]; then
+        public_alias_used="$model"
+        model_key="${MODEL_ALIAS_TARGET[$model_key]}"
+        model="$model_key"
+    fi
+
+    local engine="${MODEL_ENGINE[$model_key]:-llama-server}"
+    local port="$PORT"
+
+    # Selección de puerto, por orden de precedencia:
+    #   1. --port N              → gana TODO (es lo que estás pidiendo AHORA).
+    #   2. MODEL_PORT del script → si no hay --port.
+    #   3. --cpu                 → $CPU_PORT (offload CPU).
+    #   4. resto                 → $PORT (dGPU).
+    #
+    # Tiene que resolverse AQUÍ, antes del check de "puerto ocupado" de más
+    # abajo: si se calculara después, el check miraría 9999 mientras el
+    # servidor nace en 9990 (bug previo con --cpu, commit 2b00b5c).
+    #
+    # MODEL_PORT gana sobre --cpu a propósito: quien escribe el .sh ha dicho
+    # "este modelo vive AQUÍ". --cpu sigue significando offload a CPU (los
+    # flags --n-gpu-layers 0 / --threads N se añaden igualmente más abajo);
+    # lo que --cpu ya no puede es mover el modelo de puerto.
+    #
+    # Y --port gana sobre MODEL_PORT porque es una orden explícita de quien
+    # escribe, en ese momento, con el contexto que tiene. El .sh no se toca:
+    # la siguiente vez que lances ese modelo sin --port, vuelve a su puerto
+    # de siempre.
+    local pinned_port=""
+    local port_reason="slot por defecto"
+    if [[ -n "$port_override" ]]; then
+        if ! _ropero_valid_port "$port_override"; then
+            echo "ERROR: --port $port_override no es un puerto válido (1-65535)" >&2
+            return 1
+        fi
+        port="$port_override"
+        port_reason="forzado con --port"
+        # Registrar el puerto para que `status` y `stop` lo vean: son otros
+        # procesos y no pueden saberlo solos.
+        _ropero_adhoc_add "$port_override"
+    elif pinned_port=$(_model_port "$model_key"); then
+        port="$pinned_port"
+        port_reason="puerto fijado por MODEL_PORT"
+    elif (( cpu_only == 1 )) && [[ "$engine" == "llama-server" ]]; then
+        port="$CPU_PORT"
+        port_reason="slot CPU (--cpu)"
+    fi
+
+    # --cpu sólo tiene sentido en llama-server, y no por pereza sino porque es
+    # el único con esa palanca: --cpu mapea a --n-gpu-layers 0 + --threads N,
+    # flags que son de llama-server. En los demás engines "apagar la GPU" no
+    # es un flag, es elegir el backend (device= en airllm, y en mlx_lm/trtllm/
+    # flm ni existe la opción). Ignorarlo en silencio dejaría al usuario
+    # pensando que tiene la CPU y con la GPU delante; así que se dice.
+    if (( cpu_only == 1 )) && [[ "$engine" != "llama-server" ]]; then
+        echo "ERROR: --cpu solo funciona con engine=llama-server." >&2
+        echo "       Este modelo usa '$engine', que no tiene offload a CPU por flag." >&2
+        echo "       Para airllm, el device se elige en el propio script del modelo" >&2
+        echo "       (get_engine_args_<model>). Para los demás, no hay equivalente." >&2
+        return 1
+    fi
+
+    # Preflight ANTES de tocar el puerto: validar que el arranque puede
+    # tener éxito (GGUF + args del módulo). No matar lo que corre por un
+    # lanzamiento condenado (p.ej. mmproj ausente → antes dejaba :9999
+    # vacío y a ttstt sin servidor).
+    local -a pre_model_args=()
+    local pre_gguf_path=""
+    case "$engine" in
+        "llama-server")
+            pre_gguf_path="$GGUF_DIR/${MODEL_GGUF[$model_key]}"
+            # ROPERO_<MODELO>_GGUF permite apuntar a otra cuantización del
+            # mismo repo. La comprobación tiene que ver el MISMO fichero que
+            # se le va a pasar a llama-server, o el preflight daría por bueno
+            # un modelo que luego no se encuentra.
+            local gguf_override_env="ROPERO_$(printf '%s' "${model_key//-/_}" | tr '[:lower:]' '[:upper:]')_GGUF"
+            if [[ -n "${!gguf_override_env:-}" ]]; then
+                pre_gguf_path="$GGUF_DIR/${!gguf_override_env}"
+            fi
+            if [[ ! -f "$pre_gguf_path" ]]; then
+                echo "Archivo GGUF no encontrado: $pre_gguf_path" >&2
+                return 1
+            fi
+            local pre_out pre_status=0
+            # Los args del modelo salen del TOML, ya montados: base + nivel +
+            # flags + opciones. El word splitting aquí es INTENCIONAL: son
+            # listas separadas por espacios de flags ("vision") y de
+            # opciones con valor ("n-cpu-moe=8").
+            pre_out=$(ropero_model_args "$model_key" "$requested_level" $model_flags $model_opts 2>&1) || pre_status=$?
+            if (( pre_status != 0 )); then
+                echo "ERROR: la configuración del modelo '$model_key' no es válida:" >&2
+                echo "$pre_out" >&2
+                return 1
+            fi
+            if [[ -n "$pre_out" ]]; then
+                mapfile -t pre_model_args <<<"$pre_out"
+            fi
+            ;;
+        "airllm"|"tensorrt-llm"|"mlx_lm")
+            if [[ ! -d "${MODEL_PATH[$model_key]}" ]]; then
+                echo "Directorio de modelo no encontrado: ${MODEL_PATH[$model_key]}" >&2
+                # Si el script del modelo sabe cómo se descarga, que lo diga.
+                # Fallar con "no encontrado" y nada más obliga a ir a leer el
+                # .sh, y el comando de descarga está justo ahí arriba.
+                local _dl="${MODEL_DL[$model_key]:-}"
+                if [[ -n "$_dl" ]]; then
+                    echo "       Para conseguirlo:" >&2
+                    printf '         %s\n' "${_dl}" >&2
+                fi
+                return 1
+            fi
+            # Que el directorio exista NO basta: que el server esté instalado sí.
+            # Sin esta comprobación, `ropero gptoss-120b` en una máquina donde
+            # mlx_lm no está se lanza, falla al instante con un error de
+            # "command not found" dentro de un pipe a colorize, y el usuario no
+            # ve qué falta. El binario se comprueba AQUÍ, antes de tocar el
+            # puerto de destino: matar el modelo que hubiera en :9999 y luego
+            # descubrir que el engine no existe sería el peor orden posible.
+            if ! ropero_engine_resolve "$engine" >/dev/null 2>&1; then
+                ropero_err "engine '$engine' no instalado (falta su binario de servidor)"
+                case "$engine" in
+                    airllm)       ropero_info "  ropero --install   (o revisa ropero --check)" ;;
+                    mlx_lm)       ropero_info "  pip install mlx-lm  ·  ropero --install" ;;
+                    tensorrt-llm) ropero_info "  ropero --install   (crea ~/.venv-tensorrt)" ;;
+                    fastflowlm)   ropero_info "  ropero --install   (necesita AMD NPU: driver amdxdna + xrt)" ;;
+                esac
+                return 1
+            fi
+            ;;
+        "fastflowlm")
+            # FLM no recibe una ruta: recibe un TAG ("llama3.2:1b") y lo busca
+            # en su propio almacén. Por eso el chequeo de "-d" de los otros
+            # engines no aplica: 9999 no es un directorio.
+            local flm_root flm_dir
+            flm_root="${FLM_MODEL_PATH:-$HOME/.config/flm}"
+            flm_dir="$flm_root/models/${MODEL_PATH[$model_key]}"
+            if [[ ! -d "$flm_dir" ]]; then
+                # Puede estar en subdirectorios (el tag trae '/'), que es lo
+                # que hace flm con los nombres de tipo "hf.co/org/model:tag".
+                flm_dir="$flm_root/models/$(dirname "${MODEL_PATH[$model_key]}")/$(basename "${MODEL_PATH[$model_key]}")"
+            fi
+            if [[ ! -d "$flm_dir" ]]; then
+                echo "ERROR: el modelo '${MODEL_PATH[$model_key]}' no está en el almacén de FLM." >&2
+                echo "       Buscado en: $flm_dir" >&2
+                echo "       Descárgalo con: flm pull ${MODEL_PATH[$model_key]}" >&2
+                echo "       Modelos disponibles: flm list" >&2
+                return 1
+            fi
+            if ! ropero_engine_resolve "$engine" >/dev/null 2>&1; then
+                ropero_err "engine 'fastflowlm' no instalado (falta 'flm')"
+                ropero_info "  ropero --install   (solo en cachy/arch con NPU AMD)"
+                return 1
+            fi
+            ;;
+    esac
+
+    if port_listening "$port"; then
+        local current
+        current=$(get_model_on_port "$port" 2>/dev/null || echo "")
+        if [[ "$current" == "$model" ]]; then
+            echo "Modelo '$model' ya está corriendo en :$port"
+            return 0
+        fi
+        # Puerto destino ocupado por OTRO modelo. Default: NO matar
+        # automáticamente. El usuario decide con `ropero stop <modelo>` o
+        # con `--force` (uso interactivo; pensado para que un humano en
+        # terminal pueda rotar modelos sin encadenar 2 comandos). Solo
+        # afecta al slot destino: el otro slot (si hay modelo) sigue
+        # intacto. Si ya hay un --cpu cargado y quieres rearmar la GPU,
+        # --force SOLO mata la GPU.
+        if (( force == 1 )); then
+            local pid
+            pid=$(get_pid_for_port "$port")
+            if [[ -n "$pid" ]]; then
+                echo "⚠  --force: matando '$current' ($(_engine_human "$port" 2>/dev/null || echo '?')) en :$port (pid $pid)"
+                # _kill_port y no `kill -9`: el occupant puede ser un proxy con
+                # un engine detrás, y SIGKILL no deja que el proxy apague a su
+                # hijo. Con `kill -9` directo, rotar de modelo con --force
+                # dejaba el engine anterior sirviendo en su puerto interno
+                # (:10xxx), invisible para `ropero status` y para `ropero stop`.
+                _kill_port "$port"
+                # Pequeña espera para que el puerto se libere (lsof ve TIME_WAIT)
+                local _wait=0
+                while (( _wait < 5 )) && port_listening "$port"; do
+                    sleep 1
+                    (( _wait++ ))
+                done
+                if port_listening "$port"; then
+                    echo "✗ No se pudo liberar :$port tras matar '$current'" >&2
+                    return 1
+                fi
+            fi
+        else
+            echo "✗ Puerto :$port ocupado por '$current'" >&2
+            echo "  ropero NO mata automáticamente. Para liberar el puerto:" >&2
+            echo "    ropero stop $current" >&2
+            echo "  O usa --force para rotar interactivamente (mata solo este slot)." >&2
+            return 1
+        fi
+    fi
+
+    # Contexto efectivo: el que declara el modelo, salvo override por entorno
+    # (ROPERO_<MODELO>_CTX). El nombre se normaliza con guiones bajos, de modo
+    # que un modelo con guion ("qwen38-apex") tiene forma de sobreescribir su
+    # contexto: ROPERO_QWEN38_APEX_CTX.
+    local ctx_size
+    ctx_size="$(ropero_model_ctx "$model_key")"
+
+    # Límites del modelo ([limits] en su TOML). Se comprueban ANTES de tocar el
+    # puerto: un modelo que no cabe en la RAM no debe ocupar :9999 mientras
+    # espera a que alguien lo mate.
+    ropero_model_check_limits "$model_key" "$ctx_size" || return 1
+
+    case "$engine" in
+        "llama-server")
+            local gguf_path="$pre_gguf_path"
+
+            export ROPERO_CTX="$ctx_size"
+
+            local -a model_args=("${pre_model_args[@]}")
+
+            # ----------------------------------------------------------------
+            # Selección de device: macOS = Metal; Cachy = CUDA0 (RTX) o CPU.
+            # Si --cpu: el override de args (--n-gpu-layers 0 --threads N) se
+            # aplica al FINAL del cmd array (ver más abajo) para GANAR sobre
+            # los args del modelo (e.g. --threads 12 de qwenvision.sh). Si se
+            # añadiera a model_args aquí, quedaría ANTES de los args del modelo
+            # y llama-server usaría el último occurrence del modelo.
+            # Si no --cpu en Cachy: CUDA0 (la RTX 5080) por defecto; no hace
+            # falta flag extra (llama-server auto-detecta CUDA).
+            #
+            # NOTA: el puerto se resolvió ANTES del check de "puerto ocupado"
+            # (justo después de detectar engine), no aquí. Bug previo.
+            # ----------------------------------------------------------------
+            if (( cpu_only != 1 )); then
+                local _os
+                _os=$(ropero_detect_os 2>/dev/null || echo unknown)
+                case "$_os" in
+                    macos)
+                        # Metal: los flags óptimos los añade el módulo del
+                        # modelo y/o la compilación (ver bin/20-compile-llama.sh).
+                        :
+                        ;;
+                    cachy|arch)
+                        # CUDA0: device 0 (la RTX 5080) por defecto.
+                        # No hace falta flag extra: llama-server auto-detecta CUDA.
+                        :
+                        ;;
+                esac
+            fi
+
+            local -a cmd=(
+                "$LLAMA_BIN"
+                --model "$gguf_path"
+                --host "$HOST"
+                --port "$port"
+                --api-key "$LLAMA_API_KEY"
+                --alias "$model"
+                --ctx-size "$ctx_size"
+                -fa on
+                --log-verbosity 3
+                "${model_args[@]}"
+            )
+
+            # Override --cpu al FINAL del cmd para ganar sobre args del modelo.
+            # Ojo: --cpu mueve el DISPOSITIVO, no el puerto. Si el modelo tiene
+            # MODEL_PORT, se queda en su puerto y solo se apaga la GPU.
+            if (( cpu_only == 1 )); then
+                local _nproc
+                _nproc=$(command -v nproc >/dev/null && nproc || echo 8)
+                cmd+=("--n-gpu-layers" 0)
+                cmd+=("--threads" "$_nproc")
+            fi
+
+            alaja separator "Arrancando $model en :$port (bin: $LLAMA_BIN, ctx: $ctx_size, $port_reason)" --color
+            if (( background == 0 )); then
+                "${cmd[@]}" 2>&1 | colorize "$model" "$engine"
+                local rc=${PIPESTATUS[0]}
+                return "$rc"
+            else
+                local logfile="$LOG_DIR/ropero-${model}-${port}.log"
+                mkdir -p "$LOG_DIR" 2>/dev/null || { echo "No se pudo crear $LOG_DIR" >&2; return 1; }
+                nohup "${cmd[@]}" >>"$logfile" 2>&1 &
+                local pid=$!
+                disown "$pid" 2>/dev/null || true
+                echo "Modelo $model lanzado en background (pid $pid). Log: $logfile"
+                # Un VL de ~11 GB en frío tarda >60s en cargar; el chequeo
+                # antiguo (6s) lo daba por muerto y rompía a ttstt.
+                local wait_secs="${ROPERO_START_TIMEOUT:-180}" elapsed=0
+                while (( elapsed < wait_secs )); do
+                    if port_listening "$port"; then
+                        local got
+                        got=$(get_model_on_port "$port" 2>/dev/null || true)
+                        if [[ -n "$got" ]]; then
+                            echo "✓ $model responde en :$port (alias: $got)"
+                            return 0
+                        fi
+                    fi
+                    sleep 2
+                    (( elapsed += 2 ))
+                done
+                echo "⚠  '$model' no responde tras ${wait_secs}s; revisa el log." >&2
+                return 1
+            fi
+            ;;
+
+        "airllm"|"tensorrt-llm"|"mlx_lm"|"fastflowlm")
+            ropero_launch_engine "$model" "$model_key" "$engine" "$ctx_size" \
+                                 "$port" "$port_reason" "$background"
+            return $?
+            ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# ropero_launch_engine <model> <model_key> <engine> <ctx> <port> <why> <background>
+#
+# Lanza un engine con servidor propio (airllm / mlx_lm / tensorrt-llm /
+# fastflowlm) respetando EXACTAMENTE el mismo contrato público que llama-server,
+# para que todo lo de arriba — --background, --port, --force, MODEL_PORT,
+# `ropero stop`, `ropero status` — no tenga que saber qué hay detrás.
+#
+# ── DOS CAMINOS ───────────────────────────────────────────────────────────────
+#
+# ropero promete que todos los engines hablan con el mismo LLAMA_API_KEY, la
+# misma IP y el mismo puerto. Eso sólo es cierto si algo valida la key:
+#
+#   llama-server  sí (--api-key)                       → directo a $HOST:$port
+#   mlx_lm        NO tiene ese flag                    → proxy de auth
+#   airllm        NO tiene servidor propio             → endpoint unificado
+#   trtllm-serve  NO tiene ese flag                    → endpoint unificado
+#   flm serve     la doc dice "the key is not checked" → endpoint unificado
+#
+# 1) ENDPOINT UNIFICADO (airllm, tensorrt-llm, fastflowlm)
+#
+#    Los tres pasan por `endpoints/server.py`: un único servidor FastAPI que
+#    pone la API key, el nombre del modelo y el ciclo de vida por igual.
+#
+#        opencode ──► :9992 (endpoint, exige la key) ──► backend en 127.0.0.1
+#
+#    Antes cada uno iba por su lado: airllm con su propio server
+#    (bin/_airllm_server.py) y tensorrt/flm con el proxy de auth por
+#    delante. Tres caminos, tres formas de que algo se rompa. Ahora hay uno, y
+#    el backend nativo se queda SIEMPRE en 127.0.0.1: lo único que se expone
+#    a la red es el endpoint de ropero, que sí exige la key.
+#
+# 2) PROXY DE AUTH (mlx_lm)
+#
+#    mlx_lm.server trae endpoint, pero no valida la API key y sólo acepta
+#    "default_model" como nombre (cualquier otro lo trata como un repo_id de
+#    HuggingFace → 404). El proxy pone la key y reescribe el nombre.
+#
+#        opencode ──► :9992 (proxy, exige la key) ──127.0.0.1:10992──► mlx_lm.server
+#
+# En ambos casos lo que escucha en el puerto de ropero es el padre del engine:
+# `ropero stop` — que mata lo que escucha en el puerto — lo mata, y con él a su
+# hijo, liberando el puerto interno. Y ambos responden /v1/models con el
+# nombre del modelo de ropero, que es lo que hace que `ropero stop <modelo>` y
+# la columna MODELO del status funcionen sin ningún caso especial por engine.
+# -----------------------------------------------------------------------------
+ropero_launch_engine() {
+    local model="$1" model_key="$2" engine="$3" ctx="$4"
+    local port="$5" why="$6" background="${7:-0}"
+
+    # ── 1) Endpoint unificado ──────────────────────────────────────────────
+    case "$engine" in
+        airllm|tensorrt-llm|fastflowlm|mlx_lm)
+            _ropero_launch_endpoint "$model" "$model_key" "$engine" "$ctx" "$port" "$why" "$background"
+            return $?
+            ;;
+    esac
+
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_launch_endpoint <model> <model_key> <engine> <ctx> <port> <why> <bg>
+#
+# Arranca un modelo de airllm / tensorrt-llm / fastflowlm / mlx_lm a través del
+# endpoint unificado (endpoints/server.py).
+#
+# El endpoint es el ÚNICO proceso que escucha en el puerto de ropero. Por
+# detrás puede haber un backend nativo (trtllm-serve, flm serve) en un puerto
+# interno de 127.0.0.1, pero eso es cosa del endpoint: ropero no necesita
+# saberlo, y por eso no hay un puerto interno que registrar ni que liberar.
+# -----------------------------------------------------------------------------
+_ropero_launch_endpoint() {
+    local model="$1" model_key="$2" engine="$3" ctx="$4"
+    local port="$5" why="$6" background="${7:-0}"
+    local model_path="${MODEL_PATH[$model_key]}"
+
+    local server="$ENDPOINTS_DIR/server.py"
+    if [[ ! -f "$server" ]]; then
+        ropero_err "falta el servidor de endpoints: $server"
+        ropero_info "  debería estar en <ropero>/endpoints/server.py"
+        return 1
+    fi
+
+    # El endpoint necesita fastapi y uvicorn. No vale el primer python del
+    # PATH: puede no tenerlos (el asdf puede estar vacío, y el venv de
+    # tensorrt no está en el PATH). Se busca uno que los importe de verdad.
+    local py
+    if ! py=$(ropero_python_with fastapi uvicorn); then
+        ropero_err "el endpoint de '$engine' necesita fastapi y uvicorn, y no hay un python3 que los tenga"
+        ropero_info "  instala las dependencias del engine y vuelve a intentarlo"
+        ropero_info "  (para tensorrt: 'ropero install engines tensorrt-llm' los deja en su venv)"
+        return 1
+    fi
+
+    # El nombre del backend en el endpoint no coincide con el del engine de
+    # ropero: tensorrt-llm → tensorrt, fastflowlm → flm.
+    local backend="$engine"
+    case "$engine" in
+        tensorrt-llm) backend="tensorrt" ;;
+        fastflowlm)   backend="flm" ;;
+        mlx_lm)       backend="mlx" ;;
+    esac
+
+    # Los args del modelo salen del TOML. Para un engine con servidor propio,
+    # `[args].base` son los flags de ESE servidor.
+    local -a extra=()
+    local out st=0 err err_f
+    err_f="$(mktemp "${TMPDIR:-/tmp}/ropero_engargs.XXXXXX")"
+    out=$(ropero_model_args "$model_key" "" 2>"$err_f") || st=$?
+    err=$(cat "$err_f" 2>/dev/null || true)
+    rm -f "$err_f" 2>/dev/null || true
+    if [[ -n "$err" ]]; then
+        printf '%s\n' "$err" >&2
+    fi
+    if (( st != 0 )); then
+        ropero_err "no se pudieron construir los argumentos de '$model'; no se arranca:"
+        return 1
+    fi
+    if [[ -n "$out" ]]; then
+        mapfile -t extra <<<"$out"
+    fi
+
+    local -a cmd=(
+        "$py" "$server"
+        --backend "$backend"
+        --model-path "$model_path"
+        --model-id "$model"
+        --host "$HOST"
+        --port "$port"
+        --context "$ctx"
+        --api-key "$LLAMA_API_KEY"
+    )
+    local a
+    for a in "${extra[@]}"; do
+        [[ -n "$a" ]] || continue
+        cmd+=(--extra-arg "$a")
+    done
+
+    ropero_info "  $engine a través del endpoint unificado (exige la API key)"
+    _ropero_run_engine "$model" "$engine" "$port" "$why" "$ctx" "$background" \
+                      "server.py ($backend)" "${cmd[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_run_engine <model> <engine> <port> <why> <ctx> <bg> <label> [cmd...]
+#
+# La cola común de todo arranque en background o en primer plano: el separador,
+# el nohup, el log y la espera activa hasta que el puerto responde.
+#
+# Se extrajo porque con el endpoint unificado hay DOS caminos de arranque
+# (endpoint y proxy) y la cola es idéntica. Duplicarla era pedir que las dos
+# copias se desincronizasen.
+# -----------------------------------------------------------------------------
+_ropero_run_engine() {
+    local model="$1" engine="$2" port="$3" why="$4" ctx="$5" background="$6" bin_label="$7"
+    shift 7
+    local -a cmd=("$@")
+
+    alaja separator "Arrancando $model en :$port (engine: $engine, ctx: $ctx, $why)" --color
+
+    if (( background == 0 )); then
+        "${cmd[@]}" 2>&1 | colorize "$model" "$engine"
+        local rc=${PIPESTATUS[0]}
+        return "$rc"
+    fi
+
+    local logfile="$LOG_DIR/ropero-${model}-${port}.log"
+    mkdir -p "$LOG_DIR" 2>/dev/null || { echo "No se pudo crear $LOG_DIR" >&2; return 1; }
+    nohup "${cmd[@]}" >>"$logfile" 2>&1 &
+    local pid=$!
+    disown "$pid" 2>/dev/null || true
+    echo "Modelo $model lanzado en background (pid $pid). Log: $logfile"
+
+    # Espera activa. Se mira el puerto Y /v1/models, porque un puerto abierto no
+    # significa modelo servido: sin el segundo check, `ropero status` mostraría
+    # un modelo "?" durante los minutos que tarda en cargar.
+    local wait_secs="${ROPERO_START_TIMEOUT:-180}" elapsed=0
+    while (( elapsed < wait_secs )); do
+        if port_listening "$port"; then
+            local got
+            got=$(get_model_on_port "$port" 2>/dev/null || true)
+            if [[ -n "$got" ]]; then
+                echo "✓ $model responde en :$port (alias: $got)"
+                return 0
+            fi
+        fi
+        # Si el proceso raíz ya no está, esperar hasta los 180s no va a
+        # arreglar nada: ha fallado el arranque. Se sale ya y se enseña el log,
+        # que es donde está el motivo.
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "✗ '$model' ($bin_label) se ha salido durante el arranque." >&2
+            echo "  Últimas líneas del log ($logfile):" >&2
+            tail -n 15 "$logfile" 2>/dev/null | sed 's/^/    /' >&2 || true
+            return 1
+        fi
+        sleep 2
+        (( elapsed += 2 ))
+    done
+    echo "⚠  '$model' no responde tras ${wait_secs}s; revisa el log." >&2
+    echo "  model:  tail -f $logfile" >&2
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# --install autónomo e idempotente (spec migración + Cambios por proyecto)
+# 0. symlinks del propio ropero (entrypoint + bin/), siempre.
+# 1. paquetes (cachy/paru, macos/brew; termux: nada)
+# 2. engines, uno a uno y en este orden, cada uno con su propio linkeado al
+#    terminar (ver ropero_install_*):
+#      llama.cpp   → todos los OS salvo termux. Flags CMAKE EXACTOS del spec.
+#      airllm      → todos los OS salvo termux.
+#      tensorrt-llm → solo cachy/arch.   mlx-lm → solo macos.
+# 3. modelos via download con check individual (omitir si existen).
+#
+# NO hay un paso final de "enlazar todos los backends": ver ropero_link_*.
+# -----------------------------------------------------------------------------
+_ropero_nproc() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
+
+# -----------------------------------------------------------------------------
+# Symlinks: uno por engine, ejecutados al terminar la instalación de ESE engine.
+# -----------------------------------------------------------------------------
+# Nada de "al final del install, enlázalo todo". El fallo era ese: instalar (o
+# saltarse) un engine no tenía relación con qué symlinks aparecían, porque al
+# final se recorría una lista de TODOS los backends. Consecuencias: instalar
+# solo llama.cpp tocaba también los ejecutables de tensorrt, y si esa carpeta
+# resultaba ser un venv, se linkeaba entera — metiendo su `python3` en
+# ~/.local/bin por delante del shim de asdf para todo el sistema.
+#
+# Ahora la regla es 1:1 — quien instala, linkea. Si quieres tocar solo los
+# enlaces de un engine, se reejecuta solo la fase de ese engine.
+#
+# ── Por qué hace falta enlazar ────────────────────────────────────────────────
+# ropero no es el único binario que acaba en ~/.local/bin. Si los ejecutables
+# de un backend no están ahí, solo se alcanzan por la ruta larga completa, o
+# —peor— a través de un shim de asdf que se rompe cuando se reinstala el
+# Python que los instaló. Que es lo que pasaba con mlx_lm: su ejecutable real
+# vive en ~/.asdf/installs/python/3.11.0/bin/ y el único enlace en el PATH
+# era el shim.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# _ropero_link_dir <nombre> <dir> [prefijo]
+# Núcleo compartido por los engines con binarios en un directorio fijo.
+# Enlaza en $BIN_DIR todo lo ejecutable de <dir> que empiece por <prefijo>
+# (prefijo vacío = todos). Idempotente.
+# -----------------------------------------------------------------------------
+_ropero_link_dir() {
+    local name="$1" dir="$2" prefix="${3:-}"
+    if [[ ! -d "$dir" ]]; then
+        ropero_info "  · $name: nada que enlazar ($dir no existe)"
+        return 0
+    fi
+
+    local b exe link other linked=0 shadowed="" failed="" pending=""
+    for b in "$dir"/*; do
+        [[ -e "$b" ]] || continue
+        exe="$(basename "$b")"
+
+        # ── Filtros, en este orden ────────────────────────────────────────
+        # 1. El prefijo. Es lo que impide que un venv se linkee entero: solo
+        #    pasan los `trtllm-*`. Vacío (llama.cpp) = todos, que es lo
+        #    correcto: build/bin es un directorio de herramientas compiladas,
+        #    no un entorno de Python.
+        if [[ -n "$prefix" && "$exe" != "$prefix"* ]]; then
+            continue
+        fi
+        # 2. Scripts de activación de venv, que no son programas. Red de
+        #    seguridad para cuando alguien meta un venv con prefijo vacío:
+        #    `activate` y compañía nunca deben salir a $BIN_DIR.
+        case "$exe" in
+            activate|activate.*|Activate.ps1|deactivate.*|activate_this.py) continue ;;
+        esac
+
+        # Sin +x: no terminó de linkearse, o es un directorio. Un build en
+        # curso deja ficheros de 0 bytes sin permiso de ejecución; si nos
+        # pillan a mitad, mejor avisar que fingir que no existen.
+        if [[ ! -x "$b" || -d "$b" ]]; then
+            if [[ -f "$b" && ! -x "$b" ]]; then
+                pending="$pending $exe"
+            fi
+            continue
+        fi
+        link="$BIN_DIR/$exe"
+
+        # Si el mismo nombre ya resuelve a OTRO binario en el PATH, al enlazar
+        # el nuestro lo vamos a tapar. No siempre es un problema (casi siempre
+        # es lo que se quiere: que gane el que gestiona ropero), pero puede ser
+        # un downgrade sin que nadie se entere. Se comprueba ANTES y se avisa
+        # después, con las dos versiones.
+        #
+        # El `|| true` NO es decorativo: `command -v` sale con 1 cuando el
+        # binario NO está en el PATH, que es justo el caso normal la primera
+        # vez que se linkea (es lo que estamos haciendo aquí). Sin él, el
+        # `set -e` del entrypoint abortaba en el primer ejecutable, y como no
+        # había tubería ni `||` que lo absorbiera, `ropero --install` moría en
+        # silencio sin linkear NADA: compilaba bien y luego no aparecía ni
+        # `llama-server` en $BIN_DIR.
+        other=$(command -v "$exe" 2>/dev/null || true)
+        if [[ -n "$other" && "$other" != "$link" ]]; then
+            shadowed="$shadowed $exe"
+        fi
+
+        # `ln -sfn` falla si el destino es un symlink colgado, y aquí es el
+        # caso normal: el destino apunta a un binario que se ha recompilado.
+        # Se borra antes.
+        if [[ -L "$link" ]]; then rm -f "$link"; fi
+        # Nunca pisar un fichero real que no sea nuestro symlink.
+        if [[ -e "$link" && ! -L "$link" ]]; then
+            failed="$failed $exe (ya hay un fichero real)"
+            continue
+        fi
+        if ln -sfn "$b" "$link" 2>/dev/null; then
+            linked=$((linked + 1))
+        else
+            # Antes el error se comía con 2>/dev/null + &&: un enlace fallido se
+            # contaba como si no hubiera pasado y nadie se enteraba.
+            failed="$failed $exe"
+        fi
+    done
+
+    if [[ -n "$pending" ]]; then
+        ropero_warn "  ! $name: aún no ejecutables (build en curso?):$pending"
+    fi
+    if [[ -n "$failed" ]]; then
+        ropero_err "  ✗ $name: no se pudieron enlazar:$failed"
+    fi
+    if [[ -n "$shadowed" ]]; then
+        ropero_warn "  ! $name tapa estos binarios que ya estaban en el PATH:$shadowed"
+        ropero_info "    Ahora gana el de ropero. Si el otro era más nuevo,"
+        ropero_info "    quítalo del PATH o quítale el symlink a mano."
+    fi
+
+    if (( linked > 0 )); then
+        ropero_ok "  → $name: $linked ejecutables en $BIN_DIR"
+    else
+        ropero_info "  · $name: nada que enlazar en $dir"
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_python_script_dirs — directorios de console scripts de TODOS los
+# Pythons que podrían haber instalado un paquete: el activo y los de asdf.
+# Que se instale con uno y se ejecute con otro es la norma, no la excepción.
+# -----------------------------------------------------------------------------
+_ropero_python_script_dirs() {
+    local -a dirs=()
+    local py d base
+
+    # OJO: sin `test && hacer` como última cosa de una iteración. ropero corre
+    # con `set -e`: con esa forma, si el test falla la iteración devuelve 1 y
+    # el script ABORTA en silencio. Por eso aquí todo es un `if` explícito.
+
+    # 1. Python activo
+    if command -v python3 >/dev/null 2>&1; then
+        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null || true)
+        if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
+        d=$(python3 -c 'import sysconfig;print(sysconfig.get_path("scripts","posix_user"))' 2>/dev/null || true)
+        if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
+    fi
+
+    # 2. Todos los Pythons de asdf: el script pudo quedar en otro.
+    #
+    # Ni `python*` ni `python3*` valen como filtro: en el mismo directorio
+    # están `python-config` y `python3-config`, que no son intérpretes y no
+    # responden a `-c`. Bajo `set -e` eso abortaba el enlace en silencio.
+    # Se valida el NOMBRE: un intérprete es `python3` o `python3.N`.
+    for py in "$HOME"/.asdf/installs/python/*/bin/python3*; do
+        base="$(basename "$py")"
+        if ! [[ "$base" =~ ^python3(\.[0-9]+)?$ ]]; then continue; fi
+        if [[ ! -x "$py" ]]; then continue; fi
+        d=$("$py" -c 'import sysconfig;print(sysconfig.get_path("scripts"))' 2>/dev/null || true)
+        if [[ -n "$d" && -d "$d" ]]; then dirs+=("$d"); fi
+    done
+
+    # 3. Deduplicar: el Python activo y el de asdf suelen ser el mismo.
+    local -a uniq=()
+    for d in "${dirs[@]}"; do
+        local seen=0 x
+        for x in "${uniq[@]}"; do
+            if [[ "$x" == "$d" ]]; then seen=1; break; fi
+        done
+        if (( seen == 0 )); then uniq+=("$d"); fi
+    done
+
+    printf '%s\n' "${uniq[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_link_python <nombre> <console script> [<console script> ...]
+# Enlaza console scripts de Python por nombre exacto. Al revés que
+# _ropero_link_dir: aquí NO se enlaza "lo que haya", se enlaza lo que se pide.
+# Un paquete de Python trae dependencias que se instalan como ejecutables
+# (ninja, hf, wheel…); si se linkeara el directorio entero, esos ganarian al
+# resto del sistema. Buscar por nombre hace imposible ese fallo.
+# -----------------------------------------------------------------------------
+_ropero_link_python() {
+    local name="$1"; shift
+    local d exe target linked=0
+
+    while read -r d; do
+        if [[ -z "$d" ]]; then continue; fi
+        for exe in "$@"; do
+            if [[ ! -x "$d/$exe" ]]; then continue; fi
+            target="$BIN_DIR/$exe"
+            # Si ya está (o hay algo ahí), no se toca: puede ser un symlink
+            # previo, y no es asunto de ropero decidir cuál gana.
+            if [[ -e "$target" || -L "$target" ]]; then continue; fi
+            if ln -sfn "$d/$exe" "$target" 2>/dev/null; then
+                linked=$((linked + 1))
+                ropero_ok "  → $exe → $d/$exe"
+            fi
+        done
+    done < <(_ropero_python_script_dirs)
+
+    if (( linked == 0 )); then
+        ropero_info "  · $name: no instalados, o ya alcanzables en el PATH"
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Linkeados por engine. Cada uno existe solo, y lo llama únicamente la fase de
+# instalación de su engine.
+# -----------------------------------------------------------------------------
+
+# ropero_link_self — el entrypoint. No es un engine: se hace siempre, al
+# principio del install, para que ropero quede utilizable desde el principio
+# aunque el usuario decline todos los engines.
+#
+# Antes esto enlazaba dos cosas: el entrypoint y el directorio bin/. Ya no
+# hay bin/: los módulos viven en bin/, junto al entrypoint, y el
+# directorio models/ se encuentra por ruta relativa. Así que sólo hace falta
+# un symlink.
+ropero_link_self() {
+    mkdir -p "$BIN_DIR" 2>/dev/null || true
+    ln -sfn "$SCRIPT_DIR/ropero" "$BIN_DIR/ropero" 2>/dev/null || true
+    ropero_ok "  → $BIN_DIR/ropero"
+    return 0
+}
+
+# ropero_link_llamacpp — todos los ejecutables de build/bin.
+#
+# Sin prefijo: build/bin es un directorio de herramientas compiladas, no un
+# entorno de Python. Sus 23 binarios (llama-server, llama-cli, llama-bench…)
+# son justo lo que tiene que quedar alcanzable.
+ropero_link_llamacpp() {
+    _ropero_link_dir "llama.cpp" "$LLAMA_DIR/build/bin" ""
+}
+
+# ropero_link_tensorrt — SOLO los trtllm-*.
+#
+# $HOME/.venv-tensorrt/bin es un VENV. Dentro hay 69 ejecutables, pero solo 7
+# son de tensorrt; los otros 62 son activadores y scripts de Python que el venv
+# trae de paso, incluidos `python`/`python3`/`pydoc.bat`. Linkear el venv
+# entero en ~/.local/bin mete su python POR DELANTE del shim de asdf en el
+# PATH de todo el sistema: a partir de ahí, cualquier `python3` ejecuta el
+# venv de tensorrt. Se probó y se revirtió a mano (62 enlaces borrados); el
+# prefijo es lo que impide que el install vuelva a hacerlo.
+ropero_link_tensorrt() {
+    _ropero_link_dir "tensorrt-llm" "$HOME/.venv-tensorrt/bin" "trtllm-"
+}
+
+# ropero_link_airllm — comprueba el endpoint unificado y el backend de airllm.
+#
+# airllm 2.11.0 no registra ningún entry point (su dist-info no tiene
+# entry_points.txt): no hay `airllm`, ni `airllm-server`, ni `airllm-generate`.
+# El código anterior pedía esos tres nombres, no encontraba ninguno y no
+# linkeaba nada — sin avisar, porque "0 enlazados" se imprimía como info y el
+# install seguía como si nada. Además, `python -m airllm serve` tampoco existe:
+# el paquete es una librería pura, sin `__main__.py`.
+#
+# El servidor lo aporta endpoints/server.py: un servidor OpenAI-compatible
+# sobre AutoModel.from_pretrained, con la API key de ropero y el mismo
+# contrato de /v1/models que llama-server. Antes era bin/_airllm_server.py
+# y ahora sirve también a tensorrt-llm y fastflowlm.
+#
+# Ya no hay symlink que crear: el endpoint se invoca por ruta desde el
+# launcher. Lo que queda es comprobar que están las dos piezas (el endpoint y
+# el backend) y avisar de lo que falte.
+ropero_link_airllm() {
+    local src="$ENDPOINTS_DIR/server.py"
+    if [[ ! -f "$src" ]]; then
+        ropero_err "  ✗ airllm: falta el servidor de endpoints ($src)"
+        return 1
+    fi
+    ropero_ok "  → endpoint unificado: $src"
+
+    # El backend se verifica con los mismos imports que exige el probe. El
+    # endpoint por sí solo no hace que el servidor pueda cargar un modelo.
+    local py
+    if py=$(ropero_python_bin) && "$py" -c 'import airllm, fastapi, uvicorn' >/dev/null 2>&1; then
+        ropero_ok "  airllm importable"
+    else
+        ropero_warn "  ! airllm, fastapi o uvicorn no se pueden importar con este Python."
+        ropero_warn "    el endpoint no puede cargar ni servir inferencia hasta corregirlo."
+    fi
+    return 0
+}
+
+# ropero_link_mlx — console scripts de mlx-lm por nombre exacto.
+#
+# La lista se ha ampliado con `mlx_lm.server`, que es el que ropero usa para
+# arrancar y el que faltaba: el install|linkaba mlx_lm, mlx_lm.generate y
+# mlx_lm.chat, pero NO el server. El resultado era que `ropero <modelo-mlx>`
+# sólo encontraba mlx_lm.server a través del shim de asdf — justo el shim que se
+# rompe al reinstalar el Python, y exactamente lo que este mismo entrypoint
+# denuncia al principio de la sección de symlinks.
+#
+# El resto son herramientas de uso diario (convertir, fusionar cuantizaciones,
+# LoRA, medir velocidad) que antes solo se alcanzaban por ruta larga.
+ropero_link_mlx() {
+    _ropero_link_python "mlx_lm" \
+        mlx_lm.server \
+        mlx_lm.generate \
+        mlx_lm.chat \
+        mlx_lm.convert \
+        mlx_lm.fuse \
+        mlx_lm.lora \
+        mlx_lm.benchmark \
+        mlx_vlm.server \
+        mlx_vlm.generate
+}
+
+# ropero_link_fastflowlm — el binario `flm` de FastFlowLM.
+#
+# El cmake preset de FastFlowLM instala en /opt/fastflowlm (linux-default), fuera
+# del PATH de un usuario normal. Se enlaza para que `flm pull`, `flm list` y
+# `flm validate` se puedan escribir sin la ruta larga — que es como se documentan.
+ropero_link_fastflowlm() {
+    _ropero_link_dir "fastflowlm" "/opt/fastflowlm/bin" "flm"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_check — verifica que ropero está correctamente instalado.
+# NO modifica nada. Exit 0 si todo OK, 1 si algo falla.
+# -----------------------------------------------------------------------------
+cmd_check() {
+    # Igual que cmd_list/cmd_templates: lo que llega detrás y no se reconoce
+    # es un error, no algo que se tira. `ropero --check models` parece una
+    # orden razonable —"mira qué modelos hay"— y hasta hace un rato ejecutaba
+    # el check entero fingiendo que eso era lo que le habías pedido. Fallar
+    # aquí, arriba del todo, es lo que le da sentido al mensaje.
+    if [[ $# -gt 0 ]]; then
+        _ropero_usage_error check "check no acepta argumentos (recibido: '$1')"
+    fi
+
+    local rc=0
+    ropero_counters_reset
+
+    printf "\n== ropero check ==\n"
+
+    ropero_step "1/5" "Symlinks"
+
+    # Entry point
+    if [[ -e "$BIN_DIR/ropero" ]]; then
+        ropero_ok "ropero → $BIN_DIR/ropero"
+    else
+        ropero_err "ropero NO instalado en $BIN_DIR"
+        rc=1
+    fi
+
+    # El árbol de ropero: los módulos van con el entrypoint y los modelos se
+    # encuentran por ruta relativa. Antes esto comprobaba un symlink aparte a
+    # bin/, que ya no existe.
+    local n
+    n=$(ls -1 "$MODULES_DIR"/*.sh 2>/dev/null | wc -l | tr -d ' ')
+    if (( n > 0 )); then
+        ropero_ok "módulos → $MODULES_DIR ($n scripts)"
+    else
+        ropero_err "no encuentro los módulos en $MODULES_DIR"
+        rc=1
+    fi
+    if [[ -d "$MODELS_DIR" ]]; then
+        n=$(find "$MODELS_DIR" -name '*.toml' -not -path '*/fired/*' 2>/dev/null | wc -l | tr -d ' ')
+        ropero_ok "modelos → $MODELS_DIR ($n activos)"
+    else
+        ropero_err "no encuentro los modelos en $MODELS_DIR"
+        rc=1
+    fi
+    if [[ -f "$ENDPOINTS_DIR/server.py" ]]; then
+        ropero_ok "endpoint → $ENDPOINTS_DIR/server.py"
+    else
+        ropero_err "no encuentro el servidor de endpoints en $ENDPOINTS_DIR/server.py"
+        rc=1
+    fi
+
+    ropero_step "2/5" "Engines"
+
+    # Engines: sus ejecutables tienen que estar en $BIN_DIR, no sólo en su ruta
+    # larga. Si esto falla, la solución es `ropero --install`, no buscar el
+    # binario a mano. Cada engine se comprueba por separado, con SU regla de
+    # qué debe estar enlazado (llama.cpp: todo; tensorrt: solo trtllm-*).
+    local bdir b found
+    bdir="$LLAMA_DIR/build/bin"
+    if [[ ! -d "$bdir" ]]; then
+        ropero_info "llama.cpp: no compilado ($bdir no existe)"
+    else
+        found=0
+        # OJO: el nombre del engine y el del ejecutable son variables
+        # DISTINTAS. Con una sola, el mensaje sale con el nombre del último
+        # ejecutable recorrido en vez de con el del engine.
+        for b in "$bdir"/*; do
+            [[ -x "$b" && ! -d "$b" ]] || continue
+            local link="$BIN_DIR/$(basename "$b")"
+            [[ -L "$link" && -x "$link" ]] && found=$((found + 1))
+        done
+        if (( found > 0 )); then
+            ropero_ok "llama.cpp: $found ejecutables en $BIN_DIR"
+        else
+            ropero_err "llama.cpp: $bdir tiene ejecutables pero ninguno linkeado en $BIN_DIR"
+            ropero_info "  solución: ropero --install"
+            rc=1
+        fi
+    fi
+
+    # tensorrt-llm: solo los trtllm-*, igual que hace ropero_link_tensorrt.
+    bdir="$HOME/.venv-tensorrt/bin"
+    if [[ ! -d "$bdir" ]]; then
+        ropero_info "tensorrt-llm: no instalado ($bdir no existe)"
+    else
+        found=0
+        for b in "$bdir"/trtllm-*; do
+            [[ -x "$b" && ! -d "$b" ]] || continue
+            local link="$BIN_DIR/$(basename "$b")"
+            [[ -L "$link" && -x "$link" ]] && found=$((found + 1))
+        done
+        if (( found > 0 )); then
+            ropero_ok "tensorrt-llm: $found ejecutables en $BIN_DIR"
+        elif [[ -x "$bdir/trtllm-serve" ]]; then
+            ropero_warn "tensorrt-llm: instalado pero sin enlaces en $BIN_DIR"
+            ropero_info "  no es bloqueante: ropero lo invoca por su ruta larga"
+        else
+            ropero_info "tensorrt-llm: venv presente, sin trtllm-serve"
+        fi
+    fi
+
+    # Engines con servidor propio: uno por engine, con su probe real. El bloque
+    # anterior era un `for w in airllm mlx_lm` que miraba `command -v` — es
+    # decir, preguntaba por un ejecutable que airllm no tiene, y no preguntaba
+    # por tensorrt-llm ni por FastFlowLM en absoluto. Peor: "command -v" dice si
+    # el fichero está, no si el paquete importa. airllm daba "no disponible"
+    # (correcto por casualidad, mal por el motivo) y mlx_lm daba "disponible"
+    # porque su shim de asdf responde, sin comprobar que mlx_lm.server exista.
+    local e verdict probe_err probe_err_f
+    printf "\n-- engines con servidor propio --\n"
+    probe_err_f="$(mktemp "${TMPDIR:-/tmp}/ropero_probe.XXXXXX")"
+    for e in $(ropero_engine_list); do
+        local bin auth_mode
+        if bin=$(ropero_engine_resolve "$e" 2>/dev/null); then
+            if ropero_engine_auth_native "$e"; then
+                auth_mode="api-key propia"
+            else
+                auth_mode="proxy de auth"
+            fi
+        else
+            auth_mode="proxy de auth"
+        fi
+        # El probe escribe el VEREDICTO en stdout y el DIAGNÓSTICO en stderr.
+        # Se necesitan los dos, y el diagnóstico es a menudo lo más importante:
+        # airllm responde "ok" (el server arranca) mientras avisa de que la
+        # LIBRERÍA no importa. Con `2>/dev/null` —como estaba— ese aviso se
+        # perdía y el --check saying "ok" era media verdad.
+        : >"$probe_err_f"
+        verdict=$(ropero_engine_probe "$e" 2>"$probe_err_f" || true)
+        case "$verdict" in
+            ok)      ropero_ok  "$e: $bin [$auth_mode]" ;;
+            missing) ropero_info "$e: no instalado (engine opcional)" ;;
+            *)       ropero_warn "$e: instalado pero NO utilizable" ;;
+        esac
+        probe_err=$(cat "$probe_err_f")
+        if [[ -n "$probe_err" ]]; then
+            printf '%s\n' "$probe_err" >&2
+        fi
+    done
+    rm -f "$probe_err_f"
+
+    ropero_step "3/5" "Modelos"
+
+    # Modelos
+    if [[ -d "$GGUF_DIR" ]]; then
+        local n
+        n=$(ls -1 "$GGUF_DIR"/*.gguf 2>/dev/null | wc -l | tr -d ' ')
+        if (( n > 0 )); then
+            ropero_ok "modelos GGUF: $n en $GGUF_DIR"
+        else
+            ropero_warn "sin modelos en $GGUF_DIR (ropero --install los descarga)"
+        fi
+    else
+        ropero_warn "GGUF_DIR no existe: $GGUF_DIR"
+    fi
+
+    # llama-server
+    if command -v llama-server >/dev/null 2>&1; then
+        # Con la versión, porque ropero linkea el suyo en $BIN_DIR y eso
+        # TAPA cualquier llama-server que hubiera estado en el PATH. Sin la
+        # versión no hay forma de notar un downgrade.
+        local ls_ver
+        ls_ver=$(llama-server --version 2>&1 | grep -m1 '^version:' | sed 's/^version: //')
+        ropero_ok "llama-server: $(command -v llama-server) ${ls_ver:+(v$ls_ver)}"
+    else
+        ropero_warn "llama-server NO en PATH (ropero --install lo compila)"
+    fi
+
+    ropero_step "4/5" "PATH"
+
+    # PATH: ¿BIN_DIR está en PATH?
+    if [[ ":$PATH:" == *":$BIN_DIR:"* ]]; then
+        ropero_ok "$BIN_DIR está en PATH"
+    else
+        ropero_warn "$BIN_DIR NO está en PATH"
+        ropero_info "  Añade a tu .zshrc: export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
+
+    ropero_phase "Resumen"
+    ropero_counters
+    printf "\n"
+    if (( rc == 0 )); then
+        _ropero_log "  [✓] ropero --check OK"
+    else
+        _ropero_log "  [✗] ropero --check FALLÓ → ejecuta: ropero --install"
+    fi
+    printf "\n"
+    return $rc
+}
+
+# -----------------------------------------------------------------------------
+# Instalación por engine. Cada función hace TRES cosas, en este orden:
+#   1. preguntar si se quiere (o rehacerlo si ya estaba),
+#   2. instalar / compilar,
+#   3. y enlazar SUS ejecutables en $BIN_DIR.
+#
+# El punto 3 va dentro de la función a propósito. Antes los enlaces eran un
+# paso aparte al final del install que recorría todos los backends: instalar
+# solo llama.cpp acababa tocando también los ejecutables de tensorrt, y
+# saltarse un engine no evitaba sus enlaces. Con un engine roto, no había
+# forma de relanzar solo su fase — de ahí el `--link` que se ha quitado: no
+# arreglaba el diseño, lo tapaba.
+#
+# Todas devuelven 0 aunque fallen: que un engine opcional no se caiga no
+# impide instalar los demás.
+# -----------------------------------------------------------------------------
+
+# ── llama.cpp (todos los OS salvo termux) ────────────────────────────────────
+ropero_install_llama() {
+    local os="$1"
+
+    if [[ -x "$LLAMA_DIR/build/bin/llama-server" ]]; then
+        ropero_ok "llama.cpp ya compilado en $LLAMA_DIR"
+        if ! ropero_ask_keep "¿Recompilarlo desde cero (borra $LLAMA_DIR, ~40 min)?"; then
+            ropero_link_llamacpp
+            return 0
+        fi
+    elif ! ropero_ask "Descargar y compilar llama.cpp (imprescindible para ropero)?"; then
+        ropero_warn "llama.cpp omitido — ropero solo funcionará con binarios ya presentes"
+        return 0
+    fi
+
+    if [[ -d "$LLAMA_DIR/.git" ]]; then
+        ropero_info "borrando $LLAMA_DIR para recompilar limpio"
+        rm -rf "$LLAMA_DIR"
+    elif [[ -d "$LLAMA_DIR" ]]; then
+        ropero_warn "$LLAMA_DIR existe pero no es un clon de git; lo sustituyo"
+        rm -rf "$LLAMA_DIR"
+    fi
+
+    if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+        ropero_err "clone de llama.cpp falló"
+        return 0
+    fi
+    if [[ ! -d "$LLAMA_DIR/.git" ]]; then
+        ropero_err "llama.cpp no parece un repo git tras el clone"
+        return 0
+    fi
+
+    if ! ropero_compile_llama "$os"; then
+        ropero_err "compilación de llama.cpp falló; no hay symlinks que crear"
+        return 0
+    fi
+
+    # Solo ahora que los binarios existen de verdad.
+    ropero_link_llamacpp
+    return 0
+}
+
+# ── AirLLM (todos los OS salvo termux) ───────────────────────────────────────
+ropero_install_airllm() {
+    local py
+    py=$(ropero_python_bin 2>/dev/null || true)
+
+    # El criterio de "ya instalado" NO es `command -v airllm`. airllm no registra
+    # ningún ejecutable, así que ese test siempre daba falso y además medía una
+    # cosa que no importa. Lo que importa es si el PAQUETE importa, porque de eso
+    # depende que el server pueda cargar y servir inferencia.
+    if [[ -n "$py" ]] && "$py" -c 'import airllm, fastapi, uvicorn' >/dev/null 2>&1; then
+        ropero_ok "airllm ya instalado y utilizable"
+        if ! ropero_ask "¿Reinstalarlo?"; then
+            ropero_link_airllm
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar AirLLM (modelos safetensors que no caben en VRAM)?"; then
+        ropero_info "airllm omitido; el resto de engines funciona igual"
+        return 0
+    fi
+
+    local rc=1
+    # uv primero: es lo que hay en cachy y evita ensuciar el Python de asdf.
+    if command -v uv &>/dev/null; then
+        ropero_info "instalando airllm via uv (puede tardar)..."
+        uv pip install --system --quiet airllm fastapi uvicorn 2>/dev/null && rc=0
+    fi
+    if (( rc != 0 )) && { command -v pip &>/dev/null || command -v pip3 &>/dev/null; }; then
+        ropero_info "fallback: instalando airllm via pip..."
+        { pip install --quiet airllm fastapi uvicorn 2>/dev/null || pip3 install --quiet airllm fastapi uvicorn 2>/dev/null; } && rc=0
+    fi
+
+    # Resolver el Python DESPUÉS de uv/pip: el intérprete seleccionable puede
+    # cambiar durante la instalación y el post-check debe probar el que ropero
+    # usará al arrancar el servidor.
+    if (( rc == 0 )); then
+        py=$(ropero_python_bin 2>/dev/null || true)
+        if [[ -z "$py" ]] || ! "$py" -c 'import airllm, fastapi, uvicorn' >/dev/null 2>&1; then
+            ropero_err "airllm se instaló pero airllm, fastapi y uvicorn no importan con el Python de ropero"
+            return 1
+        fi
+        ropero_ok "airllm instalado y utilizable"
+        ropero_link_airllm
+        return $?
+    else
+        ropero_warn "airllm no instalado (ni uv ni pip han funcionado)"
+        ropero_info "  manual: uv pip install airllm"
+        return 1
+    fi
+}
+
+# ── TensorRT-LLM (solo cachy/arch) ───────────────────────────────────────────
+ropero_install_tensorrt() {
+    local venv="$HOME/.venv-tensorrt"
+
+    if [[ -x "$venv/bin/trtllm-serve" ]]; then
+        ropero_ok "tensorrt-llm ya instalado en $venv"
+        if ! ropero_ask_keep "¿Reinstalarlo (borra el venv, ~30 min)?"; then
+            ropero_link_tensorrt
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar TensorRT-LLM (pesado, ~30 min)?"; then
+        return 0
+    fi
+
+    if ! command -v uv &>/dev/null; then
+        ropero_warn "tensorrt-llm necesita uv; se omite"
+        ropero_info "  manual: pacman -S uv"
+        return 0
+    fi
+
+    # Recrear SIEMPRE: si quedó un venv roto/incompleto de un install anterior,
+    # `uv venv` falla con "A virtual environment already exists".
+    ropero_info "creando venv tensorrt-llm..."
+    rm -rf "$venv"
+    if ! uv venv "$venv" --python 3.12 2>/dev/null; then
+        ropero_warn "uv venv falló (¿borrado manual de $venv?)"
+        return 0
+    fi
+
+    ropero_info "instalando tensorrt-llm (20-40 min)..."
+    if uv pip install --python "$venv/bin/python" --quiet tensorrt-llm 2>/dev/null; then
+        ropero_ok "tensorrt-llm instalado en $venv"
+        # Solo los trtllm-*: el resto del venv no debe tocar el PATH global.
+        ropero_link_tensorrt
+    else
+        ropero_warn "tensorrt-llm falló (puede necesitar CUDA wheels manuales)"
+        ropero_info "  ver https://nvidia.github.io/TensorRT-LLM/"
+    fi
+    return 0
+}
+
+# ── mlx_lm (solo macOS / Apple Silicon) ──────────────────────────────────────
+ropero_install_mlx() {
+    if command -v mlx_lm >/dev/null 2>&1; then
+        ropero_ok "mlx-lm ya instalado"
+        if ! ropero_ask "¿Reinstalarlo?"; then
+            ropero_link_mlx
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar mlx-lm (modelos MLX en Apple Silicon)?"; then
+        return 0
+    fi
+
+    local rc=1
+    if command -v uv &>/dev/null; then
+        ropero_info "instalando mlx-lm via uv..."
+        uv pip install --system --quiet mlx-lm 2>/dev/null && rc=0
+    fi
+    if (( rc != 0 )) && { command -v pip &>/dev/null || command -v pip3 &>/dev/null; }; then
+        ropero_info "fallback: instalando mlx-lm via pip..."
+        { pip install --quiet mlx-lm 2>/dev/null || pip3 install --quiet mlx-lm 2>/dev/null; } && rc=0
+    fi
+
+    if (( rc == 0 )); then
+        ropero_ok "mlx-lm instalado"
+        ropero_link_mlx
+    else
+        ropero_warn "mlx-lm no instalado (ni uv ni pip han funcionado)"
+        ropero_info "  manual: uv pip install mlx-lm"
+    fi
+    return 0
+}
+
+# ── FastFlowLM (solo cachy/arch CON NPU AMD) ─────────────────────────────────
+# El único engine de ropero que no acelera una GPU: descarga el trabajo a la
+# NPU (XDNA) de los Ryzen AI. Es OPUESTO a la RTX, no sustituto — tiene sentido
+# precisamente porque convive con ella: la NPU come el modelo pequeño mientras la
+# GPU come el grande.
+#
+# Por qué el gate es tan específico (cachy/arch + AMD + NPU):
+#   · macOS no tiene NPU AMD. Ni el stack ni el driver.
+#   · En Linux, el stack de la NPU es amdxdna (kernel) + XRT (userspace) + firmware.
+#     `flm validate` puede pasar (usa el DRM device) mientras `flm run` falla con
+#     "No such device with index '0'" (usa XRT). Por eso se comprueban AMBAS capas.
+#   · En una CPU Intel/AMD sin NPU no hay nada que instalar: flm existiría y no
+#     arrancaría ningún modelo.
+ropero_install_fastflowlm() {
+    local os="${1:-}"
+    if [[ "$os" != "cachy" && "$os" != "arch" ]]; then
+        ropero_info "FastFlowLM: solo en cachy/arch con NPU AMD; omitido en $os"
+        return 0
+    fi
+    if ! ropero_has_amd_npu; then
+        ropero_info "FastFlowLM: no veo NPU AMD (XDNA) en esta máquina; omitido"
+        ropero_info "  se necesita /dev/accel/accel0 (driver amdxdna) o 'xrt-smi examine'"
+        ropero_info "  con NPU listada. Si la tienes y no la detecto, dímelo: el"
+        ropero_info "  gate está en ropero_has_amd_npu (bin/_engines.sh)"
+        return 0
+    fi
+
+    if [[ -x /opt/fastflowlm/bin/flm ]]; then
+        ropero_ok "FastFlowLM ya instalado en /opt/fastflowlm"
+        if ! ropero_ask "¿Reinstalarlo?"; then
+            ropero_link_fastflowlm
+            return 0
+        fi
+    elif ! ropero_ask "¿Instalar FastFlowLM (usa la NPU AMD; sólo cachy/arch con NPU)?"; then
+        return 0
+    fi
+
+    # ── 1. Stack del sistema ───────────────────────────────────────────────
+    # xrt-plugin-amdxdna es el que hace que `flm run` (XRT) vea el device. Sin él,
+    # `flm validate` puede pasar y el modelo no arranca: es el fallo más confuso
+    # de toda esta cadena, así que se instala siempre que falte.
+    local p
+    for p in xrt xrt-plugin-amdxdna linux-firmware-other; do
+        if pacman -Qi "$p" &>/dev/null; then
+            continue
+        fi
+        ropero_info "instalando $p..."
+        sudo pacman -S --needed --noconfirm "$p" \
+            || ropero_warn "  no se pudo instalar $p"
+    done
+
+    # amdxdna-dkms está en el AUR, no en los repos. Sin él, un kernel 6.19+ usa
+    # el driver in-tree, que con firmware 1.1 puede hacer desaparecer la NPU
+    # (el driver espera el protocolo viejo). El orden importa: headers → DKMS →
+    # depmod → REBOOT. El reboot no se puede hacer desde aquí; se avisa.
+    if ! modinfo amdxdna >/dev/null 2>&1 || \
+       { modinfo -F filename amdxdna 2>/dev/null | grep -q '/dkms/'; }; then
+        ropero_info "instalando amdxdna-dkms (AUR)..."
+        local _installed_dkms=0
+        if command -v paru &>/dev/null; then
+            paru -S --needed --noconfirm amdxdna-dkms && _installed_dkms=1
+        elif command -v yay &>/dev/null; then
+            yay -S --needed --noconfirm amdxdna-dkms && _installed_dkms=1
+        else
+            ropero_warn "  no hay paru/yay: instala amdxdna-dkms a mano"
+        fi
+        if (( _installed_dkms == 1 )); then
+            ropero_info "reconstruyendo el módulo para el kernel en uso..."
+            sudo dkms autoinstall -k "$(uname -r)" || ropero_warn "  dkms falló"
+            sudo depmod -a || true
+            ropero_warn "  REBOOT NECESARIO para que cargue el módulo DKMS."
+            ropero_warn "  Sin reboot, `flm validate` puede fallar o ver la NPU apagada."
+        fi
+    fi
+
+    # El límite de memoria bloqueada: la NPU reserva memoria no swapeable. Sin
+    # memlock ilimitado, los modelos grandes fallan al Allocate.
+    local memlock
+    memlock=$(ulimit -l 2>/dev/null || echo unknown)
+    if [[ "$memlock" != "unlimited" ]]; then
+        ropero_warn "  memlock = $memlock (hace falta 'unlimited' para la NPU)"
+        ropero_warn "  Añade a /etc/security/limits.conf:"
+        ropero_warn "      *    soft    memlock    unlimited"
+        ropero_warn "      *    hard    memlock    unlimited"
+        ropero_warn "  y vuelve a entrar en la sesión (o reinicia)."
+    fi
+
+    # ── 2. El runtime ──────────────────────────────────────────────────────
+    # En Arch no hay .deb de FastFlowLM, así que se compila. El preset
+    # linux-default instala en /opt/fastflowlm; de ahí el symlink.
+    local src="$HOME/FastFlowLM"
+    if [[ ! -d "$src/.git" ]]; then
+        ropero_info "clonando FastFlowLM (con submodulos)..."
+        rm -rf "$src"
+        git clone -q --recursive https://github.com/ROCm/FastFlowLM.git "$src" \
+            || { ropero_err "clone de FastFlowLM falló"; return 0; }
+    fi
+
+    # Dependencias de compilación. Sin libxrt-dev no compila; sin los de ffmpeg
+    # fallan las capacidades de audio (Whisper / transcripción).
+    for p in ninja; do
+        pacman -Qi "$p" &>/dev/null || sudo pacman -S --needed --noconfirm "$p" \
+            || ropero_warn "  no se pudo instalar $p"
+    done
+
+    ropero_info "compilando FastFlowLM (10-20 min, -j)..."
+    if ! ( cd "$src/src" && cmake --preset linux-default && \
+           cmake --build build -j"$(nproc)" && sudo cmake --install build ); then
+        ropero_warn "FastFlowLM no compiló"
+        ropero_info "  deps de build: ninja libavformat-dev libavutil-dev libavcodec-dev"
+        ropero_info "                     libswresample-dev libswscale-dev libxrt-dev uuid-dev libdrm-dev"
+        ropero_info "  guía: https://github.com/ROCm/FastFlowLM/blob/main/docs/linux-getting-started.md"
+        return 0
+    fi
+
+    ropero_link_fastflowlm
+
+    # ── 3. Verificación de la NPU ──────────────────────────────────────────
+    # No es un adorno: el 90% de los fallos de FLM aquí son de firmware/driver,
+    # no de compilación, y sin esto el install "termina bien" con una NPU muerta.
+    local flm
+    if flm=$(ropero_engine_resolve fastflowlm) && "$flm" validate 2>&1 | sed 's/^/  /'; then
+        ropero_ok "FastFlowLM listo (NPU verificada)"
+        ropero_info "  modelos: flm pull <tag>   ·   listados: flm list"
+    else
+        ropero_warn "FastFlowLM instalado pero 'flm validate' no pasa."
+        ropero_info "  Causas, en orden de probabilidad:"
+        ropero_info "    1. firmware NPU < 1.1.0.0 (necesario 1.1.2.64 en kernels 6.19)"
+        ropero_info "    2. amdxdna-dkms sin reconstruir tras el último kernel"
+        ropero_info "    3. XRT no ve la NPU:  xrt-smi examine   (flm run usa XRT,"
+        ropero_info "       no el DRM device: validate puede pasar y run fallar)"
+        ropero_info "    4. memlock no ilimitado"
+    fi
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_do_models — la fase de modelos, en un solo sitio.
+#
+# Existe por un motivo concreto: la reachable desde `ropero --install models`,
+# `ropero --install all` y `ropero models` (top-level), y son tres llamadas al
+# mismo trabajo. Duplicar el cuerpo en las tres es exactamente cómo un día
+# `ropero models` se queda sin el GGUF de MLX porque el otro camino sí lo tenía.
+# Es el mismo bug que estamos arreglando en el parseo, aplicado a la lógica: una
+# sola definición, tres entradas.
+#
+# NO llama a ropero_env_setup: quien llama a esta función ya lo ha hecho (mkdir
+# -p es idempotente, pero llamar al setup dos veces por comando es pedir que
+# mañana alguien lo lea mal y no sepa cuál de los dos manda).
+# -----------------------------------------------------------------------------
+_ropero_do_models() {
+    ropero_download_default_models "${1:-}"
+}
+
+# -----------------------------------------------------------------------------
+# cmd_models — descarga solo los modelos por defecto. Sin engines, sin paquetes,
+# sin sudo. Es lo que se pide cuando ya se tiene el stack y solo falta disco.
+# -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# _ropero_relink_all <os> — re-enlaza el entrypoint y los engines instalados.
+# -----------------------------------------------------------------------------
+_ropero_relink_all() {
+    local os="${1:-}"
+    ropero_link_self
+    ropero_link_llamacpp
+    ropero_link_tensorrt
+    ropero_link_airllm
+    if [[ "$os" == "macos" ]]; then
+        ropero_link_mlx
+    fi
+    if ropero_has_amd_npu 2>/dev/null; then
+        ropero_link_fastflowlm
+    fi
+    return 0
+}
+
+cmd_help() {
+    cat <<'EOF'
+USO: ropero <modelo> [--background|--cpu|--force|--port N]
+     ropero install [engines|models|link] [selección] [--force]
+     ropero {engines|models|link|config|status|stop|list|template|check} [--help]
+
+Instalación de ropero (una línea):
+  curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
+
+`install` gestiona engines, modelos y enlaces. Sin destino abre engines y luego modelos.
+`check` verifica la instalación. No modifica nada.
+EOF
+}
+
+_ropero_command_help() {
+    case "${1:-}" in
+        install)   printf 'USO: ropero install [engines|models|link] [selección] [--force]\n' ;;
+        engines)   printf 'USO: ropero engines [llama|airllm|mlx|tensorrt|flm|all] [--force]\n' ;;
+        models)    printf 'USO: ropero models [modelo[, modelo...]] [--force]\n' ;;
+        link)      printf 'USO: ropero link\n' ;;
+        config)    printf 'USO: ropero config [engine] [--show-key]\n' ;;
+        status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        list)      printf 'USO: ropero list\n' ;;
+        template)  printf 'USO: ropero template\n' ;;
+        check)     printf 'USO: ropero check\n' ;;
+        model)     _ropero_usage '' ;;
+        *)         cmd_help ;;
+    esac
+}
+
+_ropero_split_selection() {
+    local raw="${1:-}" token
+    raw=${raw//,/ }
+    raw=${raw//;/ }
+    for token in $raw; do printf '%s\n' "$token"; done
+}
+
+_ropero_is_unattended() {
+    [[ ! -t 0 || "${AUTO_YES:-0}" == "1" || "${SETUP_MODE:-}" == "full" || "${CI:-0}" == "1" || "${ROPERO_FORCE:-0}" == "1" ]]
+}
+
+_ropero_logged() {
+    local label="$1"; shift
+    local safe log rc
+    safe=$(printf '%s' "$label" | tr -c '[:alnum:]_.-' '_')
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    log="$LOG_DIR/install-${safe}.log"
+    "$@" 2>&1 | tee "$log"
+    rc=${PIPESTATUS[0]}
+    if (( rc != 0 )); then
+        printf '  fallo (rc=%d); últimas líneas de %s:\n' "$rc" "$log" >&2
+        tail -n 15 "$log" | sed 's/^/    /' >&2 || true
+    fi
+    return "$rc"
+}
+
+# _ropero_install_log_tail <etiqueta> — muestra contexto también cuando una
+# operación antigua devuelve 0 pero su verificación posterior demuestra que no
+# dejó el artefacto prometido. Los instaladores históricos absorben algunos
+# fallos, por lo que el rc por sí solo no es una prueba de éxito.
+_ropero_install_log_tail() {
+    local label="$1" safe log
+    safe=$(printf '%s' "$label" | tr -c '[:alnum:]_.-' '_')
+    log="$LOG_DIR/install-${safe}.log"
+    [[ -f "$log" ]] || return 0
+    printf '  verificación falló; últimas líneas de %s:\n' "$log" >&2
+    tail -n 15 "$log" | sed 's/^/    /' >&2 || true
+}
+
+_ropero_engine_name() { ropero_engine_canonical "$1"; }
+
+_ropero_engine_menu() {
+    local os; os=$(ropero_detect_os 2>/dev/null || echo unknown)
+    printf 'Engines compatibles (%s):\n' "$os"
+    ropero_engine_compatible llama-server && printf '  1) llama\n'
+    ropero_engine_compatible airllm && printf '  2) airllm\n'
+    ropero_engine_compatible mlx_lm && printf '  3) mlx\n'
+    ropero_engine_compatible tensorrt-llm && printf '  4) tensorrt\n'
+    ropero_engine_compatible fastflowlm && printf '  5) flm\n'
+    printf '  9) todos compatibles\n  0) salir\n'
+}
+
+_ropero_install_engines_selected() {
+    local -a selected=() tokens=() compatible=()
+    local raw="${1:-}" force="${2:-0}" token engine item i=0 n rc=0 installed=0 already=0 omitted=0 failed=0 before after installer_rc interactive=0 valid=0 invalid=0 os
+    for engine in llama-server airllm mlx_lm tensorrt-llm fastflowlm; do
+        ropero_engine_compatible "$engine" && compatible+=("$engine")
+    done
+    if [[ -z "$raw" ]]; then
+        if _ropero_is_unattended; then
+            raw=9
+        else
+            interactive=1
+            while :; do
+                _ropero_engine_menu; printf 'Selecciona: ' >&2; read -r raw || raw=0
+                [[ "$raw" == "0" ]] && return 0
+                valid=0 invalid=0
+                while read -r token; do
+                    case "$token" in
+                        9|all) valid=1 ;;
+                        1) engine=llama-server ;;
+                        2) engine=airllm ;;
+                        3) engine=mlx_lm ;;
+                        4) engine=tensorrt-llm ;;
+                        5) engine=fastflowlm ;;
+                        *) engine=$(_ropero_engine_name "$token" 2>/dev/null || true) ;;
+                    esac
+                    [[ "$token" == 9 || "$token" == all ]] || { ropero_engine_compatible "$engine" && valid=1 || invalid=1; }
+                done < <(_ropero_split_selection "$raw")
+                (( valid == 1 && invalid == 0 )) && break
+                ropero_warn "selección no válida o no compatible; prueba otra vez (0 para salir)"
+            done
+        fi
+    fi
+    mapfile -t tokens < <(_ropero_split_selection "$raw")
+    for token in "${tokens[@]}"; do
+        case "$token" in
+            0) return 0 ;;
+            9|all) selected=("${compatible[@]}"); break ;;
+            1) engine=llama-server ;; 2) engine=airllm ;; 3) engine=mlx_lm ;;
+            4) engine=tensorrt-llm ;; 5) engine=fastflowlm ;;
+            *) engine=$(_ropero_engine_name "$token") || { ropero_err "engine desconocido: $token"; (( interactive == 1 )) || { rc=1; failed=$((failed + 1)); }; continue; } ;;
+        esac
+        ropero_engine_compatible "$engine" || {
+            if [[ "$engine" == "mlx_lm" ]]; then
+                ropero_warn "mlx-lm requiere macOS en Apple Silicon (Darwin arm64); omitido"
+            else
+                ropero_warn "$engine no es compatible; omitido"
+            fi
+            omitted=$((omitted + 1)); continue
+        }
+        selected+=("$engine")
+    done
+    # de-duplicar y ejecutar una vez por selección.
+    local -a unique=()
+    for item in "${selected[@]}"; do [[ " ${unique[*]} " == *" $item "* ]] || unique+=("$item"); done
+    n=${#unique[@]}
+    (( n > 0 )) || { printf 'Resumen: instalado=0 · ya estaba=0 · omitido=%d · fallo=%d\n' "$omitted" "$failed"; return "$rc"; }
+    # Elegir un engine ya es consentimiento para su instalación no destructiva.
+    # AUTO_YES no autoriza los borrados: ropero_ask_keep conserva su "no" en
+    # este modo. Sin esto los instaladores antiguos pueden devolver 0 tras una
+    # declinación y el resumen mentiría diciendo "instalado".
+    export AUTO_YES=1 SETUP_MODE=full
+    (( force == 1 )) && export ROPERO_FORCE=1
+    os=$(ropero_detect_os 2>/dev/null || echo unknown)
+    for item in "${unique[@]}"; do
+        i=$((i + 1)); printf '▸ [%d/%d] %s\n' "$i" "$n" "$item"
+        before=$(ropero_engine_probe "$item" 2>/dev/null || true)
+        # Un engine sano no se reinstala salvo con --force. Además de evitar
+        # trabajo caro, esta rama es la única que puede afirmar "ya estaba"
+        # sin depender del rc (históricamente poco fiable) del instalador.
+        if [[ "$before" == ok && "$force" != 1 ]]; then
+            already=$((already + 1))
+            continue
+        fi
+
+        installer_rc=0
+        case "$item" in
+            llama-server) _ropero_logged "$item" ropero_install_llama "$os" || installer_rc=$? ;;
+            airllm) _ropero_logged "$item" ropero_install_airllm || installer_rc=$? ;;
+            mlx_lm) _ropero_logged "$item" ropero_install_mlx || installer_rc=$? ;;
+            tensorrt-llm) _ropero_logged "$item" ropero_install_tensorrt || installer_rc=$? ;;
+            fastflowlm) _ropero_logged "$item" ropero_install_fastflowlm "$os" || installer_rc=$? ;;
+        esac
+        after=$(ropero_engine_probe "$item" 2>/dev/null || true)
+        # Algunos instaladores tienen gates propios de plataforma/hardware (por
+        # ejemplo FastFlowLM vuelve a comprobar la NPU). Si ese gate decide que
+        # ya no aplica, su rc histórico es 0 y el probe queda missing: es una
+        # omisión explícita, no una instalación fallida ni una declinación.
+        if (( installer_rc == 0 )) && [[ "$after" == missing ]] && ! ropero_engine_compatible "$item"; then
+            omitted=$((omitted + 1))
+            ropero_info "$item omitido por sus requisitos de plataforma"
+            continue
+        fi
+        if (( installer_rc != 0 )) || [[ "$after" != ok ]]; then
+            rc=1; failed=$((failed + 1))
+            if (( installer_rc == 0 )); then
+                ropero_err "$item no quedó utilizable (probe=${after:-missing})"
+                _ropero_install_log_tail "$item"
+            fi
+            continue
+        fi
+        if [[ "$before" == ok ]]; then
+            already=$((already + 1))
+        else
+            installed=$((installed + 1))
+        fi
+    done
+    printf 'Resumen: instalado=%d · ya estaba=%d · omitido=%d · fallo=%d\n' "$installed" "$already" "$omitted" "$failed"
+    return "$rc"
+}
+
+_ropero_model_catalog_index() {
+    local mk="$1" i key gguf path
+    gguf=$(basename "${MODEL_GGUF[$mk]:-}")
+    path=$(basename "${MODEL_PATH[$mk]:-}")
+    _ropero_cat_build
+    for ((i=0; i<${#_ROPERO_CAT_KEY[@]}; i++)); do
+        key="${_ROPERO_CAT_KEY[$i]}"
+        [[ "$key" == "$gguf" || "$key" == "$path" ]] && { printf '%s' "$i"; return 0; }
+    done
+    return 1
+}
+
+# _ropero_model_artifact_present <índice> — la única comprobación de disco que
+# usa el instalador seleccionado antes y después de descargar. No depende de
+# que haya launcher: una entrada del catálogo puede ser pesos descargables sin
+# script de modelo asociado.
+#
+# Para un GGUF con ficheros SECUNDARIOS (MTP, mmproj) el bundle está completo
+# solo si están TODOS: un Gemma4 con el GGUF pero sin el MTP arranca (y luego
+# falla al usarlo), así que "sí" en la columna disco mentiría.
+_ropero_model_artifact_present() {
+    local idx="${1:-}" kind dest name aux
+    [[ "$idx" =~ ^[0-9]+$ ]] || return 1
+    kind="${_ROPERO_CAT_KIND[$idx]:-}"
+    case "$kind" in
+        gguf)
+            dest="${_ROPERO_CAT_DEST[$idx]:-$GGUF_DIR}"
+            name="${_ROPERO_CAT_DNAME[$idx]:-${_ROPERO_CAT_ARG2[$idx]:-}}"
+            case "$dest" in
+                '~') dest="$HOME" ;;
+                '~/'*) dest="$HOME/${dest#\~/}" ;;
+            esac
+            [[ -s "$dest/$name" ]] || return 1
+            while read -r aux; do
+                [[ -n "$aux" ]] || continue
+                [[ -s "$aux" ]] || return 1
+            done < <(_ropero_cat_aux_paths "$idx")
+            return 0
+            ;;
+        safetensors)
+            dest="${_ROPERO_CAT_DEST[$idx]:-$SAFETENSORS_DIR/${_ROPERO_CAT_KEY[$idx]:-}}"
+            case "$dest" in
+                '~') dest="$HOME" ;;
+                '~/'*) dest="$HOME/${dest#\~/}" ;;
+            esac
+            _ropero_dir_has_weights "$dest" && [[ -f "$dest/config.json" ]]
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+# _ropero_model_artifact_id <índice> — destino canónico para de-duplicar la
+# selección. Dos entradas que comparten directorio (checkpoint o GGUF) no son
+# necesariamente el mismo artefacto; el nombre final también forma parte de su
+# identidad.
+_ropero_model_artifact_id() {
+    local idx="${1:-}" kind dest name
+    [[ "$idx" =~ ^[0-9]+$ ]] || return 1
+    kind="${_ROPERO_CAT_KIND[$idx]:-}"
+    case "$kind" in
+        gguf)
+            dest="${_ROPERO_CAT_DEST[$idx]:-$GGUF_DIR}"
+            name="${_ROPERO_CAT_DNAME[$idx]:-${_ROPERO_CAT_ARG2[$idx]:-}}"
+            ;;
+        safetensors)
+            dest="${_ROPERO_CAT_DEST[$idx]:-$SAFETENSORS_DIR/${_ROPERO_CAT_KEY[$idx]:-}}"
+            name='.'
+            ;;
+        *) return 1 ;;
+    esac
+    case "$dest" in
+        '~') dest="$HOME" ;;
+        '~/'*) dest="$HOME/${dest#\~/}" ;;
+    esac
+    printf '%s:%s/%s' "$kind" "$dest" "$name"
+}
+
+# -----------------------------------------------------------------------------
+# TABLA — render artesanal en bash (sin depender de alaja).
+#
+# El diseño es el de `alaja table --border rounded`: caja de esquinas
+# redondeadas, cabecera separada por una línea y dos espacios de padding por
+# celda. Se implementa aquí, en bash, para que la tabla se vea IGUAL en
+# cualquier máquina —por SSH sin alaja, en un contenedor, en un servidor sin
+# TUI— y para que cargue los datos REALES de cada modelo en vez de un texto
+# fijo. alaja queda como referencia de diseño, no como dependencia.
+#
+# POR QUÉ NO SE USA alaja EN EL RUNTIME
+# Porque alaja puede no estar instalado (y entonces la tabla desaparece) y
+# porque su render es un proceso extra por cada tabla. Además, alaja se come
+# las filas cuyo primer campo empieza por "-": justo el caso de las filas sin
+# número de selección, que en esta tabla son la mitad.
+#
+# COLORES
+# Se apagan si stdout no es un TTY o si NO_COLOR está puesto: una tabla
+# redirigida a un fichero sale limpia, sin ANSI dentro. El resto del CLI ya
+# usa la paleta de arriba (BOLD/DIM/GREEN/...), así que la tabla no
+# introduce colores nuevos.
+#
+# ANCHOS
+# El ancho de una celda se mide sobre el texto SIN los escapes: printf no
+# cuenta los ANSI, así que medir la cadena entera descuadraría la tabla en
+# cuanto una celda lleve color.
+# -----------------------------------------------------------------------------
+_ROPERO_TBL_SEP=$'\x1f'
+_ROPERO_TBL_HDR=()
+_ROPERO_TBL_ROWS=()
+_ROPERO_VLEN=0
+
+# _ropero_vlen <texto> — ancho VISIBLE (sin ANSI) → $_ROPERO_VLEN.
+# extglob se activa solo mientras dura la función y se restaura después: es
+# lo único que permite decir "quita los \033[...m" sin lanzar un sed por
+# celda (una tabla de 25 filas son 175 forks que no hacen falta).
+_ropero_vlen() {
+    local s="$1" restore=0
+    shopt -q extglob || { shopt -s extglob; restore=1; }
+    s="${s//$'\033'\[*([0-9;])m/}"
+    (( restore == 1 )) && shopt -u extglob
+    _ROPERO_VLEN=${#s}
+}
+
+_ropero_table_reset() {
+    _ROPERO_TBL_HDR=()
+    _ROPERO_TBL_ROWS=()
+}
+
+_ropero_table_header() { _ROPERO_TBL_HDR=("$@"); }
+
+_ropero_table_row() {
+    local out="" c first=1
+    for c in "$@"; do
+        if (( first == 1 )); then out="$c"; first=0; else out+="${_ROPERO_TBL_SEP}${c}"; fi
+    done
+    _ROPERO_TBL_ROWS+=("$out")
+}
+
+# _ropero_table_rule <izq> <centro> <der> <anchos...> — línea horizontal.
+_ropero_table_rule() {
+    local left="$1" mid="$2" right="$3"; shift 3
+    local -a w=("$@")
+    local i seg rule="$left"
+    for ((i=0;i<${#w[@]};i++)); do
+        printf -v seg '%*s' $(( ${w[i]} + 4 )) ''
+        rule+="${seg// /─}"
+        (( i < ${#w[@]} - 1 )) && rule+="$mid"
+    done
+    rule+="$right"
+    printf '%s%s%s%s\n' "$_ROPERO_TBL_INDENT" "$_ROPERO_TBL_FRAME" "$rule" "$_ROPERO_TBL_RESET"
+}
+
+# _ropero_table_render <alineaciones csv: l|c|r> — dibuja la tabla.
+_ROPERO_TBL_FRAME=""      # ANSI del marco (vacío = sin color)
+_ROPERO_TBL_RESET=""
+_ROPERO_TBL_INDENT="  "
+
+_ropero_table_render() {
+    local align_csv="${1:-}"
+    local -a hdr=("${_ROPERO_TBL_HDR[@]}") rows=("${_ROPERO_TBL_ROWS[@]}")
+    local ncol=${#hdr[@]}
+    (( ncol > 0 )) || return 0
+
+    local -a widths=() aligns=()
+    local IFS=','
+    # shellcheck disable=SC2206
+    aligns=(${align_csv})
+    unset IFS
+
+    local i j r w seg pad l
+    local -a cells=()
+    for ((i=0;i<ncol;i++)); do
+        _ropero_vlen "${hdr[i]}"
+        widths[i]=$_ROPERO_VLEN
+    done
+    for r in "${rows[@]}"; do
+        IFS=$_ROPERO_TBL_SEP read -r -a cells <<<"$r"
+        for ((j=0;j<ncol && j<${#cells[@]};j++)); do
+            _ropero_vlen "${cells[j]}"
+            w=$_ROPERO_VLEN
+            (( w > widths[j] )) && widths[j]=$w
+        done
+    done
+
+    # ── borde superior ────────────────────────────────────────────────────
+    _ropero_table_rule "╭" "┬" "╮" "${widths[@]}"
+
+    # ── cabecera ──────────────────────────────────────────────────────────
+    local hline="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+    for ((i=0;i<ncol;i++)); do
+        _ropero_vlen "${hdr[i]}"
+        pad=$(( ${widths[i]} - _ROPERO_VLEN ))
+        (( pad < 0 )) && pad=0
+        printf -v seg '%*s' "$pad" ''
+        case "${aligns[i]:-l}" in
+            r) hline+="${seg}${hdr[i]}" ;;
+            c) l=$(( pad / 2 )); printf -v seg '%*s' "$l" ''
+               hline+="${seg}${hdr[i]}"; printf -v seg '%*s' $(( pad - l )) ''
+               hline+="${seg}" ;;
+            *) hline+="${hdr[i]}${seg}" ;;
+        esac
+        hline+="  "
+    done
+    hline+="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+    printf '%s%s\n' "$_ROPERO_TBL_INDENT" "$hline"
+
+    # ── separador ─────────────────────────────────────────────────────────
+    _ropero_table_rule "├" "┼" "┤" "${widths[@]}"
+
+    # ── filas ─────────────────────────────────────────────────────────────
+    for r in "${rows[@]}"; do
+        IFS=$_ROPERO_TBL_SEP read -r -a cells <<<"$r"
+        local line="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+        for ((i=0;i<ncol;i++)); do
+            local cell="${cells[i]:-}"
+            _ropero_vlen "$cell"
+            pad=$(( ${widths[i]} - _ROPERO_VLEN ))
+            (( pad < 0 )) && pad=0
+            printf -v seg '%*s' "$pad" ''
+            case "${aligns[i]:-l}" in
+                r) line+="${seg}${cell}" ;;
+                c) l=$(( pad / 2 )); printf -v seg '%*s' "$l" ''
+                   line+="${seg}${cell}"; printf -v seg '%*s' $(( pad - l )) ''
+                   line+="${seg}" ;;
+                *) line+="${cell}${seg}" ;;
+            esac
+            line+="  "
+        done
+        line+="${_ROPERO_TBL_FRAME}│${_ROPERO_TBL_RESET}"
+        printf '%s%s\n' "$_ROPERO_TBL_INDENT" "$line"
+    done
+
+    # ── borde inferior ────────────────────────────────────────────────────
+    _ropero_table_rule "└" "┴" "┘" "${widths[@]}"
+}
+
+# _ropero_table_colors — decide si la tabla va en color y con qué paleta.
+#
+# Sin TTY (o con NO_COLOR) la tabla sale en texto plano: se puede redirigir a
+# un fichero, pasar por un pipe o leer en un log sin los escapes. ROPERO_COLOR=1
+# fuerza el color aunque no haya TTY (para `| less -R`).
+_ropero_table_colors() {
+    if [[ -n "${NO_COLOR:-}" ]] \
+       || { [[ ! -t 1 ]] && [[ "${ROPERO_COLOR:-0}" != "1" ]]; }; then
+        _ROPERO_TBL_FRAME=""; _ROPERO_TBL_RESET=""
+        _ROPERO_TBL_C_FRAME=""; _ROPERO_TBL_C_HDR=""
+        _ROPERO_TBL_C_NUM=""; _ROPERO_TBL_C_DIM=""; _ROPERO_TBL_C_GOOD=""
+        _ROPERO_TBL_C_WARN=""; _ROPERO_TBL_C_TITLE=""; _ROPERO_TBL_C_NAME=""
+        return 0
+    fi
+    _ROPERO_TBL_FRAME="$DIM"; _ROPERO_TBL_RESET="$NC"
+    _ROPERO_TBL_C_FRAME="$DIM"
+    _ROPERO_TBL_C_HDR="$BOLD$CYAN_B"
+    _ROPERO_TBL_C_NUM="$BOLD$CYAN_B"
+    _ROPERO_TBL_C_DIM="$DIM"
+    _ROPERO_TBL_C_GOOD="$GRN_B"
+    _ROPERO_TBL_C_WARN="$YEL_B"
+    _ROPERO_TBL_C_TITLE="$BOLD"
+    _ROPERO_TBL_C_NAME=""
+}
+
+_ropero_models_menu() {
+    local mk idx i=1 engine state disk usage display seen=" " selectable
+    local n_sel=0 n_disk=0
+    _ropero_cat_build
+    _ropero_table_colors
+    _ropero_table_reset
+    _ropero_table_header \
+        "${_ROPERO_TBL_C_HDR}#${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}nombre${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}engine${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}tamaño${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}uso${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}descarga${_ROPERO_TBL_RESET}" \
+        "${_ROPERO_TBL_C_HDR}disco${_ROPERO_TBL_RESET}"
+    for mk in "${MODEL_NAMES[@]}"; do
+        [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" ]] && continue
+        engine="${MODEL_ENGINE[$mk]}"; display="${MODEL_ALIAS[$mk]:-$mk}"; usage='activo'
+        idx=$(_ropero_model_catalog_index "$mk" 2>/dev/null || true)
+        if [[ -z "$idx" ]]; then
+            _ropero_table_row \
+                "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${display}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${engine}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${usage}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}sin descarga${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}·${_ROPERO_TBL_RESET}"
+            continue
+        fi
+        disk='no'
+        if _ropero_model_artifact_present "$idx"; then
+            disk='sí'; n_disk=$((n_disk + 1))
+        fi
+        selectable=0
+        if ropero_engine_compatible "$engine"; then state='seleccionable'; selectable=1; else state='incompatible'; fi
+        local color_num color_state color_disk
+        if (( selectable == 1 )); then color_num="$_ROPERO_TBL_C_NUM"; else color_num="$_ROPERO_TBL_C_DIM"; fi
+        case "$state" in
+            seleccionable) color_state="${_ROPERO_TBL_C_GOOD}"; n_sel=$((n_sel + 1)) ;;
+            incompatible)  color_state="${_ROPERO_TBL_C_WARN}" ;;
+            *)             color_state="${_ROPERO_TBL_C_DIM}" ;;
+        esac
+        if [[ "$disk" == 'sí' ]]; then color_disk="${_ROPERO_TBL_C_GOOD}✓${_ROPERO_TBL_RESET}"
+        else color_disk="${_ROPERO_TBL_C_DIM}·${_ROPERO_TBL_RESET}"; fi
+        if (( selectable == 1 )); then
+            _ropero_table_row \
+                "${color_num}${i}${_ROPERO_TBL_RESET}" \
+                "${display}" \
+                "${_ROPERO_TBL_C_DIM}${engine}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_CAT_SIZE[$idx]}" \
+                "${_ROPERO_TBL_C_DIM}${usage}${_ROPERO_TBL_RESET}" \
+                "${color_state}${state}${_ROPERO_TBL_RESET}" \
+                "${color_disk}"
+            ROPERO_MENU_MODELS[$i]="$mk"; i=$((i + 1))
+        else
+            _ropero_table_row \
+                "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${display}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_TBL_C_DIM}${engine}${_ROPERO_TBL_RESET}" \
+                "${_ROPERO_CAT_SIZE[$idx]}" \
+                "${_ROPERO_TBL_C_DIM}${usage}${_ROPERO_TBL_RESET}" \
+                "${color_state}${state}${_ROPERO_TBL_RESET}" \
+                "${color_disk}"
+        fi
+        seen+="${_ROPERO_CAT_KEY[$idx]} "
+    done
+    for ((idx=0; idx<${#_ROPERO_CAT_KEY[@]}; idx++)); do
+        [[ "$seen" == *"${_ROPERO_CAT_KEY[$idx]} "* ]] && continue
+        # Las entradas sin launcher son descargables por su clave/nombre; no
+        # hay forma segura de inferir su engine, así que no reciben número.
+        _ropero_table_row \
+            "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}${_ROPERO_CAT_NAME[$idx]}${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_CAT_SIZE[$idx]}" \
+            "${_ROPERO_TBL_C_DIM}-${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}pesos sin launcher${_ROPERO_TBL_RESET}" \
+            "${_ROPERO_TBL_C_DIM}·${_ROPERO_TBL_RESET}"
+    done
+    printf '%s%sModelos%s %s· %d seleccionables · %d en disco%s\n' \
+        "$_ROPERO_TBL_INDENT" "$_ROPERO_TBL_C_TITLE" "$_ROPERO_TBL_RESET" \
+        "$_ROPERO_TBL_C_DIM" "$n_sel" "$n_disk" "$_ROPERO_TBL_RESET"
+    _ropero_table_render "r,l,l,r,l,l,c"
+    printf '%s%s99)%s todos seleccionables    %s0)%s salir\n' \
+        "$_ROPERO_TBL_INDENT" "$_ROPERO_TBL_C_HDR" "$_ROPERO_TBL_RESET" \
+        "$_ROPERO_TBL_C_HDR" "$_ROPERO_TBL_RESET"
+}
+
+_ropero_install_models_selected() {
+    local raw="${1:-}" force="${2:-0}" token mk idx i=0 n rc=0 installed=0 already=0 omitted=0 failed=0 present after_present interactive=0 valid=0 invalid=0
+    declare -gA ROPERO_MENU_MODELS=()
+    # La tabla también construye el mapa número → script para el camino sin
+    # TTY, donde 99 selecciona todos sin llegar a imprimir un prompt.
+    _ropero_models_menu >/dev/null
+    if [[ -z "$raw" ]]; then
+        if _ropero_is_unattended; then
+            raw=99
+        else
+            interactive=1
+            while :; do
+                _ropero_models_menu; printf 'Selecciona: ' >&2; read -r raw || raw=0
+                [[ "$raw" == "0" ]] && return 0
+                valid=0 invalid=0
+                while read -r token; do
+                    if [[ "$token" == 99 || "$token" == all || -n "${ROPERO_MENU_MODELS[$token]:-}" ]]; then
+                        valid=1
+                        continue
+                    fi
+                    mk=$(ropero_model_key "$token" 2>/dev/null || true)
+                    if [[ -n "$mk" ]]; then
+                        idx=$(_ropero_model_catalog_index "$mk" 2>/dev/null || true)
+                        if [[ -n "$idx" ]] && ropero_engine_compatible "${MODEL_ENGINE[$mk]}"; then valid=1; else invalid=1; fi
+                        continue
+                    fi
+                    # Sin launcher no se enumera: no se puede inferir el
+                    # engine. Pero una clave/nombre exacto del catálogo sí es
+                    # una petición explícita y descargable.
+                    if _ropero_cat_index "$token" >/dev/null 2>&1; then valid=1; else invalid=1; fi
+                done < <(_ropero_split_selection "$raw")
+                (( valid == 1 && invalid == 0 )) && break
+                ropero_warn "selección no válida o no seleccionable; prueba otra vez (0 para salir)"
+            done
+        fi
+    fi
+    local -a selected=()
+    while read -r token; do
+        case "$token" in
+            0) return 0 ;;
+            99|all) for mk in "${ROPERO_MENU_MODELS[@]}"; do selected+=("$mk"); done; break ;;
+            [0-9]*) mk="${ROPERO_MENU_MODELS[$token]:-}" ;;
+            *) mk=$(ropero_model_key "$token" 2>/dev/null || true) ;;
+        esac
+        [[ -n "$mk" ]] || {
+            if idx=$(_ropero_cat_index "$token" 2>/dev/null); then
+                selected+=("catalog:$idx")
+            elif ropero_model_retired "$token"; then
+                # No es un modelo desconocido: es un modelo retirado. La
+                # diferencia saves una búsqueda inútil al usuario.
+                ropero_warn "$token está retirado y no se puede descargar (models/<engine>/fired/)"
+                (( interactive == 1 )) || { rc=1; failed=$((failed + 1)); }
+            else
+                ropero_warn "modelo no seleccionable: $token"
+                (( interactive == 1 )) || { rc=1; failed=$((failed + 1)); }
+            fi
+            continue
+        }
+        ropero_engine_compatible "${MODEL_ENGINE[$mk]}" || { ropero_warn "$mk incompatible; omitido"; omitted=$((omitted + 1)); continue; }
+        idx=$(_ropero_model_catalog_index "$mk" 2>/dev/null || true)
+        [[ -n "$idx" ]] || { ropero_warn "$mk no tiene descarga en catálogo; omitido"; omitted=$((omitted + 1)); continue; }
+        selected+=("$mk")
+    done < <(_ropero_split_selection "$raw")
+    local -a unique=() artifacts=(); local artifact
+    for mk in "${selected[@]}"; do
+        if [[ "$mk" == catalog:* ]]; then idx="${mk#catalog:}"; else idx=$(_ropero_model_catalog_index "$mk"); fi
+        artifact=$(_ropero_model_artifact_id "$idx") || { rc=1; failed=$((failed + 1)); continue; }
+        [[ " ${artifacts[*]} " == *" $artifact "* ]] || { unique+=("$mk"); artifacts+=("$artifact"); }
+    done
+    n=${#unique[@]}
+    for mk in "${unique[@]}"; do
+        i=$((i + 1));
+        if [[ "$mk" == catalog:* ]]; then idx="${mk#catalog:}"; printf '▸ [%d/%d] %s\n' "$i" "$n" "${_ROPERO_CAT_NAME[$idx]}"; else idx=$(_ropero_model_catalog_index "$mk"); printf '▸ [%d/%d] %s\n' "$i" "$n" "${MODEL_ALIAS[$mk]:-$mk}"; fi
+        present=0; _ropero_model_artifact_present "$idx" && present=1
+        # La selección del menú es consentimiento. AUTO_YES sólo evita la
+        # pregunta redundante del descargador; ROPERO_FORCE queda desactivado
+        # salvo que se haya pedido explícitamente con --force.
+        if (( force == 1 )); then
+            AUTO_YES=1 SETUP_MODE=full ROPERO_FORCE=1 _ropero_logged "model-${mk}" _ropero_cat_download "$idx"
+        else
+            AUTO_YES=1 SETUP_MODE=full ROPERO_FORCE=0 _ropero_logged "model-${mk}" _ropero_cat_download "$idx"
+        fi
+        if [[ $? -ne 0 ]]; then
+            rc=1; failed=$((failed + 1))
+            continue
+        fi
+        after_present=0; _ropero_model_artifact_present "$idx" && after_present=1
+        if (( after_present == 0 )); then
+            rc=1; failed=$((failed + 1))
+            ropero_err "${_ROPERO_CAT_NAME[$idx]} no dejó su artefacto en disco"
+            _ropero_install_log_tail "model-${mk}"
+        elif (( present == 1 )); then
+            already=$((already + 1))
+        else
+            installed=$((installed + 1))
+        fi
+    done
+    # El flujo seleccionado descarga por entrada y no pasa por
+    # ropero_download_default_models; aplica el postcopy aquí una sola vez,
+    # únicamente después de que todas las descargas seleccionadas hayan dejado
+    # sus artefactos. Un hook requerido que falle también hace fallar el resumen.
+    if (( n > 0 && rc == 0 )); then
+        if ! _ropero_cat_postcopy; then
+            rc=1
+            failed=$((failed + 1))
+        fi
+    fi
+    printf 'Resumen: instalado=%d · ya estaba=%d · omitido=%d · fallo=%d\n' "$installed" "$already" "$omitted" "$failed"
+    return "$rc"
+}
+
+cmd_models() {
+    local force=0 raw="" arg
+    for arg in "$@"; do case "$arg" in --help|-h) _ropero_command_help models; return 0 ;; --force|-f) force=1 ;; *) raw+="${raw:+ }$arg" ;; esac; done
+    ropero_env_setup; _ropero_install_models_selected "$raw" "$force"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_model_levels <modelo> — niveles que el modelo acepta por argumento.
+#
+# "nivel" es una palabra que el modelo declara en MODEL_LEVELS (el .sh del
+# modelo). No es un concepto del CLI: el CLI solo sabe que hay una lista, y
+# la lista la pone quien escribe el modelo. Así `ropero gptoss --high` es
+# "--high porque gptoss dice que tiene high", y no "--high porque el CLI se
+# lo inventó".
+#
+# Resuelve también el alias público: `ropero verifier --high` es el mismo
+# modelo físico que `ropero gptoss --high`.
+# -----------------------------------------------------------------------------
+_ropero_model_levels() {
+    local model="${1:-}" key="${1:-}"
+    key="${key//-/_}"
+    [[ " ${MODEL_NAMES[*]} " =~ " $key " ]] || return 1
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    [[ -n "$target" ]] && key="$target"
+    printf '%s\n' "${MODEL_LEVELS[$key]:-}"
+}
+
+# _ropero_model_decl <modelo> <flags|options> — lo que el modelo declara.
+#
+#   flags    → flags booleanos:  `ropero gemma --vision`
+#   options  → opciones con valor: `ropero gemma --n-cpu-moe 5`
+#
+# Igual que _ropero_model_levels: el CLI no tiene vocabulario propio, lo
+# tiene el .sh del modelo. Y resuelve el alias público igual que los niveles
+# (`ropero gemma` y su alias son el mismo modelo físico).
+_ropero_model_decl() {
+    local model="${1:-}" what="${2:-}" key="${1:-}"
+    key="${key//-/_}"
+    [[ " ${MODEL_NAMES[*]} " =~ " $key " ]] || return 1
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    [[ -n "$target" ]] && key="$target"
+    case "$what" in
+        flags)   printf '%s\n' "${MODEL_FLAGS[$key]:-}" ;;
+        options) printf '%s\n' "${MODEL_OPTIONS[$key]:-}" ;;
+        *) return 1 ;;
+    esac
+}
+
+cmd_install() {
+    local target="" force=0 raw="" arg help_requested=0
+    for arg in "$@"; do
+        case "$arg" in
+            # Procesar toda la línea antes de responder: el destino puede estar
+            # antes O después de --help (`install --help engines` debe enseñar
+            # la ayuda de engines), y el help no debe inicializar el entorno.
+            --help|-h) help_requested=1 ;;
+            --force|-f) force=1 ;;
+            engines|models|link) [[ -z "$target" ]] || _ropero_usage_error install "destino repetido: '$arg'"; target="$arg" ;;
+            *) raw+="${raw:+ }$arg" ;;
+        esac
+    done
+    if (( help_requested == 1 )); then
+        _ropero_command_help "${target:-install}"
+        return 0
+    fi
+    ropero_env_setup
+    case "$target" in
+        engines) _ropero_install_engines_selected "$raw" "$force" ;;
+        models)
+            if (( force == 1 )); then cmd_models --force ${raw:+"$raw"}; else cmd_models ${raw:+"$raw"}; fi
+            ;;
+        link) [[ -z "$raw" ]] || _ropero_usage_error link "link no acepta selección"; _ropero_relink_all "$(ropero_detect_os)" ;;
+        '')
+            _ropero_install_engines_selected "$raw" "$force" || return $?
+            if (( force == 1 )); then cmd_models --force; else cmd_models; fi
+            ;;
+    esac
+}
+
+_ropero_config_lan_ip() {
+    # Solo inspecciona la configuración local: no consulta la red. El orden en
+    # macOS evita elegir interfaces virtuales (VPN, Docker) antes de la LAN.
+    local os iface ip route
+    os=$(uname -s 2>/dev/null || true)
+    case "$os" in
+        Darwin)
+            for iface in en0 en1; do
+                ip=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
+                if [[ -n "$ip" ]]; then
+                    printf '%s' "$ip"
+                    return 0
+                fi
+            done
+            ;;
+        Linux)
+            if command -v ip >/dev/null 2>&1; then
+                route=$(ip route get 1.1.1.1 2>/dev/null || true)
+                if [[ "$route" =~ [[:space:]]src[[:space:]]([^[:space:]]+) ]]; then
+                    printf '%s' "${BASH_REMATCH[1]}"
+                    return 0
+                fi
+            fi
+            # `hostname -I` puede devolver cero direcciones. No le apliques un
+            # default aquí: una IP inventada sería peor que "no detectada".
+            if command -v hostname >/dev/null 2>&1; then
+                ip=$(hostname -I 2>/dev/null || :)
+                ip=${ip%%[[:space:]]*}
+                if [[ -n "$ip" ]]; then
+                    printf '%s' "$ip"
+                    return 0
+                fi
+            fi
+            ;;
+    esac
+    return 1
+}
+
+cmd_config() {
+    local requested="" show_key=0 arg engine key mk p auth bin installed verdict lan_ip url_host
+    for arg in "$@"; do case "$arg" in --help|-h) _ropero_command_help config; return 0 ;; --show-key) show_key=1 ;; *) [[ -z "$requested" ]] || _ropero_usage_error config "argumento desconocido: '$arg'"; requested="$arg" ;; esac; done
+    if [[ -z "$requested" ]]; then
+        printf '%-14s %-12s %-12s %s\n' ENGINE COMPATIBLE INSTALADO MODELOS
+        for engine in llama-server airllm mlx_lm tensorrt-llm fastflowlm; do
+            ropero_engine_compatible "$engine" && key=sí || key=no
+            # llama-server no necesita un health check adicional: que su
+            # ejecutable resoluble exista es el contrato de instalación. Los
+            # probes de los demás pueden diagnosticar en stderr; config es una
+            # tabla y debe quedarse silenciosa aunque uno esté roto.
+            if [[ "$engine" == llama-server ]]; then
+                ropero_engine_resolve "$engine" >/dev/null 2>&1 && installed=sí || installed=no
+            else
+                verdict=$(ropero_engine_probe "$engine" 2>/dev/null || true)
+                case "$verdict" in
+                    ok) installed=sí ;;
+                    missing) installed=no ;;
+                    *) installed=roto ;;
+                esac
+            fi
+            local names=(); for mk in "${MODEL_NAMES[@]}"; do [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" || "${MODEL_ENGINE[$mk]}" != "$engine" ]] && continue; names+=("${MODEL_ALIAS[$mk]:-$mk}"); done
+            printf '%-14s %-12s %-12s %s\n' "$engine" "$key" "$installed" "${names[*]:--}"
+        done
+        return 0
+    fi
+    engine=$(_ropero_engine_name "$requested") || { printf 'ERROR: engine desconocido: %s\n' "$requested" >&2; return 2; }
+    if ropero_engine_auth_native "$engine" || [[ "$engine" == llama-server ]]; then
+        auth='nativa'
+    elif [[ "${ROPERO_NO_AUTH_PROXY:-0}" == "1" ]]; then
+        auth='SIN auth'
+    else
+        auth='proxy de ropero'
+    fi
+    if (( show_key == 1 )); then
+        key="$LLAMA_API_KEY"
+    elif (( ${#LLAMA_API_KEY} <= 8 )); then
+        key='********'
+    else
+        key="${LLAMA_API_KEY:0:4}…${LLAMA_API_KEY: -4}"
+    fi
+    bin=$(ropero_engine_resolve "$engine" 2>/dev/null || printf 'no instalado')
+    local internal='-'
+    if ropero_engine_auth_native "$engine" || [[ "$engine" == llama-server ]]; then
+        internal='directo (puerto del modelo)'
+    else
+        internal=$(ropero_engine_internal_port "$engine" "$PORT" 2>/dev/null || echo '-')
+    fi
+    lan_ip=$(_ropero_config_lan_ip 2>/dev/null || true)
+    url_host="${lan_ip:-127.0.0.1}"
+    printf 'engine: %s\ncompatibilidad: %s\nbind: %s\n' "$engine" "$(ropero_engine_compatible "$engine" && echo sí || echo no)" "$HOST"
+    if [[ "$HOST" != "127.0.0.1" ]]; then
+        printf 'IP local: 127.0.0.1\n'
+    fi
+    if [[ -z "$lan_ip" ]]; then
+        printf 'IP LAN: no detectada\n'
+    elif [[ "$HOST" != "$lan_ip" ]]; then
+        printf 'IP LAN: %s\n' "$lan_ip"
+    fi
+    printf 'auth: %s\napi key: %s\npuerto interno: %s\nbinario: %s\n' "$auth" "$key" "$internal" "$bin"
+    printf 'MODELO\tPUERTO\tBASE URL\tMODEL ID\tDISCO\n'
+    for mk in "${MODEL_NAMES[@]}"; do
+        [[ -n "${MODEL_ALIAS_TARGET[$mk]:-}" || "${MODEL_ENGINE[$mk]}" != "$engine" ]] && continue
+        p=$(_model_port "$mk" 2>/dev/null || printf '%s' "$PORT")
+        local disk=no; [[ -n "${MODEL_GGUF[$mk]}" && -s "$GGUF_DIR/${MODEL_GGUF[$mk]}" ]] && disk=sí; [[ -n "${MODEL_PATH[$mk]:-}" ]] && _ropero_dir_has_weights "${MODEL_PATH[$mk]}" && disk=sí
+        printf '%s\t:%s\thttp://%s:%s/v1\t%s\t%s\n' "${MODEL_ALIAS[$mk]:-$mk}" "$p" "$url_host" "$p" "${MODEL_ALIAS[$mk]:-$mk}" "$disk"
+    done
+}
+
+# -----------------------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------------------
+main() {
+    local subcmd="${1:-}"
+    if [[ -z "$subcmd" || "$subcmd" == "help" || "$subcmd" == "-h" || "$subcmd" == "--help" ]]; then
+        cmd_help
+        exit 0
+    fi
+
+    case "$subcmd" in
+        # Ni --install ni --check: la instalación de ropero (descarga, symlink
+        # y verificación) la hace install.sh, el instalador de una línea:
+        #
+        #     curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
+        #
+        # El entrypoint ya no se autoinstala. `ropero install` (sin guiones) SÍ
+        # existe, y es otra cosa: instala los ENGINES y los MODELOS.
+        check)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help check; exit 0; fi
+            cmd_check "$@"
+            exit $?
+            ;;
+        install)
+            shift
+            cmd_install "$@"
+            exit $?
+            ;;
+        engines)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help engines; exit 0; fi
+            cmd_install engines "$@"
+            exit $?
+            ;;
+        link)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help link; exit 0; fi
+            cmd_install link "$@"
+            exit $?
+            ;;
+        config)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help config; exit 0; fi
+            cmd_config "$@"
+            exit $?
+            ;;
+        list)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help list; exit 0; fi
+            cmd_list "$@"
+            exit 0
+            ;;
+        template)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help template; exit 0; fi
+            cmd_template "$@"
+            exit 0
+            ;;
+        # Top-level y no solo `--install models`: es lo que se escribe cuando
+        # ya se tiene el stack y solo falta disco, y obligar a recordar el
+        # doble flag para eso es pedir que nadie lo use. Mismo cuerpo, misma
+        # fase (_ropero_do_models): no hay dos caminos que puedan divergir.
+        models)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help models; exit 0; fi
+            cmd_models "$@"
+            exit $?
+            ;;
+        status)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help status; exit 0; fi
+            cmd_status "$@"
+            exit $?
+            ;;
+        stop)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help stop; exit 0; fi
+            cmd_stop "$@"
+            exit $?
+            ;;
+    *)
+        # Un token que empieza por "-" no es un modelo, es una opción que no
+        # existe. Decirlo así y no "Modelo desconocido: --foc" (seguido de un
+        # volcado de la lista de modelos a stderr): lo segundo convierte un typo
+        # de teclado en veinte líneas de ruido y esconde el problema real.
+        if [[ "$subcmd" == -* ]]; then
+            _ropero_usage_error '' "opción desconocida: '$subcmd'"
+        fi
+
+        local model="$subcmd"
+        shift
+        local background=0
+        local cpu_only=0
+        local force=0
+        local port_override=""
+        local level=""
+        local model_flags_set=""
+        local model_opts_set=""
+        # Lo que el MODELO declara: niveles, flags booleanos y opciones con
+        # valor. Se resuelve una vez y se cachea: el bucle puede ver varios.
+        local model_levels="" model_flags_decl="" model_options_decl=""
+        model_levels="$(_ropero_model_levels "$model" 2>/dev/null || true)"
+        model_flags_decl="$(_ropero_model_decl "$model" flags 2>/dev/null || true)"
+        model_options_decl="$(_ropero_model_decl "$model" options 2>/dev/null || true)"
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --background) background=1 ;;
+                --cpu) cpu_only=1 ;;
+                --force) force=1 ;;
+                --port)
+                    # Mismo contrato que --watch: el valor es obligatorio y
+                    # numérico. Si el siguiente token es otro flag o no
+                    # existe, es un error de uso, no un default: arrancar en
+                    # un puerto que el usuario NO ha pedido sería peor que
+                    # no arrancar.
+                    #
+                    # OJO con el `continue`: el `shift` de este caso se come el
+                    # VALOR, y el `shift` del final del bucle se come el flag.
+                    # Sin el continue, cuando --port va el último
+                    # (`ropero embed --port 9995`) el shift final no tiene
+                    # argumentos: `shift` sale con 1 y, con `set -e`, aborta el
+                    # script entero EN SILENCIO. Por eso `ropero embed --port
+                    # 9995` no arrancaba nada y no decía nada. Con dos flags
+                    # detrás funcionaba, que es lo que hacía el fallo tan
+                    # esquivo.
+                    shift
+                    if [[ $# -gt 0 && "$1" =~ ^[0-9]+$ ]]; then
+                        # --port repetido: gana el último, pero se dice. Sin el
+                        # aviso, `ropero embed --port 9995 --port 9996` arrancaba
+                        # en 9996 sin dar ninguna pista de que el 9995 se había
+                        # perdido por el camino — y cuando el puerto no era el
+                        # que esperabas, el culpable no parecía ropero sino un
+                        # segundo flag que nadie había visto.
+                        if [[ -n "$port_override" ]]; then
+                            echo "AVISO: --port repetido; gana el último (:$1)" >&2
+                        fi
+                        port_override="$1"
+                        shift
+                    elif [[ $# -eq 0 ]]; then
+                        echo "ERROR: --port requiere un número de puerto" >&2
+                        exit 1
+                    else
+                        echo "ERROR: --port requiere un número de puerto, recibido: $1" >&2
+                        exit 1
+                    fi
+                    continue
+                    ;;
+                --port=*)
+                    port_override="${1#--port=}"
+                    if [[ ! "$port_override" =~ ^[0-9]+$ ]]; then
+                        echo "ERROR: --port=$port_override no es un puerto válido" >&2
+                        exit 1
+                    fi
+                    ;;
+                -h|--help)
+                    # Antes caía en el `*)` de abajo y salía "opción
+                    # desconocida: --help". No era mentira —este branch no
+                    # documentaba ningún flag de ayuda— pero `ropero embed
+                    # --help` es lo primero que escribe cualquiera que haya
+                    # leído cualquier otro CLI en su vida, y contestarle que su
+                    # --help no existe es una forma cara de no contestar.
+                    _ropero_usage ''
+                    exit 0
+                    ;;
+                --?*)
+                    # Todo lo que empieza por "--" y no es un flag global es
+                    # cosa del MODELO. Tres formas, y en este orden:
+                    #
+                    #   1. NIVEL       --high / --medium / --low   (sin valor)
+                    #   2. OPCIÓN     --n-cpu-moe 5 / --n-cpu-moe=5 (con valor)
+                    #   3. FLAG       --vision                    (sin valor)
+                    #
+                    # Los tres tienen que estar DECLARADOS por el .sh del
+                    # modelo. Un flag que el modelo no declara es un error de
+                    # uso, no algo que se ignore: si `ropero gemma --vision`
+                    # no encontrara el mmproj y siguiera como si nada, el
+                    # fallo aparecería en la primera imagen, no al arrancar.
+                    local want="${1#--}" want_val=""
+                    if [[ "$want" == *=* ]]; then
+                        want_val="${want#*=}"; want="${want%%=*}"
+                    fi
+                    if [[ -n "$model_levels" && " $model_levels " == *" $want "* ]]; then
+                        level="$want"
+                        shift
+                        continue
+                    fi
+                    if [[ -n "$model_options_decl" && " $model_options_decl " == *" $want "* ]]; then
+                        if [[ -z "$want_val" ]]; then
+                            shift
+                            if [[ $# -eq 0 ]]; then
+                                _ropero_usage_error '' "la opción --$want requiere un valor"
+                            fi
+                            want_val="$1"
+                        fi
+                        model_opts_set+="${model_opts_set:+ }${want}=${want_val}"
+                        shift
+                        continue
+                    fi
+                    if [[ -n "$model_flags_decl" && " $model_flags_decl " == *" $want "* ]]; then
+                        model_flags_set+="${model_flags_set:+ }${want}"
+                        shift
+                        continue
+                    fi
+                    _ropero_usage_error '' "opción desconocida: '$1'"
+                    ;;
+                *) _ropero_usage_error '' "opción desconocida: '$1'" ;;
+            esac
+            shift
+        done
+        start_model "$model" "$background" "$cpu_only" "$force" "$port_override" "$level" "$model_flags_set" "$model_opts_set"
+        exit $?
+        ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,79 @@
+# =============================================================================
+# agents-a1-4b — InternScience/Agents-A1-4B-Q8_0-GGUF
+# =============================================================================
+#
+# Modelo VLM (vision-language) de 4B en Q8_0. Es la versión pequeña del
+# Agents-A1: sirve para lo mismo (razonar + ver imágenes) con mucho menos peso.
+#
+#   - GGUF principal : Agents-A1-4B-Q8_0.gguf   (4.482 GB)
+#   - mmproj (visión): Agents-A1-4B-mmproj.gguf  (0.672 GB)
+#   - Contexto       : 262144 tokens
+#
+# Sampling recomendado por la ficha oficial del modelo:
+#   temp 0.85, top_p 0.95, top_k 20, min_p 0.0,
+#   presence_penalty 1.1, repeat_penalty 1.0
+#
+# El proyector de visión es un flag: sin `--vision` el servidor arranca sin
+# torre de visión (menos VRAM) y sólo lee texto.
+#
+# El override del contexto es el canónico ROPERO_AGENTS_A1_4B_CTX.
+# =============================================================================
+
+[model]
+name    = "agents-a1-4b"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf   = "Agents-A1-4B-Q8_0.gguf"
+mmproj = "Agents-A1-4B-mmproj.gguf"
+
+[download]
+repo = "InternScience/Agents-A1-4B-Q8_0-GGUF"
+file = "Agents-A1-4B-Q8_0.gguf"
+size = "4.482 GB"
+
+[download.aux.mmproj]
+file = "Agents-A1-4B-mmproj.gguf"
+name = "Agents-A1-4B-mmproj.gguf"
+size = "0.672 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "medium"
+
+[flags]
+list = ["vision"]
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--jinja",
+    "--reasoning-format", "auto",
+    "--temp", "0.85",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.1",
+    "--repeat-penalty", "1.0",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--kv-unified",
+    "--n-predict", "8192",
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.flag.vision]
+base = ["--mmproj", "${mmproj}"]
+requires = ["mmproj"]
