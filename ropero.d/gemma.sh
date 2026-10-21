@@ -8,17 +8,15 @@
 #   - Multimodal: --mmproj para entrada de imágenes (SOLO con --vision)
 #   - Acceptance rate medido en esta máquina: 49-88% según el prompt
 #
-# Por que esta config es óptima para Gemma:
-#   - Q4_K_XL (~15-16 GB) cabe en GPUs de 16-24 GB con KV cache q8_0
-#   - MTP aporta aceleración neta con n-max 4 (equilibrio velocidad/overhead)
-#   - Sampling canónico de Gemma 4: temp 1.0, top-p 0.95, top-k 64
-#   - Contexto 131072 por defecto, ampliable a 262144 vía env var
-#
-# Peculiaridades de Gemma:
-#   1. Spec-type draft-mtp: drafter nativo de Gemma (mtp-gemma-4-26B-A4B-it)
-#   2. Model-draft: archivo mtp-gemma-4-26B-A4B-it.gguf (Q4_0 near-lossless)
-#   3. mmproj: gemma-4-26B-A4B-it-mmproj-BF16.gguf (torre de visión)
-#   4. MoE: si hay OOM, usar --n-cpu-moe para descargar expertos a RAM
+# Optimizaciones aplicadas (respecto a la versión previa):
+#   - spec-draft-n-max 4 → 8: con aceptación alta, más profundidad de draft
+#     amortiza mejor cada forward pass del modelo principal (cuello de botella
+#     real cuando la KV vive en RAM).
+#   - spec-draft-p-min 0.0 → 0.6: el drafter se corta solo cuando su
+#     confianza cae, evitando drafts que acabarían rechazados.
+#   - NOTA: --n-cpu-moe 5 y --no-kv-offload se MANTIENEN porque sin ellos
+#     hay OOM en esta máquina (16 GB VRAM). El precio es velocidad de
+#     generación, pero es el mínimo viable sin cambiar hardware.
 #
 # ── USO ─────────────────────────────────────────────────────────────────────
 #   ropero gemma                      → texto puro, sin visión
@@ -29,10 +27,11 @@
 #   ropero gemma --low                → sin razonamiento (respuesta directa)
 #
 # Override env vars (sin editar este archivo):
-#   ROPERO_GEMMA_CTX=262144 ropero gemma    # 256k context
-#   ROPERO_GEMMA_TEMP=0.7 ropero gemma      # más determinista (Gemma recomienda 1.0)
-#   ROPERO_GEMMA_MTP_NMAX=2 ropero gemma    # menos especulación
-#   ROPERO_GEMMA_N_CPU_MOE=8 ropero gemma   # experts MoE en CPU por defecto
+#   ROPERO_GEMMA_CTX=262144 ropero gemma     # 256k context
+#   ROPERO_GEMMA_TEMP=0.7 ropero gemma       # más determinista
+#   ROPERO_GEMMA_MTP_NMAX=6 ropero gemma     # menos especulación
+#   ROPERO_GEMMA_MTP_PMIN=0.0 ropero gemma   # drafter sin umbral (comport. antiguo)
+#   ROPERO_GEMMA_N_CPU_MOE=8 ropero gemma    # experts MoE en CPU por defecto
 # ==============================================================================
 
 MODEL_ENGINE="llama-server"
@@ -41,35 +40,26 @@ MODEL_GGUF="gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
 # Rutas de los ficheros del BUNDLE. Se usan $GGUF_DIR (no $HOME/models/gguf)
 # para que un GGUF_DIR distinto se respete: 01-env.sh lo define y lo expande
 # (un "~" dentro de comillas dobles no se expande, y por eso aquí no hay "~").
-# Nombres propios (no MODEL_*): el loader sourcea todos los scripts seguidos
-# y un MODEL_* compartido lo pisaría el siguiente script.
 GEMMA_MTP="$GGUF_DIR/mtp-gemma-4-26B-A4B-it.gguf"
 GEMMA_MMPROJ="$GGUF_DIR/gemma-4-26B-A4B-it-mmproj-BF16.gguf"
 
 MODEL_CTX="${ROPERO_GEMMA_CTX:-131072}"
 
 # Niveles de razonamiento. Gemma 4 NO tiene "reasoning_effort" como gpt-oss:
-# su chat template solo conoce enable_thinking y preserve_thinking (el
-# "Preserved Thinking" de Google). Los niveles se traducen a sus knobs reales:
+# su chat template solo conoce enable_thinking y preserve_thinking.
 #
 #   low     → enable_thinking=false              → respuesta directa, sin CoT
 #   medium  → enable_thinking=true               → razona y responde (default)
 #   high    → enable_thinking + preserve_thinking → además conserva el CoT
-#                                                anterior en el historial, que
-#                                                es lo que necesita un flujo
-#                                                agentic con tool calls
+#                                                anterior en el historial
 #
 # MEDIDO en esta máquina (RTX 5080 Laptop, 16 GB):
-#   enable_thinking=false → 0 caracteres de razonamiento en la respuesta
-#   enable_thinking=true  → ~500 caracteres, y el CoT sale limpio en el campo
-#                           `reasoning_content` de la API (llama-server sabe
-#                           parsear el bloque <|channel>thought de Gemma 4).
+#   enable_thinking=false → 0 caracteres de razonamiento
+#   enable_thinking=true  → ~500 caracteres en reasoning_content
 MODEL_LEVELS="${MODEL_LEVELS:-low medium high}"
 MODEL_LEVEL_DEFAULT="${MODEL_LEVEL_DEFAULT:-medium}"
 
-# Flags y opciones que este modelo acepta por argumento. Los declara el .sh;
-# el CLI los valida contra esta lista, así que `ropero embed --vision` da
-# error en vez de ignorarse en silencio.
+# Flags y opciones que este modelo acepta por argumento.
 MODEL_FLAGS="${MODEL_FLAGS:-vision}"
 MODEL_OPTIONS="${MODEL_OPTIONS:-n-cpu-moe}"
 
@@ -79,8 +69,7 @@ MODEL_OPTIONS="${MODEL_OPTIONS:-n-cpu-moe}"
 # MODEL_LEVELS, MODEL_LEVEL_DEFAULT, MODEL_FLAGS y MODEL_OPTIONS son ARRAYS
 # asociativos del CLI (declare -A). El loader sourcea TODOS los scripts
 # seguidos, así que dentro de get_model_args_* esos valores son los del
-# ÚLTIMO script sourceado, no los de este. Es el mismo motivo por el que
-# MODEL_GGUF va en array (ver la cabecera de 21-download-models.sh).
+# ÚLTIMO script sourceado, no los de este.
 #
 # El script captura los suyos al sourcearse y la función lee la COPIA.
 # -----------------------------------------------------------------------------
@@ -104,43 +93,46 @@ get_model_args_gemma() {
             ;;
     esac
 
-    # ---- MoE en CPU: default POR CASO, ajustable en los dos ----
+    # ---- MoE en CPU: 5 por defecto (obligatorio en esta máquina) ----
     # Los expertos MoE son el 88% de los pesos (22,8B de 26B), así que cada
-    # capa que se queda en la RAM libera ~0,46 GB de VRAM. Ese hueco es
-    # exactamente el que necesita el mmproj cuando hay visión.
+    # capa que se queda en la RAM libera ~0,46 GB de VRAM.
     #
-    #   sin --vision → 0 capas en la CPU: no hay mmproj que hospedar, la
-    #                   VRAM está libre y lo que se quiere es velocidad.
-    #   con --vision → 5 capas en la CPU: el mmproj son 1139 MiB y sin
-    #                   hacer hueco no entra.
+    # En esta máquina (RTX 5080 Laptop, 16 GB) el modelo completo + KV +
+    # overhead no cabe en VRAM, así que 5 capas de expertos se quedan en CPU
+    # tanto con visión como sin ella. Sin ese hueco hay OOM.
     #
-    # En los dos casos se puede forzar con --n-cpu-moe N (o con
-    # ROPERO_GEMMA_N_CPU_MOE=N), que manda sobre el default.
+    # Se puede forzar otro valor con --n-cpu-moe N (o ROPERO_GEMMA_N_CPU_MOE=N),
+    # que manda sobre el default.
     #
-    # Coste de bajar capas: se calculan en la CPU, así que baja el tokens/s.
-    # Es el trueque de "más contexto y visión" contra "más velocidad".
-    local n_cpu_moe_default=0
-    if [[ "${ROPERO_MODEL_FLAG_VISION:-0}" == "1" ]]; then
-        n_cpu_moe_default=5
-    fi
+    # Coste de bajar capas: se calculan en la CPU → baja tokens/s.
+    # Subir capas libera VRAM pero penaliza velocidad; bajar capas acelera
+    # pero puede provocar OOM.
+    local n_cpu_moe_default=5
     local n_cpu_moe="${ROPERO_MODEL_OPT_N_CPU_MOE:-${ROPERO_GEMMA_N_CPU_MOE:-$n_cpu_moe_default}}"
 
-    # ---- MTP: cuántos tokens se especulan de golpe ----
-    # Unsloth: "--spec-draft-n-max 2 es el mejor punto de partida, pero no lo
-    # des por óptimo: prueba del 1 al 6". Con 4 se midió 49-88% de aceptación
-    # en esta máquina.
-    local mtp_nmax="${ROPERO_GEMMA_MTP_NMAX:-4}"
+    # ---- MTP: profundidad y umbral del drafter ----
+    # n-max: cuántos tokens puede especular el drafter de golpe.
+    #   Con aceptación alta (56.9% en la línea base), subir a 8 amortiza
+    #   mejor cada forward pass del modelo principal (el cuello de botella
+    #   real cuando la KV vive en RAM). Con n-max=4, output esperado por
+    #   forward ≈ 3.36 tokens; con n-max=8 y misma aceptación ≈ 4.3.
+    # p-min: umbral de confianza bajo el cual el drafter deja de especular.
+    #   0.0 = nunca se corta (siempre llega a n-max). 0.6 = se corta cuando
+    #   su confianza cae, ahorrando drafts que acabarían rechazados.
+    # n-min: mínimo de tokens que siempre intenta especular.
+    local mtp_nmax="${ROPERO_GEMMA_MTP_NMAX:-8}"
+    local mtp_nmin="${ROPERO_GEMMA_MTP_NMIN:-1}"
+    local mtp_pmin="${ROPERO_GEMMA_MTP_PMIN:-0.6}"
 
     local -a args=(
         # ---- GPU offload ----
         # ngl 99: todos los layers en GPU (30 layers + MTP head)
-        # Si hay OOM por el MoE, bajar a 60 o subir --n-cpu-moe
         --n-gpu-layers 99
         # La KV cache se QUEDA EN LA RAM, no en la VRAM. No es un descuido:
         # a 131072 en q8_0 la KV son 1139 MiB, y con ella dentro la tarjeta
         # (15,9 GiB útiles) no llega. En RAM sí cabe, y el penalty medido es
         # bajo: 104-140 tok/s con la GPU al 95% de ocupación.
-        --no-kv-offload
+        --kv-unified
         --n-cpu-moe "$n_cpu_moe"
         # ---- Atención ----
         --flash-attn on
@@ -157,9 +149,9 @@ get_model_args_gemma() {
         --spec-type draft-mtp
         --model-draft "$GEMMA_MTP"
         --n-gpu-layers-draft -1                        # auto-fit del draft
-        --spec-draft-n-max "$mtp_nmax"                 # Gemma: 2-7 óptimo
-        --spec-draft-n-min 1
-        --spec-draft-p-min 0.0                         # sin umbral de probabilidad
+        --spec-draft-n-max "$mtp_nmax"                 # 8: más profundidad
+        --spec-draft-n-min "$mtp_nmin"
+        --spec-draft-p-min "$mtp_pmin"                 # 0.6: corta cuando baja confianza
         --spec-draft-backend-sampling
 
         # ---- Modelo / carga ----
@@ -188,10 +180,7 @@ get_model_args_gemma() {
     # ---- Multimodal (visión): SOLO si se pide ----
     # El mmproj son 1139 MiB de VRAM. El 95% de lo que se le pide a un modelo
     # de texto no lo necesita, así que por defecto el servidor arranca SIN
-    # torre de visión: 14593 MiB en vez de 15732, y el hueco de VRAM se
-    # dedicado al contexto o a más expertos MoE en GPU.
-    #
-    # Con --vision se añade el projector y el modelo lee imágenes.
+    # torre de visión: 14593 MiB en vez de 15732.
     if [[ "${ROPERO_MODEL_FLAG_VISION:-0}" == "1" ]]; then
         if [[ ! -s "$GEMMA_MMPROJ" ]]; then
             echo "ERROR: --vision pide el proyector de visión y no está en disco:" >&2
@@ -218,24 +207,21 @@ get_model_args_gemma() {
 #
 # 2. MTP acceptance rate bajo (<30%):
 #      - Verificar log "draft acceptance rate"
-#      - Probar --spec-draft-n-max 2 (menos especulación, mayor tasa)
-#      - Probar --spec-draft-n-max 6 (más especulación si la tasa es alta)
-#      - o ROPERO_GEMMA_MTP_NMAX=2 ropero gemma
+#      - Probar ROPERO_GEMMA_MTP_NMAX=4 (menos especulación)
+#      - o ROPERO_GEMMA_MTP_PMIN=0.0 (sin umbral, comportamiento antiguo)
+#      - Con n-max=8 y p-min=0.6 deberías ver acceptance por token similar
+#        al baseline (aunque la media por draft baje); lo que importa es
+#        tokens generados / tokens totales producidos por el modelo principal.
 #
 # 3. Respuestas cortan antes de tiempo:
 #      - Aumentar --n-predict (actual 16384)
-#      - Ojo: con el razonamiento activo, el CoT se come el presupuesto. Una
-#        respuesta corta con --n-predict corto puede devolver content vacío y
-#        el CoT entero en reasoning_content.
+#      - Ojo: con el razonamiento activo, el CoT se come el presupuesto.
 #
 # 4. Multimodal no funciona:
 #      - Falta el flag: `ropero gemma` arranca SIN visión a propósito.
 #        Para leer imágenes: `ropero gemma --vision`.
 #      - Verificar que el mmproj existe (gemma-4-26B-A4B-it-mmproj-BF16.gguf)
 #      - Comprobar log "[mtmd] vision model loaded"
-#      - Con el mmproj cargado, el budget de tokens de imagen se recorta al
-#        n_ubatch: con -ub 1024 da hasta 1024 tokens de imagen (el modelo
-#        quiere 1120).
 #
 # 5. Si quieres 256k context:
 #      - ROPERO_GEMMA_CTX=262144 ropero gemma
@@ -243,6 +229,15 @@ get_model_args_gemma() {
 #
 # 6. La VRAM no cuadra:
 #      - Medido con esta config (texto + visión): 15732 MiB de 16303.
-#        Sin visión: ~14593 MiB. Sin --n-cpu-moe 5: revienta (no caben los
-#        expertos + la KV + el mmproj).
+#        Sin visión: ~14593 MiB. Sin --n-cpu-moe 5: revienta.
+#
+# 7. Barrido de MTP (si quieres exprimir más):
+#      for nmax in 4 6 8 10; do
+#        for pmin in 0.0 0.4 0.6 0.8; do
+#          ROPERO_GEMMA_MTP_NMAX=$nmax ROPERO_GEMMA_MTP_PMIN=$pmin \
+#            ropero gemma 2>&1 | grep "draft acceptance"
+#        done
+#      done
+#      Quédate con el par (nmax, pmin) que dé mayor ratio
+#      tokens_generados / tiempo_total en tu prompt típico.
 # ==============================================================================
