@@ -1,12 +1,12 @@
 # =============================================================================
-# agents-a1-35b — InternScience/Agents-A1-Q4_K_M-GGUF
+# agents-a1-4b — InternScience/Agents-A1-4B-Q8_0-GGUF
 # =============================================================================
 #
-# El Agents-A1 grande, en Q4_K_M. Misma familia y misma calibración que el 4B
-# (agents-a1-4b), con el peso que le corresponde:
+# Modelo VLM (vision-language) de 4B en Q8_0. Es la versión pequeña del
+# Agents-A1: sirve para lo mismo (razonar + ver imágenes) con mucho menos peso.
 #
-#   - GGUF principal : Agents-A1-Q4_K_M.gguf     (21.167 GB)
-#   - mmproj (visión): Agents-A1-mmproj.gguf     (0.899 GB)
+#   - GGUF principal : Agents-A1-4B-Q8_0.gguf   (4.482 GB)
+#   - mmproj (visión): Agents-A1-4B-mmproj.gguf  (0.672 GB)
 #   - Contexto       : 262144 tokens
 #
 # Sampling recomendado por la ficha oficial del modelo:
@@ -16,27 +16,27 @@
 # El proyector de visión es un flag: sin `--vision` el servidor arranca sin
 # torre de visión (menos VRAM) y sólo lee texto.
 #
-# El override del contexto es el canónico ROPERO_AGENTS_A1_35B_CTX.
+# El override del contexto es el canónico ROPERO_AGENTS_A1_4B_CTX.
 # =============================================================================
 
 [model]
-name    = "agents-a1-35b"
+name    = "agents-tiny"
 engine  = "llama-server"
 context = 262144
 
 [files]
-gguf   = "Agents-A1-Q4_K_M.gguf"
-mmproj = "Agents-A1-mmproj.gguf"
+gguf   = "Agents-A1-4B-Q8_0.gguf"
+mmproj = "Agents-A1-4B-mmproj.gguf"
 
 [download]
-repo = "InternScience/Agents-A1-Q4_K_M-GGUF"
-file = "Agents-A1-Q4_K_M.gguf"
-size = "21.167 GB"
+repo = "InternScience/Agents-A1-4B-Q8_0-GGUF"
+file = "Agents-A1-4B-Q8_0.gguf"
+size = "4.482 GB"
 
 [download.aux.mmproj]
-file = "Agents-A1-mmproj.gguf"
-name = "Agents-A1-mmproj.gguf"
-size = "0.899 GB"
+file = "Agents-A1-4B-mmproj.gguf"
+name = "Agents-A1-4B-mmproj.gguf"
+size = "0.672 GB"
 
 [levels]
 list    = ["low", "medium", "high"]

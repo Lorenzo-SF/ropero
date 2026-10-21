@@ -59,7 +59,7 @@ KNOWN_FORMATS = ("gguf", "safetensors")
 
 # Ficheros que [files] puede declarar. Los placeholders ${gguf}, ${mtp} y
 # ${mmproj} apuntan a estos tres.
-FILE_KEYS = ("gguf", "mtp", "mmproj")
+FILE_KEYS = ("gguf", "mtp", "mmproj", "chat_template")
 
 
 # ===========================================================================
@@ -683,6 +683,8 @@ def _resolve_token(token, ctx):
         return ctx["mtp"]
     if token == "mmproj":
         return ctx["mmproj"]
+    if token == "chat_template":
+        return ctx["chat_template"]
     if token == "ctx":
         return "" if ctx["ctx"] is None else str(ctx["ctx"])
     if token == "value":
@@ -791,21 +793,25 @@ def build_argv(loaded, level=None, flags=(), options=()):
         "gguf": "",
         "mtp": "",
         "mmproj": "",
+        "chat_template": "",
         "ctx": effective_context(model),
         "value": "",
     }
     gguf_dir = _gguf_dir()
+    model_dir = _clean(model.get("name", "")) or "model"
     if files.get("gguf"):
         # ROPERO_<NOMBRE>_GGUF permite apuntar el modelo a otra cuantización
         # del MISMO repo sin tocar el TOML. Antes vivía en el MODEL_GGUF del
         # script ("MODEL_GGUF=${ROPERO_GPTOSS_GGUF:-gpt-oss-...}"); ahora el
         # override es genérico y lo declara el nombre del modelo.
         gguf_name = os.environ.get(gguf_env_name(model.get("name", ""))) or files["gguf"]
-        ctx["gguf"] = os.path.join(gguf_dir, gguf_name)
+        ctx["gguf"] = os.path.join(gguf_dir, model_dir, gguf_name)
     if files.get("mtp"):
-        ctx["mtp"] = os.path.join(gguf_dir, files["mtp"])
+        ctx["mtp"] = os.path.join(gguf_dir, model_dir, files["mtp"])
     if files.get("mmproj"):
-        ctx["mmproj"] = os.path.join(gguf_dir, files["mmproj"])
+        ctx["mmproj"] = os.path.join(gguf_dir, model_dir, files["mmproj"])
+    if files.get("chat_template"):
+        ctx["chat_template"] = os.path.join(gguf_dir, model_dir, files["chat_template"])
 
     argv = []
 
@@ -1015,6 +1021,9 @@ def build_record(path, engine_dir, origin):
         # pueda hacer por sorpresa. El dato va en el TOML, no en el shell.
         "1" if download.get("manual") else "0",
         os.path.abspath(path),
+        # `chat_template`: fichero auxiliar (plantilla Jinja) que se descarga
+        # con el bundle y se referencia desde [args] con ${chat_template}.
+        aux_field("chat_template"),
     ]
     return fields
 
@@ -1156,7 +1165,7 @@ def validate_model(path, engine_dir, origin):
         if download.get("name") and os.path.isabs(str(download.get("name"))):
             bad("[download].name debe ser un nombre de fichero, no una ruta absoluta")
         aux = download.get("aux") or {}
-        for kind in ("mtp", "mmproj"):
+        for kind in ("mtp", "mmproj", "chat_template"):
             cfg = aux.get(kind)
             if not cfg:
                 continue

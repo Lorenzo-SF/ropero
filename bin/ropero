@@ -398,7 +398,7 @@ _model_port() {
     # El nombre del env se normaliza con guiones bajos: "agents-a1-4b" → ROPERO_AGENTS_A1_4B_PORT.
     # Sin esta normalización, un modelo con guion produce un nombre de variable
     # INVÁLIDO ("ROPERO_AGENTS-A1-4B_PORT") y bash se queja en cada consulta.
-    local env_name="ROPERO_$(printf '%s' "${mk//-/_}" | tr '[:lower:]' '[:upper:]')_PORT"
+    local env_name="ROPERO_$(printf '%s' "${mk//-/_}" | tr -- '.' '_' | tr '[:lower:]' '[:upper:]')_PORT"
     local env_val="${!env_name:-}"
     local p="${MODEL_PORT[$mk]:-}"
 

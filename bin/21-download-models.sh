@@ -225,7 +225,7 @@ _ropero_cat_build() {
                 key="${MODEL_GGUF[$m]:-}"
                 [[ -n "$key" ]] || continue
                 _cat_gguf "$key" "$repo" "${MODEL_FILE[$m]:-$key}" \
-                          "${MODEL_ALIAS[$m]:-$m}" "${MODEL_SIZE[$m]:-?}" "" "$key"
+                          "${MODEL_ALIAS[$m]:-$m}" "${MODEL_SIZE[$m]:-?}" "$GGUF_DIR/${MODEL_ALIAS[$m]:-$m}" "$key"
                 ;;
         esac
 
@@ -237,6 +237,7 @@ _ropero_cat_build() {
         aux_spec=""
         aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MTP[$m]:-}" "MTP")"
         aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MMPROJ[$m]:-}" "mmproj")"
+        aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_CHAT_TEMPLATE[$m]:-}" "chat_template")"
         if [[ -n "$aux_spec" ]]; then
             _cat_aux "$key" "$aux_spec"
         fi

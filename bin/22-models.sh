@@ -212,6 +212,7 @@ _ropero_register_alias() {
     MODEL_SIZE["$a_key"]="$size"
     MODEL_AUX_MTP["$a_key"]="$aux_mtp"
     MODEL_AUX_MMPROJ["$a_key"]="$aux_mmproj"
+    MODEL_AUX_CHAT_TEMPLATE["$a_key"]="${MODEL_AUX_CHAT_TEMPLATE[$key]:-}"
     MODEL_MANUAL["$a_key"]="$manual"
     MODEL_MIN_RAM_GB["$a_key"]="${MODEL_MIN_RAM_GB[$key]:-}"
     MODEL_RAM_FRACTION["$a_key"]="${MODEL_RAM_FRACTION[$key]:-}"
@@ -246,8 +247,8 @@ ropero_models_load() {
         MODEL_ENGINE MODEL_ALIAS MODEL_ALIAS_TARGET MODEL_ALIAS_LEVEL
         MODEL_CTX MODEL_PORT MODEL_FORMAT MODEL_PATH MODEL_GGUF MODEL_MTP
         MODEL_MMPROJ MODEL_LEVELS MODEL_LEVEL_DEFAULT MODEL_FLAGS MODEL_OPTIONS
-        MODEL_REPO MODEL_FILE MODEL_DEST MODEL_SIZE MODEL_EXCLUDES
-        MODEL_AUX_MTP MODEL_AUX_MMPROJ MODEL_TOML MODEL_MANUAL
+        MODEL_REPO MODEL_FILE MODEL_DEST MODEL_SIZE MODEL_EXCLUDES MODEL_DL
+        MODEL_AUX_MTP MODEL_AUX_MMPROJ MODEL_AUX_CHAT_TEMPLATE MODEL_TOML MODEL_MANUAL
         MODEL_MIN_RAM_GB MODEL_RAM_FRACTION MODEL_KV_KIB_PER_TOKEN
         ROPERO_RETIRED ROPERO_RETIRED_PATH ROPERO_RETIRED_NAME ROPERO_RETIRED_GGUF
     )
@@ -298,7 +299,7 @@ ropero_models_load() {
     local -a fields=()
     local name engine alias origin engine_dir ctx port fmt path gguf mtp mmproj
     local repo file dest size excludes levels level_default flags options aliases
-    local aux_mtp aux_mmproj args_b64 opts_b64 limits_b64 manual toml_path
+    local aux_mtp aux_mmproj aux_chat_template args_b64 opts_b64 limits_b64 manual toml_path
     local key a_key a_name a_level pair
     while IFS=$'\x1f' read -r -a fields; do
         [[ "${fields[0]:-}" == "ROPERO_MC_DUMP_VERSION=1" ]] && continue
@@ -313,6 +314,7 @@ ropero_models_load() {
         aliases="${fields[21]}";      aux_mtp="${fields[22]}";    aux_mmproj="${fields[23]}"
         args_b64="${fields[24]}";     opts_b64="${fields[25]}";   limits_b64="${fields[26]}"
         manual="${fields[27]}";       toml_path="${fields[28]}"
+        aux_chat_template="${fields[29]:-}"
 
         # La key de los arrays normaliza los guiones a guiones bajos: es lo que
         # permite que `ropero agents-a1-4b` y `ropero agents_a1_4b` sean el
@@ -353,6 +355,7 @@ ropero_models_load() {
         MODEL_EXCLUDES["$key"]="$excludes"
         MODEL_AUX_MTP["$key"]="$aux_mtp"
         MODEL_AUX_MMPROJ["$key"]="$aux_mmproj"
+        MODEL_AUX_CHAT_TEMPLATE["$key"]="$aux_chat_template"
         MODEL_TOML["$key"]="$toml_path"
         # Descarga manual: el modelo existe pero `ropero install models` no lo
         # ofrece (checkpoints de más de 100 GB). Es un dato del TOML.
@@ -466,7 +469,7 @@ ropero_model_ctx() {
     local ctx="${MODEL_CTX[$key]:-}"
     local env_name
     key="${key//-/_}"
-    env_name="ROPERO_$(printf '%s' "$key" | tr '[:lower:]' '[:upper:]')_CTX"
+    env_name="ROPERO_$(printf '%s' "$key" | tr '.-' '__' | tr '[:lower:]' '[:upper:]')_CTX"
     printf '%s' "${!env_name:-$ctx}"
 }
 

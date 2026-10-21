@@ -1,0 +1,70 @@
+# =============================================================================
+# qwopus-3.6-coder — Qwopus3.6 35B-A3B Coder (MXFP4 MOE Hybrid Imatrix)
+# =============================================================================
+
+[model]
+name    = "qwopus"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf          = "Qwopus3.6-35B-A3B-Coder-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
+chat_template = "chat_template.jinja"
+
+[download]
+repo = "jashepp/Qwopus3.6-35B-A3B-Coder-MXFP4_MOE_Hybrid-Imatrix-GGUF"
+file = "Qwopus3.6-35B-A3B-Coder-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
+size = "20.7 GB"
+
+[download.aux.chat_template]
+file = "chat_template.jinja"
+name = "chat_template.jinja"
+size = "0.01 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "medium"
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--jinja",
+    "--chat-template-file", "${chat_template}",
+
+    "--n-cpu-moe", "18",
+
+    "--temp", "0.60",
+    "--top-k", "40",
+    "--top-p", "0.95",
+    "--min-p", "0.05",
+
+    "--dry-multiplier", "0.8",
+    "--dry-base", "1.75",
+    "--dry-allowed-length", "5",
+    "--dry-penalty-last-n", "1024",
+    "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
+
+    "--samplers", "min_p;top_k;top_p;temp;dry",
+
+    "--reasoning", "off",
+    "--chat-template-kwargs", '{"enable_thinking": false}',
+
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--kv-unified",
+
+    "--n-predict", "8192",
+    "--batch-size", "2048",
+    "--ubatch-size", "256",
+    "--parallel", "1",
+    "--load-mode", "none",
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }
