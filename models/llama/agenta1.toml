@@ -1,5 +1,5 @@
 [model]
-name    = "agents"
+name    = "agenta1"
 engine  = "llama-server"
 context = 262144
 
