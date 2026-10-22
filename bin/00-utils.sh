@@ -1,3 +1,9 @@
+# Cargar estilos pre-generados (fallback sin alaja)
+if [[ -f "${MODULES_DIR:-$SCRIPT_DIR}/_styles.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${MODULES_DIR:-$SCRIPT_DIR}/_styles.sh"
+fi
+
 #!/usr/bin/env bash
 # =============================================================================
 # 00-utils.sh — réplica mínima de setup 00-utils.sh para ropero (spec migración)
@@ -6,7 +12,7 @@
 # =============================================================================
 
 _ropero_log() { printf '%s\n' "$*" >&2; }
-ropero_info() { _ropero_log "  [i] $*"; }
+ropero_info() { _ropero_log "${_STYLE_INFO//\{MSG\}/$*}"; }
 
 # Contadores del contrato. Se incrementan en los mismos helpers que ya usaba
 # todo ropero, así que `--install` y `--check` traen su recuento sin tocar las
@@ -14,9 +20,9 @@ ropero_info() { _ropero_log "  [i] $*"; }
 # los pone a cero al entrar en cada comando del contrato; fuera de ellos los
 # valores no se leen y no molestan.
 ROPERO_OK=0; ROPERO_WARN=0; ROPERO_FAIL=0
-ropero_ok()   { _ropero_log "  [✓] $*"; ROPERO_OK=$((ROPERO_OK+1)); }
+ropero_ok()   { _ropero_log "${_STYLE_SUCCESS//\{MSG\}/$*}"; ROPERO_OK=$((ROPERO_OK+1)); }
 ropero_warn() { _ropero_log "  [!] $*"; ROPERO_WARN=$((ROPERO_WARN+1)); }
-ropero_err()  { _ropero_log "  [✗] $*"; ROPERO_FAIL=$((ROPERO_FAIL+1)); }
+ropero_err()  { _ropero_log "${_STYLE_ERROR//\{MSG\}/$*}"; ROPERO_FAIL=$((ROPERO_FAIL+1)); }
 
 ropero_counters_reset() { ROPERO_OK=0; ROPERO_WARN=0; ROPERO_FAIL=0; }
 

@@ -94,7 +94,7 @@ case "${1:-}" in
         #
         # El formato del aux es "repo|ruta/en/repo|nombre final|tamaño|etiqueta".
         _ropero_cat_build
-        _cat_gguf "sintetico.gguf" "unsloth/ejemplo" "sintetico.gguf" "Sintetico" "1 MB"
+        _cat_gguf "sintetico.gguf" "unsloth/ejemplo" "sintetico.gguf" "Sintetico" "1 MB" "$GGUF_DIR/gemma"
         _cat_aux "sintetico.gguf" \
             "unsloth/ejemplo|MTP/mtp-ejemplo-Q4_0.gguf|mtp-ejemplo-Q4_0.gguf|1.37 GB|MTP de ejemplo"
         idx=$(_ropero_cat_index "sintetico.gguf") || exit
@@ -232,8 +232,8 @@ class BundleContract(unittest.TestCase):
         self.env['QA_FAIL'] = MAIN
         self.assertNotEqual(self.run_ropero('qa-fetch', 'gemma', ok=False).returncode, 0)
         self.assertEqual(self.transfers(), [MAIN])
-        self.assertFalse((self.models / PROJ).exists())
-        self.assertFalse((self.models / MTP).exists())
+        self.assertFalse((self.models / 'gemma' / PROJ).exists())
+        self.assertFalse((self.models / 'gemma' / MTP).exists())
 
     def test_declined_primary_does_not_download_auxiliaries(self) -> None:
         del self.env['AUTO_YES'], self.env['CI']
@@ -297,7 +297,7 @@ class BundleContract(unittest.TestCase):
         self.assertEqual(argv[argv.index('--cache-type-k') + 1], 'q8_0')
         self.assertEqual(argv[argv.index('--cache-type-v') + 1], 'q8_0')
         self.assertEqual(argv[argv.index('--spec-type') + 1], 'draft-mtp')
-        self.assertEqual(argv[argv.index('--model-draft') + 1], str(self.models / MTP))
+        self.assertEqual(argv[argv.index('--model-draft') + 1], str(self.models / 'gemma' / MTP))
         self.assertIn('--jinja', argv)
         self.assertEqual(float(argv[argv.index('--temp') + 1]), 1.0)
         self.assertEqual(argv[argv.index('--top-p') + 1], '0.95')
@@ -311,7 +311,7 @@ class BundleContract(unittest.TestCase):
         self.run_ropero('gemma', '--vision')
         argv = self.argv()
         self.assertEqual(argv.count('--mmproj'), 1)
-        self.assertEqual(argv[argv.index('--mmproj') + 1], str(self.models / PROJ))
+        self.assertEqual(argv[argv.index('--mmproj') + 1], str(self.models / 'gemma' / PROJ))
         self.assertEqual(argv[argv.index('--n-cpu-moe') + 1], '5')
 
         # 3) --n-cpu-moe ajusta los expertos MoE en la CPU, con y sin visión.
@@ -344,7 +344,8 @@ class BundleContract(unittest.TestCase):
     def test_alias_carries_its_default_level(self) -> None:
         # `ropero verifier` es `ropero gptoss --high`: el alias público lleva
         # su nivel por defecto. Y el flag explícito gana sobre el del alias.
-        (self.models / 'gpt-oss-20b-UD-Q8_K_XL.gguf').write_bytes(b'fake gptoss')
+        (self.models / 'gptoss').mkdir(parents=True, exist_ok=True)
+        (self.models / 'gptoss' / 'gpt-oss-20b-UD-Q8_K_XL.gguf').write_bytes(b'fake gptoss')
         self.run_ropero('verifier')
         argv = self.argv()
         kwargs = argv[argv.index('--chat-template-kwargs') + 1]
@@ -385,11 +386,11 @@ class BundleContract(unittest.TestCase):
         before = generic.stat()
         self.run_ropero('qa-fetch', QMAIN)
         self.assertCountEqual(self.transfers(), QREMOTES)
-        self.assertTrue((self.models / QMAIN).is_file())
-        self.assertTrue((self.models / QMTP).is_file())
-        self.assertTrue((self.models / QPROJ).is_file())
+        self.assertTrue((self.models / 'qwen' / QMAIN).is_file())
+        self.assertTrue((self.models / 'qwen' / QMTP).is_file())
+        self.assertTrue((self.models / 'qwen' / QPROJ).is_file())
         # El MTP venía de MTP/ en el repo y ha acabado en la raíz.
-        self.assertFalse((self.models / 'MTP').exists())
+        self.assertFalse((self.models / 'qwen' / 'MTP').exists())
         self.assertEqual(generic.read_bytes(), b'unrelated projector')
         self.assertEqual(generic.stat().st_ino, before.st_ino)
 

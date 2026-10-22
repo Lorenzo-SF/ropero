@@ -477,11 +477,19 @@ _ropero_cat_download() {
     local i="$1"
     _ropero_cat_build
 
+    local _name="${_ROPERO_CAT_NAME[$i]:-}"
+    ropero_info "$_name: descargando..."
+
     if [[ "${_ROPERO_CAT_KIND[$i]}" == "safetensors" ]]; then
-        ropero_download_safetensors \
+        if ropero_download_safetensors \
             "${_ROPERO_CAT_REPO[$i]}" "${_ROPERO_CAT_ARG2[$i]}" "${_ROPERO_CAT_SIZE[$i]}" \
-            "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_EXCLUDES[$i]}"
-        return $?
+            "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_EXCLUDES[$i]}"; then
+            ropero_ok "$_name: 100% completado"
+            return 0
+        else
+            ropero_err "$_name: error en la descarga"
+            return 1
+        fi
     fi
 
     local dest_dir dest_name final
@@ -489,19 +497,27 @@ _ropero_cat_download() {
     dest_name="$(_ropero_cat_dest_name "$i")"
     final="$dest_dir/$dest_name"
 
-    ropero_download_gguf \
+    if ! ropero_download_gguf \
         "${_ROPERO_CAT_REPO[$i]}" "${_ROPERO_CAT_ARG2[$i]}" "${_ROPERO_CAT_NAME[$i]}" \
-        "${_ROPERO_CAT_SIZE[$i]}" "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_DNAME[$i]}" || return 1
-
-    # El descargador devuelve 0 también cuando el usuario RECHAZA la descarga.
-    # Sin este check, un "no" del usuario se tomaría por un bundle descargado
-    # y los aux se bajarían igualmente (252 MB + 1.19 GB que nadie pidió).
-    if [[ ! -s "$final" ]]; then
-        ropero_err "${_ROPERO_CAT_NAME[$i]}: el fichero principal ($dest_name) no está en disco"
+        "${_ROPERO_CAT_SIZE[$i]}" "${_ROPERO_CAT_DEST[$i]}" "${_ROPERO_CAT_DNAME[$i]}"; then
+        ropero_err "$_name: error en la descarga"
         return 1
     fi
 
-    _ropero_cat_download_aux "$i"
+    # El descargador devuelve 0 también cuando el usuario RECHAZA la descarga.
+    if [[ ! -s "$final" ]]; then
+        ropero_err "${_ROPERO_CAT_NAME[$i]}: el fichero principal ($dest_name) no está en disco"
+        ropero_err "$_name: error en la descarga"
+        return 1
+    fi
+
+    if _ropero_cat_download_aux "$i"; then
+        ropero_ok "$_name: 100% completado"
+        return 0
+    else
+        ropero_err "$_name: error en la descarga"
+        return 1
+    fi
 }
 
 # -----------------------------------------------------------------------------

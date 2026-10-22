@@ -1,0 +1,47 @@
+# =============================================================================
+# qwen3-coder-next — Qwen3 Coder Next (UD-IQ2_M, unsloth)
+# =============================================================================
+
+[model]
+name    = "qwen_next"
+engine  = "llama-server"
+context = 32768
+
+[files]
+gguf = "Qwen3-Coder-Next-UD-Q2_K_XL.gguf"
+
+[download]
+repo = "unsloth/Qwen3-Coder-Next-GGUF"
+file = "Qwen3-Coder-Next-UD-Q2_K_XL.gguf"
+size = "26.8 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "medium"
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--jinja",
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "40",
+    "--min-p", "0.01",
+    "--repeat-penalty", "1.0",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--kv-unified",
+    "--n-predict", "8192",
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }
