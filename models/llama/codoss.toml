@@ -1,0 +1,74 @@
+# =============================================================================
+# codoss — gpt-oss-20b coder (EXPERIMENTAL)
+# =============================================================================
+
+[model]
+name    = "codoss"
+engine  = "llama-server"
+context = 131072
+
+[files]
+gguf = "gpt-oss-20b-code.gguf"
+
+[download]
+repo = "xCloudinfo/gpt-oss-20b-Code-xCloud-GGUF"
+file = "gpt-oss-20b-code.gguf"
+size = "13.2 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "medium"
+
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--temp", "1.0",
+    "--min-p", "0.0",
+    "--top-p", "1.0",
+    "--top-k", "0",
+    "--threads", "12",
+    "--threads-batch", "24",
+    "--reasoning-format", "auto",
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--n-predict", "16384",
+    "--slot-prompt-similarity", "0.2",
+    "--keep", "8192",
+    "--chat-template-kwargs", "{'reasoning_effort': '${env:ROPERO_CODOSS_REASONING:-medium}'}",
+    "--cache-type-k", "${env:ROPERO_CODOSS_KV:-f16}",
+    "--cache-type-v", "${env:ROPERO_CODOSS_KV:-f16}",
+    "--jinja",
+    "--kv-unified",
+    "--load-mode", "auto",
+]
+
+[args.level.low]
+reasoning_effort = "low"
+base = [
+    "--spec-type", "ngram-simple",
+    "--spec-ngram-simple-size-n", "6",
+    "--spec-ngram-simple-size-m", "16",
+    "--spec-draft-n-min", "1",
+    "--spec-draft-n-max", "2",
+]
+
+[args.level.medium]
+reasoning_effort = "medium"
+base = [
+    "--spec-type", "ngram-simple",
+    "--spec-ngram-simple-size-n", "12",
+    "--spec-ngram-simple-size-m", "48",
+    "--spec-draft-n-min", "1",
+    "--spec-draft-n-max", "3",
+]
+
+[args.level.high]
+reasoning_effort = "high"
+base = [
+    "--spec-type", "ngram-simple",
+    "--spec-ngram-simple-size-n", "8",
+    "--spec-ngram-simple-size-m", "32",
+    "--spec-draft-n-min", "1",
+    "--spec-draft-n-max", "4",
+]

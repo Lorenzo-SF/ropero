@@ -979,7 +979,7 @@ AIRLLM_EXTRA_FLAGS = {
 
 
 def apply_extra_args(args):
-    extra = list(getattr(args, "extra_arg", None) or [])
+    extra = [x for x in (getattr(args, "extra_arg", None) or []) if x]
     if not extra:
         return
 
@@ -1240,7 +1240,7 @@ def main() -> int:
                     help="nombre al que se reescribe el campo 'model' del body "
                          "(vacío = el que conoce el backend: el id de ropero para "
                          "tensorrt, el TAG para flm)")
-    ap.add_argument("--extra-arg", action="append", default=[],
+    ap.add_argument("--extra-arg", action="append", default=[], nargs="?",
                     help="argumento extra para el sub-proceso backend (repetible)")
     ap.set_defaults(backend_extra_args=[])    # Sampling del backend airllm (no aplica a los proxied).
     ap.add_argument("--max-new-tokens", type=int, default=4096)

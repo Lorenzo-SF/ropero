@@ -1,0 +1,27 @@
+# =============================================================================
+# gpt-oss-120b — GPT-OSS 120B (AirLLM, unsloth)
+# =============================================================================
+
+[model]
+name    = "gpt-oss-120b"
+engine  = "airllm"
+context = 131072
+format  = "safetensors"
+path    = "gpt-oss-120b"
+
+[files]
+
+[download]
+repo     = "unsloth/gpt-oss-120b"
+file     = "gpt-oss-120b"
+size     = "0 GB"
+excludes = ["original/*"]
+manual   = false
+
+[args]
+base = [
+    "--compression", "4bit",
+    "--max-new-tokens", "4096",
+    "--layer-shards", "${env:ROPERO_GPT_OSS_120B_SHARDS:-$HOME/models/airllm-shards}",
+]
+

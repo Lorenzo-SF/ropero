@@ -1,57 +1,18 @@
 # =============================================================================
 # gptoss — gpt-oss-20b (UD-Q8_K_XL) con razonamiento por nivel
 # =============================================================================
-#
-# UN modelo, el nivel de razonamiento va por argumento:
-#
-#   ropero gptoss              → medium (el default)
-#   ropero gptoss --high       → razonamiento alto
-#   ropero gptoss --medium     → razonamiento medio
-#   ropero gptoss --low        → razonamiento bajo
-#
-# Los alias públicos siguen funcionando, cada uno con su nivel:
-#
-#   ropero verifier            → gptoss --high
-#   ropero designer            → gptoss --medium
-#
-# ── EL GGUF: UD-Q8_K_XL ─────────────────────────────────────────────────────
-#   MXFP4  12,1 GB → lo usaban antes gptoss_high/medium/low
-#   Q8_K_XL 13,2 GB → ESTE
-#
-# El MXFP4 no está descargado, así que los scripts antiguos apuntaban a un
-# fichero inexistente. Con este GGUF como modelo único, el "seguro frío" deja
-# de ser un segundo modelo distinto.
-#
-# ── Y EL CONTEXTO BAJA A 65536 POR ESO ───────────────────────────────────────
-# gpt-oss-20b: 24 capas, 8 cabezas KV, head_dim 64.
-#   KV por token = 24 × 8 × 64 × 2 (K y V) = 24.576 elementos
-#   en q8_0 (1,0625 B/elem) = 26.112 B/token
-#
-#   pesos Q8_K_XL ....... 13,20 GB = 12,29 GiB
-#   KV q8_0 @ 65536 ..... 1,71 GB  = 1,59 GiB
-#   KV q8_0 @ 131072 .... 3,42 GB  = 3,19 GiB  ← con el MXFP4 (11,3 GiB) ya
-#                                                   no cabía en 16 GB
-#
-# Si necesitas 128K: ROPERO_GPTOSS_CTX=131072 ROPERO_GPTOSS_KV=q4_0 (el KV en
-# q4_0 son 1,7 GB y entra, pero es un trueque de calidad en la cache).
-#
-# El override del contexto es ROPERO_GPTOSS_CTX (el nombre canónico
-# ROPERO_<MODELO>_CTX). El override del GGUF (ROPERO_GPTOSS_GGUF) ya no
-# existe: [files].gguf es el nombre final en disco y no se puede cambiar por
-# entorno; para usar otro GGUF hay que editar este fichero.
-# =============================================================================
 
 [model]
 name    = "gptoss"
 engine  = "llama-server"
-context = 65536
+context = 131072
 
 [files]
-gguf = "gpt-oss-20b-UD-Q8_K_XL.gguf"
+gguf = "openai_gpt-oss-20b-MXFP4.gguf"
 
 [download]
-repo = "unsloth/gpt-oss-20b-GGUF"
-file = "gpt-oss-20b-UD-Q8_K_XL.gguf"
+repo = "bartowski/openai_gpt-oss-20b-GGUF-MXFP4-Experimental"
+file = "openai_gpt-oss-20b-MXFP4.gguf"
 size = "13.2 GB"
 
 [levels]
@@ -62,16 +23,13 @@ default = "medium"
 verifier = "high"
 designer = "medium"
 
-# El nivel no es un flag más: es lo que cambia la calibración. La tabla de
-# n-gramas por nivel (la que hace el decoding especulativo por n-gramas) es
-# la MISMA que usaba el .sh, sin cambios en los valores.
 [args]
 base = [
     "--n-gpu-layers", "99",
-    "--temp", "0.8",
-    "--top-k", "40",
-    "--min-p", "0.05",
-    "--repeat-penalty", "1.1",
+    "--temp", "1.0",
+    "--min-p", "0.0",
+    "--top-p", "1.0",
+    "--top-k", "0",
     "--threads", "12",
     "--threads-batch", "24",
     "--reasoning-format", "auto",
@@ -80,19 +38,14 @@ base = [
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--cache-type-k", "${env:ROPERO_GPTOSS_KV:-q8_0}",
-    "--cache-type-v", "${env:ROPERO_GPTOSS_KV:-q8_0}",
+    "--chat-template-kwargs", "{'reasoning_effort': '${env:ROPERO_GPTOSS_REASONING:-medium}'}",
+    "--cache-type-k", "${env:ROPERO_GPTOSS_KV:-f16}",
+    "--cache-type-v", "${env:ROPERO_GPTOSS_KV:-f16}",
     "--jinja",
     "--kv-unified",
     "--load-mode", "auto",
 ]
 
-# Los n-gramas no son "drafting" como el MTP: el modelo propone continuaciones
-# de texto que ya ha visto y el objetivo las acepta o las rechaza. Cuanto más
-# largo es el CoT, más oportunidades hay de que el texto se repita (fórmulas,
-# imports, bloques repetidos) — y ahí es donde el n-gram pega. Por eso el nivel
-# alto usa un n más corto y ventana más larga: en código denso se repite mucho,
-# pero en trozos cortos.
 [args.level.low]
 reasoning_effort = "low"
 base = [
@@ -103,7 +56,6 @@ base = [
     "--spec-draft-n-max", "2",
 ]
 
-# Balanceado para chat convencional y flujo asistencial estándar
 [args.level.medium]
 reasoning_effort = "medium"
 base = [
@@ -114,8 +66,6 @@ base = [
     "--spec-draft-n-max", "3",
 ]
 
-# Razonamiento alto: bloques extensos, código denso o estructuras lógicas
-# repetitivas.
 [args.level.high]
 reasoning_effort = "high"
 base = [

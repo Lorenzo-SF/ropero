@@ -345,7 +345,7 @@ class BundleContract(unittest.TestCase):
         # `ropero verifier` es `ropero gptoss --high`: el alias público lleva
         # su nivel por defecto. Y el flag explícito gana sobre el del alias.
         (self.models / 'gptoss').mkdir(parents=True, exist_ok=True)
-        (self.models / 'gptoss' / 'gpt-oss-20b-UD-Q8_K_XL.gguf').write_bytes(b'fake gptoss')
+        (self.models / 'gptoss' / 'openai_gpt-oss-20b-MXFP4.gguf').write_bytes(b'fake gptoss')
         self.run_ropero('verifier')
         argv = self.argv()
         kwargs = argv[argv.index('--chat-template-kwargs') + 1]
