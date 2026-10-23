@@ -322,6 +322,14 @@ ropero_models_load() {
         # sean válidos.
         key="${name//-/_}"
 
+        # ── Duplicados ───────────────────────────────────────────────────
+        # Un [model].name duplicado no se registra dos veces: el segundo se
+        # avisa y se omite, para que no haya dos modelos con el mismo nombre.
+        if [[ "$origin" == "active" && " ${MODEL_NAMES[*]} " == *" $key "* ]]; then
+            ropero_warn "$toml_path: el nombre '$name' ya está registrado; se omite"
+            continue
+        fi
+
         # ── Modelos RETIRADOS ────────────────────────────────────────────
         # Se indexan, pero NO se registran como modelos utilizables.
         if [[ "$origin" == "fired" ]]; then
@@ -434,6 +442,14 @@ ropero_models_load() {
 # -----------------------------------------------------------------------------
 ropero_model_args() {
     local name="${1:-}" level="${2:-}"
+    # Resolver alias público al modelo físico: _modelconf.py solo conoce los
+    # nombres declarados en [model].name, no los aliases del loader de bash.
+    local key="${name//-/_}"
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    if [[ -n "$target" ]]; then
+        # El nombre "humano" del modelo físico es MODEL_ALIAS[target].
+        name="${MODEL_ALIAS[$target]:-$target}"
+    fi
     shift 2 2>/dev/null || true
 
     local conf py

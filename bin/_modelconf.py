@@ -1304,6 +1304,9 @@ def cmd_validate(opts):
     problems = []
     warnings = []
     seen = {}
+    # Conjunto global de nombres de modelo (todas las origins) y aliases.
+    all_model_names = set()
+    all_aliases = {}
     for path, engine_dir, origin in entries:
         found, warned = validate_model(path, engine_dir, origin)
         problems.extend(found)
@@ -1321,6 +1324,22 @@ def cmd_validate(opts):
                             % (os.path.basename(path), name, seen[key]))
         else:
             seen[key] = os.path.basename(path)
+        # El nombre del modelo no puede duplicar un alias ya registrado.
+        if name in all_aliases:
+            problems.append("%s: el nombre '%s' ya lo usa un alias en %s"
+                            % (os.path.basename(path), name, all_aliases[name] if name in all_aliases else "?"))
+        # Aliases: no pueden duplicar nombres de modelos ni otros aliases.
+        aliases = loaded.get("aliases") or {}
+        for alias in aliases:
+            if alias in all_aliases:
+                problems.append("%s: el alias '%s' ya lo usa %s"
+                                % (os.path.basename(path), alias, all_aliases[alias]))
+            elif alias in all_model_names:
+                problems.append("%s: el alias '%s' duplica un nombre de modelo existente"
+                                % (os.path.basename(path), alias))
+            else:
+                all_aliases[alias] = os.path.basename(path)
+        all_model_names.add(name)
 
     for warning in warnings:
         sys.stderr.write("%s\n" % warning)

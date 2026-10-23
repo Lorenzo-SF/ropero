@@ -205,7 +205,7 @@ _ropero_cat_build() {
         [[ -n "${MODEL_ALIAS_TARGET[$m]:-}" ]] && continue
 
         # Descarga manual: no se ofrece en `ropero install models`.
-        [[ "${MODEL_MANUAL[$m]:-0}" == "1" ]] && continue
+        if [[ "${MODEL_MANUAL[$m]:-0}" == "1" && "${ROPERO_CAT_INCLUDE_MANUAL:-0}" != "1" ]]; then continue; fi
 
         repo="${MODEL_REPO[$m]:-}"
         [[ -n "$repo" ]] || continue
@@ -290,7 +290,7 @@ ropero_model_key() {
 # -----------------------------------------------------------------------------
 _ropero_cat_index() {
     local filter="${1:-}" i n key matched
-    _ropero_cat_build
+    ROPERO_CAT_INCLUDE_MANUAL=1 _ropero_cat_build
     n=${#_ROPERO_CAT_KEY[@]}
 
     [[ -n "$filter" ]] || { for ((i=0;i<n;i++)); do printf '%s\n' "$i"; done; return 0; }
@@ -527,7 +527,7 @@ _ropero_cat_download() {
 # -----------------------------------------------------------------------------
 ropero_models_catalog() {
     local i n
-    _ropero_cat_build
+    ROPERO_CAT_INCLUDE_MANUAL=1 _ropero_cat_build
     n=${#_ROPERO_CAT_KEY[@]}
     for ((i=0;i<n;i++)); do
         printf '  %-46s %-8s %s\n' "${_ROPERO_CAT_KEY[$i]}" \
@@ -546,7 +546,7 @@ ropero_models_catalog() {
 ropero_download_default_models() {
     local filter="${1:-}" os idx rc=0
 
-    _ropero_cat_build
+    ROPERO_CAT_INCLUDE_MANUAL=1 _ropero_cat_build
 
     if [[ -n "$filter" ]]; then
         if ! idx="$(_ropero_cat_index "$filter")"; then
@@ -627,7 +627,7 @@ _ropero_cat_postcopy() {
 _ropero_download_safetensors_mlx() {
     local os="${1:-}" i n
     [[ "$os" == "macos" ]] || return 0
-    _ropero_cat_build
+    ROPERO_CAT_INCLUDE_MANUAL=1 _ropero_cat_build
     n=${#_ROPERO_CAT_KEY[@]}
     for ((i=0;i<n;i++)); do
         [[ "${_ROPERO_CAT_KIND[$i]}" == "safetensors" ]] || continue

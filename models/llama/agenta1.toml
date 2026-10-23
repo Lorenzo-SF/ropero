@@ -1,7 +1,7 @@
 [model]
 name    = "agenta1"
 engine  = "llama-server"
-context = 262144
+context = 131072
 
 [files]
 gguf   = "Agents-A1-35B-A3B-MXFP4_MOE_Q8_0-Imatrix.gguf"
@@ -17,9 +17,8 @@ default = "medium"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
+    "--n-gpu-layers", "-1",
     "--jinja",
-    "--n-cpu-moe", "18",
     "--temp", "0.55",
     "--top-p", "0.90",
     "--top-k", "15",

@@ -105,12 +105,11 @@ ropero_compile_llama() {
                 -DGGML_CUDA_MMQ_NVFP4=ON \
                 -DGGML_CUDA=ON \
                 -DGGML_CUDA_FA=ON \
-                -DGGML_CUDA_FA_QUANTS=ALL \
+                -DGGML_CUDA_FA_ALL_QUANTS=ON \
                 -DGGML_CUDA_GRAPHS=ON \
                 -DGGML_CUDA_FORCE_MMQ=OFF \
                 -DGGML_CUDA_FORCE_CUBLAS=OFF \
                 -DGGML_CUDA_F16=OFF \
-                -DGGML_CUDA_NO_VMM=ON \
                 -DGGML_CUDA_COMPRESSION_MODE=speed \
                 -DGGML_RPC=ON \
                 -DGGML_OPENMP=ON \

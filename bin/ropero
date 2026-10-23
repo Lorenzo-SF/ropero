@@ -1446,7 +1446,7 @@ start_model() {
             # flags + opciones. El word splitting aquí es INTENCIONAL: son
             # listas separadas por espacios de flags ("vision") y de
             # opciones con valor ("n-cpu-moe=8").
-            pre_out=$(ropero_model_args "$model_key" "$requested_level" $model_flags $model_opts 2>&1) || pre_status=$?
+            pre_out=$(ropero_model_args "$model" "$requested_level" $model_flags $model_opts 2>&1) || pre_status=$?
             if (( pre_status != 0 )); then
                 echo "ERROR: la configuración del modelo '$model_key' no es válida:" >&2
                 echo "$pre_out" >&2
@@ -1617,8 +1617,10 @@ start_model() {
                 --api-key "$LLAMA_API_KEY"
                 --alias "$model"
                 --ctx-size "$ctx_size"
-                -fa on
-                --log-verbosity 3
+                --flash-attn on
+                --log-verbosity 4
+                --parallel 1
+
                 "${model_args[@]}"
             )
 
@@ -1781,7 +1783,7 @@ _ropero_launch_endpoint() {
     local -a extra=()
     local out st=0 err err_f
     err_f="$(mktemp "${TMPDIR:-/tmp}/ropero_engargs.XXXXXX")"
-    out=$(ropero_model_args "$model_key" "" 2>"$err_f") || st=$?
+    out=$(ropero_model_args "$model" "" 2>"$err_f") || st=$?
     err=$(cat "$err_f" 2>/dev/null || true)
     rm -f "$err_f" 2>/dev/null || true
     if [[ -n "$err" ]]; then
@@ -1806,10 +1808,29 @@ _ropero_launch_endpoint() {
         --api-key "$LLAMA_API_KEY"
     )
     local a
+    # Filtrar elementos vacíos (mapfile puede dejar uno al final si el
+    # output no termina en newline).
+    local -a _clean_extra=()
     for a in "${extra[@]}"; do
-        [[ -n "$a" ]] || continue
-        cmd+=(--extra-arg "$a")
+        [[ -n "${a//[[:space:]]/}" ]] || continue
+        _clean_extra+=("$a")
     done
+    # Para airllm, los args del modelo son flags directos del endpoint
+    # (--compression, --max-new-tokens, --layer-shards). Si los pasamos
+    # envueltos en `--extra-arg`, argparse no los consume porque son flags
+    # reconocidos y da error "expected one argument". Así que para airllm los
+    # pasamos directamente. Para los otros backends (tensorrt, flm, mlx), los
+    # args del modelo van como `--extra-arg` porque el endpoint los reenvía al
+    # backend nativo.
+    if [[ "$backend" == "airllm" ]]; then
+        for a in "${_clean_extra[@]}"; do
+            cmd+=("$a")
+        done
+    else
+        for a in "${_clean_extra[@]}"; do
+            cmd+=(--extra-arg "$a")
+        done
+    fi
 
     ropero_info "  $engine a través del endpoint unificado (exige la API key)"
     _ropero_run_engine "$model" "$engine" "$port" "$why" "$ctx" "$background" \
@@ -3597,6 +3618,108 @@ cmd_config() {
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
+cmd_gguffer() {
+    local path="" repo="" quant="" list_only=0 download_dir=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --path) [[ $# -ge 2 ]] || { echo "ERROR: --path requiere un directorio" >&2; return 2; }; path="$2"; shift 2 ;;
+            --path=*) path="${1#--path=}"; shift ;;
+            --repo) [[ $# -ge 2 ]] || { echo "ERROR: --repo requiere un repo (owner/name)" >&2; return 2; }; repo="$2"; shift 2 ;;
+            --repo=*) repo="${1#--repo=}"; shift ;;
+            --quant)
+                if [[ $# -eq 1 ]]; then list_only=1; shift
+                else quant="$2"; shift 2; fi ;;
+            --quant=*) quant="${1#--quant=}"; shift ;;
+            -h|--help) printf 'USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant [TIPO]]
+'; return 0 ;;
+            *) echo "ERROR: argumento desconocido: $1" >&2; return 2 ;;
+        esac
+    done
+
+    if [[ -z "$path" && -z "$repo" ]]; then
+        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant [TIPO]]" >&2
+        return 2
+    fi
+    if [[ -n "$path" && -n "$repo" ]]; then
+        echo "ERROR: usa --path O --repo, no ambos" >&2
+        return 2
+    fi
+
+    local _llama_dir="${LLAMA_DIR:-$HOME/llama.cpp}"
+    local _convert="$_llama_dir/convert_hf_to_gguf.py"
+    local _quantize
+    _quantize="$(command -v llama-quantize 2>/dev/null || echo "$_llama_dir/build/bin/llama-quantize")"
+
+    if (( list_only == 1 )); then
+        echo "Quants disponibles:"
+        "$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" | sed 's/^/  /'
+        return 0
+    fi
+
+    # Si --repo, descargar primero
+    if [[ -n "$repo" ]]; then
+        if ! command -v hf >/dev/null 2>&1; then
+            echo "ERROR: falta 'hf' (huggingface_hub) para descargar" >&2
+            return 1
+        fi
+        download_dir="$(mktemp -d "${TMPDIR:-/tmp}/ropero-gguffer.XXXXXX")"
+        echo "Descargando $repo en $download_dir..."
+        if ! hf download "$repo" --local-dir "$download_dir"; then
+            echo "ERROR: falló la descarga" >&2
+            rm -rf "$download_dir"
+            return 1
+        fi
+        path="$download_dir"
+    fi
+
+    if [[ ! -d "$path" ]]; then
+        echo "ERROR: directorio no encontrado: $path" >&2
+        [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+        return 1
+    fi
+
+    # Validar quant si se pasó
+    if [[ -n "$quant" ]]; then
+        if ! "$_quantize" --help 2>&1 | grep -qiE "or  ${quant}([^A-Za-z0-9_]|$)"; then
+            echo "ERROR: quant no válido: $quant" >&2
+            echo "Usa 'ropero gguffer --path <dir> --quant' para ver la lista." >&2
+            [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+            return 1
+        fi
+    fi
+
+    local name; name="$(basename "$path")"
+    local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
+    mkdir -p "$out_dir"
+    local out="$out_dir/${name}.gguf"
+
+    echo "Convirtiendo $path -> $out (F16)..."
+    if ! python3 "$_convert" "$path" --outfile "$out" --outtype f16; then
+        echo "ERROR: falló la conversión" >&2
+        [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+        return 1
+    fi
+
+    if [[ -n "$quant" && "$quant" != "F16" && "$quant" != "F32" && "$quant" != "BF16" ]]; then
+        local qout="${out%.gguf}-${quant}.gguf"
+        echo "Cuantizando a $quant -> $qout..."
+        if ! "$_quantize" "$out" "$qout" "$quant"; then
+            echo "ERROR: falló la cuantización" >&2
+            [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+            return 1
+        fi
+        rm -f "$out"
+        out="$qout"
+    fi
+
+    # Limpiar safetensors
+    rm -rf "$path"
+
+    echo "GGUF creado: $out"
+    return 0
+}
+
+
 main() {
     local subcmd="${1:-}"
     if [[ -z "$subcmd" || "$subcmd" == "help" || "$subcmd" == "-h" || "$subcmd" == "--help" ]]; then
@@ -3652,6 +3775,11 @@ main() {
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help template; exit 0; fi
             cmd_template "$@"
             exit 0
+            ;;
+        gguffer)
+            shift
+            cmd_gguffer "$@"
+            exit $?
             ;;
         # Top-level y no solo `--install models`: es lo que se escribe cuando
         # ya se tiene el stack y solo falta disco, y obligar a recordar el
