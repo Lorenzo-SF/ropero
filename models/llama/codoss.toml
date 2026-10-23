@@ -1,5 +1,5 @@
 # =============================================================================
-# codoss — gpt-oss-20b coder (EXPERIMENTAL)
+# gptoss — gpt-oss-20b (UD-Q8_K_XL) con razonamiento por nivel
 # =============================================================================
 
 [model]
@@ -19,7 +19,6 @@ size = "13.2 GB"
 list    = ["low", "medium", "high"]
 default = "medium"
 
-
 [args]
 base = [
     "--n-gpu-layers", "99",
@@ -35,7 +34,7 @@ base = [
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--chat-template-kwargs", "{'reasoning_effort': '${env:ROPERO_CODOSS_REASONING:-medium}'}",
+    "--chat-template-kwargs", '{"reasoning_effort": "${env:ROPERO_CODOSS_REASONING:-medium}"}',
     "--cache-type-k", "${env:ROPERO_CODOSS_KV:-f16}",
     "--cache-type-v", "${env:ROPERO_CODOSS_KV:-f16}",
     "--jinja",

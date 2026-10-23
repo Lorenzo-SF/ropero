@@ -38,11 +38,12 @@ base = [
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--chat-template-kwargs", "{'reasoning_effort': '${env:ROPERO_GPTOSS_REASONING:-medium}'}",
+    "--chat-template-kwargs", '{"reasoning_effort": "${env:ROPERO_GPTOSS_REASONING:-medium}"}',
     "--cache-type-k", "${env:ROPERO_GPTOSS_KV:-f16}",
     "--cache-type-v", "${env:ROPERO_GPTOSS_KV:-f16}",
     "--jinja",
     "--kv-unified",
+    "--kv-offload",
     "--load-mode", "auto",
 ]
 
