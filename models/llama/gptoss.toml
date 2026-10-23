@@ -1,5 +1,16 @@
 # =============================================================================
-# gptoss — gpt-oss-20b (UD-Q8_K_XL) con razonamiento por nivel
+# gptoss — gpt-oss-20b (MXFP4) con razonamiento por nivel
+# =============================================================================
+#
+# El nivel de razonamiento lo fija el nivel elegido (`ropero gptoss --high`)
+# y se pasa al template como `--chat-template-kwargs {"reasoning_effort": ...}`.
+# ROPERO_GPTOSS_REASONING (low|medium|high) lo sobreescribe: es la forma de
+# forzar un nivel sin tocar la línea de órdenes. Sin ese env var, cada nivel
+# usa el suyo.
+#
+# El flag se emite UNA SOLA VEZ, desde [args.level.<nivel>]. Si además
+# estuviera en [args].base, llama.cpp se quedaría con el último valor (el del
+# nivel) y el override por entorno dejaría de funcionar en silencio.
 # =============================================================================
 
 [model]
@@ -13,7 +24,7 @@ gguf = "openai_gpt-oss-20b-MXFP4.gguf"
 [download]
 repo = "bartowski/openai_gpt-oss-20b-GGUF-MXFP4-Experimental"
 file = "openai_gpt-oss-20b-MXFP4.gguf"
-size = "13.2 GB"
+size = "11.2 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -48,7 +59,7 @@ base = [
 ]
 
 [args.level.low]
-reasoning_effort = "low"
+reasoning_effort = "${env:ROPERO_GPTOSS_REASONING:-low}"
 base = [
     "--spec-type", "ngram-simple",
     "--spec-ngram-simple-size-n", "6",
@@ -58,7 +69,7 @@ base = [
 ]
 
 [args.level.medium]
-reasoning_effort = "medium"
+reasoning_effort = "${env:ROPERO_GPTOSS_REASONING:-medium}"
 base = [
     "--spec-type", "ngram-simple",
     "--spec-ngram-simple-size-n", "12",
@@ -68,7 +79,7 @@ base = [
 ]
 
 [args.level.high]
-reasoning_effort = "high"
+reasoning_effort = "${env:ROPERO_GPTOSS_REASONING:-high}"
 base = [
     "--spec-type", "ngram-simple",
     "--spec-ngram-simple-size-n", "8",

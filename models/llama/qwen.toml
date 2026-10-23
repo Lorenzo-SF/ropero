@@ -58,7 +58,7 @@ list = ["vision"]
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
+    "--n-gpu-layers", "-1",
     "--jinja",
     "--temp", "0.60",
     "--top-p", "0.95",
@@ -73,9 +73,6 @@ base = [
     "--ubatch-size", "1024",
     "--parallel", "1",
 
-    # ---- Decoding especulativo (MTP) ----
-    "--spec-type", "draft-mtp",
-    "--model-draft", "${mtp}",
 ]
 
 [args.level.low]

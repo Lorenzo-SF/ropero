@@ -1,5 +1,14 @@
 # =============================================================================
-# gptoss — gpt-oss-20b (UD-Q8_K_XL) con razonamiento por nivel
+# codoss — gpt-oss-20b coder (xCloud GGUF) con razonamiento por nivel
+# =============================================================================
+#
+# El nivel de razonamiento lo fija el nivel elegido (`ropero codoss --high`)
+# y se pasa al template como `--chat-template-kwargs {"reasoning_effort": ...}`.
+# ROPERO_CODOSS_REASONING (low|medium|high) lo sobreescribe.
+#
+# El flag se emite UNA SOLA VEZ, desde [args.level.<nivel>]: duplicado en
+# [args].base, llama.cpp se queda con el último y el override por entorno
+# deja de funcionar.
 # =============================================================================
 
 [model]
@@ -34,16 +43,17 @@ base = [
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--chat-template-kwargs", '{"reasoning_effort": "${env:ROPERO_CODOSS_REASONING:-medium}"}',
-    "--cache-type-k", "${env:ROPERO_CODOSS_KV:-f16}",
-    "--cache-type-v", "${env:ROPERO_CODOSS_KV:-f16}",
+    # El nivel de razonamiento lo inyecta [args.level.<nivel>]; duplicar el
+    # flag aquí haría que llama.cpp descartara el override por entorno.
+    "--cache-type-k", "${env:ROPERO_CODOSS_KV:-q8_0}",
+    "--cache-type-v", "${env:ROPERO_CODOSS_KV:-q8_0}",
     "--jinja",
     "--kv-unified",
     "--load-mode", "auto",
 ]
 
 [args.level.low]
-reasoning_effort = "low"
+reasoning_effort = "${env:ROPERO_CODOSS_REASONING:-low}"
 base = [
     "--spec-type", "ngram-simple",
     "--spec-ngram-simple-size-n", "6",
@@ -53,7 +63,7 @@ base = [
 ]
 
 [args.level.medium]
-reasoning_effort = "medium"
+reasoning_effort = "${env:ROPERO_CODOSS_REASONING:-medium}"
 base = [
     "--spec-type", "ngram-simple",
     "--spec-ngram-simple-size-n", "12",
@@ -63,7 +73,7 @@ base = [
 ]
 
 [args.level.high]
-reasoning_effort = "high"
+reasoning_effort = "${env:ROPERO_CODOSS_REASONING:-high}"
 base = [
     "--spec-type", "ngram-simple",
     "--spec-ngram-simple-size-n", "8",

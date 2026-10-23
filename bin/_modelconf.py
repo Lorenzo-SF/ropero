@@ -749,14 +749,32 @@ def _expand_all(items, ctx):
     return [expand(item, ctx) for item in items]
 
 
-def _chat_template_pair(cfg):
-    """Devuelve (flag, json) del atajo chat_template_kwargs / reasoning_effort."""
+def _chat_template_pair(cfg, ctx=None):
+    """Devuelve (flag, json) del atajo chat_template_kwargs / reasoning_effort.
+
+    Con ctx, los valores se expanden: así el TOML puede fijar el nivel por
+    defecto ("low"/"medium"/"high") y dejar que el entorno lo sobreescriba con
+    ${env:VAR:-<defecto>}.
+
+    Antes NO se expandían, y eso mataba al env var: el TOML ponía el flag a
+    mano en [args].base y el nivel lo volvía a poner. llama.cpp avisa
+    "DEPRECATED: argument '--chat-template-kwargs' specified multiple times" y
+    se queda con el ÚLTIMO, que es el del nivel: el valor del entorno se
+    descartaba en silencio.
+    """
     if "chat_template_kwargs" in cfg and cfg["chat_template_kwargs"] is not None:
         payload = cfg["chat_template_kwargs"]
+        if ctx is not None:
+            payload = {
+                k: (expand(v, ctx) if isinstance(v, str) else v)
+                for k, v in payload.items()
+            }
         return "--chat-template-kwargs", json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"))
     effort = cfg.get("reasoning_effort")
     if effort:
+        if ctx is not None:
+            effort = expand(str(effort), ctx)
         payload = {"reasoning_effort": effort}
         return "--chat-template-kwargs", json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"))
@@ -827,7 +845,7 @@ def build_argv(loaded, level=None, flags=(), options=()):
         cfg = levels_spec[level] or {}
         level_base = cfg.get("base") or []
         argv.extend(_expand_all(level_base, ctx))
-        flag, payload = _chat_template_pair(cfg)
+        flag, payload = _chat_template_pair(cfg, ctx)
         if flag:
             argv.append(flag)
             argv.append(payload)

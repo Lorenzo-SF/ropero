@@ -1623,7 +1623,7 @@ start_model() {
 
                 "${model_args[@]}"
             )
-
+    
             # Override --cpu al FINAL del cmd para ganar sobre args del modelo.
             # Ojo: --cpu mueve el DISPOSITIVO, no el puerto. Si el modelo tiene
             # MODEL_PORT, se queda en su puerto y solo se apaga la GPU.
