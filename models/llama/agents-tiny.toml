@@ -80,24 +80,18 @@ context = 262144
 
 [files]
 gguf   = "Agents-A1-4B-Q8_0.gguf"
-mmproj  = "Agents-A1-4B-mmproj.gguf"
-
 [download]
 repo = "InternScience/Agents-A1-4B-Q8_0-GGUF"
 file = "Agents-A1-4B-Q8_0.gguf"
 size = "4.17 GiB"
 
-[download.aux.mmproj]
-file = "Agents-A1-4B-mmproj.gguf"
-name = "Agents-A1-4B-mmproj.gguf"
-size = "0.63 GiB"
 
 [levels]
 list    = ["low", "medium", "high"]
 default = "low"
 
 [flags]
-list = ["vision"]
+list = []
 
 [args]
 base = [
@@ -125,8 +119,6 @@ base = [
     "--batch-size", "512",
     "--ubatch-size", "256",
     "--n-predict", "8192",
-    "--parallel", "1",
-
     # ---- Modelo / carga ----
     "--jinja",
     "--load-mode", "auto",                   # mmap + page cache, no "none"
@@ -141,6 +133,6 @@ chat_template_kwargs = { enable_thinking = true }
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
 
-[args.flag.vision]
-base    = ["--mmproj", "${mmproj}"]
-requires = ["mmproj"]
+# [args.flag.vision] se ha ido con el mmproj:
+#   base    = ["--mmproj", "${mmproj}"]
+#   requires = ["mmproj"]

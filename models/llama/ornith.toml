@@ -80,24 +80,18 @@ context = 262144
 
 [files]
 gguf   = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
-mmproj  = "mmproj-Ornith-1.5-35B-A3B-f16.gguf"
-
 [download]
 repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
 file = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
 size = "11.68 GiB"
 
-[download.aux.mmproj]
-file = "mmproj-Ornith-1.5-35B-A3B-f16.gguf"
-name = "mmproj-Ornith-1.5-35B-A3B-f16.gguf"
-size = "0.84 GiB"
 
 [levels]
 list    = ["low", "medium", "high"]
 default = "low"
 
 [flags]
-list = ["vision"]
+list = []
 
 [args]
 base = [
@@ -130,8 +124,6 @@ base = [
     "--batch-size", "512",
     "--ubatch-size", "256",
     "--n-predict", "8192",
-    "--parallel", "1",
-
     # ---- Modelo / carga ----
     "--jinja",
     "--load-mode", "auto",                   # mmap + page cache, no "none"
@@ -146,6 +138,6 @@ chat_template_kwargs = { enable_thinking = true }
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
 
-[args.flag.vision]
-base    = ["--mmproj", "${mmproj}"]
-requires = ["mmproj"]
+# [args.flag.vision] se ha ido con el mmproj:
+#   base    = ["--mmproj", "${mmproj}"]
+#   requires = ["mmproj"]
