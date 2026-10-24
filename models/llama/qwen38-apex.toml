@@ -59,50 +59,12 @@
 #
 # ── SPECULATIVE DECODING ────────────────────────────────────────────────────
 # El GGUF lleva la cabeza MTP DENTRO (blk.64.*, 15 tensores, según la ficha
-# del repo), así que no hace falta ningún fichero aparte: --spec-type draft-mtp
-# ya la encuentra. Si al probarlo ves n_drafted = 0 en el log, quité esas dos
-# líneas y ya está.
-#
-# ── REASONING ───────────────────────────────────────────────────────────────
-# El chat_template de Qwen3.8 acepta SOLO: xhigh (su default), medium, low.
-# "high" se remapea a xhigh; "minimal" lanza excepción. Por eso los niveles
-# aquí son low / medium / xhigh (NO high).
-# Sampling oficial en modo thinking: temp 1.0 / top_p 0.95 / top_k 20 /
-# min_p 0.0 / repetition_penalty 1.0.
-#
-# El override del contexto es el canónico ROPERO_QWEN38_APEX_CTX.
-# =============================================================================
-#
-# ── QUÉ ES -ngl Y POR QUÉ -1 (y no 99) ──────────────────────────────────────
-#   --n-gpu-layers = cuantas capas del modelo se copian a la VRAM.
-#     0 = todo en CPU · 99 = "todas las que quepan" · -1 = que lo decida el
-#     fitter, que es el default upstream.
-#   El fitter (fit_params, on por defecto) mira la VRAM libre y decide el
-#   reparto: cuantas capas entran, y con "overflow" por fraccion, o sea que
-#   la atencion puede quedarse en la GPU y el MLP ir a la CPU, o al reves.
-#   Tambien ajusta el contexto si el usuario no lo ha fijado a mano.
-#   PERO si el usuario fija -ngl, el fitter aborta con
-#     "n_gpu_layers already set by user to 99, abort"
-#   y esa excepcion se CAPTURA y sale como WARN (common_params_fit_exception
-#   -> LOG_WRN, status FAILURE). O sea: no se aplica NINGUN ajuste y el
-#   servidor carga el modelo entero en la VRAM a pelo -> cudaMalloc failed.
-#   Ese es el motivo de -1. El 99 solo tiene sentido si el modelo cabe entero
-#   Y quieres quitar el fitter del medio para medir sin ajustes.
-#
-# ── POR QUÉ batch 512 Y ubatch 256 ─────────────────────────────────────────
-#   --batch-size  = tokens del prompt que se pasan al modelo en una llamada.
-#   --ubatch-size = tokens que se calculan DE GOLPE en la GPU (micro-lote).
-#                  El compute buffer se dimensiona con el ubatch, no con el
-#                  batch, y el buffer mas gordo son los logits:
-#                      ubatch x vocab x 4 bytes
-#                        1024 -> 1,02 GB   (vocab 248.320)
-#                         512 ->  508 MB
-#                         256 ->  254 MB
-#                         128 ->  127 MB
-#   El batch, en cambio, no llena la VRAM: afecta al prefill (cuantos tokens
-#   por llamada) y a la RAM del prompt cache. Con el page cache haciendo de
-#   RAM, cada GB cuenta, asi que va corto de RAM.
-#   El fitter NO toca ni el batch ni el ubatch: hay que fijarlos a mano.
+#   OJO: la cabeza MTP (los tensores nextn) SI esta dentro del GGUF, pero
+#   --spec-type draft-mtp NO se usa. Crea un draft context con su propio
+#   espacio de VRAM (y su KV en f16) y en un portatil de 16 GB no cabe: el
+#   server se queda sin memoria y no arranca (medido en agenta1: con MTP no
+#   arrancaba; sin MTP, 140 t/s). Si tu GGUF es de otro que NO traiga la
+#   cabeza MTP, esto no aplica y no pierdes nada.
 
 [model]
 name    = "qwen38-apex"
@@ -153,9 +115,6 @@ base = [
 
     "--n-predict", "16384",
     # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "10",
-
     # ---- Reasoning ----
     "--reasoning-budget", "12288",           # -1 = sin limite, 0 = fin inmediato
 
