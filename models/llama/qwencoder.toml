@@ -1,89 +1,89 @@
 # =============================================================================
-# qwencoder — Qwen3-Coder-30B-A3B-Instruct (UD-IQ3_XXS GGUF)
+# qwencoder — Qwen3-Coder-30B-A3B-Instruct (MoE 128 expertos, 8 activos)
 # =============================================================================
 #
-# Modelo: Qwen/Qwen3-Coder-30B-A3B-Instruct (UD-IQ3_XXS GGUF)
-#   - MoE 30.5B / 3.3B activo (128 expertos, 8 activados)
-#   - 48 layers, GQA 32Q / 4KV
-#   - Vocab Qwen3 (~150K)
-#   - Contexto 262,144 nativo
-#   - **Solo non-thinking mode** (spec repo: NO genera <think> blocks)
-#     → NO usar enable_thinking (modelo no lo soporta, lo ignora)
-#   - Sampling canónico Qwen3: temp=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05
+#   - GGUF   : Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf  (11.97 GiB)
+#   - repo   : unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
 #
-# ── UD-IQ3_XXS (12,8 GB) en vez de UD-Q4_K_XL (17,7 GB) ─────────────────────
-#   Q4_K_XL  17,7 GB  →  deja ~0,3 GB de VRAM para el KV cache  ⇒ inusable
-#   IQ3_XXS  12,8 GB  →  deja ~3,2 GB
+# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
+# El GGUF se queda (el UD-IQ3_XXS de unsloth: 11,97 GB, con imatrix).
+# El problema era la KV: este modelo tiene las 48 capas de atencion completa
+# (no eshibrido), asi que la KV son 98.304 B/token: a 131072 en f16 son
+# 12,88 GB (imposible) y en q8_0 son 6,44 GB (tampoco). Con q4_0 son 3,22 GB
+# a 131072 y 1,61 GB a 65536: por eso el contexto baja a 65536, que sigue
+# cubriendo el "44K" que el rol necesita.
+# bartowski no tiene este modelo; unsloth si.
 #
-# El contexto de 44K es un REQUISITO DURO de este rol (un repo entero no cabe en
-# 8K), y el contexto vive en el KV cache, que vive en la VRAM.
+# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB de 15.933) ──────
+#   pesos 11,97 GiB
+#   KV q4_0 @65536   1,61 GB   (48 capas full-attn x 4 KV x 128 dim x 2 x 0,5 B)
+#   compute          ~0,7 GB   (ubatch 512)
+#   contexto CUDA    ~0,4 GB
+#   --------------------------
+#   total           ~14,7 GB   -> cabe con 0,6 GB de margen (el ctx 131072 NO cabria: 16,3 GB)
 #
-# IQ3 cuantiza a la baja lo que no es importante y sube el embedding y
-# lm_head; para un MoE de 3,3B activos la diferencia de calidad está en el
-# orden del 3%, que es poco para 4,9 GB de VRAM.
+# ── ARGUMENTOS QUE IMPORTAN Y POR QUÉ ──────────────────────────────────────
+#   · --n-gpu-layers -1: deja que el fitter reparta. Con un número fijo
+#     (99) el fitter aborta con "n_gpu_layers already set by user", el modelo
+#     se va entero a la GPU a pelo y revienta con cudaMalloc failed.
+#   · --load-mode auto: mmap + page cache. Con "none" el fichero entero se
+#     copia a la RAM (y aquí no cabe): se pierde el page cache y el SSD deja
+#     de servir de "RAM".
+#   · KV q4_0: con f16 no cabe y la KV se va a la CPU -> la atención se
+#     calcula en la CPU y los t/s se desploman (es lo que le pasó al gpt-oss
+#     con 80-100 t/s en vez de 120-130). El KV cuantizado exige -fa on.
+#   · Los niveles son los que acepta el chat_template del modelo (ver abajo).
 #
-# Peculiaridades críticas:
-#   1. MoE 30B en 16GB VRAM: requiere --n-cpu-moe (no cabe entero)
-#   2. Modelo denso de atención, NO hybrid Gated DeltaNet
-#   3. No usa MTP ni speculative decoding (GGUF básico)
+# ── REASONING ───────────────────────────────────────────────────────────────
+# Este modelo NO tiene niveles de razonamiento: su chat_template no menciona
+# enable_thinking ni reasoning_effort. Por eso aqui no hay [levels].
 #
-# El override del contexto es el canónico ROPERO_QWENCODER_CTX (antes el .sh
-# usaba ROPERO_CODER_CTX, por el alias `coder`).
+# El override del contexto es el canónico ROPERO_CODER_CTX.
 # =============================================================================
 
 [model]
 name    = "qwencoder"
 engine  = "llama-server"
-context = 131072
-alias   = "coder"
+context = 65536
 
 [files]
-gguf = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
+gguf   = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
 
 [download]
 repo = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
 file = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
-size = "12.8 GB"
+size = "11.97 GiB"
 
 [args]
 base = [
-    # ---- GPU offload (MoE 30B/3B activo) ----
-    "--n-gpu-layers", "-1",                            # todos los layers GPU-eligible
-    "--n-cpu-moe", "${env:ROPERO_CODER_N_CPU_MOE:-30}",  # expertos MoE en CPU
-    "--no-kv-offload",                                 # KV cache en GPU
+    # ---- GPU offload: que el fitter reparta ----
+    "--n-gpu-layers", "-1",
 
-    # ---- Atención ----
-    # -fa on lo pone ropero entry globalmente
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
 
     # ---- KV cache ----
-    "--cache-type-k", "q8_0",                          # q8_0 recomendado para tool use
-    "--cache-type-v", "q8_0",
-    "--cache-prompt",
-    "--context-shift",
-    "--kv-unified",                                   # single user, unified buffer
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--kv-unified",
 
-    # ---- Modelo / carga ----
-    "--jinja",                                        # chat template Qwen3 coder
-    "--reasoning-format", "deepseek",                  # limpia tags <think> (no genera, pero por si)
-    "--load-mode", "none",
-
-    # ---- Sampling (canónico Qwen3 coder) ----
+    # ---- Sampling del Qwen3-Coder ----
     "--temp", "0.7",
     "--top-p", "0.8",
     "--top-k", "20",
     "--min-p", "0.0",
     "--repeat-penalty", "1.05",
     "--repeat-last-n", "64",
-
-    # ---- Batching / threads ----
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-
-    # ---- Generación ----
-    "--n-predict", "8192",                             # agentic puede requerir outputs largos
+    "--reasoning-format", "deepseek",
     "--keep", "1024",
 
-    # ---- Misc ----
-    # --log-verbosity lo pone ropero entry (default 4)
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "512",
+    "--n-predict", "8192",
+    "--parallel", "1",
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]

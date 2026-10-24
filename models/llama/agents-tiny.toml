@@ -1,0 +1,115 @@
+# =============================================================================
+# agents-tiny — Agents-A1-4B (denso, 32 capas) - el modelo pequeño del mismo grupo
+# =============================================================================
+#
+#   - GGUF   : Agents-A1-4B-Q8_0.gguf  (4.17 GiB)
+#   - repo   : InternScience/Agents-A1-4B-Q8_0-GGUF
+#   - mmproj  : Agents-A1-4B-mmproj.gguf
+#
+# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
+# Este ya cabía de sobra (4,17 GiB), así que aquí el problema no era el
+# GGUF sino los argumentos:
+#   · "--n-gpu-layers 99" hacia abortar el fitter (con 4 GB da igual, pero es
+#     la misma mina que en el resto de modelos).
+#   · El repo del TOML era ...-Q8_0-GGUF, que sí existe (el search lo habia
+#     relacionado con el Q4_K_M y daba 401 por error de nombre).
+#
+# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB de 15.933) ──────
+#   pesos 4,17 GiB
+#   KV q8_0 @262144   4,29 GB   (8 capas full-attn x 4 KV x 256 dim x 2 x 1 B)
+#   compute          ~1,1 GB   (ubatch 256)
+#   contexto CUDA    ~0,4 GB
+#   --------------------------
+#   total           ~9,96 GB   -> cabe el ctx NATIVO entero (262144) con 5 GB de sobra
+#
+# ── ARGUMENTOS QUE IMPORTAN Y POR QUÉ ──────────────────────────────────────
+#   · --n-gpu-layers -1: deja que el fitter reparta. Con un número fijo
+#     (99) el fitter aborta con "n_gpu_layers already set by user", el modelo
+#     se va entero a la GPU a pelo y revienta con cudaMalloc failed.
+#   · --load-mode auto: mmap + page cache. Con "none" el fichero entero se
+#     copia a la RAM (y aquí no cabe): se pierde el page cache y el SSD deja
+#     de servir de "RAM".
+#   · KV q8_0: con f16 no cabe y la KV se va a la CPU -> la atención se
+#     calcula en la CPU y los t/s se desploman (es lo que le pasó al gpt-oss
+#     con 80-100 t/s en vez de 120-130). El KV cuantizado exige -fa on.
+#   · Los niveles son los que acepta el chat_template del modelo (ver abajo).
+#
+# ── REASONING ───────────────────────────────────────────────────────────────
+# El chat_template de este modelo NO tiene niveles de esfuerzo: sólo el flag
+# enable_thinking (true/false). Así que "medium" y "high" hacen lo mismo; se
+# mantienen los tres nombres para no romper los scripts que ya los usan.
+#
+# El override del contexto es el canónico ROPERO_AGENTS_TINY_CTX.
+# =============================================================================
+
+[model]
+name    = "agents-tiny"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf   = "Agents-A1-4B-Q8_0.gguf"
+mmproj  = "Agents-A1-4B-mmproj.gguf"
+
+[download]
+repo = "InternScience/Agents-A1-4B-Q8_0-GGUF"
+file = "Agents-A1-4B-Q8_0.gguf"
+size = "4.17 GiB"
+
+[download.aux.mmproj]
+file = "Agents-A1-4B-mmproj.gguf"
+name = "Agents-A1-4B-mmproj.gguf"
+size = "0.63 GiB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "low"
+
+[flags]
+list = ["vision"]
+
+[args]
+base = [
+    # ---- GPU offload: que el fitter reparta ----
+    "--n-gpu-layers", "-1",
+
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q8_0 lo exige
+
+    # ---- KV cache ----
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--kv-unified",
+
+    # ---- Sampling ----
+    "--temp", "0.85",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.1",
+    "--repeat-penalty", "1.0",
+    "--reasoning-format", "auto",
+
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "256",
+    "--n-predict", "8192",
+    "--parallel", "1",
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",                   # mmap + page cache, no "none"
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.flag.vision]
+base    = ["--mmproj", "${mmproj}"]
+requires = ["mmproj"]
