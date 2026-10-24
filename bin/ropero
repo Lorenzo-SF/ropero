@@ -820,7 +820,6 @@ _render_status_compact() {
 
     # ── Cabecera ──────────────────────────────────────────────────────────
     printf "${BOLD}${CYAN_B}─── ROPERO STATUS ───${NC}  ${DIM}%s${NC}\n" "$(date +%H:%M:%S)"
-    echo
 
     # ── Sistema (resumen en 2 líneas) ─────────────────────────────────────
     # Temperatura en amarillo para que llame la atención (es lo que más
@@ -829,30 +828,38 @@ _render_status_compact() {
         "$cpu_ghz" "$ram_mb" "$cpu_temp" "$cpu_fan"
     printf "  ${GRN_B}GPU${NC}  ${BOLD}%s GHz${NC} · %s MB · ${YELLOW}%s°C${NC} · fan %s RPM\n" \
         "$gpu_ghz" "$vram_mb" "$gpu_temp" "$gpu_fan"
-    echo
 
-    # ── Puertos (tabla padded) ────────────────────────────────────────────
-    # Cabecera + separador dim. Anchos: SLOT=9, PUERTO=6, ESTADO=6,
-    # MODELO=22 (con elipsis si >22), PID=7, UPTIME=8, ENGINE=15.
-    # SLOT lleva el dueño del puerto: "dGPU"/"CPU" para los slots por defecto,
-    # el nombre del modelo para los puertos pineados (MODEL_PORT).
-    printf "  ${YEL_B}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
-        "SLOT" "PORT" "ESTADO" "MODELO" "PID" "UPTIME" "ENGINE"
-    printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
-        "─────────" "──────" "──────" "──────────────────────" "───────" "────────" "───────────────"
+        # ── Puertos (tabla de alaja) ──────────────────────────────────────────
+    # El color va por celda: --row-N-color es una lista POSICIONAL (una por
+    # columna), así que van los 7 explícitos para dejar la celda ESTADO (2)
+    # en verde. Ojo: una lista de 1 color se aplicaría a TODAS las celdas,
+    # y los huecos no existen (se compactan al parsear).
+    # Los efectos van aparte: --row-N-effects es de toda la fila, y
+    # --row-N-<efecto> es la máscara que decide en qué celdas se aplica.
+    local alaja_bin="${ROPERO_ALAJA:-$HOME/.local/bin/alaja}"
+    [ -x "$alaja_bin" ] || alaja_bin="$(command -v alaja 2>/dev/null || true)"
+    if [ -z "$alaja_bin" ]; then
+        printf "${DIM}(alaja no encontrado)${NC}\n" >&2
+        return 1
+    fi
 
-    # Filas
-    local i=0
+    local C_NORM="hex:#CDD6F4"   # texto normal
+    local C_ON="hex:#A6E3A1"     # estado ON
+    local C_HDR="hex:#F9E2AF"    # cabecera
+
+    local row_args=() opts=()
+    local i=0 r=0
     while (( i < ${#ROPERO_SLOT_ROWS[@]} )); do
         local slot="${ROPERO_SLOT_ROWS[$((i+0))]}"
         local port="${ROPERO_SLOT_ROWS[$((i+1))]}"
         local state="${ROPERO_SLOT_ROWS[$((i+2))]}"
         local model="${ROPERO_SLOT_ROWS[$((i+3))]}"
-        local pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
+        # local pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
         local uptime="${ROPERO_SLOT_ROWS[$((i+5))]}"
         local engine="${ROPERO_SLOT_ROWS[$((i+6))]}"
 
-        # Truncar slot/modelo largos (preservan ancho de columna)
+        # Truncar slot/modelo largos: alaja NO trunca, el ancho de columna
+        # sale del contenido más largo, así que el corte va aquí.
         if (( ${#slot} > 9 )); then
             slot="${slot:0:6}..."
         fi
@@ -860,17 +867,27 @@ _render_status_compact() {
             model="${model:0:19}..."
         fi
 
-        # Estado coloreado. Color FUERA del campo %-Ns para que el pad no
-        # cuente bytes ANSI.
+        row_args+=(--rows "$slot;$port;$state;$model;$uptime;$engine")
+
+        r=$((r+1))
         if [[ "$state" == "ON" ]]; then
-            printf "  %-9s %-6s ${GRN_B}%-6s${NC} %-22s %-7s %-8s %-15s\n" \
-                "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
+            opts+=(--row-$r-color "$C_NORM;$C_NORM;$C_ON;$C_NORM;$C_NORM;$C_NORM;$C_NORM")
+            opts+=(--row-$r-effects "bold")
+            opts+=(--row-$r-bold "false;false;true;false;false;false")
         else
-            printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
-                "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
+            opts+=(--row-$r-effects "dim")
         fi
         i=$((i+7))
     done
+
+    "$alaja_bin" table \
+        --border none \
+        --padding 0 \
+        --headers-color "$C_HDR" \
+        --headers-effects "bold" \
+        --headers "SLOT;PORT;ESTADO;MODELO;UPTIME;ENGINE" \
+        ${row_args[@]+"${row_args[@]}"} \
+        ${opts[@]+"${opts[@]}"}
 }
 
 # -----------------------------------------------------------------------------
