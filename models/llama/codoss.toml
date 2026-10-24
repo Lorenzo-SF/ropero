@@ -107,7 +107,11 @@ base = [
     "--temp", "1.0",
     "--min-p", "0.0",
     "--top-p", "1.0",
-    "--top-k", "0",
+    # 40 y no 0: el sampler de llama.cpp corre en la CPU y sin recorte tiene que
+    # ordenar los 201.088 tokens en cada token (~8 ms, la mitad del tiempo de
+    # generacion). Medido en gptoss: 15,62 ms/token -> 7,2 de GPU + 8,4 de
+    # sampler. Ver la cabecera de gptoss.toml.
+    "--top-k", "${env:ROPERO_CODOSS_TOPK:-40}",
     "--threads", "12",
     "--threads-batch", "24",
     "--reasoning-format", "auto",
@@ -119,6 +123,12 @@ base = [
     "--ubatch-size", "256",
     "--n-predict", "8192",
     "--parallel", "1",
+
+    # ---- Prefill entre turnos ----
+    # Sin cache-prompt cada turno vuelve a prefillar el contexto entero (con
+    # 14k tokens de prompt: 5,2 s por turno). Con cache-prompt se reusa.
+    "--cache-prompt",
+    "--context-shift",
 
     # ---- Modelo / carga ----
     "--jinja",
