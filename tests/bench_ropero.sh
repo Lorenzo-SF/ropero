@@ -53,7 +53,9 @@ AGENTE="${AGENTE:-build}"
 PUERTO="${PUERTO:-9999}"                     # donde apuntan los providers
 API_KEY="${API_KEY:-sk-local-dev-key}"
 ESPERA="${ESPERA:-900}"                      # segundos esperando al modelo
-TIMEOUT="${TIMEOUT:-3600}"                   # segundos maximos por sesion
+TIMEOUT="${TIMEOUT:-900}"                    # segundos maximos por sesion.
+# 3600 era una hora y pico colgada sin decir nada; 900 avisa antes y deja
+# margen para las tres pruebas de un modelo.
 FORCE="${FORCE:-0}"                          # 1 = repetir los ya probados
 
 # Si el nombre de la carpeta no es el del modelo en ropero, se mapea aqui.
@@ -126,9 +128,13 @@ ms_por_token() {
 gpu_completo() {
     local log="$1" off="" mal=0 motivo=""
 
+    # "cannot meet free memory target" solo es un FALLO si de verdad se
+    # quedaron capas en la CPU. Con --n-gpu-layers fijo el fitter lo intenta
+    # y no puede ajustar, pero el modelo entra entero igualmente: eso es un
+    # aviso, no un fallo.
+    local aviso=""
     if grep -qa "cannot meet free memory target" "$log" 2>/dev/null; then
-        mal=1
-        motivo="el fitter no pudo ajustar a la VRAM: $(grep -a -m1 'cannot meet free memory target' "$log" | sed 's/.*: //')"
+        aviso="el fitter no pudo ajustar a la VRAM ($(grep -a -m1 'cannot meet free memory target' "$log" | sed 's/.*: //'))"
     fi
 
     off=$(grep -aoE "offloaded [0-9]+/[0-9]+ layers" "$log" 2>/dev/null | tail -1)
@@ -139,7 +145,19 @@ gpu_completo() {
         if [[ "$x" -lt "$y" ]]; then
             mal=1
             motivo="solo $x de $y capas en la GPU (el resto en la CPU)"
+            aviso=""
+        else
+            GPU_AVISO="modelo entero en la GPU ($x/$y capas)"
+            [[ -n "$aviso" ]] && GPU_AVISO="$GPU_AVISO; $aviso"
+            return 0
         fi
+    fi
+
+    # sin "offloaded X/Y" no se puede asegurar: si el fitter no pudo, puede
+    # que se quedaran capas en la CPU sin que el log lo diga claro.
+    if [[ -n "$aviso" && $mal -eq 0 ]]; then
+        GPU_AVISO="$aviso (no se pudo comprobar el reparto de capas)"
+        return 0
     fi
 
     if (( mal )); then
@@ -188,7 +206,33 @@ if [[ ${#carpetas[@]} -eq 0 ]]; then
 fi
 
 GLOBAL="$OUT_DIR/resumen-global.tsv"
-printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$GLOBAL"
+GLOBAL_PREV="$OUT_DIR/.resumen-global.prev.tsv"
+# No se trunca: si ya existe, se conserva y al final se fusiona con lo nuevo
+# (sin duplicar las filas de los modelos repetidos).
+if [[ -f "$GLOBAL" ]]; then
+    cp "$GLOBAL" "$GLOBAL_PREV"
+    printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$GLOBAL"
+else
+    printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$GLOBAL"
+fi
+
+# ── LIMPIAR EL ESTADO ENTRE PRUEBAS ─────────────────────────────────────────
+# Sin esto, la segunda prueba de un modelo arranca sobre lo que dejó la
+# primera: el contexto del prompt anterior sigue en el servidor, la VRAM
+# sigue ocupada y el opencode arrastra sesiones del run anterior.
+limpiar_procesos() {
+    local modelo="$1"
+
+    # 1. el opencode que haya quedado vivo (el timeout mata el proceso, pero
+    #    no siempre a los hijos ni al daemon de sesiones)
+    pkill -f 'opencode run' 2>/dev/null || true
+    pkill -f 'opencode.*--format json' 2>/dev/null || true
+    sleep 0.3
+
+    # 2. el servidor de llama.cpp: se para y se relanza limpio
+    ropero stop "$modelo" >/dev/null 2>&1 || true
+    sleep 1
+}
 
 # ── UNA PRUEBA POR CARPETA ─────────────────────────────────────────────────
 n=0
@@ -205,47 +249,82 @@ for carpeta in "${carpetas[@]}"; do
   # ── idempotente: si este modelo ya esta probado, no se repite ───────────
   # La marca se pone AL TERMINAR el modelo. Si la corrida se corto, no hay
   # marca y el modelo se vuelve a hacer (que es lo que quieres).
-  if [[ -f "$out/.bench-hecho" && "$FORCE" != "1" ]]; then
-    ok "ya estaba probado — me lo salto (borra $out/.bench-hecho para repetirlo)"
-    continue
+  # ¿ya están TODAS las pruebas de este modelo? entonces se salta entero.
+  # Si solo están algunas, se hacen las que faltan: una corrida interrumpida
+  # no tira el trabajo hecho.
+  if [[ "$FORCE" != "1" && -f "$out/resumen.tsv" ]]; then
+    faltan=0
+    for p in "${PROMPTS[@]}"; do
+      pr="${p%.md}"
+      grep -q "^$pr"$'\t' "$out/resumen.tsv" 2>/dev/null || faltan=$((faltan+1))
+    done
+    if (( faltan == 0 )); then
+      ok "ya estaba probado entero — me lo salto (FORCE=1 para repetir)"
+      continue
+    elif (( faltan < ${#PROMPTS[@]} )); then
+      ok "faltan $faltan prueba(s) — solo hago esas"
+    fi
   fi
   rm -f "$out/.bench-hecho"
 
-  # ── ropero ───────────────────────────────────────────────────────────────
-  # En segundo plano y con la salida aqui: en primer plano ropero se queda
-  # sirviendo el puerto, que es lo que queremos. Y el log del servidor queda
-  # en el directorio de resultados.
-  ( cd "$dir" && nohup ropero "$modelo" > "$out/ropero.log" 2>&1 & )
-  sleep 1
-
-  if grep -q "ya está corriendo" "$out/ropero.log" 2>/dev/null; then
-    ok "ya estaba corriendo: lo uso y no lo paro al terminar"
-  elif ! esperar_modelo; then
-    err "el modelo no respondió en :$PUERTO tras ${ESPERA}s"
-    tail -n 15 "$out/ropero.log" | sed 's/^/    /'
-    continue
-  else
-    ok "servido como '$(modelo_en_puerto)' en :$PUERTO"
-  fi
-
-  # El modelo esta entero en la VRAM? Si no, los tokens/s de abajo no valen.
-  gpu_nota="ok"
-  if gpu_completo "$out/ropero.log"; then
-    ok "$GPU_AVISO"
-  else
-    gpu_nota="RECORTADO"
-    err "$GPU_AVISO"
-    err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
-    err "  -> baja el context del TOML o quita el mmproj; el fitter recorta solo"
-  fi
+  # El arranque del server va DENTRO del bucle de pruebas: cada prueba
+  # arranca con el server limpio (sin el contexto de la anterior), y su
+  # log se guarda aparte -> los tokens/s de cada prueba son los suyos.
 
   # ── las pruebas ──────────────────────────────────────────────────────────
-  printf 'prueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$out/resumen.tsv"
+  # El resumen del modelo NO se trunca: si ya tiene filas de una prueba, esa
+  # prueba se salta. Asi una corrida interrumpida no tira el trabajo hecho.
+  if [[ ! -f "$out/resumen.tsv" ]]; then
+    printf 'prueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$out/resumen.tsv"
+  fi
   for p in "${PROMPTS[@]}"; do
     prueba="${p%.md}"
     prompt="$(cat "$PROMPTS_DIR/$p")"
     work="$dir/$prueba"                   # el trabajo ocurre junto al modelo
+
+    # ya está hecha esta prueba para este modelo? -> no se repite
+    if [[ -f "$out/resumen.tsv" ]] && grep -q "^$prueba"$'\t' "$out/resumen.tsv" 2>/dev/null; then
+      ok "  $p ya estaba hecha — me la salto"
+      continue
+    fi
+
+    # ── estado limpio entre pruebas ──────────────────────────────────────
+    # El opencode deja procesos y el server de llama.cpp se queda con el
+    # contexto de la prueba anterior (y con la VRAM). Si no se limpian, la
+    # segunda prueba arranca sobre el estado de la primera: por eso el
+    # servidor se para y se relanza, y el opencode se mata.
+    limpiar_procesos "$modelo"
+
     rm -rf "$work"; mkdir -p "$work"
+
+    # ── ropero, limpio para esta prueba ──────────────────────────────────
+    # En segundo plano y con la salida aqui: en primer plano ropero se queda
+    # sirviendo el puerto, que es lo que queremos.
+    LOG_PRUEBA="$out/ropero-$prueba.log"
+    ( cd "$dir" && nohup ropero "$modelo" > "$LOG_PRUEBA" 2>&1 & )
+    sleep 1
+
+    if grep -q "ya está corriendo" "$LOG_PRUEBA" 2>/dev/null; then
+        err "el modelo ya estaba corriendo: no se puede medir en limpio"
+        err "  -> para el ropero $modelo y vuelve a lanzarlo"
+        continue
+    elif ! esperar_modelo; then
+        err "el modelo no respondió en :$PUERTO tras ${ESPERA}s"
+        tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
+        continue
+    fi
+    ok "  servidor limpio para $prueba (log: $(basename "$LOG_PRUEBA"))"
+
+    # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
+    gpu_nota="ok"
+    if gpu_completo "$LOG_PRUEBA"; then
+        ok "  $GPU_AVISO"
+    else
+        gpu_nota="RECORTADO"
+        err "  $GPU_AVISO"
+        err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
+        err "  -> baja el context del TOML o quita el mmproj; el fitter recorta solo"
+    fi
 
     info "  $p"
     t0=$(date +%s)
@@ -272,8 +351,8 @@ for carpeta in "${carpetas[@]}"; do
       tail -n 10 "$out/opencode-$prueba.log" | sed 's/^/    /'
     fi
 
-    ts="$(tokens_por_segundo "$out/ropero.log")"; ts="${ts:-?}"
-    ms="$(ms_por_token "$out/ropero.log")";     ms="${ms:-?}"
+    ts="$(tokens_por_segundo "$LOG_PRUEBA")"; ts="${ts:-?}"
+    ms="$(ms_por_token "$LOG_PRUEBA")";     ms="${ms:-?}"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" \
       >> "$out/resumen.tsv"
@@ -293,6 +372,8 @@ for carpeta in "${carpetas[@]}"; do
       prueba="${p%.md}"
       [[ -f "$out/sesion-$prueba.md" ]] && \
         cp "$out/sesion-$prueba.md" "$OUT_DIR/juez/$carpeta/sesion-$prueba.md"
+      [[ -f "$out/ropero-$prueba.log" ]] && \
+        cp "$out/ropero-$prueba.log" "$OUT_DIR/juez/$carpeta/ropero-$prueba.log"
     done
     # los ficheros que el modelo haya generado en la carpeta de trabajo
     for w in "$dir"/*/; do
@@ -314,6 +395,14 @@ for carpeta in "${carpetas[@]}"; do
   # marca: este modelo ya esta. La proxima corrida se lo salta.
   date -Is > "$out/.bench-hecho"
 done
+
+# ── fusionar el global: lo viejo + lo nuevo, sin filas duplicadas ─────────
+if [[ -f "$GLOBAL_PREV" ]]; then
+    { cat "$GLOBAL_PREV"; tail -n +2 "$GLOBAL"; } | \
+        awk -F'\t' 'NR==1{print; next} !seen[$1"\t"$2]++' > "$GLOBAL.nuevo"
+    mv "$GLOBAL.nuevo" "$GLOBAL"
+    rm -f "$GLOBAL_PREV"
+fi
 
 head2 "resumen global"
 cat "$GLOBAL"
