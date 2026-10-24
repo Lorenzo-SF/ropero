@@ -76,7 +76,7 @@
 [model]
 name    = "agenta1"
 engine  = "llama-server"
-context = 65536
+context = 131072
 
 [files]
 gguf   = "Agents-A1-MTP-APEX-I-Mini.gguf"
@@ -93,7 +93,7 @@ default = "low"
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "-1",
+    "--n-gpu-layers", "42",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige

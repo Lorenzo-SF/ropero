@@ -103,7 +103,7 @@ list = []
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "-1",
+    "--n-gpu-layers", "31",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
@@ -124,14 +124,7 @@ base = [
     "--reasoning-budget", "4096",
     "--keep", "1024",
 
-    # ---- Speculative decoding con la cabeza MTP (fichero aparte) ----
-    "--spec-type", "draft-mtp",
-    "--model-draft", "${mtp}",
-    "--n-gpu-layers-draft", "-1",
-    "--spec-draft-n-max", "8",
-    "--spec-draft-n-min", "1",
-    "--spec-draft-p-min", "0.6",
-    "--spec-draft-backend-sampling",
+   
 
     # ---- Batch ----
     "--batch-size", "512",

@@ -100,7 +100,7 @@ base = [
     # -1 = que lo reparta el fitter. Con 99 el fitter aborta ("n_gpu_layers
     # already set by user to 99, abort"), deja de ajustar nada y el modelo
     # se carga entero en la VRAM a pelo. Ver la cabecera.
-    "--n-gpu-layers", "-1",
+    "--n-gpu-layers", "25",
     "--temp", "1.0",
     "--min-p", "0.0",
     "--top-p", "1.0",

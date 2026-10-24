@@ -117,7 +117,7 @@ base = [
     # -1 = auto: el fitter reparte solo. NO pongas un numero (--n-gpu-layers
     # 99): el fitter aborta con "n_gpu_layers already set by user" y el modelo
     # se va entero a la GPU a pelo -> cudaMalloc failed.
-    "--n-gpu-layers", "-1",
+    "--n-gpu-layers", "66",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
@@ -142,10 +142,10 @@ base = [
 
     # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
     "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "10",
+    "--spec-draft-n-max", "5",
 
     # ---- Reasoning ----
-    "--reasoning-budget", "12288",           # -1 = sin limite, 0 = fin inmediato
+    "--reasoning-budget", "12288",    
 
     # ---- Modelo / carga ----
     "--jinja",
