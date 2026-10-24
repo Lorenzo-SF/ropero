@@ -23,7 +23,13 @@
 #     KV q4_0 @131072   1,07 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
 #     compute buffer    ~0,9 GB   (ubatch 256: los logits = 248320 x 256 x 4B)
 #     --------------------------
-#     total            ~14,8 GB   -> el ctx NATIVO entero (131072) cabe
+#     total            ~14,8 GB   -> 131072 cabe
+#
+#   OJO: el ctx NATIVO del Qwen3.8-27B son 262144 (max_position_embeddings
+#   del config.json), no 131072. A 262144 la KV q4_0 serían 2,15 GB -> 15,9 GB
+#   -> no cabe; por eso el contexto de este fichero es 131072 (la mitad).
+#   Para el ctx nativo entero, usa `qwen38-apex` (NanoPlus de IsValorum,
+#   11,35 GiB), que sí lo aguanta con el mismo q4_0.
 #
 #   Con KV f16 la KV serían 4,29 GB -> 16,6 GB -> no cabe -> la KV se va a la
 #   CPU, la atención se calcula en la CPU y los t/s se desploman. De ahí el

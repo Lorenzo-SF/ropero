@@ -1,0 +1,133 @@
+# =============================================================================
+# qwen38-apex-hq — Qwen3.8-27B APEX-I **MiniPlus** V3 (máxima calidad)
+# =============================================================================
+#
+#   - GGUF   : Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3.gguf  (14,16 GB / 13,19 GiB)
+#   - mmproj : mmproj-Qwen3.8-27B-Q8_0.gguf             (0,59 GiB)
+#   - repo   : IsValorum/Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3-GGUF
+#
+# ── QUÉ APORTA ESTE RESPECTO A `qwen38-apex` (el NanoPlus) ──────────────────
+# Es el mismo checkpoint oficial (Qwen/Qwen3.8-27B) con el quant de más bits:
+#
+#   build          tamaño    BPW   WikiText-2 PPL   Δ vs base BF16
+#   ──────────────────────────────────────────────────────────────────────────
+#   MiniPlus V3    13,19 GiB  4,15  6,1361           +5,90 %
+#   NanoPlus V3    11,35 GiB  3,57  6,2577           +8,00 %
+#
+# O sea: 1,84 GiB menos y un 2,1 % más de PPL. El MiniPlus es el mejor
+# Qwen3.8-27B que cabe entero en una 5080 Laptop... pero NO llega a 128K de
+# contexto. Si el contexto largo es lo prioritario, usa `qwen38-apex`
+# (NanoPlus) con sus 262144 nativos.
+#
+# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB) ──────────────
+#   pesos 13,19 GiB
+#   KV q4_0 @65536   0,54 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
+#   compute          ~0,9 GB   (ubatch 256: logits = 248320 x 256 x 4 B)
+#   contexto CUDA    ~0,4 GB
+#   ---------------------------
+#   total           ~15,0 GB   -> cabe, pero con 0,3 GB de margen
+#
+#   Subiendo a 131072 la KV serían 1,07 GB -> 15,5 GB -> no cabe (y el fitter
+#   no baja el ctx si el usuario lo fija: "context size set by user"). Por eso
+#   aquí el contexto es 65536 y no 131072.
+#   Con el flag --vision (mmproj Q8_0, 0,59 GiB) el total sube a 15,6 GB ->
+#   baja el contexto a 49152 si necesitas visión.
+#
+# ── SPECULATIVE DECODING ────────────────────────────────────────────────────
+# El GGUF lleva la cabeza MTP DENTRO (blk.64.*, 15 tensores, según la ficha
+# del repo): no hace falta ningún fichero aparte, --spec-type draft-mtp ya la
+# encuentra.
+#
+# ── REASONING ───────────────────────────────────────────────────────────────
+# Mismos niveles que el Qwen3.8 base: low / medium / xhigh (el template sólo
+# acepta esos tres; "high" se remapea a xhigh y "minimal" lanza excepción).
+# Sampling oficial en modo thinking: temp 1.0 / top_p 0.95 / top_k 20 /
+# min_p 0.0 / repetition_penalty 1.0.
+#
+# El override del contexto es el canónico ROPERO_QWEN38_APEX_HQ_CTX.
+# =============================================================================
+
+[model]
+name    = "qwen38-apex-hq"
+engine  = "llama-server"
+context = 65536
+
+[files]
+gguf   = "Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3.gguf"
+mmproj = "mmproj-Qwen3.8-27B-Q8_0.gguf"
+
+[download]
+repo = "IsValorum/Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3-GGUF"
+file = "Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3.gguf"
+size = "14.16 GB"
+
+[download.aux.mmproj]
+file = "mmproj-Qwen3.8-27B-Q8_0.gguf"
+name = "mmproj-Qwen3.8-27B-Q8_0.gguf"
+size = "0.59 GB"
+
+[levels]
+list    = ["low", "medium", "xhigh"]
+default = "low"
+
+[flags]
+list = ["vision"]
+
+[args]
+base = [
+    # ---- GPU offload ----
+    # -1 = auto: el fitter reparte solo. NO pongas un numero (--n-gpu-layers
+    # 99): el fitter aborta con "n_gpu_layers already set by user" y el modelo
+    # se va entero a la GPU a pelo -> cudaMalloc failed.
+    "--n-gpu-layers", "-1",
+
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",                # 0,54 GB a 65536 (f16 = 2,15 GB)
+    "--cache-type-v", "q4_0",
+    "--kv-unified",
+
+    # ---- Sampling oficial en modo thinking (ficha de Qwen3.8) ----
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "256",                 # compute buffer ~0,9 GB
+
+    "--n-predict", "16384",
+    "--parallel", "1",
+
+    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "10",
+
+    # ---- Reasoning ----
+    "--reasoning-budget", "12288",           # -1 = sin limite, 0 = fin inmediato
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",
+]
+
+# El nivel marca el reasoning_effort. El env ROPERO_QWEN38_APEX_HQ_REASONING lo
+# sobreescribe.
+[args.level.low]
+reasoning_effort = "${env:ROPERO_QWEN38_APEX_HQ_REASONING:-low}"
+
+[args.level.medium]
+reasoning_effort = "${env:ROPERO_QWEN38_APEX_HQ_REASONING:-medium}"
+
+[args.level.xhigh]
+reasoning_effort = "${env:ROPERO_QWEN38_APEX_HQ_REASONING:-xhigh}"
+
+# Sin --vision el servidor arranca sin torre de visión (menos VRAM) y sólo
+# lee texto.
+[args.flag.vision]
+base    = ["--mmproj", "${mmproj}"]
+requires = ["mmproj"]
