@@ -43,7 +43,10 @@
 #
 # ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB) ──────────────
 #   pesos 11,35 GiB
-#   KV q4_0 @262144  2,15 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
+#   KV q4_0 @65536   1,05 GB   (16 capas full-attn x (4 KV heads x 256 dim)
+#                             x 2 (K y V) x 0,5625 B (q4_0) = 18,4 B/token)
+#   KV q4_0 @262144  4,18 GB   -> NO CABE (medido en el qwen: 3,95 GB en
+#                             q8_0; el fitter recorta capas y se va a 9 t/s)
 #   compute          ~0,9 GB   (ubatch 256: logits = 248320 x 256 x 4 B)
 #   contexto CUDA    ~0,4 GB
 #   ---------------------------
@@ -104,28 +107,22 @@
 [model]
 name    = "qwen38-apex"
 engine  = "llama-server"
-context = 262144
+context = 65536
 
 [files]
 gguf   = "Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3.gguf"
-mmproj = "mmproj-Qwen3.8-27B-Q8_0.gguf"
-
 [download]
 repo = "IsValorum/Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3-GGUF"
 file = "Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3.gguf"
 size = "12.18 GB"
 
-[download.aux.mmproj]
-file = "mmproj-Qwen3.8-27B-Q8_0.gguf"
-name = "mmproj-Qwen3.8-27B-Q8_0.gguf"
-size = "0.59 GB"
 
 [levels]
 list    = ["low", "medium", "xhigh"]
 default = "low"
 
 [flags]
-list = ["vision"]
+list = []
 
 [args]
 base = [
@@ -155,8 +152,6 @@ base = [
     "--ubatch-size", "256",                 # compute buffer ~0,9 GB
 
     "--n-predict", "16384",
-    "--parallel", "1",
-
     # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "10",
@@ -184,6 +179,6 @@ reasoning_effort = "${env:ROPERO_QWEN38_APEX_REASONING:-xhigh}"
 # lee texto. Con --vision hay que tener el mmproj en disco: el mmproj Q8_0
 # son 0,59 GiB, así que con visión activada el ctx de 262144 se queda sin
 # margen; baja a 196608 si la Vision te importa más que el contexto.
-[args.flag.vision]
-base    = ["--mmproj", "${mmproj}"]
-requires = ["mmproj"]
+# [args.flag.vision] se ha ido con el mmproj:
+#   base    = ["--mmproj", "${mmproj}"]
+#   requires = ["mmproj"]

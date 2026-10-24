@@ -34,7 +34,6 @@ base = [
     "--n-predict", "8192",
     "--batch-size", "4096",
     "--ubatch-size", "1024",
-    "--parallel", "1",
 ]
 
 [args.level.low]

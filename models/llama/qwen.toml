@@ -20,7 +20,8 @@
 # ── POR QUÉ IQ3_XS ──────────────────────────────────────────────────────────
 #   VRAM 15,93 GB totales -> ~15,5 utilizables (el contexto CUDA se come ~0,4)
 #     IQ3_XS          12,80 GB
-#     KV q4_0 @131072   1,07 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
+#     KV q4_0 @65536    1,05 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
+#     KV q4_0 @131072   2,09 GB   (el contexto completo NO cabe)
 #     compute buffer    ~0,9 GB   (ubatch 256: los logits = 248320 x 256 x 4B)
 #     --------------------------
 #     total            ~14,8 GB   -> 131072 cabe
@@ -88,28 +89,27 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 131072
+context = 65536
 
 [files]
 gguf   = "Qwen3.8-27B-IQ3_XS.gguf"
-mmproj = "mmproj-Qwen3.8-27B-f16.gguf"
+# Sin mmproj: el visor de imagen son 693 MiB de VRAM (12.207 - 11.514). Con el
+# escritorio abierto solo quedaban 14.036 MiB libres y el fitter recortaba 16
+# capas a la CPU -> 9 t/s en vez de ~30. Si lo quieres de vuelta, descomenta
+# la linea y baja el contexto.
+# mmproj = "mmproj-Qwen3.8-27B-f16.gguf"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-IQ3_XS.gguf"
 size = "12.80 GB"
 
-[download.aux.mmproj]
-file = "mmproj-Qwen3.8-27B-f16.gguf"
-name = "mmproj-Qwen3.8-27B-f16.gguf"
-size = "0.86 GB"
-
 [levels]
 list    = ["low", "medium", "xhigh"]
 default = "low"
 
 [flags]
-list = ["vision"]
+list = []
 
 [args]
 base = [
@@ -139,7 +139,6 @@ base = [
     "--ubatch-size", "256",                 # compute buffer ~0,9 GB
 
     "--n-predict", "16384",
-    "--parallel", "1",
 
     # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
     "--spec-type", "draft-mtp",
@@ -166,6 +165,10 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
 # Sin --vision el servidor arranca sin torre de visión (menos VRAM) y sólo
 # lee texto. Con --vision hay que tener el mmproj en disco.
-[args.flag.vision]
-base    = ["--mmproj", "${mmproj}"]
-requires = ["mmproj"]
+# El flag "vision" (mmproj) se ha ido: el visor de imagen son 693 MiB de VRAM
+# y aqui no hace falta. Para reincorporarlo:
+#   [files]      mmproj = "mmproj-Qwen3.8-27B-f16.gguf"
+#   [flags]      list = ["vision"]
+#   [args.flag.vision]
+#   base    = ["--mmproj", "${mmproj}"]
+#   requires = ["mmproj"]

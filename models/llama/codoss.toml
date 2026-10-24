@@ -122,8 +122,6 @@ base = [
     "--batch-size", "512",
     "--ubatch-size", "256",
     "--n-predict", "8192",
-    "--parallel", "1",
-
     # ---- Prefill entre turnos ----
     # Sin cache-prompt cada turno vuelve a prefillar el contexto entero (con
     # 14k tokens de prompt: 5,2 s por turno). Con cache-prompt se reusa.

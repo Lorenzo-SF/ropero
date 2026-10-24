@@ -27,22 +27,18 @@ port    = 9991
 
 [files]
 gguf   = "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
-mmproj = "Qwen2.5-VL-mmproj.gguf"
-
 [download]
 repo = "unsloth/Qwen2.5-VL-7B-Instruct-GGUF"
 file = "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
 size = "6.1 GB"
 
 # El mmproj también es parte del bundle: sin él el modelo arranca pero no ve.
-[download.aux.mmproj]
-file = "mmproj-F16.gguf"
-name = "Qwen2.5-VL-mmproj.gguf"
-size = "1.35 GB"
 
 [args]
 base = [
-    "--n-gpu-layers", "${env:ROPERO_QWENVISION_NGL:-999}",
+    # -1 (no 999): con un numero fijo el fitter aborta ("n_gpu_layers already set
+# by user") y el modelo entero se va a la VRAM a pelo -> cudaMalloc failed.
+    "--n-gpu-layers", "-1",
     "--threads", "12",
     "--threads-batch", "24",
     "--temp", "${env:ROPERO_QWENVISION_TEMP:-0.2}",     # baja temperatura para análisis preciso
@@ -51,7 +47,6 @@ base = [
     "--repeat-penalty", "${env:ROPERO_QWENVISION_REPEAT:-1.05}",
     "--cache-type-k", "q8_0",
     "--cache-type-v", "q8_0",
-    "--mmproj", "${mmproj}",
     "--n-predict", "4096",
     "--slot-prompt-similarity", "0.8",
     "--keep", "8192",
