@@ -117,10 +117,6 @@ base = [
     "--samplers", "min_p;top_k;top_p;temp;dry",
     "--reasoning-budget", "4096",
 
-    # ---- Speculative decoding con la cabeza MTP (va dentro) ----
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "10",
-
     # ---- Batch ----
     "--batch-size", "512",
     "--ubatch-size", "256",
