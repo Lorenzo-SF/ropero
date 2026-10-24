@@ -1,26 +1,89 @@
 # =============================================================================
-# qwen38-apex — Qwen3.8-27B EfficientThink (VAL APEX I MiniPlus V3)
+# qwen — Qwen3.8-27B (base, denso 27B + VLM) con GGUF de bartowski
 # =============================================================================
 #
-#   - GGUF principal : Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf (14.162 GB)
-#   - MTP (drafter)  : speculative/dflash2-qwen38-27b-Q4_K_M.gguf  (1.143 GB)
-#   - mmproj (visión): mmproj-Qwen3.8-27B-Q4_K_M.gguf               (0.522 GB)
+# Por qué bartowski y no cuantizarlo tú:
+#   · Sus GGUF usan imatrix (activation-aware): meten más bits donde el modelo
+#     los necesita. Un llama-quantize sin imatrix te da peor calidad a igual
+#     tamaño.
+#   · Te ahorras 41,6 GB de safetensors + 41,6 GB de GGUF F16 + horas de
+#     quantize en un portátil.
+#   · El GGUF oficial de NVFP4 de Unsloth (21,02 GiB) NO es una opción aquí:
+#     sólo cuantiza el MLP; la atención se queda en FP8 (10,29 GB) y el
+#     embed (248320 x 5120) en BF16 (2,54 GB). No cabe en 16 GB de VRAM.
 #
-# Contexto 32768: es lo que recomienda la ficha oficial para llama.cpp (el
-# nativo del modelo son 262144).
+# ── TAMAÑOS REALES (bartowski/Qwen3.8-27B-GGUF, medidos) ────────────────────
+#   IQ4_XS 15,48 GB (NO cabe) | IQ3_M 14,86 (NO cabe) | Q3_K_M 13,40
+#   IQ3_XS 12,80 GB  <-- el que usa este fichero
+#   IQ3_XXS 12,32 | Q3_K_S 12,73 | IQ2_M 10,52 | Q4_0 16,35
 #
-# Sampling de la ficha:
-#   temp 0.60, top_p 0.95, top_k 20, min_p 0.05,
-#   repeat_penalty 1.00, presence_penalty 0.0
+# ── POR QUÉ IQ3_XS ──────────────────────────────────────────────────────────
+#   VRAM 15,93 GB totales -> ~15,5 utilizables (el contexto CUDA se come ~0,4)
+#     IQ3_XS          12,80 GB
+#     KV q4_0 @131072   1,07 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
+#     compute buffer    ~0,9 GB   (ubatch 256: los logits = 248320 x 256 x 4B)
+#     --------------------------
+#     total            ~14,8 GB   -> 131072 cabe
 #
-# El MTP va en [args].base (no en un flag): el bundle se descarga entero, así
-# que el drafter está siempre en disco y --spec-type draft-mtp siempre aplica.
+#   OJO: el ctx NATIVO del Qwen3.8-27B son 262144 (max_position_embeddings
+#   del config.json), no 131072. A 262144 la KV q4_0 serían 2,15 GB -> 15,9 GB
+#   -> no cabe; por eso el contexto de este fichero es 131072 (la mitad).
+#   Para el ctx nativo entero, usa `qwen38-apex` (NanoPlus de IsValorum,
+#   11,35 GiB), que sí lo aguanta con el mismo q4_0.
 #
-# El proyector de visión es un flag: sin `--vision` el servidor arranca sin
-# torre de visión (menos VRAM) y sólo lee texto.
+#   Con KV f16 la KV serían 4,29 GB -> 16,6 GB -> no cabe -> la KV se va a la
+#   CPU, la atención se calcula en la CPU y los t/s se desploman. De ahí el
+#   q4_0 (el KV cuantizado exige -fa on, que va aquí).
 #
-# El override del contexto es el canónico ROPERO_QWEN38_APEX_CTX.
+# ── SPECULATIVE DECODING CON LA CABEZA MTP ─────────────────────────────────
+#   El GGUF de bartowski INCLUYE la cabeza MTP (los tensores nextn): la
+#   diferencia de tamaño entre el modelo estimado (11,18 GiB) y el fichero real
+#   (11,92 GiB) son 0,74 GiB, que es exactamente model_mtp.safetensors
+#   (0,79 GiB) en el repo oficial. Por eso NO hace falta un fichero aparte:
+#   se activa con --spec-type draft-mtp y ya está dentro.
+#   Si al probarlo ves que la especificación no se activa (n_drafted = 0 en el
+#   log), es que tu GGUF no la trae: quita esas dos líneas y ya está.
+#
+# ── REASONING ───────────────────────────────────────────────────────────────
+#   El chat_template de Qwen3.8 acepta SOLO: xhigh (su default), medium, low.
+#   "high" se remapea a xhigh; "minimal" lanza excepción. Por eso los niveles
+#   aquí son low / medium / xhigh (NO high).
+#   El sampling oficial en modo thinking es temp 1.0 / top_p 0.95 / top_k 20 /
+#   min_p 0.0 / repetition_penalty 1.0 (de la ficha del modelo).
+#
+# El override del contexto es el canónico ROPERO_QWEN_CTX.
 # =============================================================================
+#
+# ── QUÉ ES -ngl Y POR QUÉ -1 (y no 99) ──────────────────────────────────────
+#   --n-gpu-layers = cuantas capas del modelo se copian a la VRAM.
+#     0 = todo en CPU · 99 = "todas las que quepan" · -1 = que lo decida el
+#     fitter, que es el default upstream.
+#   El fitter (fit_params, on por defecto) mira la VRAM libre y decide el
+#   reparto: cuantas capas entran, y con "overflow" por fraccion, o sea que
+#   la atencion puede quedarse en la GPU y el MLP ir a la CPU, o al reves.
+#   Tambien ajusta el contexto si el usuario no lo ha fijado a mano.
+#   PERO si el usuario fija -ngl, el fitter aborta con
+#     "n_gpu_layers already set by user to 99, abort"
+#   y esa excepcion se CAPTURA y sale como WARN (common_params_fit_exception
+#   -> LOG_WRN, status FAILURE). O sea: no se aplica NINGUN ajuste y el
+#   servidor carga el modelo entero en la VRAM a pelo -> cudaMalloc failed.
+#   Ese es el motivo de -1. El 99 solo tiene sentido si el modelo cabe entero
+#   Y quieres quitar el fitter del medio para medir sin ajustes.
+#
+# ── POR QUÉ batch 512 Y ubatch 256 ─────────────────────────────────────────
+#   --batch-size  = tokens del prompt que se pasan al modelo en una llamada.
+#   --ubatch-size = tokens que se calculan DE GOLPE en la GPU (micro-lote).
+#                  El compute buffer se dimensiona con el ubatch, no con el
+#                  batch, y el buffer mas gordo son los logits:
+#                      ubatch x vocab x 4 bytes
+#                        1024 -> 1,02 GB   (vocab 248.320)
+#                         512 ->  508 MB
+#                         256 ->  254 MB
+#                         128 ->  127 MB
+#   El batch, en cambio, no llena la VRAM: afecta al prefill (cuantos tokens
+#   por llamada) y a la RAM del prompt cache. Con el page cache haciendo de
+#   RAM, cada GB cuenta, asi que va corto de RAM.
+#   El fitter NO toca ni el batch ni el ubatch: hay que fijarlos a mano.
 
 [model]
 name    = "qwen"
@@ -28,62 +91,81 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf   = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
-mtp    = "dflash2-qwen38-27b-Q4_K_M.gguf"
-mmproj = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
+gguf   = "Qwen3.8-27B-IQ3_XS.gguf"
+mmproj = "mmproj-Qwen3.8-27B-f16.gguf"
 
 [download]
-repo = "IsValorum/Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3-GGUF"
-file = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
-size = "14.162 GB"
-
-# El drafter vive en el subdirectorio `speculative/` del repo, pero el nombre
-# final es plano: el modelo lo busca en la raíz de $GGUF_DIR.
-[download.aux.mtp]
-file = "speculative/dflash2-qwen38-27b-Q4_K_M.gguf"
-name = "dflash2-qwen38-27b-Q4_K_M.gguf"
-size = "1.143 GB"
+repo = "bartowski/Qwen3.8-27B-GGUF"
+file = "Qwen3.8-27B-IQ3_XS.gguf"
+size = "12.80 GB"
 
 [download.aux.mmproj]
-file = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
-name = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
-size = "0.522 GB"
+file = "mmproj-Qwen3.8-27B-f16.gguf"
+name = "mmproj-Qwen3.8-27B-f16.gguf"
+size = "0.86 GB"
 
 [levels]
-list    = ["low", "medium", "high"]
-default = "medium"
+list    = ["low", "medium", "xhigh"]
+default = "low"
 
 [flags]
 list = ["vision"]
 
 [args]
 base = [
+    # ---- GPU offload ----
+    # -1 = auto: el fitter reparte solo. NO pongas un numero (--n-gpu-layers
+    # 99): el fitter aborta con "n_gpu_layers already set by user" y el modelo
+    # se va entero a la GPU a pelo -> cudaMalloc failed.
     "--n-gpu-layers", "-1",
-    "--jinja",
-    "--temp", "0.60",
+
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",                # 1,07 GB a 131072 (f16 = 4,29 GB)
+    "--cache-type-v", "q4_0",
+    "--kv-unified",
+
+    # ---- Sampling oficial en modo thinking (ficha de Qwen3.8) ----
+    "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
-    "--min-p", "0.05",
+    "--min-p", "0.0",
     "--repeat-penalty", "1.0",
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "--kv-unified",
+
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "256",                 # compute buffer ~0,9 GB
+
     "--n-predict", "16384",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
     "--parallel", "1",
 
+    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "10",
+
+    # ---- Reasoning ----
+    "--reasoning-budget", "12288",           # -1 = sin limite, 0 = fin inmediato
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",
 ]
 
+# El nivel marca el reasoning_effort. El env ROPERO_QWEN_REASONING lo
+# sobreescribe (es la forma de forzar un nivel sin tocar la línea de órdenes).
 [args.level.low]
-chat_template_kwargs = { enable_thinking = false }
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-low}"
 
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = true }
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-medium}"
 
-[args.level.high]
-chat_template_kwargs = { enable_thinking = true }
+[args.level.xhigh]
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
+# Sin --vision el servidor arranca sin torre de visión (menos VRAM) y sólo
+# lee texto. Con --vision hay que tener el mmproj en disco.
 [args.flag.vision]
-base = ["--mmproj", "${mmproj}"]
+base    = ["--mmproj", "${mmproj}"]
 requires = ["mmproj"]

@@ -1,5 +1,76 @@
 # =============================================================================
-# ornith-1.5 — Ornith 1.5 35B-A3B (MXFP4 MOE Hybrid Imatrix)
+# ornith — Ornith-1.5-35B-A3B (MoE híbrido, como el Agents-A1)
+# =============================================================================
+#
+#   - GGUF   : Ornith-1.5-35B-A3B-IQ2_M.gguf  (11.68 GiB)
+#   - repo   : bartowski/Ornith-1.5-35B-A3B-GGUF
+#   - mmproj  : mmproj-Ornith-1.5-35B-A3B-f16.gguf
+#
+# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
+# El GGUF que habia (jashepp MXFP4_MOE_Q8_0_F16, 20,7 GB) no cabia.
+# En bartowski hay 29 quants, pero el primero que entra entero es el IQ2_M
+# (11,68 GiB): el IQ3_XXS (14,29) y el IQ3_XS (15,54) ya no caben ni con un
+# contexto de 16K. El oficial ornith-ai solo tiene Q4_K_M (20,22) o mas.
+# Es el trade-off de esta VRAM: para el Ornith, el techo de calidad es 2 bits.
+# El imatrix de bartowski y el mmproj (0,84 GiB) estan en el mismo repo.
+#
+# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB de 15.933) ──────
+#   pesos 11,68 GiB
+#   KV q4_0 @262144   1,34 GB   (10 capas full-attn x 2 KV x 256 dim x 2 x 0,5 B)
+#   compute          ~1,1 GB   (ubatch 256)
+#   contexto CUDA    ~0,4 GB
+#   --------------------------
+#   total           ~14,5 GB   -> cabe el ctx NATIVO entero (262144)
+#
+# ── ARGUMENTOS QUE IMPORTAN Y POR QUÉ ──────────────────────────────────────
+#   · --n-gpu-layers -1: deja que el fitter reparta. Con un número fijo
+#     (99) el fitter aborta con "n_gpu_layers already set by user", el modelo
+#     se va entero a la GPU a pelo y revienta con cudaMalloc failed.
+#   · --load-mode auto: mmap + page cache. Con "none" el fichero entero se
+#     copia a la RAM (y aquí no cabe): se pierde el page cache y el SSD deja
+#     de servir de "RAM".
+#   · KV q4_0: con f16 no cabe y la KV se va a la CPU -> la atención se
+#     calcula en la CPU y los t/s se desploman (es lo que le pasó al gpt-oss
+#     con 80-100 t/s en vez de 120-130). El KV cuantizado exige -fa on.
+#   · Los niveles son los que acepta el chat_template del modelo (ver abajo).
+#
+# ── QUÉ ES -ngl Y POR QUÉ -1 (y no 99) ──────────────────────────────────────
+#   --n-gpu-layers = cuantas capas del modelo se copian a la VRAM.
+#     0 = todo en CPU · 99 = "todas las que quepan" · -1 = que lo decida el
+#     fitter, que es el default upstream.
+#   El fitter (fit_params, on por defecto) mira la VRAM libre y decide el
+#   reparto: cuantas capas entran, y con "overflow" por fraccion, o sea que
+#   la atencion puede quedarse en la GPU y el MLP ir a la CPU, o al reves.
+#   Tambien ajusta el contexto si el usuario no lo ha fijado a mano.
+#   PERO si el usuario fija -ngl, el fitter aborta con
+#     "n_gpu_layers already set by user to 99, abort"
+#   y esa excepcion se CAPTURA y sale como WARN (common_params_fit_exception
+#   -> LOG_WRN, status FAILURE). O sea: no se aplica NINGUN ajuste y el
+#   servidor carga el modelo entero en la VRAM a pelo -> cudaMalloc failed.
+#   Ese es el motivo de -1. El 99 solo tiene sentido si el modelo cabe entero
+#   Y quieres quitar el fitter del medio para medir sin ajustes.
+#
+# ── POR QUÉ batch 512 Y ubatch 256 ─────────────────────────────────────────
+#   --batch-size  = tokens del prompt que se pasan al modelo en una llamada.
+#   --ubatch-size = tokens que se calculan DE GOLPE en la GPU (micro-lote).
+#                  El compute buffer se dimensiona con el Ubatch, no con el
+#                  batch, y el buffer mas gordo son los logits:
+#                      ubatch x vocab x 4 bytes
+#                        1024 -> 1,02 GB   (vocab 248.320)
+#                         512 ->  508 MB
+#                         256 ->  254 MB
+#                         128 ->  127 MB
+#   El batch, en cambio, no llena la VRAM: afecta al prefill (cuantos tokens
+#   por llamada) y a la RAM del prompt cache. Con el page cache haciendo de
+#   RAM, cada GB cuenta, asi que 512 va corto de RAM.
+#   El fitter NO toca ni el batch ni el ubatch: hay que fijarlos a mano.
+#
+# ── REASONING ───────────────────────────────────────────────────────────────
+# El chat_template de este modelo NO tiene niveles de esfuerzo: sólo el flag
+# enable_thinking (true/false). Así que "medium" y "high" hacen lo mismo; se
+# mantienen los tres nombres para no romper los scripts que ya los usan.
+#
+# El override del contexto es el canónico ROPERO_ORNITH_CTX.
 # =============================================================================
 
 [model]
@@ -8,58 +79,62 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf          = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-chat_template = "chat_template.jinja"
+gguf   = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
+mmproj  = "mmproj-Ornith-1.5-35B-A3B-f16.gguf"
 
 [download]
-repo = "jashepp/Ornith-1.5-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF"
-file = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-size = "20.7 GB"
+repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
+file = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
+size = "11.68 GiB"
 
-[download.aux.chat_template]
-file = "chat_template.jinja"
-name = "chat_template.jinja"
-size = "0.01 GB"
+[download.aux.mmproj]
+file = "mmproj-Ornith-1.5-35B-A3B-f16.gguf"
+name = "mmproj-Ornith-1.5-35B-A3B-f16.gguf"
+size = "0.84 GiB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
+
+[flags]
+list = ["vision"]
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
-    "--jinja",
-    "--chat-template-file", "${chat_template}",
+    # ---- GPU offload: que el fitter reparta ----
+    "--n-gpu-layers", "-1",
 
-    "--n-cpu-moe", "18",
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
 
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--kv-unified",
+
+    # ---- Sampling del Ornith ----
     "--temp", "0.60",
     "--top-k", "35",
     "--top-p", "0.93",
     "--min-p", "0.10",
     "--top-n-sigma", "0.60",
-
     "--dry-multiplier", "0.8",
     "--dry-base", "1.75",
     "--dry-allowed-length", "3",
     "--dry-penalty-last-n", "1024",
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
-
     "--samplers", "top_k;top_p;min_p;dry;temp;top_n_sigma",
-
-    "--reasoning", "on",
     "--reasoning-budget", "32768",
-    "--chat-template-kwargs", '{"enable_thinking": true}',
 
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "--kv-unified",
-
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "256",
     "--n-predict", "8192",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
     "--parallel", "1",
-    "--load-mode", "none",
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]
@@ -70,3 +145,7 @@ chat_template_kwargs = { enable_thinking = true }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
+
+[args.flag.vision]
+base    = ["--mmproj", "${mmproj}"]
+requires = ["mmproj"]

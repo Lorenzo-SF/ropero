@@ -1,14 +1,76 @@
 # =============================================================================
-# codoss — gpt-oss-20b coder (xCloud GGUF) con razonamiento por nivel
+# codoss — gpt-oss-20b-code (fine-tune de codigo de xCloudinfo)
 # =============================================================================
 #
-# El nivel de razonamiento lo fija el nivel elegido (`ropero codoss --high`)
-# y se pasa al template como `--chat-template-kwargs {"reasoning_effort": ...}`.
-# ROPERO_CODOSS_REASONING (low|medium|high) lo sobreescribe.
+#   - GGUF   : gpt-oss-20b-code.gguf  (12.85 GiB)
+#   - repo   : xCloudinfo/gpt-oss-20b-Code-xCloud-GGUF
 #
-# El flag se emite UNA SOLA VEZ, desde [args.level.<nivel>]: duplicado en
-# [args].base, llama.cpp se queda con el último y el override por entorno
-# deja de funcionar.
+# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
+# Es el unico GGUF que hay de este fine-tune (12,85 GiB), asi que el
+# modelo no se toca. Lo que cambia son los argumentos:
+#   · "--n-gpu-layers 99" -> -1 (el fitter, que aborta con ese 99).
+#   · La KV a q8_0 con 131072 son 1,61 GB y el total se va a 15,96 GB: no cabe.
+#     Con q4_0 son 0,81 GB y queda en 15,16 GB. Sigue siendo sobreescribible
+#     con ROPERO_CODOSS_KV.
+#   · ubatch 1024 -> 256: con el vocab de 201.088 los logits a 1024 son 825 MB
+#     de logits solo.
+#
+# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB de 15.933) ──────
+#   pesos 12,85 GiB
+#   KV q4_0 @131072   0,81 GB   (12 capas full-attn x 8 KV x 64 dim x 2 x 0,5 B (+ las 12 de SWA, fijas))
+#   compute          ~1,1 GB   (ubatch 256)
+#   contexto CUDA    ~0,4 GB
+#   --------------------------
+#   total           ~15,16 GB   -> cabe el ctx nativo (131072), justo
+#
+# ── ARGUMENTOS QUE IMPORTAN Y POR QUÉ ──────────────────────────────────────
+#   · --n-gpu-layers -1: deja que el fitter reparta. Con un número fijo
+#     (99) el fitter aborta con "n_gpu_layers already set by user", el modelo
+#     se va entero a la GPU a pelo y revienta con cudaMalloc failed.
+#   · --load-mode auto: mmap + page cache. Con "none" el fichero entero se
+#     copia a la RAM (y aquí no cabe): se pierde el page cache y el SSD deja
+#     de servir de "RAM".
+#   · KV q4_0: con f16 no cabe y la KV se va a la CPU -> la atención se
+#     calcula en la CPU y los t/s se desploman (es lo que le pasó al gpt-oss
+#     con 80-100 t/s en vez de 120-130). El KV cuantizado exige -fa on.
+#   · Los niveles son los que acepta el chat_template del modelo (ver abajo).
+#
+# ── QUÉ ES -ngl Y POR QUÉ -1 (y no 99) ──────────────────────────────────────
+#   --n-gpu-layers = cuantas capas del modelo se copian a la VRAM.
+#     0 = todo en CPU · 99 = "todas las que quepan" · -1 = que lo decida el
+#     fitter, que es el default upstream.
+#   El fitter (fit_params, on por defecto) mira la VRAM libre y decide el
+#   reparto: cuantas capas entran, y con "overflow" por fraccion, o sea que
+#   la atencion puede quedarse en la GPU y el MLP ir a la CPU, o al reves.
+#   Tambien ajusta el contexto si el usuario no lo ha fijado a mano.
+#   PERO si el usuario fija -ngl, el fitter aborta con
+#     "n_gpu_layers already set by user to 99, abort"
+#   y esa excepcion se CAPTURA y sale como WARN (common_params_fit_exception
+#   -> LOG_WRN, status FAILURE). O sea: no se aplica NINGUN ajuste y el
+#   servidor carga el modelo entero en la VRAM a pelo -> cudaMalloc failed.
+#   Ese es el motivo de -1. El 99 solo tiene sentido si el modelo cabe entero
+#   Y quieres quitar el fitter del medio para medir sin ajustes.
+#
+# ── POR QUÉ batch 512 Y ubatch 256 ─────────────────────────────────────────
+#   --batch-size  = tokens del prompt que se pasan al modelo en una llamada.
+#   --ubatch-size = tokens que se calculan DE GOLPE en la GPU (micro-lote).
+#                  El compute buffer se dimensiona con el Ubatch, no con el
+#                  batch, y el buffer mas gordo son los logits:
+#                      ubatch x vocab x 4 bytes
+#                        1024 -> 1,02 GB   (vocab 248.320)
+#                         512 ->  508 MB
+#                         256 ->  254 MB
+#                         128 ->  127 MB
+#   El batch, en cambio, no llena la VRAM: afecta al prefill (cuantos tokens
+#   por llamada) y a la RAM del prompt cache. Con el page cache haciendo de
+#   RAM, cada GB cuenta, asi que 512 va corto de RAM.
+#   El fitter NO toca ni el batch ni el ubatch: hay que fijarlos a mano.
+#
+# ── REASONING ───────────────────────────────────────────────────────────────
+# El chat_template acepta los niveles de esfuerzo reales del modelo (aquí
+# low / medium / high (los del gpt-oss)), y el nivel se pasa como --chat-template-kwargs.
+#
+# El override del contexto es el canónico ROPERO_CODOSS_CTX.
 # =============================================================================
 
 [model]
@@ -17,20 +79,31 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "gpt-oss-20b-code.gguf"
+gguf   = "gpt-oss-20b-code.gguf"
 
 [download]
 repo = "xCloudinfo/gpt-oss-20b-Code-xCloud-GGUF"
 file = "gpt-oss-20b-code.gguf"
-size = "13.2 GB"
+size = "12.85 GiB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
+    # ---- GPU offload: que el fitter reparta ----
+    "--n-gpu-layers", "-1",
+
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--kv-unified",
+
+    # ---- Sampling del gpt-oss ----
     "--temp", "1.0",
     "--min-p", "0.0",
     "--top-p", "1.0",
@@ -38,18 +111,18 @@ base = [
     "--threads", "12",
     "--threads-batch", "24",
     "--reasoning-format", "auto",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    # El nivel de razonamiento lo inyecta [args.level.<nivel>]; duplicar el
-    # flag aquí haría que llama.cpp descartara el override por entorno.
-    "--cache-type-k", "${env:ROPERO_CODOSS_KV:-q8_0}",
-    "--cache-type-v", "${env:ROPERO_CODOSS_KV:-q8_0}",
+
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "256",
+    "--n-predict", "8192",
+    "--parallel", "1",
+
+    # ---- Modelo / carga ----
     "--jinja",
-    "--kv-unified",
-    "--load-mode", "auto",
+    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]
