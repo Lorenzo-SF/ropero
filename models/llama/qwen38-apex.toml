@@ -1,0 +1,98 @@
+# =============================================================================
+# qwen38-apex — Qwen3.8-27B EfficientThink (VAL APEX I MiniPlus V3)
+# =============================================================================
+#
+#   - GGUF principal : Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf (14.162 GB)
+#   - MTP (drafter)  : speculative/dflash2-qwen38-27b-Q4_K_M.gguf  (1.143 GB)
+#   - mmproj (visión): mmproj-Qwen3.8-27B-Q4_K_M.gguf               (0.522 GB)
+#
+# Contexto 32768: es lo que recomienda la ficha oficial para llama.cpp (el
+# nativo del modelo son 262144).
+#
+# Sampling de la ficha:
+#   temp 0.60, top_p 0.95, top_k 20, min_p 0.05,
+#   repeat_penalty 1.00, presence_penalty 0.0
+#
+# El MTP va en [args].base (no en un flag): el bundle se descarga entero, así
+# que el drafter está siempre en disco y --spec-type draft-mtp siempre aplica.
+#
+# NOTA: el comentario de arriba mentia -- el drafter se descargaba pero no se
+# le pasaba a llama-server (faltaban --spec-type y --spec-draft-model), asi que
+# la especificacion nunca ocurria. Corregido en [args].base.
+#
+# El proyector de visión es un flag: sin `--vision` el servidor arranca sin
+# torre de visión (menos VRAM) y sólo lee texto.
+#
+# El override del contexto es el canónico ROPERO_QWEN38_APEX_CTX.
+# =============================================================================
+
+[model]
+name    = "qwen38-apex"
+engine  = "llama-server"
+context = 131072
+
+[files]
+gguf   = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
+mtp    = "dflash2-qwen38-27b-Q4_K_M.gguf"
+mmproj = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
+
+[download]
+repo = "IsValorum/Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3-GGUF"
+file = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
+size = "14.162 GB"
+
+# El drafter vive en el subdirectorio `speculative/` del repo, pero el nombre
+# final es plano: el modelo lo busca en la raíz de $GGUF_DIR.
+[download.aux.mtp]
+file = "speculative/dflash2-qwen38-27b-Q4_K_M.gguf"
+name = "dflash2-qwen38-27b-Q4_K_M.gguf"
+size = "1.143 GB"
+
+[download.aux.mmproj]
+file = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
+name = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
+size = "0.522 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "medium"
+
+[flags]
+list = ["vision"]
+
+[args]
+base = [
+    "--n-gpu-layers", "-1",
+    "--jinja",
+    "--temp", "0.60",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.05",
+    "--repeat-penalty", "1.0",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--kv-unified",
+    "--n-predict", "16384",
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+
+    # El drafter DFlash2 se descargaba pero NO se le pasaba al servidor:
+    # --spec-type se quedaba sin poner y la especulacion no ocurria nunca.
+    "--spec-type", "draft-dflash",
+    "--spec-draft-model", "${mtp}",
+    "--spec-draft-n-max", "10",
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.flag.vision]
+base = ["--mmproj", "${mmproj}"]
+requires = ["mmproj"]

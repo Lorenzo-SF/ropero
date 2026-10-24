@@ -8,9 +8,15 @@
 # forzar un nivel sin tocar la línea de órdenes. Sin ese env var, cada nivel
 # usa el suyo.
 #
-# El flag se emite UNA SOLA VEZ, desde [args.level.<nivel>]. Si además
-# estuviera en [args].base, llama.cpp se quedaría con el último valor (el del
-# nivel) y el override por entorno dejaría de funcionar en silencio.
+# El flag se emite UNA SOLA VEZ, desde [args.level.<nivel>]. Antes estaba
+# tambien en [args].base: no rompia nada (llama.cpp se queda con el ultimo
+# valor, que es el del nivel) pero el base pisaba la intencion y el
+# comentario decia una cosa y el codigo otra.
+#
+# El KV va en q8_0, no en f16: a 131072 la KV f16 son 3,22 GB y con el modelo
+# (11,2 GB) + compute (0,73 GB) no caben en los 15,93 GB de VRAM -> la KV se
+# va a la CPU, la atencion se calcula en la CPU y los t/s caen de 120-130 a
+# 80-100. Con q8_0 la KV son 1,61 GB y todo cabe.
 # =============================================================================
 
 [model]
@@ -49,9 +55,8 @@ base = [
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--chat-template-kwargs", '{"reasoning_effort": "${env:ROPERO_GPTOSS_REASONING:-medium}"}',
-    "--cache-type-k", "${env:ROPERO_GPTOSS_KV:-f16}",
-    "--cache-type-v", "${env:ROPERO_GPTOSS_KV:-f16}",
+    "--cache-type-k", "${env:ROPERO_GPTOSS_KV:-q8_0}",
+    "--cache-type-v", "${env:ROPERO_GPTOSS_KV:-q8_0}",
     "--jinja",
     "--kv-unified",
     "--kv-offload",
