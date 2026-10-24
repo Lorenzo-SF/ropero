@@ -112,8 +112,6 @@ base = [
     "--batch-size", "512",
     "--ubatch-size", "512",
     "--n-predict", "8192",
-    "--parallel", "1",
-
     # ---- Modelo / carga ----
     "--jinja",
     "--load-mode", "auto",                   # mmap + page cache, no "none"

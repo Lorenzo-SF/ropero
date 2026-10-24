@@ -113,6 +113,43 @@ ms_por_token() {
     | grep -oE '[0-9]+(\.[0-9]+)? ms per token' | tail -1 | grep -oE '^[0-9.]+'
 }
 
+# ── VERIFICAR QUE EL MODELO ESTA ENTERO EN LA GPU ───────────────────────────
+#
+# El fitter de llama.cpp recorta SILENCIOSAMENTE: si el modelo + la KV + el
+# compute no caben en la VRAM, quita capas y se las deja en la CPU. El
+# servidor arranca igual, responde igual... y va a 9 t/s en vez de 30. Sin
+# este check, el bench mide una configuracion rota y no lo dice.
+#
+# Las dos señales en el log:
+#   · "cannot meet free memory target"  -> el fitter no pudo cumplir
+#   · "offloaded X/Y layers"            -> X < Y = hay capas en la CPU
+gpu_completo() {
+    local log="$1" off="" mal=0 motivo=""
+
+    if grep -qa "cannot meet free memory target" "$log" 2>/dev/null; then
+        mal=1
+        motivo="el fitter no pudo ajustar a la VRAM: $(grep -a -m1 'cannot meet free memory target' "$log" | sed 's/.*: //')"
+    fi
+
+    off=$(grep -aoE "offloaded [0-9]+/[0-9]+ layers" "$log" 2>/dev/null | tail -1)
+    if [[ -n "$off" ]]; then
+        local x y
+        x=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\1|')
+        y=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\2|')
+        if [[ "$x" -lt "$y" ]]; then
+            mal=1
+            motivo="solo $x de $y capas en la GPU (el resto en la CPU)"
+        fi
+    fi
+
+    if (( mal )); then
+        GPU_AVISO="$motivo"
+        return 1
+    fi
+    GPU_AVISO="modelo entero en la GPU"
+    return 0
+}
+
 # ── PRECHECK ───────────────────────────────────────────────────────────────
 for b in ropero opencode curl; do
   command -v "$b" >/dev/null 2>&1 || { err "falta '$b' en el PATH"; exit 1; }
@@ -151,7 +188,7 @@ if [[ ${#carpetas[@]} -eq 0 ]]; then
 fi
 
 GLOBAL="$OUT_DIR/resumen-global.tsv"
-printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\n' > "$GLOBAL"
+printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$GLOBAL"
 
 # ── UNA PRUEBA POR CARPETA ─────────────────────────────────────────────────
 n=0
@@ -191,8 +228,19 @@ for carpeta in "${carpetas[@]}"; do
     ok "servido como '$(modelo_en_puerto)' en :$PUERTO"
   fi
 
+  # El modelo esta entero en la VRAM? Si no, los tokens/s de abajo no valen.
+  gpu_nota="ok"
+  if gpu_completo "$out/ropero.log"; then
+    ok "$GPU_AVISO"
+  else
+    gpu_nota="RECORTADO"
+    err "$GPU_AVISO"
+    err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
+    err "  -> baja el context del TOML o quita el mmproj; el fitter recorta solo"
+  fi
+
   # ── las pruebas ──────────────────────────────────────────────────────────
-  printf 'prueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\n' > "$out/resumen.tsv"
+  printf 'prueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$out/resumen.tsv"
   for p in "${PROMPTS[@]}"; do
     prueba="${p%.md}"
     prompt="$(cat "$PROMPTS_DIR/$p")"
@@ -226,11 +274,11 @@ for carpeta in "${carpetas[@]}"; do
 
     ts="$(tokens_por_segundo "$out/ropero.log")"; ts="${ts:-?}"
     ms="$(ms_por_token "$out/ropero.log")";     ms="${ms:-?}"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" \
-      >> "$out/resumen.tsv"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$carpeta" "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" \
+      "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" \
+      >> "$out/resumen.tsv"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$carpeta" "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" \
       >> "$GLOBAL"
   done
 

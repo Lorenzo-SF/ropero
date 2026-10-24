@@ -21,7 +21,7 @@
 #
 # ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB) ──────────────
 #   pesos 13,19 GiB
-#   KV q4_0 @65536   0,54 GB   (16 capas full-attn x 4 KV x 256 dim x 2 x 0,5 B)
+#   KV q4_0 @65536   1,05 GB   (16 capas full-attn x 1024 x 2 x 0,5625 B = 18,4 B/token)
 #   compute          ~0,9 GB   (ubatch 256: logits = 248320 x 256 x 4 B)
 #   contexto CUDA    ~0,4 GB
 #   ---------------------------
@@ -85,24 +85,18 @@ context = 65536
 
 [files]
 gguf   = "Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3.gguf"
-mmproj = "mmproj-Qwen3.8-27B-Q8_0.gguf"
-
 [download]
 repo = "IsValorum/Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3-GGUF"
 file = "Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3.gguf"
 size = "14.16 GB"
 
-[download.aux.mmproj]
-file = "mmproj-Qwen3.8-27B-Q8_0.gguf"
-name = "mmproj-Qwen3.8-27B-Q8_0.gguf"
-size = "0.59 GB"
 
 [levels]
 list    = ["low", "medium", "xhigh"]
 default = "low"
 
 [flags]
-list = ["vision"]
+list = []
 
 [args]
 base = [
@@ -132,8 +126,6 @@ base = [
     "--ubatch-size", "256",                 # compute buffer ~0,9 GB
 
     "--n-predict", "16384",
-    "--parallel", "1",
-
     # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "10",
@@ -159,6 +151,6 @@ reasoning_effort = "${env:ROPERO_QWEN38_APEX_HQ_REASONING:-xhigh}"
 
 # Sin --vision el servidor arranca sin torre de visión (menos VRAM) y sólo
 # lee texto.
-[args.flag.vision]
-base    = ["--mmproj", "${mmproj}"]
-requires = ["mmproj"]
+# [args.flag.vision] se ha ido con el mmproj:
+#   base    = ["--mmproj", "${mmproj}"]
+#   requires = ["mmproj"]
