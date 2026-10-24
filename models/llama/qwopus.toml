@@ -130,7 +130,7 @@ base = [
 chat_template_kwargs = { enable_thinking = false }
 
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = true }
+chat_template_kwargs = { enable_thinking = false }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
