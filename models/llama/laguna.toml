@@ -1,91 +1,6 @@
 # =============================================================================
 # laguna — Laguna XS 2.1 (poolside, MoE 33B totales / 3B activos)
 # =============================================================================
-#
-#   - GGUF   : Laguna-XS-2.1-APEX-I-Mini.gguf  (12.83 GB)
-#   - repo   : mudler/Laguna-XS-2.1-APEX-GGUF
-#
-# ── POR QUÉ ESTE MODELO ─────────────────────────────────────────────────────
-# Es el modelo de poolside para "agentic coding and long-horizon work on a
-# local machine". Tres cosas que no tiene nadie mas en el roster:
-#
-#   1. THINKING POR PETICION. "Native reasoning support: interleaved thinking
-#      between tool calls with support for enabling and disabling thinking
-#      per-request". O sea: el mismo modelo puede razonar o no depending de
-#      lo que pida el request, y ademas conserva el razonamiento entre
-#      llamadas de herramienta.
-#   2. APEX (Adaptive Precision for Expert Models): la cuantizacion es
-#      layer-wise, no plana. La capa 0 (FFN denso, la que atraviesa todo
-#      token) va a Q8_0, el experto compartido (siempre activo) a Q8_0, y
-#      los routed experts (que solo se activan 8 de 256) se comprimen mas.
-#      La variante I- es la que ademas usa imatrix con calibracion de codigo,
-#      razonamiento, tool-calling y trazas agénticas.
-#   3. El GGUF es de UN SOLO FICHERO (no hay que descargar partes).
-#
-#   (benchmark)          Laguna XS 2.1   Laguna XS.2   Qwen3.6-35B-A3B
-#   SWE-bench Verified         70.9 %       69.9 %       73.4 %
-#   SWE-bench Multilingual     63.1 %       57.7 %       67.2 %
-#   SWE-Bench Pro              47.6 %       46.3 %       49.5 %
-#   Terminal-Bench 2.0         37.5 %       35.7 %       51.5 %
-#
-# ── POR QUÉ I-Mini Y NO I-Compact ───────────────────────────────────────────
-#   · I-Mini      12.83 GB -> el que cabe (los pesos entran, con lo que
-#                            sobra para el KV y un pequeño offload de
-#                            experts)
-#   · I-Compact  15.78 GB -> no cabe: habria que dejar 33 de 40 capas en la
-#                            CPU (eso no es un offload, es un modelo en la
-#                            RAM con la GPU decorando)
-#   · Quality    21.82 GB ->idem, 35 de 40 capas a la CPU
-#
-# El ctx NATIVO del Laguna es 262144 (el rope lleva YaRN factor 32 sobre
-# 8192 tokens originales). Con el ctx nativo, su KV son 2.84 GB (es un
-# modelo denso en atencion: 40 capas, 30 de ellas sliding de ventana 512,
-# y 10 plenas), y los experts de las 4 primeras capas van a la CPU.
-#
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      11.9 GB
-#   KV cache q4_0 @262144 (10 plenas + 30 SWA)    2.84 GB
-#   compute buffer (ubatch 256 )                0.330 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             14.61 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                              342 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 0 recurrentes y 40 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: --n-cpu-moe 4: los EXPERTS de las 4 primeras capas van a la
-#   CPU. Es la via BARATA: la atencion y el KV cache siguen
-#   enteros en la GPU. Cada token cruza el bus PCIe, asi que
-#   el decode baja, pero no se desploma.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 262144.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_LAGUNA_CTX.
 
 [model]
 name    = "laguna"
@@ -103,12 +18,12 @@ size = "12.83 GB"
 [args]
 base = [
     # ---- GPU offload: las 40 capas del GGUF, enteras ----
-    "--n-gpu-layers", "40",
-    "--n-cpu-moe", "${env:ROPERO_LAGUNA_N_CPU_MOE:-4}",   # experts de las 4 primeras capas a la CPU
+    "--n-gpu-layers", "41",
+    "--n-cpu-moe", "${env:ROPERO_LAGUNA_N_CPU_MOE:-7}",   # experts de las 4 primeras capas a la CPU
 
     # ---- KV cache ----
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--cache-prompt",
     "--context-shift",
     "--kv-unified",
@@ -155,9 +70,3 @@ chat_template_kwargs = { enable_thinking = true }
 [args.level.no-thinking]
 chat_template_kwargs = { enable_thinking = false }
 
-[options]
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]

@@ -5,7 +5,7 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 163840
+context = 196608
 
 [files]
 gguf   = "Qwen3.8-27B-IQ2_M.gguf"

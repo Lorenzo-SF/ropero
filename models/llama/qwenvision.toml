@@ -1,67 +1,6 @@
 # =============================================================================
 # qwenvision — Qwen2.5-VL-7B-Instruct (UD-Q4_K_XL)
 # =============================================================================
-#
-# Visión para ttstt (analizar espectrogramas) y análisis general de imagen.
-# Soporte en este build: handlers QWEN25VL en tools/mtmd/models/ ✓ (verificado
-# en producción). Pesos: unsloth/Qwen2.5-VL-7B-Instruct-GGUF.
-#
-# MMPROJ: `Qwen2.5-VL-mmproj.gguf`, el fichero `mmproj-F16.gguf` del repo.
-# El nombre final lleva el prefijo porque "mmproj-F16.gguf" existe también en
-# el repo de Ministral: sin renombrar, uno pisa al otro.
-#
-# NOTA histórica: Llama 3.2 Vision murió aquí ("unknown model architecture:
-# 'mllama'"); Qwen2.5-VL es su sustituto verificado.
-#
-# Aquí el mmproj va SIEMPRE en la línea de comandos (no es un flag): el modelo
-# es de visión, no de texto con visión opcional.
-#
-# El override del contexto es el canónico ROPERO_QWENVISION_CTX.
-# =============================================================================
-
-
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)       4.4 GB
-#   KV cache q4_0 @128000 (28 plenas)    3.63 GB
-#   compute buffer (ubatch 512 )                0.338 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                              8.84 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                             6247 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 0 recurrentes y 28 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: NINGUN offload: las 28 capas del modelo y su KV cache
-#   entero en la VRAM.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 128000.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_QWENVISION_CTX.
 
 [model]
 name    = "qwenvision"
@@ -71,18 +10,18 @@ port    = 9991
 
 [files]
 gguf   = "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
+
 [download]
 repo = "unsloth/Qwen2.5-VL-7B-Instruct-GGUF"
 file = "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
 size = "6.10 GB"
 
-# El mmproj también es parte del bundle: sin él el modelo arranca pero no ve.
 
 [args]
 base = [
     # -1 (no 999): con un numero fijo el fitter aborta ("n_gpu_layers already set
 # by user") y el modelo entero se va a la VRAM a pelo -> cudaMalloc failed.
-    "--n-gpu-layers", "28",
+    "--n-gpu-layers", "29",
     "--threads", "12",
     "--threads-batch", "24",
     "--temp", "${env:ROPERO_QWENVISION_TEMP:-0.2}",     # baja temperatura para análisis preciso
@@ -98,12 +37,3 @@ base = [
     "--load-mode", "none",
 ]
 
-[options]
-# La temperatura se puede pisar desde el entorno (lo usa el bench para
-# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
-# esta midiendo el sampler, no el modelo).
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]

@@ -1,100 +1,6 @@
 # =============================================================================
 # nemotron — NVIDIA-Nemotron-3.5-Lightning-30B-A3B (MoE híbrido Mamba)
 # =============================================================================
-#
-# NVIDIA-Nemotron-3.5-Lightning-30B-A3B — Config calibrada
-#   - MoE 30B / 3B activo (128 experts routed, 6 activos)
-#   - HYBRID: 46 capas Mamba-2 (state-space, recurrentes) + 6 de atención
-#     + 23 capas de experts routed
-#   - Context nativo: 1.000.000 de tokens (el rope NO lleva scaling:
-#     rope.scaling.finetuned = false, sin factor)
-#   - Reasoning controlable via enable_thinking
-#   - Sampling canónico NVIDIA: temp=1.0, top_p=0.95
-#
-# ── POR QUÉ ESTE MODELO, Y POR QUÉ CON OFFLOAD DE EXPERTS ───────────────────
-# Los pesos NO caben enteros en 16 GB: 19.76 GB son 18844 MiB y la VRAM
-# libre son 15300 MiB. Se comprobó TODA la lista de cuantizaciones del repo
-# de unsloth y la más pequeña es UD-IQ1_M / UD-IQ2_M / UD-IQ2_XXS a
-# 19.43 GB (18530 MiB): sigue sin caber. Da igual el ctx.
-#
-# PERO: el 88 % de sus pesos son los EXPERTES ROUTED (medido leyendo los
-# offsets del propio GGUF):
-#
-#     expert routed (up)      8.70 GB   44.1 %
-#     expert routed (down)    8.70 GB   44.1 %
-#     experto compartido       0.51 GB    2.6 %
-#     lm head + embeddings    0.74 GB    3.8 %
-#     atencion                0.16 GB    0.8 %
-#
-# Con --n-cpu-moe 18 (los experts de las 18 primeras capas a la CPU)
-# quedan 12.46 GB de pesos en la GPU y el ctx nativo de 1M cabe con
-# 291 MiB de margen. Y es la vía BARATA de offload: la atención, el lm head
-# y los embeddings siguen en la GPU, y solo cruzan el bus PCIe los
-# experts (6 de 128 activos).
-#
-# Ademas su KV es ridículamente pequeño: solo 6 de sus 52 capas son de
-# atención (las otras 46 son Mamba-2, con estado recurrente). A 1M de
-# contexto con q4_0 son solo 1.69 GB.
-#
-# ── SUS NÚMEROS (ficha oficial de NVIDIA) ───────────────────────────────────
-#   SWE-bench Verified      51.56 %     GPQA Diamond    75.44
-#   SWE-bench Multilingual  39.33 %     IFBench         71.88
-#   Terminal-Bench 2.1      24.58 %     AA-LCR (largo)  52.00
-#
-# Para comparar: el Qwen3.6-35B-A3B hace 73.4 % SWE-bench V. El nemotron
-# no le gana en codigo; su fuerte es el contexto (1M nativo) y el
-# razonamiento. Es un "analista" mas que un "coder".
-#
-# OJO: el GGUF de este repo TRAE la cabeza MTP (nextn_predict_layers = 1).
-# No se usa: --spec-type draft-mtp crea un draft context con su propia
-# VRAM y su KV en f16, y con el margen que hay (ya estamos usando el
-# offload) el server no arrancaria.
-# =============================================================================
-
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      17.5 GB
-#   KV cache q4_0 @1048576 (6 plenas)    1.69 GB
-#   compute buffer (ubatch 512 )                0.338 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             14.66 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                              291 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 46 recurrentes y 6 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: --n-cpu-moe 18: los EXPERTS de las 18 primeras capas van a la
-#   CPU. Es la via BARATA: la atencion y el KV cache siguen
-#   enteros en la GPU. Cada token cruza el bus PCIe, asi que
-#   el decode baja, pero no se desploma.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 1048576.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_NEMOTRON_CTX.
 
 [model]
 name    = "nemotron"
@@ -111,11 +17,8 @@ size = "19.76 GB"
 
 [args]
 base = [
-    # ---- GPU offload (MoE 30B/3B activo, 16GB VRAM justos) ----
     "--n-gpu-layers", "52",                            # todos los layers GPU-eligible
     "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-18}",   # experts de las 18 primeras capas a la CPU
-    # (SIN --no-kv-offload: ese flag mete el KV en la CPU. El KV se
-    #  asigna en el backend de la CAPA, asi que sin el flag va a la GPU.)
 
     # ---- Atención ----
     # -fa on lo pone ropero entry globalmente

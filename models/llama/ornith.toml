@@ -1,61 +1,6 @@
 # =============================================================================
 # ornith — Ornith-1.5-35B-A3B (MoE híbrido, como el Agents-A1)
 # =============================================================================
-#
-#   - GGUF   : Ornith-1.5-35B-A3B-IQ2_M.gguf  (11.68 GiB)
-#   - repo   : bartowski/Ornith-1.5-35B-A3B-GGUF
-#   - mmproj  : mmproj-Ornith-1.5-35B-A3B-f16.gguf
-#
-# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
-# El GGUF que habia (jashepp MXFP4_MOE_Q8_0_F16, 20,7 GB) no cabia.
-# En bartowski hay 29 quants, pero el primero que entra entero es el IQ2_M
-# (11,68 GiB): el IQ3_XXS (14,29) y el IQ3_XS (15,54) ya no caben ni con un
-# contexto de 16K. El oficial ornith-ai solo tiene Q4_K_M (20,22) o mas.
-# Es el trade-off de esta VRAM: para el Ornith, el techo de calidad es 2 bits.
-# El imatrix de bartowski y el mmproj (0,84 GiB) estan en el mismo repo.
-#
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      11.2 GB
-#   KV cache q4_0 @262144 (10 plenas)    1.41 GB
-#   compute buffer (ubatch 256 )                0.330 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             13.43 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                             1550 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 30 recurrentes y 10 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: NINGUN offload: las 40 capas del modelo y su KV cache
-#   entero en la VRAM.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 262144.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_ORNITH_CTX.
 
 [model]
 name    = "ornith"
@@ -64,30 +9,27 @@ context = 262144
 
 [files]
 gguf   = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
+
 [download]
 repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
 file = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
 size = "12.54 GB"
 
-
 [levels]
 list    = ["low", "medium", "high"]
 default = "low"
 
-[flags]
-list = []
-
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "40",
+    "--n-gpu-layers", "42",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
 
     # ---- KV cache ----
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--kv-unified",
 
     # ---- Sampling del Ornith ----
@@ -122,16 +64,3 @@ chat_template_kwargs = { enable_thinking = true }
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
 
-# [args.flag.vision] se ha ido con el mmproj:
-#   base    = ["--mmproj", "${mmproj}"]
-#   requires = ["mmproj"]
-
-[options]
-# La temperatura se puede pisar desde el entorno (lo usa el bench para
-# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
-# esta midiendo el sampler, no el modelo).
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]

@@ -74,13 +74,10 @@ size = "13.28 GB"
 list    = ["low", "medium", "high"]
 default = "low"
 
-[flags]
-list = []
-
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "30",
+    "--n-gpu-layers", "31",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
@@ -120,17 +117,3 @@ chat_template_kwargs = { enable_thinking = true }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
-
-# [args.flag.vision] se ha ido con el mmproj:
-#   base    = ["--mmproj", "${mmproj}"]
-#   requires = ["mmproj"]
-
-[options]
-# La temperatura se puede pisar desde el entorno (lo usa el bench para
-# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
-# esta midiendo el sampler, no el modelo).
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]

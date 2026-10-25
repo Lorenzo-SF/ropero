@@ -1,62 +1,6 @@
 # =============================================================================
 # agenta1 — Agents-A1-35B-A3B (MoE híbrido 256 expertos, 8 activos)
 # =============================================================================
-#
-#   - GGUF   : Agents-A1-MTP-APEX-I-Mini.gguf  (13.36 GiB)
-#   - repo   : SC117/Agents-A1-MTP-APEX-GGUF
-#
-# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
-# El GGUF que había (jashepp MXFP4_MOE_Q8_0_F16, 19,32 GiB) NO cabe
-# en 16 GB de VRAM: el modelo entero se iba a la GPU a pelo y reventaba, o el
-# offload de los expertos mataba el decode (el PCIe por token).
-# El APEX-I de SC117 entra entero (13,36 GiB) y además trae la cabeza MTP
-# DENTRO (el nombre del repo lo dice), así que hay speculation sin ficheros
-# extra.
-# bartowski no tiene este modelo y unsloth tampoco.
-#
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      10.8 GB
-#   KV cache q4_0 @262144 (10 plenas)    1.41 GB
-#   compute buffer (ubatch 256 )                0.330 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             13.05 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                             1938 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 30 recurrentes y 10 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: NINGUN offload: las 40 capas del modelo y su KV cache
-#   entero en la VRAM.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 262144.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_AGENTA1_CTX.
-
 [model]
 name    = "agenta1"
 engine  = "llama-server"
@@ -77,14 +21,14 @@ default = "low"
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "40",
+    "--n-gpu-layers", "41",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
 
     # ---- KV cache ----
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--kv-unified",
 
     # ---- Sampling (el del propio Agents-A1) ----
@@ -109,18 +53,6 @@ base = [
     "--jinja",
     "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
-
-# ── OPCIONES SOBREESCRIBIBLES ────────────────────────────────────────────
-# El bench necesita medir a temp 0.1-0.2 (lo pide pruebas1.md) sin editar
-# este fichero. Con esto, el override llega al argv:
-#   ROPERO_MODEL_OPT_TEMP=0.15 ropero <modelo>
-# o en la linea de ordenes:  ropero <modelo> --temp 0.15
-[options]
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]
 
 [args.level.low]
 chat_template_kwargs = { enable_thinking = false }

@@ -1,63 +1,6 @@
 # =============================================================================
 # qwopus — Qwopus3.6-35B-A3B-Coder (MoE híbrido, como el Agents-A1)
 # =============================================================================
-#
-#   - GGUF   : Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf  (12.60 GiB)
-#   - repo   : xero0000/Qwopus3.6-35B-A3B-Coder-vram13-GGUF
-#
-# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
-# El GGUF que habia (jashepp MXFP4_MOE_Q8_0_F16, 20,7 GB) no cabia.
-# De los que hay:
-#   · mradermacher  : Q2_K 12,34 | Q3_K_S 14,48 (no cabe) | Q3_K_M 15,99 (no)
-#   · Jackrong (MTP): Q3_K_M 15,99 (no cabe)
-#   · xero0000      : "vram13" 12,60 -> quant pensado para 13 GB de VRAM
-# Se queda el vram13: es 0,26 GB mas grande que el Q2_K (mas bits) y hay
-# margen para el contexto. Con vision no hay mmproj en ese repo (este repo
-# solo trae el GGUF), asi que este modelo queda en modo texto.
-# El chat_template ya va dentro del GGUF: se deja de descargar aparte.
-#
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      12.1 GB
-#   KV cache q4_0 @262144 (10 plenas)    1.41 GB
-#   compute buffer (ubatch 256 )                0.330 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             14.28 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                              679 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 30 recurrentes y 10 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: NINGUN offload: las 40 capas del modelo y su KV cache
-#   entero en la VRAM.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 262144.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_QWOPUS_CTX.
 
 [model]
 name    = "qwopus"
@@ -79,14 +22,14 @@ default = "low"
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "40",
+    "--n-gpu-layers", "41",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
 
     # ---- KV cache ----
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--kv-unified",
 
     # ---- Sampling ----
@@ -119,12 +62,3 @@ chat_template_kwargs = { enable_thinking = false }
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
 
-[options]
-# La temperatura se puede pisar desde el entorno (lo usa el bench para
-# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
-# esta midiendo el sampler, no el modelo).
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]

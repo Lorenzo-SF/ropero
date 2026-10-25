@@ -1,77 +1,6 @@
 # =============================================================================
-# ♻️ REACTIVADO — muse (Muse-Glimmer-30B)
+# muse (Muse-Glimmer-30B)
 # =============================================================================
-#
-# Reactivado el 2026-10-25 para volver a medirlo en el bench: los
-# cinco modelos que estaban bencheados eran casi todos de la misma
-# familia (gpt-oss y derivados). Faltaba un coder de verdad y dos MoE
-# nuevos que no fueran de esa familia.
-#
-# Descargable con: ropero download muse
-#
-# Muse-Glimmer-30B — Config calibrada (RTX 5080 16GB VRAM, 30GB RAM)
-#   - DENSE 30B (29.6B con vision encoder 1.8B)
-#   - Hybrid: 16 layers local attention (sliding window 2048) + 1 global
-#   - Vocab 202,048 (200k BPE + 2048 special)
-#   - RoPE θ=500,000
-#   - Sampling canónico (repo Meta): temp=1.0, top_p=0.95, top_k=64
-#   - Reasoning strength: low/medium/high/xhigh (system prompt)
-#   - Speculative decoding: DFlash drafter (16-token blocks)
-#
-# Peculiaridades críticas:
-#   1. DENSE 30B (sin MoE): el offload, si hace falta, es por CAPAS
-#      → usar --n-gpu-layers bajo (20-25) y dejar el resto en CPU
-#   2. SWA pattern [L,L,L,G] repetido → DEBE llevar --swa-full
-#      (sin esto, attention computation usa ventana completa ineficiente)
-#   3. --reasoning-format deepseek limpia tags <think> del output
-#   4. RoPE θ=500k se infiere del GGUF metadata; --rope-freq-base fuerza valor
-#
-# El override del contexto es el canónico ROPERO_MUSE_CTX.
-# =============================================================================
-
-
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      12.4 GB
-#   KV cache q4_0 @131072 (13 plenas + 39 SWA)    0.49 GB
-#   compute buffer (ubatch 1024)                1.154 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             14.54 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                              413 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 0 recurrentes y 52 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: NINGUN offload: las 52 capas del modelo y su KV cache
-#   entero en la VRAM.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 131072.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
-# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
-# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
-# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
-# que sale de <arch>.block_count del GGUF, no de un README).
-#
-# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
-# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
-# margen justo, el MTP se come la VRAM y el server no arranca.
-#
-# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
-# de la capa; sin el flag, a la GPU).
-#
-# El override del contexto es el canónico ROPERO_MUSE_CTX.
 
 [model]
 name    = "muse"
@@ -89,7 +18,7 @@ size = "13.36 GB"
 [args]
 base = [
     # ---- GPU offload (modelo denso 30B, 16GB VRAM justos) ----
-    "--n-gpu-layers", "52",                            # ~22 de 52 layers en GPU; resto CPU
+    "--n-gpu-layers", "53",                            # ~22 de 52 layers en GPU; resto CPU
 
     # ---- Atención ----
     # -fa on lo pone ropero entry globalmente; no duplicar
@@ -99,15 +28,11 @@ base = [
     "--rope-freq-base", "500000",                      # θ=500k del repo
 
     # ---- KV cache ----
-    "--cache-type-k", "q4_0",                          # agresivo (SWA usa ventanas pequeñas)
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",                          # agresivo (SWA usa ventanas pequeñas)
+    "--cache-type-v", "turbo3",
     "--cache-prompt",
     "--context-shift",
     "--kv-unified",                                    # single user, unified buffer
-
-    # ---- Speculative decoding (DFlash drafter del repo) ----
-
-                        # hasta 16 tokens drfteados por bloque
 
     # ---- Modelo / carga ----
     "--jinja",                                         # chat template Muse (jinja)
@@ -136,13 +61,3 @@ base = [
     # ---- Misc ----
     # --log-verbosity lo pone ropero entry (default 4)
 ]
-
-[options]
-# La temperatura se puede pisar desde el entorno (lo usa el bench para
-# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
-# esta midiendo el sampler, no el modelo).
-list = ["temp"]
-
-[args.option.temp]
-replace = "--temp"
-base = ["--temp", "${value}"]
