@@ -36,12 +36,17 @@
 #   CPU, la atención se calcula en la CPU y los t/s se desploman. De ahí el
 #   q4_0 (el KV cuantizado exige -fa on, que va aquí).
 #
-#   OJO: la cabeza MTP (los tensores nextn) SI esta dentro del GGUF, pero
-#   --spec-type draft-mtp NO se usa. Crea un draft context con su propio
-#   espacio de VRAM (y su KV en f16) y en un portatil de 16 GB no cabe: el
-#   server se queda sin memoria y no arranca (medido en agenta1: con MTP no
-#   arrancaba; sin MTP, 140 t/s). Si tu GGUF es de otro que NO traiga la
-#   cabeza MTP, esto no aplica y no pierdes nada.
+#   La cabeza MTP (los tensores nextn) SI esta dentro del GGUF y SI se usa
+#   (--spec-type draft-mtp). Medido en este modelo: 66/66 capas en la GPU,
+#   aceptacion del draft 19-37 %, y el server arranca sin problemas. El
+#   MTP NO es lo que hizo lento al qwen: el bench lo mato a los 900 s
+#   generando a 27 t/s, no colgado.
+#
+#   OJO con el otro caso: en agenta1 el MTP SI impedia arrancar (el server
+#   se quedaba sin memoria). La diferencia es el margen de VRAM: el MTP
+#   crea un draft context con su propio espacio y su KV en f16, y en un
+#   modelo que ya llena la GPU no cabe. Aqui el qwen (12,8 GB de pesos +
+#   KV q4_0) deja sitio. Si cambias de GGUF, comprueba el margen antes.
 
 [model]
 name    = "qwen"
@@ -71,10 +76,12 @@ list = []
 [args]
 base = [
     # ---- GPU offload ----
-    # -1 = auto: el fitter reparte solo. NO pongas un numero (--n-gpu-layers
-    # 99): el fitter aborta con "n_gpu_layers already set by user" y el modelo
-    # se va entero a la GPU a pelo -> cudaMalloc failed.
-    "--n-gpu-layers", "66",
+    # -1 = auto: el fitter reparte solo. NO pongas un numero: con
+    # --n-gpu-layers fijo el fitter aborta ("n_gpu_layers already set by
+    # user") y el modelo se va entero a la GPU a pelo -> cudaMalloc failed.
+    # Es exactamente lo que tumbó al codoss en el bench: con "-ngl 25" fijo
+    # pidio 12.036 MiB de golpe, no los habia, y el server no arranco.
+    "--n-gpu-layers", "-1",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
@@ -95,12 +102,13 @@ base = [
     "--batch-size", "512",
     "--ubatch-size", "256",                 # compute buffer ~0,9 GB
 
+    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
+    # Medido: draft acceptance 19-37 %, y el server arranca (66/66 capas).
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "10",
 
     "--n-predict", "16384",
 
-    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
     # ---- Reasoning ----
     "--reasoning-budget", "12288",    
 

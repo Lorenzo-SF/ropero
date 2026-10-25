@@ -92,8 +92,16 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "25",
+    # ---- GPU offload ----
+    # -1 = que lo reparta el fitter. Con un numero fijo el fitter aborta
+    # ("n_gpu_layers already set by user to 25, abort"): el modelo se pide
+    # ENTERO en la VRAM a pelo y si algo mas ocupa la GPU, cudaMalloc
+    # failed y el server no arranca. MEDIDO en el bench del 2026-10-25:
+    # con "-ngl 25" fijo y 5.595 MiB libres (otro proceso en la GPU) el
+    # server murio al cargar ("allocating 12036.68 MiB ... out of memory",
+    # "exiting due to model loading error") y este modelo no llego a
+    # responder ni la primera tarea. Con -1 el fitter recorta el contexto.
+    "--n-gpu-layers", "-1",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige

@@ -21,7 +21,7 @@ default = "medium"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
+    "--n-gpu-layers", "-1",
     "--jinja",
     "--temp", "1.0",
     "--top-p", "0.95",
