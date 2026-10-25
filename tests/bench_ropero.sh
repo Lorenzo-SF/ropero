@@ -92,6 +92,26 @@ FORCE="${FORCE:-0}"                          # 1 = repetir los ya probados
 # Con 0.15 los cinco se miden en el mismo punto.
 TEMP="${TEMP:-0.15}"
 
+# El nivel de razonamiento con el que se mide. Los modelos tienen niveles
+# distintos (gptoss: low/medium/high; qwen36: low/medium/xhigh; muse: no
+# tiene niveles, se ajusta por system prompt; laguna: thinking/no-thinking).
+#
+# MEDIR EL DEFAULT DE CADA MODELO NO COMPARA NADA: se estaria midiendo "el
+# modelo con su nivel por defecto" contra "el modelo con su nivel por
+# defecto", y eso mezcla dos variables (la calidad del modelo y la del
+# razonamiento).
+#
+# Con NIVEL=high, el bench arranca el modelo en el nivel pedido (ropero
+# registra un alias por nivel) y asi todos se miden pensando igual.
+# Los modelos sin niveles se miden con el suyo (que es el unico).
+#
+#   NIVEL=medium ./bench_ropero.sh gptoss qwen36
+#
+# El nivel se pasa como flag: `ropero gptoss --high`. Los niveles los
+# declara cada modelo en su TOML ([levels].list), asi que no todos los
+# modelos los tienen. Ver _ropero_model_levels en bin/ropero.
+NIVEL="${NIVEL:-high}"
+
 # Si el nombre de la carpeta no es el del modelo en ropero, se mapea aqui.
 declare -A MODELO_ROPERO=(
   [agentas1]=agenta1
@@ -356,6 +376,15 @@ inyectar_corpus() {
   printf '%s\n\n%s\n\n%s' "$pre" "$CORPUS" "$post"
 }
 
+# El ctx de cada modelo se lee de su TOML (la fuente de verdad). Con esto el
+# bench puede COMPROBAR que el test cabe antes de lanzar, y avisar si no.
+ctx_de_modelo() {
+    local modelo="$1"
+    local toml="$AQUI/../models/llama/$modelo.toml"
+    [[ -f "$toml" ]] || { printf '0\n'; return; }
+    sed -n 's/^context[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$toml" | head -1
+}
+
 GLOBAL="$OUT_DIR/resumen-global.tsv"
 GLOBAL_PREV="$OUT_DIR/.resumen-global.prev.tsv"
 # No se trunca: si ya existe, se conserva y al final se fusiona con lo nuevo
@@ -461,6 +490,10 @@ for carpeta in "${carpetas[@]}"; do
     [[ -f "$prompt_file" ]] || continue
     corpus_en_prompt "$prompt_file"
 
+    # La sesion que esta tarea encadena (si alguna). La lleva la tarea
+    # ANTERIOR de la misma prueba: el BLOQUE 3 continua el BLOQUE 2.
+    sesion_cadena=""
+
     # las tareas de esta prueba
     tareas=()
     while IFS=$'\t' read -r tipo tid cuerpo; do
@@ -486,9 +519,47 @@ for carpeta in "${carpetas[@]}"; do
       work="$dir/$nombre"
       rm -rf "$work"; mkdir -p "$work"
 
+      # ── EL MISMO SYSTEM PROMPT PARA TODOS ────────────────────────────────
+      # El bench escribe un AGENTS.md en el directorio de trabajo. opencode lo
+      # mete en el contexto como instrucciones del proyecto, IGUAL para
+      # todos los modelos. Asi el system prompt no es una variable mas que
+      # diferencia a unos de otros.
+      #
+      # Ademas lleva la linea del reasoning strength, que es lo que necesita
+      # el muse (el unico del roster que no lo expone como reasoning_effort).
+      cat > "$work/AGENTS.md" <<AGENTS_EOF
+# Banco de pruebas de ropero
+
+Estas instrucciones son identicas para todos los modelos que se miden. No
+las cambies ni las completes: si anades reglas, el modelo deja de estar
+midiendo lo mismo que los demas.
+
+Reasoning strength: ${NIVEL}
+
+Responde a la tarea que te llega. Si no puedes hacer alguna parte, dilo y
+sigue con el resto. No inventes salidas de terminal ni resultados de tests:
+si dices que algo se ejecuto, tiene que haberse ejecutado de verdad.
+AGENTS_EOF
+
       # ── ropero, limpio para esta tarea ───────────────────────────────────
+      # Se arranca en el NIVEL pedido, no en el default del modelo: si no,
+      # cada modelo se mide con el nivel de razonamiento que le de la gana y
+      # la comparacion no significa nada.
+      #
+      # El nivel es un flag (ropero gptoss --high), no un alias. Y solo se
+      # pasa si el modelo lo declara: `ropero gptoss --high` funciona,
+      # `ropero muse --high` no (el muse no tiene niveles: se ajusta con
+      # "Reasoning strength: <valor>" en el system prompt).
       LOG_PRUEBA="$out/ropero-$nombre.log"
-      ( cd "$dir" && ROPERO_MODEL_OPT_TEMP="$TEMP" nohup ropero "$modelo" > "$LOG_PRUEBA" 2>&1 & )
+      # El nivel es un flag (ropero gptoss --high). Los niveles los declara
+      # cada modelo en su TOML, asi que no todos los tienen: si el server no
+      # acepta el flag, se avisa y el modelo se mide con su nivel por
+      # defecto (que es lo unico que se puede hacer con el).
+      flag_nivel=""
+      if [[ -n "$NIVEL" ]]; then
+          flag_nivel="--$NIVEL"
+      fi
+      ( cd "$dir" && ROPERO_MODEL_OPT_TEMP="$TEMP" nohup ropero "$modelo" $flag_nivel > "$LOG_PRUEBA" 2>&1 & )
       sleep 1
 
       if grep -q "ya está corriendo" "$LOG_PRUEBA" 2>/dev/null; then
@@ -499,6 +570,16 @@ for carpeta in "${carpetas[@]}"; do
           err "  $tid: el modelo no respondió en :$PUERTO tras ${ESPERA}s"
           tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
           continue
+      fi
+
+      # ¿Se arranca en el nivel pedido? Si el modelo no declara ese nivel,
+      # ropero lo avisa y arranca con el suyo. Sin avisar, comparariamos
+      # modelos con distinto nivel de razonamiento.
+      if [[ -n "$flag_nivel" ]]; then
+          if grep -qaE "nivel|level|unknown option|opción desconocida|invalid" "$LOG_PRUEBA" 2>/dev/null \
+             && ! grep -qaE "n_ctx|context size|n_layer" "$LOG_PRUEBA" 2>/dev/null; then
+              warn "  $tid: el nivel $flag_nivel no se pudo aplicar (mira el log); se mide con el default"
+          fi
       fi
 
       # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
@@ -518,10 +599,46 @@ for carpeta in "${carpetas[@]}"; do
           warn "  $tid: temp en el log ($temp_log) != la pedida ($TEMP)"
       fi
 
+      # ── ¿CABE ESTE TEST EN EL CONTEXTO DEL MODELO? ──────────────────────
+      # El banco exige que todos los modelos puedan hacer todos los tests.
+      # Si el prompt no cabe en el ctx del modelo, el server lo rechaza y el
+      # turno no cuenta para nada: es un fallo del BANCO, no del modelo.
+      # Se avisa (y se marca) en vez de lanzar un turno que va a fallar.
+      ctx_modelo="$(ctx_de_modelo "$modelo")"
+      if [[ "$ctx_modelo" != "0" ]]; then
+          tokens_prompt=$(( ${#cuerpo} / 3 ))
+          # margen: la respuesta del modelo + el overhead del servidor
+          if (( tokens_prompt + 2000 > ctx_modelo )); then
+              err "  $tid: el prompt (~${tokens_prompt} tokens) no cabe en el ctx del modelo ($ctx_modelo)"
+              err "  -> este turno NO puntua: es un fallo del banco, no del modelo"
+              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$tid" "-" "-" "-" "-" "-" "-" "NO_CABE" "no" "no" >> "$out/resumen.tsv"
+              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$carpeta" "$tid" "-" "-" "-" "-" "-" "NO_CABE" "no" "no" >> "$GLOBAL"
+              continue
+          fi
+      fi
+
       info "  $tid"
       t0=$(date +%s)
+      # ── LA SESION SE ENCADENA ────────────────────────────────────────────
+      # El BLOQUE 3 de la prueba larga se hace "10 turnos despues" del
+      # BLOQUE 2: eso solo tiene sentido si los turnos son de la MISMA
+      # sesion. Con un "opencode run" nuevo en cada turno, cada turno es una
+      # sesion nueva y el BLOQUE 3 mediria una deriva que empieza de cero
+      # para todos (que es cero para todos).
+      #
+      # Los bloques que forman una secuencia (BLOQUE 2 -> 3, y el 6) se
+      # encadenan con --session <id>, que continua una sesion CONCRETA (no
+      # "la ultima": --continue seria una carrera si dos runs se solaparan).
+      # Los que son independientes (BLOQUE 1, 4, 5) van en sesion nueva,
+      # para que el contexto no se contamine.
+      flag_sesion=""
+      if [[ -n "$sesion_cadena" ]]; then
+          flag_sesion="--session $sesion_cadena"
+      fi
       ( cd "$work" && timeout "$TIMEOUT" opencode run "$(inyectar_corpus "$cuerpo")" \
-        --model "$MODELO" --agent "$AGENTE" --format json ) \
+        --model "$MODELO" --agent "$AGENTE" --variant "$NIVEL" $flag_sesion --format json ) \
       > "$out/opencode-$nombre.json" 2> "$out/opencode-$nombre.log"
       rc=$?
       dur=$(( $(date +%s) - t0 ))
@@ -561,6 +678,14 @@ for carpeta in "${carpetas[@]}"; do
         err "  $tid: opencode rc=$rc"
         tail -n 5 "$out/opencode-$nombre.log" | sed 's/^/    /'
       fi
+
+      # Si esta tarea encadena con la siguiente, la siguiente continua SU
+      # sesion (el session id, que es lo que entiende --session).
+      case "$tid" in
+          BLOQUE1|BLOQUE2) sesion_cadena="$sid" ;;
+          *)               sesion_cadena="" ;;   # fin de cadena
+      esac
+      # shellcheck disable=SC2034  # el reset del final tambien cuenta como uso
 
       ts="$(tokens_por_segundo "$LOG_PRUEBA")"; ts="${ts:-?}"
       ms="$(ms_por_token "$LOG_PRUEBA")";     ms="${ms:-?}"

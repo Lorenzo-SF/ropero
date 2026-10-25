@@ -32,36 +32,48 @@
 # Con IQ2 se ahorran 2 GB de pesos, pero el techo de calidad de 2 bits es
 # justo lo que no queremos en el modelo que va a ser el principal.
 #
-# ── ARITMÉTICA DE VRAM (medida, no estimada) ────────────────────────────────
-# El KV NO lo gastan las 40 capas: la arquitectura es
-#     10 x (3 x (Gated DeltaNet -> MoE) -> 1 x (Gated Attention -> MoE))
-# o sea 1 de cada 4 capas es de atencion plena. Las otras 30 son recurrentes
-# (Gated DeltaNet) y tienen estado recurrente propio, no KV.
+# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
 #
-#   pesos            12.60 GB  (12.598 MiB)
-#   KV q4_0 @262144   1.44 GB  (10 capas full-attn x 2 x 256 dim x 2 x 0,5625 B)
-#   compute          ~0.34 GB  (ubatch 256)
-#   server + holgura  ~0.47 GB
-#   --------------------------
-#   total            14.51 GB  -> cabe con 449 MiB de margen
+#   pesos (el GGUF entero, leido de sus offsets)      12.3 GB
+#   KV cache q4_0 @262144 (10 plenas)    1.41 GB
+#   compute buffer (ubatch 256 )                0.330 GB
+#   server + holgura (400)                             0.475 GB
+#   ---------------------------------------------------------------------
+#   total                                             14.49 GB
+#   VRAM libre en la RTX 5080                       15300 MiB
+#   margen                                              458 MiB
 #
-# El calculo del KV esta CALIBRADO contra los memory breakdown medidos del
-# bench del 2026-10-25 (error 0,00 % en los 5 casos). Ver el README.
+# COMO SE CALCULA EL KV (que no es "capas x ctx"):
+#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
+#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
+#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
+#     estado RS. Este modelo tiene 30 recurrentes y 10 de atencion.
+#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
+#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
+#   · el KV por token de una capa de atencion es
+#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
 #
-# ── POR QUÉ SIN MTP ─────────────────────────────────────────────────────────
-# El GGUF de este repo NO trae la cabeza MTP (nextn_predict_layers = 0), y
-# el --spec-type draft-mtp ademas crea un draft context con su propia VRAM
-# y su KV en f16. Sin margen para eso, el server no arranca.
+# OFFLOAD: NINGUN offload: las 40 capas del modelo y su KV cache
+#   entero en la VRAM.
 #
-# ── NIVELES DE RAZONAMIENTO ────────────────────────────────────────────────
-# El chat_template del modelo acepta los niveles low / medium / xhigh.
-# "high" no existe: el template solo conoce esos tres, y su default es
-# xhigh (razona al maximo). Para bajar a medium hay que pasar el nivel
-# explicito con --chat-template-kwargs.
+# El ctx NATIVO (el context_length del propio GGUF) es 262144.
+# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
+#   que el ctx train no da mas contexto (server-context.cpp:4955).
 #
-# El modelo recomienda 262144 de contexto, y avisa de que por debajo de
-# 128K se pierde capacidad de thinking.
-# =============================================================================
+# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
+# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
+# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
+# que sale de <arch>.block_count del GGUF, no de un README).
+#
+# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
+# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
+# margen justo, el MTP se come la VRAM y el server no arranca.
+#
+# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
+# de la capa; sin el flag, a la GPU).
+#
+# El override del contexto es el canónico ROPERO_QWEN36_CTX.
 
 [model]
 name    = "qwen36"

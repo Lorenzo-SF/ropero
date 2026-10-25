@@ -199,26 +199,55 @@ El vocabulario es del modelo, no del CLI: si un modelo no declara `--vision`,
 
 Activos:
 
-| Modelo | Engine | GGUF | Capas (`-ngl`) | ctx |
-|---|---|---|---|---|
-| `agenta1` | llama-server | 11.66 GB | 40 | 262144 |
-| `agents-tiny` | llama-server | 4.48 GB | 32 | 262144 |
-| `devstral` | llama-server | 11.47 GB | 40 | 32768 |
-| `fable` | llama-server | 13.25 GB | 40 | 262144 |
-| `gemma` | llama-server | 13.28 GB | 30 | 131072 |
-| `gptoss` | llama-server | 12.11 GB | 24 | 131072 |
-| `laguna` | llama-server | 12.83 GB | 40 | 32768 |
-| `muse` | llama-server | 13.36 GB | 52 | 131072 |
-| `ornith` | llama-server | 12.54 GB | 40 | 262144 |
-| `qwen` | llama-server | 12.80 GB | 64 | 65536 |
-| `qwen36` | llama-server | 13.21 GB | 40 | 262144 |
-| `qwencoder` | llama-server | 11.97 GB | 48 | 65536 |
-| `qwenvision` | llama-server | 6.10 GB | 28 | 32768 |
-| `qwopus` | llama-server | 13.53 GB | 40 | 262144 |
+| Modelo | Engine | GGUF | Capas (`-ngl`) | ctx | Offload | VRAM | Margen |
+|---|---|---|---|---|---|---|---|
+| `agenta1` | llama-server | 11.66 GB | 40 | 262144 | — | 13.0 | 1938 |
+| `agents-tiny` | llama-server | 4.48 GB | 32 | 262144 | — | 9.2 | 5871 |
+| `devstral` | llama-server | 11.47 GB | 18 | 393216 | `--n-gpu-layers 18` | 14.5 | 484 |
+| `fable` | llama-server | 13.25 GB | 40 | 262144 | `--n-cpu-moe 2` | 14.5 | 429 |
+| `gemma` | llama-server | 13.28 GB | 30 | 262144 | — | 14.6 | 327 |
+| `gptoss` | llama-server | 12.11 GB | 24 | 131072 | — | 13.7 | 1312 |
+| `laguna` | llama-server | 12.83 GB | 40 | 262144 | `--n-cpu-moe 4` | 14.6 | 342 |
+| `muse` | llama-server | 13.36 GB | 52 | 131072 | — | 14.5 | 413 |
+| `nemotron` | llama-server | 19.76 GB | 52 | 1048576 | `--n-cpu-moe 18` | 14.7 | 291 |
+| `ornith` | llama-server | 12.54 GB | 40 | 262144 | — | 13.4 | 1550 |
+| `qwen` | llama-server | 12.80 GB | 55 | 262144 | `--n-gpu-layers 55` | 14.7 | 282 |
+| `qwen36` | llama-server | 13.21 GB | 40 | 262144 | — | 14.5 | 458 |
+| `qwencoder` | llama-server | 11.97 GB | 48 | 262144 | `--n-cpu-moe 22` | 14.5 | 403 |
+| `qwenvision` | llama-server | 6.10 GB | 28 | 128000 | — | 8.8 | 6247 |
+| `qwopus` | llama-server | 13.53 GB | 40 | 262144 | — | 14.3 | 679 |
 
-Todos van **enteros en la GPU**: todas las capas, el KV cache incluido, sin
-recorte y sin offload a la CPU. Los que no cabían en 16 GB con su cuantización
-original se bajaron de cuantización hasta que entraron.
+**Cada modelo lleva su ctx nativo** (el `context_length` de su propio GGUF) y
+el offload justo para que quepa en los 15.300 MiB libres de la RTX 5080.
+
+Las dos vías de offload, y por qué se elige una u otra:
+
+| vía | qué manda a la CPU | qué NO toca | coste en decode |
+|---|---|---|---|
+| `--n-cpu-moe N` | los **experts** de las N primeras capas | la atención ni el KV | cada token cruza el PCIe |
+| `--n-gpu-layers N` | **capas enteras** (y su KV con ellas) | — | cada token cruza el PCIe N veces |
+
+`--n-cpu-moe` es la vía **barata** (solo MoE): la atención y el KV cache
+siguen enteros en la GPU, así que el modelo conserva su velocidad de
+atención. `--n-gpu-layers` parcial es la vía **cara** y solo se usa cuando el
+modelo es denso (sin experts que mandar a la CPU): cada token cruza el bus
+PCIe una vez por cada capa en CPU.
+
+Los que pagan offload:
+
+- **`nemotron`**: sus pesos (19.76 GB) no caben de ninguna manera en 16 GB,
+  ni con la cuantización más pequeña que existe. Va con `--n-cpu-moe 18`:
+  el 88 % de sus pesos son los expertos routed, y con 18 de sus 23 capas de
+  experts en la CPU el ctx nativo de **1.000.000** de tokens cabe con 291 MiB
+  de margen. Su KV es diminuto (solo 6 de sus 52 capas son de atención; las
+  otras 46 son Mamba-2, con estado recurrente).
+- **`qwencoder`**: 48 capas de atención completa, su KV son 6.75 GB a 262144.
+  Con `--n-cpu-moe 22` entra. Es el que peor sale en decode del roster.
+- **`devstral`** y **`qwen`**: son densos, así que no hay experts que mandar
+  a la CPU: el offload es por capas (`--n-gpu-layers 18` y `55`).
+
+Si el ctx largo no es lo prioritario en un modelo concreto, bajar su ctx
+(`ROPERO_<MODELO>_CTX`) aligera el offload y el decode recupera velocidad.
 
 Los demás engines (`airllm`, `mlx_lm`) tienen sus modelos aparte, en
 `models/airllm/` y `models/mlx_lm/`.
@@ -274,12 +303,21 @@ Por eso la política es:
 
 - **La cuantización se elige para que el modelo entero quepa**, y entonces el
   `-ngl` con el número exacto de capas es correcto: no hay nada que recortar.
-- Si el modelo **no** cabe entero, el `-ngl` va a `-1` y deja que el fitter
-  recorte el contexto, que es lo único que puede recortar sin castigar el
-  decode.
+- Si el modelo **no** cabe entero, hay dos salidas, y se elige según el
+  modelo:
+  - **MoE** (`--n-cpu-moe N`): se mandan los experts de las N primeras capas a
+    la CPU. La atención y el KV siguen en la GPU. Es la vía barata.
+  - **Denso** (`--n-gpu-layers N`): se mandan N capas enteras a la CPU, con su
+    KV. Es la vía cara: cada token cruza el bus PCIe N veces.
+  - O el `-ngl` a `-1`, para que el fitter recorte el contexto en vez de las
+    capas: sale un modelo rápido con menos contexto.
 - Un `-ngl` fijo con un número **menor** que el total de capas es un offload
   parcial deliberado: cada token de las capas en CPU cruza el bus PCIe. Es
   lento, y el bench lo detecta (el log dice `offloaded X/Y layers`).
+
+Los ctx que se necesitan con el `--n-gpu-layers` fijo salen de la aritmética
+de VRAM de cada TOML, que está escrita en su cabecera y es reproducible con
+las reglas de la sección siguiente.
 
 ### El MTP y la VRAM
 
@@ -378,7 +416,7 @@ Los runners-up, para cada perfil:
 |---|---|---|---|
 | `qwen36` | coder + analista, el más fuerte que entra | 73.4 % SWE-bench V, 3B activos, 262K | MoE: la calidad del MoE es menor que la de un denso del mismo tamaño |
 | `muse` | el más listo y con razonamiento fino | SWE-bench Pro **51.2 %** (el más alto de la tabla), IFBench 77.0, AIME 94.7, y **4 niveles** (low/medium/high/xhigh) vía system prompt | Es **denso** 30B: sin MTP va a 15-25 t/s |
-| `laguna` | agente con herramientas | thinking **por petición**, APEX (cuantización por capa, no plana) | 37.5 % TB 2.0; su ctx se queda en 32768 (es denso en atención) |
+| `laguna` | agente con herramientas | thinking **por petición**, APEX (cuantización por capa, no plana) | 37.5 % TB 2.0; es denso en atención (su KV es 8× la de un MoE), así que paga `--n-cpu-moe 4` para el ctx nativo |
 | `qwen` | el denso de referencia | Qwen3.8-27B, IQ3_XS | 61.7 % SWE-bench Pro |
 | `fable` | coder con el mejor tool-use | Opus-4.8 tool use, 51.5 % TB | Su GGUF trae la cabeza MTP y hay que quitarla |
 
@@ -393,12 +431,41 @@ cada token de las capas en CPU cruza el bus PCIe. Con un MoE (que es lo que
 hace rápido al `qwen36`) el offload penaliza mucho menos, porque solo se
 van los expertos.
 
-### `--n-cpu-moe`: fuera
+Los ctx nativos que lleva cada modelo están en la tabla de "Los modelos". El
+cuadro completo: cada TOML tiene en su cabecera la aritmética de VRAM con la
+que se calculó su offload.
 
-Mandar expertos MoE a la CPU (`--n-cpu-moe`) es la otra forma de que el modelo
-"quepa". No es gratis: cada token recorre los expertos por el bus PCIe y el
-decode se desploma. Con la cuantización correcta **no hace falta**: el modelo
-entero cabe en 16 GB y se queda todo en la GPU.
+### `--n-cpu-moe`: la vía de offload de los MoE
+
+Mandar expertos MoE a la CPU (`--n-cpu-moe N`) es la otra forma de que el
+modelo "quepa". No es gratis: cada token recorre los expertos por el bus
+PCIe y el decode baja. Pero es **mucho más barato** que mandar capas
+enteras, porque:
+
+- solo se van los **experts** (el 44 % de los pesos en un MoE routed típico);
+  la atención, el lm head y los embeddings se quedan en la GPU;
+- y el **KV cache no se toca**: sigue entero en la VRAM, así que la atención
+  no va a la RAM.
+
+En llama.cpp el flag manda a la CPU los tensores `ffn_*_exps` de los bloques
+`0..N-1` (`common/common.h`, `llm_add_n_cpu_ffn_overrides`): es un override
+del **buffer type del tensor**, no del device de la capa. Por eso el KV (que
+se asigna en el backend de la capa) se queda en la GPU.
+
+En el roster activo lo usan cuatro modelos: `nemotron` (18), `qwencoder` (22),
+`laguna` (4) y `fable` (2). Los demás entran enteros.
+
+### El `--n-cpu-moe` y el ctx nativo
+
+El contexto que el servidor usa es `min(n_ctx_seq, n_ctx_train)`
+(`server-context.cpp`): pedir más que el ctx train **no** da más contexto.
+El `ctx_train` de cada modelo sale de su propio GGUF, y ese es el ctx que
+llevan los TOMLs.
+
+El nemotron es el caso extremo: su ctx train es de **1.000.000** de tokens
+(su rope no lleva scaling), y entra con 291 MiB de margen porque su KV es
+ridículamente pequeño (solo 6 de sus 52 capas son de atención; las otras 46
+son Mamba-2, con estado recurrente).
 
 
 ---

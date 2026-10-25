@@ -9,6 +9,9 @@ mismo sitio.
 Uso:
     python3 gen_corpus_largo.py > /tmp/corpus.md
 
+El corpus ronda los 24.500 tokens: cabe en el ctx mas pequeno del roster
+(32768), de modo que todos los modelos pueden hacer el test largo.
+
 Los 5 datos plantados (el modelo tiene que acordarse de ellos al final):
     1. La constante MAGICKO es 4823
     2. La funcion se llama reconciliar_cuentas
@@ -143,7 +146,15 @@ def main():
     partes.append("end")
     partes.append("")
 
-    partes.append(cuerpo_extra(72))
+    # El corpus tiene que caber en el ctx MAS PEQUEÑO del roster (32768,
+    # que es lo que tienen devstral, laguna y qwenvision), porque el banco
+    # exige que TODOS los modelos puedan hacer TODOS los tests.
+    #
+    # 38 modulos x ~640 tokens = ~24.300 tokens de corpus, mas las preguntas
+    # (~200) y la respuesta del modelo. Con eso el prompt completo ronda los
+    # 24.500 tokens: en un ctx de 32768 quedan 8.000 para la respuesta, de
+    # sobra.
+    partes.append(cuerpo_extra(38))
 
     partes.append("defmodule Tienda.Repo do")
     partes.append("  use Ecto.Repo, otp_app: :tienda")

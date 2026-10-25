@@ -14,91 +14,48 @@
 # extra.
 # bartowski no tiene este modelo y unsloth tampoco.
 #
-# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB de 15.933) ──────
-#   pesos 13,36 GiB
-#   KV q4_0 @65536   0,34 GB   (10 capas full-attn x 2 KV x 256 dim x 2 x 0,5 B)
-#   compute          ~1,1 GB   (ubatch 256)
-#   contexto CUDA    ~0,4 GB
-#   --------------------------
-#   total           ~15,2 GB   -> cabe, con 0,1 GB de margen (justo: el fitter ajusta)
+# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
 #
-# ── ARGUMENTOS QUE IMPORTAN Y POR QUÉ ──────────────────────────────────────
-#   · --n-gpu-layers -1: deja que el fitter reparta. Con un número fijo
-#     (99) el fitter aborta con "n_gpu_layers already set by user", el modelo
-#     se va entero a la GPU a pelo y revienta con cudaMalloc failed.
-#   · --load-mode auto: mmap + page cache. Con "none" el fichero entero se
-#     copia a la RAM (y aquí no cabe): se pierde el page cache y el SSD deja
-#     de servir de "RAM".
-#   · KV q4_0: con f16 no cabe y la KV se va a la CPU -> la atención se
-#     calcula en la CPU y los t/s se desploman (es lo que le pasó al gpt-oss
-#     con 80-100 t/s en vez de 120-130). El KV cuantizado exige -fa on.
-#   · Los niveles son los que acepta el chat_template del modelo (ver abajo).
+#   pesos (el GGUF entero, leido de sus offsets)      10.8 GB
+#   KV cache q4_0 @262144 (10 plenas)    1.41 GB
+#   compute buffer (ubatch 256 )                0.330 GB
+#   server + holgura (400)                             0.475 GB
+#   ---------------------------------------------------------------------
+#   total                                             13.05 GB
+#   VRAM libre en la RTX 5080                       15300 MiB
+#   margen                                             1938 MiB
 #
-# ── QUÉ ES -ngl Y POR QUÉ -1 (y no 99) ──────────────────────────────────────
-#   --n-gpu-layers = cuantas capas del modelo se copian a la VRAM.
-#     0 = todo en CPU · 99 = "todas las que quepan" · -1 = que lo decida el
-#     fitter, que es el default upstream.
-#   El fitter (fit_params, on por defecto) mira la VRAM libre y decide el
-#   reparto: cuantas capas entran, y con "overflow" por fraccion, o sea que
-#   la atencion puede quedarse en la GPU y el MLP ir a la CPU, o al reves.
-#   Tambien ajusta el contexto si el usuario no lo ha fijado a mano.
-#   PERO si el usuario fija -ngl, el fitter aborta con
-#     "n_gpu_layers already set by user to 99, abort"
-#   y esa excepcion se CAPTURA y sale como WARN (common_params_fit_exception
-#   -> LOG_WRN, status FAILURE). O sea: no se aplica NINGUN ajuste y el
-#   servidor carga el modelo entero en la VRAM a pelo -> cudaMalloc failed.
-#   Ese es el motivo de -1. El 99 solo tiene sentido si el modelo cabe entero
-#   Y quieres quitar el fitter del medio para medir sin ajustes.
+# COMO SE CALCULA EL KV (que no es "capas x ctx"):
+#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
+#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
+#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
+#     estado RS. Este modelo tiene 30 recurrentes y 10 de atencion.
+#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
+#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
+#   · el KV por token de una capa de atencion es
+#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
 #
-# ── POR QUÉ batch 512 Y ubatch 256 ─────────────────────────────────────────
-#   --batch-size  = tokens del prompt que se pasan al modelo en una llamada.
-#   --ubatch-size = tokens que se calculan DE GOLPE en la GPU (micro-lote).
-#                  El compute buffer se dimensiona con el Ubatch, no con el
-#                  batch, y el buffer mas gordo son los logits:
-#                      ubatch x vocab x 4 bytes
-#                        1024 -> 1,02 GB   (vocab 248.320)
-#                         512 ->  508 MB
-#                         256 ->  254 MB
-#                         128 ->  127 MB
-#   El batch, en cambio, no llena la VRAM: afecta al prefill (cuantos tokens
-#   por llamada) y a la RAM del prompt cache. Con el page cache haciendo de
-#   RAM, cada GB cuenta, asi que 512 va corto de RAM.
-#   El fitter NO toca ni el batch ni el ubatch: hay que fijarlos a mano.
+# OFFLOAD: NINGUN offload: las 40 capas del modelo y su KV cache
+#   entero en la VRAM.
 #
-# ── REASONING ───────────────────────────────────────────────────────────────
-# El chat_template de este modelo NO tiene niveles de esfuerzo: sólo el flag
-# enable_thinking (true/false). Así que "medium" y "high" hacen lo mismo; se
-# mantienen los tres nombres para no romper los scripts que ya los usan.
+# El ctx NATIVO (el context_length del propio GGUF) es 262144.
+# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
+#   que el ctx train no da mas contexto (server-context.cpp:4955).
+#
+# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
+# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
+# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
+# que sale de <arch>.block_count del GGUF, no de un README).
+#
+# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
+# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
+# margen justo, el MTP se come la VRAM y el server no arranca.
+#
+# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
+# de la capa; sin el flag, a la GPU).
 #
 # El override del contexto es el canónico ROPERO_AGENTA1_CTX.
-# =============================================================================
-
-
-# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
-# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
-# sin recorte y sin offload a la CPU. Para que eso sea posible:
-#
-#   · --n-gpu-layers = 40  = el numero REAL de capas del GGUF (leido de
-#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
-#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
-#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
-#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
-#     cabe: por eso se pone el numero exacto y no -1.
-#   · el KV cache va en la GPU (sin --no-kv-offload) y en q4_0, que es lo
-#     que hace que el ctx quepa.
-#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
-#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
-#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
-#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
-#     cruzar el bus PCIe en el decode, y el t/s se desploma.
-#
-# ctx = 65536: el maximo que cabe con el KV en q4_0 y el resto del modelo
-# entero en la GPU, con la formula de KV de llama.cpp
-# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
-#
-# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
-# =============================================================================
 
 [model]
 name    = "agenta1"
