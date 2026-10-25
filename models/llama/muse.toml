@@ -1,10 +1,13 @@
 # =============================================================================
-# 🔥 FIRED — muse (Muse-Glimmer-30B)
+# ♻️ REACTIVADO — muse (Muse-Glimmer-30B)
 # =============================================================================
 #
-# Retirado: fuera del scope base. Recuperable con
-#   mv models/llama/fired/muse.toml models/llama/
-# y descargando el GGUF.
+# Reactivado el 2026-10-25 para volver a medirlo en el bench: los
+# cinco modelos que estaban bencheados eran casi todos de la misma
+# familia (gpt-oss y derivados). Faltaba un coder de verdad y dos MoE
+# nuevos que no fueran de esa familia.
+#
+# Descargable con: ropero download muse
 #
 # Muse-Glimmer-30B — Config calibrada (RTX 5080 16GB VRAM, 30GB RAM)
 #   - DENSE 30B (29.6B con vision encoder 1.8B)
@@ -26,24 +29,50 @@
 # El override del contexto es el canónico ROPERO_MUSE_CTX.
 # =============================================================================
 
+
+# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
+# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
+# sin recorte y sin offload a la CPU. Para que eso sea posible:
+#
+#   · --n-gpu-layers = 52  = el numero REAL de capas del GGUF (leido de
+#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
+#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
+#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
+#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
+#     cabe: por eso se pone el numero exacto y no -1.
+#   · el KV cache va en la GPU (sin --no-kv-offload) y en q4_0, que es lo
+#     que hace que el ctx quepa.
+#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
+#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
+#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
+#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
+#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#
+# ctx = 131072: el maximo que cabe con el KV en q4_0 y el resto del modelo
+# entero en la GPU, con la formula de KV de llama.cpp
+# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+#
+# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
+# =============================================================================
+
 [model]
 name    = "muse"
 engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "Muse-Glimmer-30B-UD-Q4_K_XL.gguf"
+gguf   = "Muse-Glimmer-30B-UD-IQ2_M.gguf"
 
 [download]
 repo = "unsloth/Muse-Glimmer-30B-GGUF"
-file = "Muse-Glimmer-30B-UD-Q4_K_XL.gguf"
-size = "15.9 GB"
+file = "Muse-Glimmer-30B-UD-IQ2_M.gguf"
+size = "12.26 GB"
 
 [args]
 base = [
     # ---- GPU offload (modelo denso 30B, 16GB VRAM justos) ----
-    "--n-gpu-layers", "22",                            # ~22 de 52 layers en GPU; resto CPU
-    "--no-kv-offload",                                 # KV cache en GPU (con 22 layers hay espacio)
+    "--n-gpu-layers", "52",                            # ~22 de 52 layers en GPU; resto CPU
 
     # ---- Atención ----
     # -fa on lo pone ropero entry globalmente; no duplicar
@@ -60,8 +89,8 @@ base = [
     "--kv-unified",                                    # single user, unified buffer
 
     # ---- Speculative decoding (DFlash drafter del repo) ----
-    "--spec-type", "draft-dflash",
-    "--spec-draft-n-max", "16",                        # hasta 16 tokens drfteados por bloque
+
+                        # hasta 16 tokens drfteados por bloque
 
     # ---- Modelo / carga ----
     "--jinja",                                         # chat template Muse (jinja)

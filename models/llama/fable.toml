@@ -1,10 +1,13 @@
 # =============================================================================
-# 🔥 FIRED — fable (Fable-Coder-35B-A3B)
+# ♻️ REACTIVADO — fable (Fable-Coder-35B-A3B)
 # =============================================================================
 #
-# Retirado: fuera del scope base. Recuperable con
-#   mv models/llama/fired/fable.toml models/llama/
-# y descargando el GGUF.
+# Reactivado el 2026-10-25 para volver a medirlo en el bench: los
+# cinco modelos que estaban bencheados eran casi todos de la misma
+# familia (gpt-oss y derivados). Faltaba un coder de verdad y dos MoE
+# nuevos que no fueran de esa familia.
+#
+# Descargable con: ropero download fable
 #
 # Fable-Coder-35B-A3B — Config optimizada para RTX 5080 (16GB VRAM, 32GB RAM)
 #   - MoE 35B totales / 3B activos por token
@@ -20,35 +23,62 @@
 #   - Gen 131k ctx: 8-12 t/s (KV cache limita)
 #
 # ── Tuning por VRAM disponible ─────────────────────────────────────────────
-# -cmoe 999 = TODOS los expertos a CPU (max VRAM libre para KV, gen más lento)
-# -cmoe  48 = mitad y mitad (balance)
-# -cmoe  20 = solo 20 layers con expertos en CPU
+# Con la cuantización Q2_K (13.25 GB) el modelo ENTERO cabe en la VRAM de
+# 16 GB, así que ya NO hace falta el --n-cpu-moe que antes mandaba 30
+# capas de expertos a la CPU. Mandar expertos a la CPU no es gratis: cada
+# token los recorre por el bus PCIe y el decode se desploma.
 #
-# Con 16GB VRAM lo óptimo suele ser 35-48: attention+embeddings en GPU,
-# expertos en CPU, gen un poco más lento pero context largo usable.
+# Con el Q4_K_M de antes (21.7 GB) no cabía ni de lejos: el modelo entero
+# no entra en 16 GB a ninguna cuantización de este repo. Por eso el cambio
+# a Q2_K, que es la cuantización más pequeña que ofrece mradermacher.
 #
 # El override del contexto es el canónico ROPERO_FABLE_CTX.
+# =============================================================================
+
+
+# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
+# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
+# sin recorte y sin offload a la CPU. Para que eso sea posible:
+#
+#   · --n-gpu-layers = 40  = el numero REAL de capas del GGUF (leido de
+#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
+#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
+#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
+#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
+#     cabe: por eso se pone el numero exacto y no -1.
+#   · el KV cache va en la GPU (sin --no-kv-offload) y en q4_0, que es lo
+#     que hace que el ctx quepa.
+#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
+#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
+#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
+#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
+#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#
+# ctx = 32768: el maximo que cabe con el KV en q4_0 y el resto del modelo
+# entero en la GPU, con la formula de KV de llama.cpp
+# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+#
+# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
 # =============================================================================
 
 [model]
 name    = "fable"
 engine  = "llama-server"
-context = 131072
+context = 32768
 
 [files]
-gguf = "fable-coder-35B-A3B-Q4_K_M.gguf"
+gguf   = "fable-coder-35B-A3B.Q2_K.gguf"
 
 [download]
-repo = "Achilles1089/fable-coder-35B-A3B-GGUF"
-file = "fable-coder-35B-A3B-Q4_K_M.gguf"
-size = "21.7 GB"
+repo = "mradermacher/fable-coder-35B-A3B-GGUF"
+file = "fable-coder-35B-A3B.Q2_K.gguf"
+size = "13.25 GB"
 
 [args]
 base = [
     # ---- GPU offload ----
-    "--n-gpu-layers", "999",                            # todos los layers "GPU-eligible"
-    "--n-cpu-moe", "${env:ROPERO_FABLE_N_CPU_MOE:-30}",  # expertos MoE en CPU (ajustable)
-    "--no-kv-offload",                                  # KV cache en GPU (default on)
+    "--n-gpu-layers", "40",                            # todos los layers "GPU-eligible"
 
     # ---- Atención ----
     # -fa on se pone globalmente en ropero entry; no duplicar
@@ -56,17 +86,17 @@ base = [
 
     # ---- KV cache ----
     "--cache-type-k", "q4_0",                           # q4_0 en K para liberar VRAM
-    "--cache-type-v", "q8_0",                           # nunca q4_0 en V, degrada tool use
+    "--cache-type-v", "q4_0",                           # nunca q4_0 en V, degrada tool use
     "--cache-prompt",
     "--cache-reuse", "512",                             # reusa bloques KV en prompts similares
     "--kv-unified",                                     # single user, unified buffer
     "--context-shift",                                  # rolling context en sesiones largas
 
     # ---- Speculative decoding (MTP del propio modelo) ----
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "5",                          # hasta 5 tokens drfteados por ronda
-    "--spec-draft-n-min", "1",                          # no malgastes en rounds de 0 drafts
-    "--spec-draft-backend-sampling",                    # offload sampling a backend
+
+                          # hasta 5 tokens drfteados por ronda
+                          # no malgastes en rounds de 0 drafts
+
 
     # ---- Batching / threads ----
     "--batch-size", "4096",

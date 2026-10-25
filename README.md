@@ -199,17 +199,30 @@ El vocabulario es del modelo, no del CLI: si un modelo no declara `--vision`,
 
 Activos:
 
-| Modelo | Engine | Notas |
-|---|---|---|
-| `gemma` | llama-server | Gemma 4 26B-A4B, con MTP y visión |
-| `gptoss` | llama-server | GPT-OSS 20B, alias `verifier` y `designer` |
-| `qwencoder` | llama-server | Qwen3-Coder 30B, alias `coder` |
-| `qwenvision` | llama-server | Qwen2.5-VL 7B |
-| `agents-a1-4b` | llama-server | InternScience Agents-A1 4B |
-| `agents-a1-35b` | llama-server | InternScience Agents-A1 35B-A3B |
-| `qwen38-apex` | llama-server | Qwen3.8 27B, con MTP y visión |
-| `airllm` | airllm | GPT-OSS 120B sobre AirLLM |
-| `metaloss` | mlx_lm | GPT-OSS 20B en MLX (Apple Silicon) |
+| Modelo | Engine | GGUF | Capas (`-ngl`) | ctx |
+|---|---|---|---|---|
+| `agenta1` | llama-server | 11.66 GB | 40 | 65536 |
+| `agents-tiny` | llama-server | 4.48 GB | 32 | 131072 |
+| `devstral` | llama-server | 11.47 GB | 40 | 32768 |
+| `fable` | llama-server | 13.25 GB | 40 | 32768 |
+| `gemma` | llama-server | 13.28 GB | 30 | 16384 |
+| `gptoss` | llama-server | 12.11 GB | 24 | 65536 |
+| `muse` | llama-server | 12.26 GB | 52 | 131072 |
+| `ornith` | llama-server | 12.54 GB | 40 | 65536 |
+| `qwen` | llama-server | 12.80 GB | 64 | 65536 |
+| `qwencoder` | llama-server | 11.97 GB | 48 | 65536 |
+| `qwenvision` | llama-server | 6.10 GB | 28 | 32768 |
+| `qwopus` | llama-server | 13.53 GB | 40 | 32768 |
+
+Todos van **enteros en la GPU**: todas las capas, el KV cache incluido, sin
+recorte y sin offload a la CPU. Los que no cabían en 16 GB con su cuantización
+original se bajaron de cuantización hasta que entraron.
+
+Los demás engines (`airllm`, `mlx_lm`) tienen sus modelos aparte, en
+`models/airllm/` y `models/mlx_lm/`.
+
+La lista completa y vigente está en `models/` — que es la fuente de verdad: un TOML
+nuevo aparece en `ropero` sin tocar esta tabla.
 
 Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
 `ropero verifier` es `ropero gptoss --high`.
@@ -230,6 +243,72 @@ Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
 Los overrides propios de cada modelo (temperatura del drafter, tipo de KV…)
 también existen: `ROPERO_GEMMA_TEMP`, `ROPERO_GEMMA_MTP_NMAX`,
 `ROPERO_GPTOSS_KV`… y están declarados en el TOML de cada modelo.
+
+### `--n-gpu-layers`: el número real de capas
+
+En los TOMLs de `models/llama/`, `--n-gpu-layers` lleva **el número real de
+capas del GGUF** (leído de `<arch>.block_count` en la cabecera del fichero, no
+de un README ni de una suposición). La razón está en el código de `llama.cpp`:
+
+`common/fit.cpp` hace dos cosas, **en este orden**:
+
+1. Si el modelo no cabe, **reduce el contexto** (no las capas):
+   `"entire model can be fit by reducing context"`.
+2. Y si el usuario fijó `n_gpu_layers != -1`, **aborta**:
+   `"n_gpu_layers already set by user to N, abort"`.
+
+O sea: un `-ngl` fijo desactiva el fitter y el modelo se pide entero en la
+VRAM de golpe. Si no cabe, la carga falla:
+
+```
+allocating 12036.68 MiB on device 0: cudaMalloc failed: out of memory
+llama_server: exiting due to model loading error
+```
+
+Medido el 2026-10-25 con `codoss` (`-ngl 25` fijo): no llegó a responder ni la
+primera tarea.
+
+Por eso la política es:
+
+- **La cuantización se elige para que el modelo entero quepa**, y entonces el
+  `-ngl` con el número exacto de capas es correcto: no hay nada que recortar.
+- Si el modelo **no** cabe entero, el `-ngl` va a `-1` y deja que el fitter
+  recorte el contexto, que es lo único que puede recortar sin castigar el
+  decode.
+- Un `-ngl` fijo con un número **menor** que el total de capas es un offload
+  parcial deliberado: cada token de las capas en CPU cruza el bus PCIe. Es
+  lento, y el bench lo detecta (el log dice `offloaded X/Y layers`).
+
+### El MTP y la VRAM
+
+`--spec-type draft-mtp` crea un **draft context** con su propio espacio de VRAM
+y su KV en `f16`, y el fitter lo mide **junto al modelo principal**
+(`common.cpp`: el MTP se pasa como `extra` a `common_fit_params`). Con el
+margen justo, el MTP se come la VRAM que necesitan las capas del modelo, y el
+server no arranca.
+
+En un portátil de 16 GB el MTP no compensa: el draft context son ~0.5 GB de
+pesos + KV en `f16` (el doble que en `q8_0`), y lo que se gana en t/s no llega
+a lo que se pierde en capacidad de contexto y en el riesgo de que el modelo no
+arranque.
+
+**Política: el roster activo va sin MTP.** Se quitó de todos los TOMLs. Cuando
+el GGUF trae la cabeza MTP incrustada (`<arch>.nextn_predict_layers = 1`), los
+pesos están en el fichero pero **no se cargan** si no se pide el draft context
+(`llama-model.cpp`: la capa nextn sólo se crea con
+`LLAMA_CONTEXT_TYPE_MTP`).
+
+Si algún día hace falta el MTP, se documenta en la cabecera del TOML y se
+comprueba con `ropero status` que el server arranca y que el log dice
+`offloaded N/N layers`.
+
+### `--n-cpu-moe`: fuera
+
+Mandar expertos MoE a la CPU (`--n-cpu-moe`) es la otra forma de que el modelo
+"quepa". No es gratis: cada token recorre los expertos por el bus PCIe y el
+decode se desploma. Con la cuantización correcta **no hace falta**: el modelo
+entero cabe en 16 GB y se queda todo en la GPU.
+
 
 ---
 

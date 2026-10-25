@@ -141,6 +141,18 @@ base = [
     "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
+# ── OPCIONES SOBREESCRIBIBLES ────────────────────────────────────────────
+# El bench necesita medir a temp 0.1-0.2 (lo pide pruebas1.md) sin editar
+# este fichero. Con esto, el override llega al argv:
+#   ROPERO_MODEL_OPT_TEMP=0.15 ropero <modelo>
+# o en la linea de ordenes:  ropero <modelo> --temp 0.15
+[options]
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]
+
 [args.level.low]
 reasoning_effort = "${env:ROPERO_CODOSS_REASONING:-low}"
 base = [
