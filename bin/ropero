@@ -1634,7 +1634,11 @@ start_model() {
                 --api-key "$LLAMA_API_KEY"
                 --alias "$model"
                 --ctx-size "$ctx_size"
+                --threads 12
+                --threads-batch 24
                 --flash-attn on
+                --jinja                         
+                --kv-unified
                 --log-verbosity 4
                 --parallel 1
 
@@ -2476,8 +2480,8 @@ ropero_install_llama() {
         ropero_warn "$LLAMA_DIR existe pero no es un clon de git; lo sustituyo"
         rm -rf "$LLAMA_DIR"
     fi
-
-    if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+    # if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+    if ! git clone -q git@github.com:AtomicBot-ai/atomic-llama-cpp-turboquant.git "$LLAMA_DIR"; then
         ropero_err "clone de llama.cpp falló"
         return 0
     fi

@@ -5,14 +5,14 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 262144
+context = 163840
 
 [files]
-gguf   = "Qwen3.8-27B-IQ3_XS.gguf"
+gguf   = "Qwen3.8-27B-IQ2_M.gguf"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-IQ3_XS.gguf"
+file = "Qwen3.8-27B-IQ2_M.gguf"
 size = "12.80 GB"
 
 [levels]
@@ -24,42 +24,26 @@ list = []
 
 [args]
 base = [
-    "--n-gpu-layers", "55",
+    "--n-gpu-layers", "66",
 
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
+    "--cache-type-k", "turbo3",              
+    "--cache-type-v", "turbo3",
 
-    # ---- KV cache ----
-    "--cache-type-k", "q4_0",                # 1,07 GB a 131072 (f16 = 4,29 GB)
-    "--cache-type-v", "q4_0",
-    "--kv-unified",
-
-    # ---- Sampling oficial en modo thinking (ficha de Qwen3.8) ----
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
     "--min-p", "0.0",
     "--repeat-penalty", "1.0",
 
-    # ---- Batch ----
     "--batch-size", "512",
-    "--ubatch-size", "256",                 # compute buffer ~0,9 GB
-
-    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max","10",
-    "--spec-draft-p-min","0.88",
+    "--ubatch-size", "256",         
 
     "--n-predict", "16384",
 
-    # ---- Reasoning ----
     "--reasoning-preserve",
     "--reasoning-budget", "12288",    
     "--checkpoint-min-step","256",
-    
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--kv-unified",
+
     "--load-mode", "mlock",
 ]
 

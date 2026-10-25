@@ -99,7 +99,7 @@ ropero_compile_llama() {
                 -DCMAKE_CXX_FLAGS="-march=native -O3 -ftree-vectorize" \
                 -DCMAKE_C_FLAGS="-march=native -O3 -ftree-vectorize" \
                 -DCMAKE_CUDA_FLAGS="--use_fast_math -O3 -lineinfo" \
-                -DCMAKE_CUDA_ARCHITECTURES="120a" \
+                -DCMAKE_CUDA_ARCHITECTURES="120-real" \
                 -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
                 -DGGML_CUDA_MMQ_MXFP4=ON \
                 -DGGML_CUDA_MMQ_NVFP4=ON \
