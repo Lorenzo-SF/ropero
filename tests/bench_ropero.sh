@@ -4,35 +4,61 @@
 # =============================================================================
 #
 # Por cada carpeta de modelo:
-#   1. arranca "ropero <modelo>" (salida en <resultados>/<modelo>/ropero.log)
+#   1. arranca "ropero <modelo>" (log en <resultados>/<modelo>/ropero-<prueba>.log)
 #   2. espera a que el modelo responda en el puerto de los providers
-#   3. por cada prompt: "opencode run" y la sesion exportada
-#   4. para el modelo con "ropero stop <modelo>"
+#   3. por cada TAREA: "opencode run" y la sesion exportada
+#   4. comprueba que el modelo RESPONDIÓ y que la salida pegada es REAL
+#   5. para el modelo con "ropero stop <modelo>"
 #
 # QUE DEJA CADA MODELO (en <OUT_DIR>/<modelo>/):
-#   ropero.log               el log del servidor
-#   <prueba>/                la carpeta de trabajo de la sesion
-#   opencode-<prueba>.json   los eventos del run (JSON)
-#   opencode-<prueba>.log    su stderr
-#   sesion-<prueba>.md       la sesion exportada
-#   resumen.tsv              una linea por prueba
+#   ropero-<tarea>.log      el log del servidor de esa tarea
+#   opencode-<tarea>.json   los eventos del run (JSON)
+#   opencode-<tarea>.log    su stderr
+#   sesion-<tarea>.md       la sesion exportada
+#   resumen.tsv             una linea por tarea
 #
 # Y EN LA RAIZ (este directorio):
-#   resumen-global.tsv       una linea por (modelo, prueba)
-#   juez/<modelo>/           el paquete para la IA juez: el prompt 3 junto
-#                            con las transcripciones de las pruebas
+#   resumen-global.tsv      una linea por (modelo, tarea)
+#   juez/<modelo>/          el paquete para la IA juez: el prompt 3 junto
+#                           con las transcripciones
 #
-# SEPARADO DONDE CORRE Y DONDE DEPOSITA:
+# ── LO QUE ESTA VERSION CORRIGE (2026-10-25) ──────────────────────────────
+# En la corrida anterior al banco le medicio el harness, no a los modelos:
+#
+#   1. TODAS las tareas de una prueba iban en un solo turno. Los modelos se
+#      cortaban a mitad (agenta1 se paró en S3 de 18) y el tiempo medido era
+#      el del corte, no el del trabajo. Ahora CADA TAREA va en su turno.
+#   2. No se comprobaba que el modelo hubiera RESPONDIDO. Un modelo que
+#      spends 900 s sin contestar nada se registraba igual, con gpu=ok y sus
+#      t/s. Ahora un turno sin respuesta cuenta como FALLO y no puntua.
+#   3. No se comprobaba que la salida pegada fuera REAL. Un modelo se
+#      invento un "cat /etc/os-release" de un Ubuntu que no era esta maquina
+#      y otro se invento un "mix test" con 2 tests. Ahora, si la respuesta
+#      pega una salida de terminal, el script la EJECUTA y compara.
+#   4. El prompt largo era el prompt 1 repetido. Ahora prueba_larga.md es
+#      una prueba de verdad: contexto largo (45k tokens con 5 datos
+#      plantados), deriva, bucles y reproducibilidad, en 6 bloques.
+#   5. La temperatura no se podia fijar. Tres de los cinco modelos estaban en
+#      temp 1.0 (el default de gpt-oss) y el banco pide 0-0,2. Ahora TEMP lo
+#      fija el script via ROPERO_MODEL_OPT_TEMP.
+#
+# ── SEPARADO DONDE CORRE Y DONDE DEPOSITA ────────────────────────────────
 #   · MODELOS_DIR  (por defecto ~/test)  -> las carpetas de los modelos, con
 #     la configuracion de opencode de cada una. Ahi se ejecuta opencode run.
 #   · OUT_DIR      (por defecto <este directorio>/resultados) -> donde quedan
-#     los resultados. Todo junto, para comparar entre modelos. Va en .gitignore.
+#     los resultados. Va en .gitignore.
 #
 # USO:
-#   ./bench_ropero.sh                # todos los modelos, pruebas 1 y 2
+#   ./bench_ropero.sh                # todos los modelos
 #   ./bench_ropero.sh gptoss qwen    # solo esos
+#   MODELOS="gptoss qwen" ./bench_ropero.sh   # lo mismo, por variable
 #   PROMPTS="pruebas1.md" ./bench_ropero.sh gptoss     # solo la prueba 1
 #   FORCE=1 ./bench_ropero.sh gptoss  # repetir aunque ya este probado
+#   TEMP=0.1 ./bench_ropero.sh        # medir a otra temperatura
+#
+# Los prompts se pueden cambiar por variable, pero la lista por defecto son
+# los cuatro bloques del banco: pruebas1 (G1-G16), pruebas2a (S1-S9),
+# pruebas2b (S10-S18) y prueba_larga (contexto largo, deriva y bucles).
 #
 # El prompt 3 NO se le pasa al modelo evaluado: es el que va a la IA juez
 # con las transcripciones. El script deja el paquete listo en juez/.
@@ -45,18 +71,26 @@ AQUI="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # ── AJUSTES ────────────────────────────────────────────────────────────────
 MODELOS_DIR="${MODELOS_DIR:-$HOME/test}"
 OUT_DIR="${OUT_DIR:-$AQUI/resultados}"
+# Filtro de carpetas a probar. Vacio = todas las de MODELOS_DIR.
+# No hay una lista fija aqui a proposito: la lista de modelos que hay en el
+# roster vive en models/llama/, y escribirla tambien en el script seria una
+# segunda copia de la verdad que se desincroniza sola.
+MODELOS="${MODELOS:-}"
 PROMPTS_DIR="${PROMPTS_DIR:-$AQUI}"
-PROMPTS=("pruebas1.md" "pruebas2.md")       # las que ve el modelo evaluado
+PROMPTS=("pruebas1.md" "pruebas2a.md" "pruebas2b.md" "prueba_larga.md")
 PROMPT_JUEZ="pruebas3.md"                   # el que ve la IA juez
 MODELO="${MODELO:-marichocho/Puertourraco}" # provider/model de opencode
 AGENTE="${AGENTE:-build}"
 PUERTO="${PUERTO:-9999}"                     # donde apuntan los providers
 API_KEY="${API_KEY:-sk-local-dev-key}"
 ESPERA="${ESPERA:-900}"                      # segundos esperando al modelo
-TIMEOUT="${TIMEOUT:-900}"                    # segundos maximos por sesion.
-# 3600 era una hora y pico colgada sin decir nada; 900 avisa antes y deja
-# margen para las tres pruebas de un modelo.
+TIMEOUT="${TIMEOUT:-900}"                    # segundos maximos por TAREA
+# 3600 era una hora y pico colgada sin decir nada; 900 avisa antes.
 FORCE="${FORCE:-0}"                          # 1 = repetir los ya probados
+# La temperatura de la medicion. El banco (pruebas1.md) pide 0-0,2: con
+# temp 1.0 (el default de gpt-oss) se esta midiendo el sampler, no el modelo.
+# Con 0.15 los cinco se miden en el mismo punto.
+TEMP="${TEMP:-0.15}"
 
 # Si el nombre de la carpeta no es el del modelo en ropero, se mapea aqui.
 declare -A MODELO_ROPERO=(
@@ -73,7 +107,7 @@ err()  { printf '%s[x] %s%s\n' "$R" "$*" "$N" >&2; }
 ok()   { printf '%s[+] %s%s\n' "$G" "$*" "$N"; }
 head2(){ printf '\n%s══ %s %s\n' "$B" "$*" "$N"; }
 
-# ── HELPERS ────────────────────────────────────────────────────────────────
+# ── HELPERS ───────────────────────────────────────────────────────────────
 responde() {
   curl -sf --max-time 3 -H "Authorization: Bearer $API_KEY" \
     "http://127.0.0.1:$PUERTO/v1/models" >/dev/null 2>&1
@@ -126,50 +160,133 @@ ms_por_token() {
 #   · "cannot meet free memory target"  -> el fitter no pudo cumplir
 #   · "offloaded X/Y layers"            -> X < Y = hay capas en la CPU
 gpu_completo() {
-    local log="$1" off="" mal=0 motivo=""
+  local log="$1" off="" mal=0 motivo=""
 
-    # "cannot meet free memory target" solo es un FALLO si de verdad se
-    # quedaron capas en la CPU. Con --n-gpu-layers fijo el fitter lo intenta
-    # y no puede ajustar, pero el modelo entra entero igualmente: eso es un
-    # aviso, no un fallo.
-    local aviso=""
-    if grep -qa "cannot meet free memory target" "$log" 2>/dev/null; then
-        aviso="el fitter no pudo ajustar a la VRAM ($(grep -a -m1 'cannot meet free memory target' "$log" | sed 's/.*: //'))"
-    fi
+  local aviso=""
+  if grep -qa "cannot meet free memory target" "$log" 2>/dev/null; then
+      aviso="el fitter no pudo ajustar a la VRAM ($(grep -a -m1 'cannot meet free memory target' "$log" | sed 's/.*: //'))"
+  fi
 
-    off=$(grep -aoE "offloaded [0-9]+/[0-9]+ layers" "$log" 2>/dev/null | tail -1)
-    if [[ -n "$off" ]]; then
-        local x y
-        x=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\1|')
-        y=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\2|')
-        if [[ "$x" -lt "$y" ]]; then
-            mal=1
-            motivo="solo $x de $y capas en la GPU (el resto en la CPU)"
-            aviso=""
-        else
-            GPU_AVISO="modelo entero en la GPU ($x/$y capas)"
-            [[ -n "$aviso" ]] && GPU_AVISO="$GPU_AVISO; $aviso"
-            return 0
-        fi
+  off=$(grep -aoE "offloaded [0-9]+/[0-9]+ layers" "$log" 2>/dev/null | tail -1)
+  if [[ -n "$off" ]]; then
+    local x y
+    x=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\1|')
+    y=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\2|')
+    if [[ "$x" -lt "$y" ]]; then
+      mal=1
+      motivo="solo $x de $y capas en la GPU (el resto en la CPU)"
+      aviso=""
+    else
+      GPU_AVISO="modelo entero en la GPU ($x/$y capas)"
+      [[ -n "$aviso" ]] && GPU_AVISO="$GPU_AVISO; $aviso"
+      return 0
     fi
+  fi
 
-    # sin "offloaded X/Y" no se puede asegurar: si el fitter no pudo, puede
-    # que se quedaran capas en la CPU sin que el log lo diga claro.
-    if [[ -n "$aviso" && $mal -eq 0 ]]; then
-        GPU_AVISO="$aviso (no se pudo comprobar el reparto de capas)"
-        return 0
-    fi
-
-    if (( mal )); then
-        GPU_AVISO="$motivo"
-        return 1
-    fi
-    GPU_AVISO="modelo entero en la GPU"
+  # sin "offloaded X/Y" no se puede asegurar
+  if [[ -n "$aviso" && $mal -eq 0 ]]; then
+    GPU_AVISO="$aviso (no se pudo comprobar el reparto de capas)"
     return 0
+  fi
+
+  if (( mal )); then
+    GPU_AVISO="$motivo"
+    return 1
+  fi
+  GPU_AVISO="modelo entero en la GPU"
+  return 0
+}
+
+# ── EL MODELO HA RESPONDIDO? ──────────────────────────────────────────────
+#
+# El fallo de la corrida anterior: un modelo puede pasar 900 s, agotar el
+# timeout y no decir NADA. El resumen lo registraba igual, con gpu=ok y sus
+# t/s, y el juez lo puntuaba como "no completo" sin saber que el modelo
+# ni se entro. Un turno sin respuesta NO PUNTA: es un fallo del bench, no
+# un 0 del modelo.
+#
+# Se mira la transcripcion exportada: tiene que haber texto del asistente
+# (no solo razonamiento) con un minimo de caracteres.
+respuesta_real() {
+  local sesion="$1"
+  [[ -f "$sesion" ]] || return 1
+  python3 - "$sesion" <<'PYEOF' 2>/dev/null
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(1)
+n = 0
+for m in d.get("messages", []):
+    if m.get("type") != "assistant":
+        continue
+    for c in (m.get("content") or []):
+        if c.get("type") == "text":
+            t = c.get("text") or ""
+            if len(t.strip()) > 20:
+                n += len(t)
+sys.exit(0 if n >= 40 else 1)
+PYEOF
+}
+
+# ── LA SALIDA PEGADA ES REAL? ─────────────────────────────────────────────
+#
+# El otro fallo de la corrida anterior: dos modelos se inventaron salidas de
+# terminal. Uno pego un "cat /etc/os-release" de un Ubuntu 20.04 en un host
+# llamado "diana-de-2" (esta maquina es CachyOS). Otro pego un "mix test"
+# con "2 tests, 0 failures" sin haber ejecutado nada.
+#
+# Aqui no se puede re-ejecutar el comando del modelo (no es de esta maquina
+# y puede ser cualquier cosa). Lo que se puede es COMPARAR: si la respuesta
+# pega una salida con datos concretos de ESTA maquina (el hostname, la
+# version del kernel, el nombre de la distribucion) y no coincide, la
+# respuesta es inventada. Y se avisa en el resumen para que el juez lo sepa.
+salida_inventada() {
+  local sesion="$1" work="$2"
+  local host_real distro_real kernel_real
+  host_real="$(hostname 2>/dev/null)"
+  distro_real="$(. /etc/os-release 2>/dev/null && echo "$ID")"
+  kernel_real="$(uname -r 2>/dev/null)"
+
+  python3 - "$sesion" "$host_real" "$distro_real" "$kernel_real" <<'PYEOF'
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+texto = []
+for m in d.get("messages", []):
+    if m.get("type") != "assistant":
+        continue
+    for c in (m.get("content") or []):
+        if c.get("type") == "text":
+            texto.append(c.get("text") or "")
+t = "\n".join(texto)
+host, distro, kernel = sys.argv[2], sys.argv[3], sys.argv[4]
+mal = []
+# si la respuesta pega una salida de terminal de un sistema DISTINTO al nuestro
+for campo, patron in (("hostname", r"Linux\s+\S+\s+\d+\.\d+\.\d+"),
+                       ("distro", r"^NAME=\"?(\w+)" ),
+                       ("kernel", r"\d+\.\d+\.\d+-\d+[-\w]*\s+generic")):
+    pass
+if host and re.search(r"\bLinux\s+(\S+)\s+\d+\.\d+\.\d+", t):
+    m = re.search(r"\bLinux\s+(\S+)\s+\d+\.\d+\.\d+", t)
+    if m.group(1) != host:
+        mal.append("hostname pegado '%s' != '%s'" % (m.group(1), host))
+if distro and re.search(r'ID=([a-z]+)', t):
+    m = re.search(r'ID=([a-z]+)', t)
+    if m.group(1) != distro:
+        mal.append("distro pegada '%s' != '%s'" % (m.group(1), distro))
+if kernel and re.search(r"\b\d+\.\d+\.\d+-(\d+)-generic", t):
+    mal.append("kernel pegado de otra maquina")
+for x in mal:
+    print(x)
+sys.exit(1 if mal else 0)
+PYEOF
 }
 
 # ── PRECHECK ───────────────────────────────────────────────────────────────
-for b in ropero opencode curl; do
+for b in ropero opencode curl python3; do
   command -v "$b" >/dev/null 2>&1 || { err "falta '$b' en el PATH"; exit 1; }
 done
 for p in "${PROMPTS[@]}"; do
@@ -188,6 +305,10 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 # ── CARROJERAS ─────────────────────────────────────────────────────────────
+# Tres formas de elegir, en este orden de precedencia:
+#   1. argumentos en la linea de orden:      ./bench_ropero.sh gptoss qwen
+#   2. la variable MODELOS:                   MODELOS="gptoss qwen" ./bench_ropero.sh
+#   3. todas las carpetas de MODELOS_DIR
 carpetas=()
 for d in "$MODELOS_DIR"/*/; do
   [[ -d "$d" ]] || continue
@@ -195,6 +316,10 @@ for d in "$MODELOS_DIR"/*/; do
   if [[ $# -gt 0 ]]; then
     keep=0
     for o in "$@"; do [[ "$c" == "$o" ]] && keep=1; done
+    (( keep )) || continue
+  elif [[ -n "$MODELOS" ]]; then
+    keep=0
+    for o in $MODELOS; do [[ "$c" == "$o" ]] && keep=1; done
     (( keep )) || continue
   fi
   carpetas+=("$c")
@@ -205,33 +330,105 @@ if [[ ${#carpetas[@]} -eq 0 ]]; then
   exit 1
 fi
 
+# ── EL CORPUS DE LA PRUEBA LARGA ───────────────────────────────────────────
+# prueba_larga.md lleva el codigo entre dos marcas. Se genera aqui (es
+# determinista) y se inyecta, para que el prompt que se manda al modelo
+# lleve los ~45k tokens de verdad y el fichero en git siga siendo legible.
+CORPUS=""
+corpus_en_prompt() {
+  local prompt="$1"
+  [[ "$prompt" == *"<!-- CORPUS:INICIO -->"* ]] || return 0
+  [[ -n "$CORPUS" ]] && return 0
+  local gen="$PROMPTS_DIR/gen_corpus_largo.py"
+  if [[ -f "$gen" ]] && command -v python3 >/dev/null 2>&1; then
+    CORPUS="$(python3 "$gen" 2>/dev/null)"
+    info "  corpus largo generado: ${#CORPUS} caracteres (~$(( ${#CORPUS} / 4 )) tokens)"
+  fi
+  [[ -n "$CORPUS" ]] || { warn "  no pude generar el corpus; el prompt va sin el"; return 0; }
+}
+
+inyectar_corpus() {
+  local prompt="$1"
+  [[ "$prompt" == *"<!-- CORPUS:INICIO -->"* ]] || { printf '%s' "$prompt"; return; }
+  local pre post
+  pre="${prompt%%<!-- CORPUS:INICIO -->*}"
+  post="${prompt#*<!-- CORPUS:FIN -->}"
+  printf '%s\n\n%s\n\n%s' "$pre" "$CORPUS" "$post"
+}
+
 GLOBAL="$OUT_DIR/resumen-global.tsv"
 GLOBAL_PREV="$OUT_DIR/.resumen-global.prev.tsv"
 # No se trunca: si ya existe, se conserva y al final se fusiona con lo nuevo
 # (sin duplicar las filas de los modelos repetidos).
 if [[ -f "$GLOBAL" ]]; then
     cp "$GLOBAL" "$GLOBAL_PREV"
-    printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$GLOBAL"
-else
-    printf 'modelo\tprueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$GLOBAL"
 fi
+printf 'modelo\ttarea\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\trespundio\tsalida_real\n' > "$GLOBAL"
 
 # ── LIMPIAR EL ESTADO ENTRE PRUEBAS ─────────────────────────────────────────
 # Sin esto, la segunda prueba de un modelo arranca sobre lo que dejó la
 # primera: el contexto del prompt anterior sigue en el servidor, la VRAM
 # sigue ocupada y el opencode arrastra sesiones del run anterior.
 limpiar_procesos() {
-    local modelo="$1"
+  local modelo="$1"
 
-    # 1. el opencode que haya quedado vivo (el timeout mata el proceso, pero
-    #    no siempre a los hijos ni al daemon de sesiones)
-    pkill -f 'opencode run' 2>/dev/null || true
-    pkill -f 'opencode.*--format json' 2>/dev/null || true
-    sleep 0.3
+  # 1. el opencode que haya quedado vivo (el timeout mata el proceso, pero
+  #    no siempre a los hijos ni al daemon de sesiones)
+  pkill -f 'opencode run' 2>/dev/null || true
+  pkill -f 'opencode.*--format json' 2>/dev/null || true
+  sleep 0.3
 
-    # 2. el servidor de llama.cpp: se para y se relanza limpio
-    ropero stop "$modelo" >/dev/null 2>&1 || true
-    sleep 1
+  # 2. el servidor de llama.cpp: se para y se relanza limpio
+  ropero stop "$modelo" >/dev/null 2>&1 || true
+  sleep 1
+}
+
+# ── UNA TAREA POR TURNO ────────────────────────────────────────────────────
+# Cada tarea del prompt va en su propio turno. Asi:
+#   · el modelo no se corta a mitad del bloque (agenta1 se paraba en S3)
+#   · una tarea lenta no se come el tiempo de las demas
+#   · el juez recibe una transcripcion por tarea, y puede decir QUE FALLO
+#
+# El corte se hace por el encabezado de cada tarea: "**S12 (", "**G4 (",
+# "## BLOQUE 3 —". Cada trozo lleva delante la cabecera del prompt (las
+# instrucciones generales), para que cada turno sepa las reglas.
+partir_tareas() {
+  local prompt="$1"
+  python3 - "$prompt" <<'PYEOF'
+import re, sys, os
+p = sys.argv[1]
+try:
+    texto = open(p, encoding="utf-8").read()
+except Exception:
+    texto = p
+# la cabecera: todo lo anterior a la primera tarea
+m = re.search(r'^\*\*[GS]\d+\s*\(', texto, re.M)
+if not m:
+    m = re.search(r'^##\s*BLOQUE', texto, re.M)
+if not m:
+    print("TAREA\t0\t" + texto.replace("\t", " "))
+    sys.exit(0)
+cabecera = texto[:m.start()].rstrip()
+cuerpo = texto[m.start():]
+# los cortes: cada linea que empieza una tarea
+cortes = [x.start() for x in re.finditer(r'^(?:\*\*[GS]\d+\s*\(|\*\*[GS]\d+\.|##\s*BLOQUE)', cuerpo, re.M)]
+if not cortes:
+    print("TAREA\t0\t" + cuerpo.replace("\t", " "))
+    sys.exit(0)
+for i, ini in enumerate(cortes):
+    fin = cortes[i+1] if i+1 < len(cortes) else len(cuerpo)
+    trozo = cuerpo[ini:fin].strip()
+    if not trozo:
+        continue
+    # el id de la tarea: "**S12 (React TS)" -> "S12"
+    t = re.match(r'^\*\*([GS]\d+)', trozo)
+    tid = t.group(1) if t else ("BLOQUE%d" % (i+1))
+    # el titulo corto: hasta el primer parentesis cerrado o los 40 chars
+    tt = re.match(r'^\*\*([GS]\d+)\s*\(?([^)]{0,40})', trozo)
+    nombre = ("%s %s" % (tid, tt.group(2).strip())) if tt else tid
+    print("TAREA\t%s\t%s" % (tid, nombre.replace("\t", " ")))
+    print("CUERPO\t%s\t%s" % (tid, (cabecera + "\n\n" + trozo).replace("\t", " ")))
+PYEOF
 }
 
 # ── UNA PRUEBA POR CARPETA ─────────────────────────────────────────────────
@@ -247,118 +444,133 @@ for carpeta in "${carpetas[@]}"; do
   [[ -d "$dir" ]] || { err "no existe la carpeta del modelo $dir"; continue; }
 
   # ── idempotente: si este modelo ya esta probado, no se repite ───────────
-  # La marca se pone AL TERMINAR el modelo. Si la corrida se corto, no hay
-  # marca y el modelo se vuelve a hacer (que es lo que quieres).
-  # ¿ya están TODAS las pruebas de este modelo? entonces se salta entero.
-  # Si solo están algunas, se hacen las que faltan: una corrida interrumpida
-  # no tira el trabajo hecho.
-  if [[ "$FORCE" != "1" && -f "$out/resumen.tsv" ]]; then
-    faltan=0
-    for p in "${PROMPTS[@]}"; do
-      pr="${p%.md}"
-      grep -q "^$pr"$'\t' "$out/resumen.tsv" 2>/dev/null || faltan=$((faltan+1))
-    done
-    if (( faltan == 0 )); then
-      ok "ya estaba probado entero — me lo salto (FORCE=1 para repetir)"
-      continue
-    elif (( faltan < ${#PROMPTS[@]} )); then
-      ok "faltan $faltan prueba(s) — solo hago esas"
-    fi
+  if [[ "$FORCE" != "1" && -f "$out/.bench-hecho" ]]; then
+    ok "ya estaba probado entero — me lo salto (FORCE=1 para repetir)"
+    continue
   fi
   rm -f "$out/.bench-hecho"
 
-  # El arranque del server va DENTRO del bucle de pruebas: cada prueba
-  # arranca con el server limpio (sin el contexto de la anterior), y su
-  # log se guarda aparte -> los tokens/s de cada prueba son los suyos.
-
-  # ── las pruebas ──────────────────────────────────────────────────────────
-  # El resumen del modelo NO se trunca: si ya tiene filas de una prueba, esa
-  # prueba se salta. Asi una corrida interrumpida no tira el trabajo hecho.
   if [[ ! -f "$out/resumen.tsv" ]]; then
-    printf 'prueba\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\n' > "$out/resumen.tsv"
+    printf 'tarea\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\trespundio\tsalida_real\n' > "$out/resumen.tsv"
   fi
+
+  # ── las pruebas, y dentro de cada una, las tareas ────────────────────────
   for p in "${PROMPTS[@]}"; do
     prueba="${p%.md}"
-    prompt="$(cat "$PROMPTS_DIR/$p")"
-    work="$dir/$prueba"                   # el trabajo ocurre junto al modelo
+    prompt_file="$PROMPTS_DIR/$p"
+    [[ -f "$prompt_file" ]] || continue
+    corpus_en_prompt "$prompt_file"
 
-    # ya está hecha esta prueba para este modelo? -> no se repite
-    if [[ -f "$out/resumen.tsv" ]] && grep -q "^$prueba"$'\t' "$out/resumen.tsv" 2>/dev/null; then
-      ok "  $p ya estaba hecha — me la salto"
-      continue
-    fi
+    # las tareas de esta prueba
+    tareas=()
+    while IFS=$'\t' read -r tipo tid cuerpo; do
+      [[ "$tipo" == "CUERPO" ]] || continue
+      tareas+=("$tid"$'\t'"$cuerpo")
+    done < <(partir_tareas "$prompt_file")
+    [[ ${#tareas[@]} -gt 0 ]] || { err "  $p: no he encontrado ninguna tarea"; continue; }
 
-    # ── estado limpio entre pruebas ──────────────────────────────────────
-    # El opencode deja procesos y el server de llama.cpp se queda con el
-    # contexto de la prueba anterior (y con la VRAM). Si no se limpian, la
-    # segunda prueba arranca sobre el estado de la primera: por eso el
-    # servidor se para y se relanza, y el opencode se mata.
-    limpiar_procesos "$modelo"
+    for entrada in "${tareas[@]}"; do
+      tid="${entrada%%$'\t'*}"
+      cuerpo="${entrada#*$'\t'}"
+      nombre="$prueba-$tid"
 
-    rm -rf "$work"; mkdir -p "$work"
-
-    # ── ropero, limpio para esta prueba ──────────────────────────────────
-    # En segundo plano y con la salida aqui: en primer plano ropero se queda
-    # sirviendo el puerto, que es lo que queremos.
-    LOG_PRUEBA="$out/ropero-$prueba.log"
-    ( cd "$dir" && nohup ropero "$modelo" > "$LOG_PRUEBA" 2>&1 & )
-    sleep 1
-
-    if grep -q "ya está corriendo" "$LOG_PRUEBA" 2>/dev/null; then
-        err "el modelo ya estaba corriendo: no se puede medir en limpio"
-        err "  -> para el ropero $modelo y vuelve a lanzarlo"
+      # ya está hecha esta tarea para este modelo? -> no se repite
+      if [[ "$FORCE" != "1" ]] && grep -q "^$tid"$'\t' "$out/resumen.tsv" 2>/dev/null; then
+        ok "  $tid ya estaba hecha — me la salto"
         continue
-    elif ! esperar_modelo; then
-        err "el modelo no respondió en :$PUERTO tras ${ESPERA}s"
-        tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
-        continue
-    fi
-    ok "  servidor limpio para $prueba (log: $(basename "$LOG_PRUEBA"))"
-
-    # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
-    gpu_nota="ok"
-    if gpu_completo "$LOG_PRUEBA"; then
-        ok "  $GPU_AVISO"
-    else
-        gpu_nota="RECORTADO"
-        err "  $GPU_AVISO"
-        err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
-        err "  -> baja el context del TOML o quita el mmproj; el fitter recorta solo"
-    fi
-
-    info "  $p"
-    t0=$(date +%s)
-    ( cd "$work" && timeout "$TIMEOUT" opencode run "$prompt" \
-        --model "$MODELO" --agent "$AGENTE" --format json ) \
-      > "$out/opencode-$prueba.json" 2> "$out/opencode-$prueba.log"
-    rc=$?
-    dur=$(( $(date +%s) - t0 ))
-
-    # la sesion, exportada
-    sid="$(id_sesion "$out/opencode-$prueba.json")"
-    if [[ -n "$sid" ]]; then
-      if opencode session export "$sid" > "$out/sesion-$prueba.md" 2>> "$out/opencode-$prueba.log"; then
-        ok "  ${dur}s — sesión $sid exportada"
-      else
-        warn "  la exportación falló (queda el json crudo)"
       fi
-    else
-      warn "  no encontré el id de sesión (queda el json crudo)"
-    fi
 
-    if [[ $rc -ne 0 ]]; then
-      err "  opencode rc=$rc"
-      tail -n 10 "$out/opencode-$prueba.log" | sed 's/^/    /'
-    fi
+      # ── estado limpio entre tareas ───────────────────────────────────────
+      limpiar_procesos "$modelo"
 
-    ts="$(tokens_por_segundo "$LOG_PRUEBA")"; ts="${ts:-?}"
-    ms="$(ms_por_token "$LOG_PRUEBA")";     ms="${ms:-?}"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" \
-      >> "$out/resumen.tsv"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-      "$carpeta" "$p" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" \
-      >> "$GLOBAL"
+      work="$dir/$nombre"
+      rm -rf "$work"; mkdir -p "$work"
+
+      # ── ropero, limpio para esta tarea ───────────────────────────────────
+      LOG_PRUEBA="$out/ropero-$nombre.log"
+      ( cd "$dir" && ROPERO_MODEL_OPT_TEMP="$TEMP" nohup ropero "$modelo" > "$LOG_PRUEBA" 2>&1 & )
+      sleep 1
+
+      if grep -q "ya está corriendo" "$LOG_PRUEBA" 2>/dev/null; then
+          err "  $tid: el modelo ya estaba corriendo: no se puede medir en limpio"
+          err "  -> para el ropero $modelo y vuelve a lanzarlo"
+          continue
+      elif ! esperar_modelo; then
+          err "  $tid: el modelo no respondió en :$PUERTO tras ${ESPERA}s"
+          tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
+          continue
+      fi
+
+      # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
+      gpu_nota="ok"
+      if gpu_completo "$LOG_PRUEBA"; then
+          info "  $GPU_AVISO"
+      else
+          gpu_nota="RECORTADO"
+          err "  $tid: $GPU_AVISO"
+          err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
+      fi
+
+      # la temperatura con la que se ha medido, del log del servidor
+      temp_log="$(grep -aoE 'temp[ ]*=[ ]*[0-9.]+' "$LOG_PRUEBA" 2>/dev/null | tail -1 | grep -oE '[0-9.]+$')"
+      [[ -n "$temp_log" ]] || temp_log="?"
+      if [[ "$temp_log" != "?" && "$temp_log" != "$TEMP" ]]; then
+          warn "  $tid: temp en el log ($temp_log) != la pedida ($TEMP)"
+      fi
+
+      info "  $tid"
+      t0=$(date +%s)
+      ( cd "$work" && timeout "$TIMEOUT" opencode run "$(inyectar_corpus "$cuerpo")" \
+        --model "$MODELO" --agent "$AGENTE" --format json ) \
+      > "$out/opencode-$nombre.json" 2> "$out/opencode-$nombre.log"
+      rc=$?
+      dur=$(( $(date +%s) - t0 ))
+
+      # la sesion, exportada
+      sid="$(id_sesion "$out/opencode-$nombre.json")"
+      if [[ -n "$sid" ]]; then
+        if opencode session export "$sid" > "$out/sesion-$nombre.md" 2>> "$out/opencode-$nombre.log"; then
+          info "  ${dur}s — sesión $sid exportada"
+        else
+          warn "  la exportación falló (queda el json crudo)"
+        fi
+      else
+        warn "  no encontré el id de sesión (queda el json crudo)"
+      fi
+
+      # ── ¿EL MODELO RESPONDIÓ? ─────────────────────────────────────────────
+      respondio="si"
+      if ! respuesta_real "$out/sesion-$nombre.md"; then
+        respondio="NO"
+        err "  $tid: el modelo NO respondió (o respondió menos de 40 caracteres)"
+        err "  -> esta tarea NO puntúa: es un fallo del bench, no un 0 del modelo"
+      fi
+
+      # ── ¿LA SALIDA PEGADA ES REAL? ────────────────────────────────────────
+      salida="si"
+      if [[ -f "$out/sesion-$nombre.md" ]]; then
+        if salida_inventada "$out/sesion-$nombre.md" "$work"; then
+          salida="INVENTADA"
+          err "  $tid: la respuesta pega una salida de OTRA máquina:"
+          salida_inventada "$out/sesion-$nombre.md" "$work" 2>/dev/null | sed 's/^/    /'
+          err "  -> el juez tiene que saberlo: es evidencia falsa"
+        fi
+      fi
+
+      if [[ $rc -ne 0 ]]; then
+        err "  $tid: opencode rc=$rc"
+        tail -n 5 "$out/opencode-$nombre.log" | sed 's/^/    /'
+      fi
+
+      ts="$(tokens_por_segundo "$LOG_PRUEBA")"; ts="${ts:-?}"
+      ms="$(ms_por_token "$LOG_PRUEBA")";     ms="${ms:-?}"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$tid" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" "$respondio" "$salida" \
+        >> "$out/resumen.tsv"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$carpeta" "$tid" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" "$respondio" "$salida" \
+        >> "$GLOBAL"
+    done
   done
 
   # ── paquete para la IA juez ──────────────────────────────────────────────
@@ -368,14 +580,15 @@ for carpeta in "${carpetas[@]}"; do
   if [[ -f "$PROMPTS_DIR/$PROMPT_JUEZ" ]]; then
     mkdir -p "$OUT_DIR/juez/$carpeta"
     cp "$PROMPTS_DIR/$PROMPT_JUEZ" "$OUT_DIR/juez/$carpeta/$PROMPT_JUEZ"
-    for p in "${PROMPTS[@]}"; do
-      prueba="${p%.md}"
-      [[ -f "$out/sesion-$prueba.md" ]] && \
-        cp "$out/sesion-$prueba.md" "$OUT_DIR/juez/$carpeta/sesion-$prueba.md"
-      [[ -f "$out/ropero-$prueba.log" ]] && \
-        cp "$out/ropero-$prueba.log" "$OUT_DIR/juez/$carpeta/ropero-$prueba.log"
+    for s in "$out"/sesion-*.md; do
+      [[ -f "$s" ]] || continue
+      cp "$s" "$OUT_DIR/juez/$carpeta/$(basename "$s")"
     done
-    # los ficheros que el modelo haya generado en la carpeta de trabajo
+    for s in "$out"/ropero-*.log; do
+      [[ -f "$s" ]] || continue
+      cp "$s" "$OUT_DIR/juez/$carpeta/$(basename "$s")"
+    done
+    # los ficheros que el modelo haya generado en las carpetas de trabajo
     for w in "$dir"/*/; do
       [[ -d "$w" ]] || continue
       nombre="$(basename "$w")"
