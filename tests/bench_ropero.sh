@@ -92,6 +92,26 @@ FORCE="${FORCE:-0}"                          # 1 = repetir los ya probados
 # Con 0.15 los cinco se miden en el mismo punto.
 TEMP="${TEMP:-0.15}"
 
+# El nivel de razonamiento con el que se mide. Los modelos tienen niveles
+# distintos (gptoss: low/medium/high; qwen36: low/medium/xhigh; muse: no
+# tiene niveles, se ajusta por system prompt; laguna: thinking/no-thinking).
+#
+# MEDIR EL DEFAULT DE CADA MODELO NO COMPARA NADA: se estaria midiendo "el
+# modelo con su nivel por defecto" contra "el modelo con su nivel por
+# defecto", y eso mezcla dos variables (la calidad del modelo y la del
+# razonamiento).
+#
+# Con NIVEL=high, el bench arranca el modelo en el nivel pedido (ropero
+# registra un alias por nivel) y asi todos se miden pensando igual.
+# Los modelos sin niveles se miden con el suyo (que es el unico).
+#
+#   NIVEL=medium ./bench_ropero.sh gptoss qwen36
+#
+# El nivel se pasa como flag: `ropero gptoss --high`. Los niveles los
+# declara cada modelo en su TOML ([levels].list), asi que no todos los
+# modelos los tienen. Ver _ropero_model_levels en bin/ropero.
+NIVEL="${NIVEL:-high}"
+
 # Si el nombre de la carpeta no es el del modelo en ropero, se mapea aqui.
 declare -A MODELO_ROPERO=(
   [agentas1]=agenta1
@@ -487,8 +507,24 @@ for carpeta in "${carpetas[@]}"; do
       rm -rf "$work"; mkdir -p "$work"
 
       # ── ropero, limpio para esta tarea ───────────────────────────────────
+      # Se arranca en el NIVEL pedido, no en el default del modelo: si no,
+      # cada modelo se mide con el nivel de razonamiento que le de la gana y
+      # la comparacion no significa nada.
+      #
+      # El nivel es un flag (ropero gptoss --high), no un alias. Y solo se
+      # pasa si el modelo lo declara: `ropero gptoss --high` funciona,
+      # `ropero muse --high` no (el muse no tiene niveles: se ajusta con
+      # "Reasoning strength: <valor>" en el system prompt).
       LOG_PRUEBA="$out/ropero-$nombre.log"
-      ( cd "$dir" && ROPERO_MODEL_OPT_TEMP="$TEMP" nohup ropero "$modelo" > "$LOG_PRUEBA" 2>&1 & )
+      # El nivel es un flag (ropero gptoss --high). Los niveles los declara
+      # cada modelo en su TOML, asi que no todos los tienen: si el server no
+      # acepta el flag, se avisa y el modelo se mide con su nivel por
+      # defecto (que es lo unico que se puede hacer con el).
+      flag_nivel=""
+      if [[ -n "$NIVEL" ]]; then
+          flag_nivel="--$NIVEL"
+      fi
+      ( cd "$dir" && ROPERO_MODEL_OPT_TEMP="$TEMP" nohup ropero "$modelo" $flag_nivel > "$LOG_PRUEBA" 2>&1 & )
       sleep 1
 
       if grep -q "ya está corriendo" "$LOG_PRUEBA" 2>/dev/null; then
@@ -499,6 +535,16 @@ for carpeta in "${carpetas[@]}"; do
           err "  $tid: el modelo no respondió en :$PUERTO tras ${ESPERA}s"
           tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
           continue
+      fi
+
+      # ¿Se arranca en el nivel pedido? Si el modelo no declara ese nivel,
+      # ropero lo avisa y arranca con el suyo. Sin avisar, comparariamos
+      # modelos con distinto nivel de razonamiento.
+      if [[ -n "$flag_nivel" ]]; then
+          if grep -qaE "nivel|level|unknown option|opción desconocida|invalid" "$LOG_PRUEBA" 2>/dev/null \
+             && ! grep -qaE "n_ctx|context size|n_layer" "$LOG_PRUEBA" 2>/dev/null; then
+              warn "  $tid: el nivel $flag_nivel no se pudo aplicar (mira el log); se mide con el default"
+          fi
       fi
 
       # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
