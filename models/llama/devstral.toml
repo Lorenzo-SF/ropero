@@ -1,0 +1,105 @@
+# =============================================================================
+# ♻️ REACTIVADO — devstral (Devstral Small 2 24B Instruct)
+# =============================================================================
+#
+# Reactivado el 2026-10-25 para volver a medirlo en el bench: los
+# cinco modelos que estaban bencheados eran casi todos de la misma
+# familia (gpt-oss y derivados). Faltaba un coder de verdad y dos MoE
+# nuevos que no fueran de esa familia.
+#
+# Descargable con: ropero download devstral
+#
+# Devstral-Small-2-24B-Instruct-2512 (UD-Q4_K_XL) — MoE 24B, thinking off por
+# defecto (es un coder: respuesta directa).
+#
+# El override del contexto es el canónico ROPERO_DEVSTRAL_CTX.
+# =============================================================================
+
+
+# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
+# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
+# sin recorte y sin offload a la CPU. Para que eso sea posible:
+#
+#   · --n-gpu-layers = 40  = el numero REAL de capas del GGUF (leido de
+#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
+#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
+#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
+#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
+#     cabe: por eso se pone el numero exacto y no -1.
+#   · el KV cache va en la GPU (sin --no-kv-offload) y en q8_0, que es lo
+#     que hace que el ctx quepa.
+#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
+#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
+#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
+#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
+#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#
+# ctx = 32768: el maximo que cabe con el KV en q8_0 y el resto del modelo
+# entero en la GPU, con la formula de KV de llama.cpp
+# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+#
+# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
+# =============================================================================
+
+[model]
+name    = "devstral"
+engine  = "llama-server"
+context = 32768
+alias   = "coder_lite"
+
+[files]
+gguf   = "Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf"
+
+[download]
+repo = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
+file = "Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf"
+size = "11.47 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "40",
+
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--cache-prompt",
+    "--cache-reuse", "512",
+    "--kv-unified",
+    "--context-shift",
+
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+    "--threads", "12",
+    "--threads-batch", "16",
+    "--poll", "30",
+
+    "--jinja",
+    "--chat-template-kwargs", '{"enable_thinking": false}',
+    "--reasoning-format", "deepseek",
+
+    "--temp", "0.6",
+    "--top-k", "20",
+    "--top-p", "0.95",
+    "--min-p", "0.05",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--seed", "-1",
+
+    "--n-predict", "4096",
+    "--keep", "1024",
+
+    "--load-mode", "none",
+    "--metrics",
+    "--perf",
+]
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

@@ -1,0 +1,141 @@
+# =============================================================================
+# ♻️ REACTIVADO — fable (Fable-Coder-35B-A3B)
+# =============================================================================
+#
+# Reactivado el 2026-10-25 para volver a medirlo en el bench: los
+# cinco modelos que estaban bencheados eran casi todos de la misma
+# familia (gpt-oss y derivados). Faltaba un coder de verdad y dos MoE
+# nuevos que no fueran de esa familia.
+#
+# Descargable con: ropero download fable
+#
+# Fable-Coder-35B-A3B — Config optimizada para RTX 5080 (16GB VRAM, 32GB RAM)
+#   - MoE 35B totales / 3B activos por token
+#   - Fine-tune Opus-4.7 reasoning + Opus-4.8 tool use sobre Qwen3.6-35B-A3B
+#   - MBPP 78.2% (+5.2 sobre base), SWE-Bench 73.4%, Terminal-Bench 51.5%
+#   - Hybrid: 48 layers (3 Gated DeltaNet + 1 Gated Attention, repetido)
+#   - MTP heads integrados (Qwen3.6 los trae)
+#
+# Resultado esperado en RTX 5080:
+#   - Prompt eval: 250-400 t/s
+#   - Gen 8k ctx:  35-50 t/s
+#   - Gen 32k ctx: 18-25 t/s
+#   - Gen 131k ctx: 8-12 t/s (KV cache limita)
+#
+# ── Tuning por VRAM disponible ─────────────────────────────────────────────
+# Con la cuantización Q2_K (13.25 GB) el modelo ENTERO cabe en la VRAM de
+# 16 GB, así que ya NO hace falta el --n-cpu-moe que antes mandaba 30
+# capas de expertos a la CPU. Mandar expertos a la CPU no es gratis: cada
+# token los recorre por el bus PCIe y el decode se desploma.
+#
+# Con el Q4_K_M de antes (21.7 GB) no cabía ni de lejos: el modelo entero
+# no entra en 16 GB a ninguna cuantización de este repo. Por eso el cambio
+# a Q2_K, que es la cuantización más pequeña que ofrece mradermacher.
+#
+# El override del contexto es el canónico ROPERO_FABLE_CTX.
+# =============================================================================
+
+
+# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
+# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
+# sin recorte y sin offload a la CPU. Para que eso sea posible:
+#
+#   · --n-gpu-layers = 40  = el numero REAL de capas del GGUF (leido de
+#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
+#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
+#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
+#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
+#     cabe: por eso se pone el numero exacto y no -1.
+#   · el KV cache va en la GPU (sin --no-kv-offload) y en q4_0, que es lo
+#     que hace que el ctx quepa.
+#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
+#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
+#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
+#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
+#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#
+# ctx = 32768: el maximo que cabe con el KV en q4_0 y el resto del modelo
+# entero en la GPU, con la formula de KV de llama.cpp
+# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+#
+# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
+# =============================================================================
+
+[model]
+name    = "fable"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf   = "fable-coder-35B-A3B.Q2_K.gguf"
+
+[download]
+repo = "mradermacher/fable-coder-35B-A3B-GGUF"
+file = "fable-coder-35B-A3B.Q2_K.gguf"
+size = "13.25 GB"
+
+[args]
+base = [
+    # ---- GPU offload ----
+    "--n-gpu-layers", "40",                            # todos los layers "GPU-eligible"
+
+    # ---- Atención ----
+    # -fa on se pone globalmente en ropero entry; no duplicar
+    # --swa-full NO aplicar — Fable no tiene SWA
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",                           # q4_0 en K para liberar VRAM
+    "--cache-type-v", "q4_0",                           # nunca q4_0 en V, degrada tool use
+    "--cache-prompt",
+    "--cache-reuse", "512",                             # reusa bloques KV en prompts similares
+    "--kv-unified",                                     # single user, unified buffer
+    "--context-shift",                                  # rolling context en sesiones largas
+
+    # ---- Speculative decoding (MTP del propio modelo) ----
+
+                          # hasta 5 tokens drfteados por ronda
+                          # no malgastes en rounds de 0 drafts
+
+
+    # ---- Batching / threads ----
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",
+    "--parallel", "1",
+    "--threads", "12",                                  # 32GB RAM, CPU moderna
+    "--threads-batch", "16",
+    "--poll", "30",                                     # polling medio (default 50)
+
+    # ---- Modelo / carga ----
+    "--jinja",                                          # chat template Qwen3.6
+    "--chat-template-kwargs", '{"enable_thinking": false}',  # coder = directo, sin thinking
+    "--reasoning-format", "deepseek",                   # limpia tags thinking del output
+
+    # ---- Sampling (canónico Qwen3.6 coder) ----
+    "--temp", "0.6",
+    "--top-k", "20",
+    "--top-p", "0.95",
+    "--min-p", "0.05",
+    "--repeat-penalty", "1.0",                          # sin penalty (Qwen3.6 OK)
+    "--repeat-last-n", "64",
+    "--seed", "-1",
+
+    # ---- Generación ----
+    "--n-predict", "4096",                              # tope por response, ajustable
+    "--keep", "1024",                                   # preserva system+tools al hacer context-shift
+
+    # ---- Misc ----
+    "--load-mode", "none",                              # mmap off (con mlock o manual swap)
+    "--metrics",                                        # /metrics endpoint
+    "--perf",                                           # libllama perf timings
+]
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

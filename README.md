@@ -199,17 +199,32 @@ El vocabulario es del modelo, no del CLI: si un modelo no declara `--vision`,
 
 Activos:
 
-| Modelo | Engine | Notas |
-|---|---|---|
-| `gemma` | llama-server | Gemma 4 26B-A4B, con MTP y visión |
-| `gptoss` | llama-server | GPT-OSS 20B, alias `verifier` y `designer` |
-| `qwencoder` | llama-server | Qwen3-Coder 30B, alias `coder` |
-| `qwenvision` | llama-server | Qwen2.5-VL 7B |
-| `agents-a1-4b` | llama-server | InternScience Agents-A1 4B |
-| `agents-a1-35b` | llama-server | InternScience Agents-A1 35B-A3B |
-| `qwen38-apex` | llama-server | Qwen3.8 27B, con MTP y visión |
-| `airllm` | airllm | GPT-OSS 120B sobre AirLLM |
-| `metaloss` | mlx_lm | GPT-OSS 20B en MLX (Apple Silicon) |
+| Modelo | Engine | GGUF | Capas (`-ngl`) | ctx |
+|---|---|---|---|---|
+| `agenta1` | llama-server | 11.66 GB | 40 | 262144 |
+| `agents-tiny` | llama-server | 4.48 GB | 32 | 262144 |
+| `devstral` | llama-server | 11.47 GB | 40 | 32768 |
+| `fable` | llama-server | 13.25 GB | 40 | 262144 |
+| `gemma` | llama-server | 13.28 GB | 30 | 131072 |
+| `gptoss` | llama-server | 12.11 GB | 24 | 131072 |
+| `laguna` | llama-server | 12.83 GB | 40 | 32768 |
+| `muse` | llama-server | 13.36 GB | 52 | 131072 |
+| `ornith` | llama-server | 12.54 GB | 40 | 262144 |
+| `qwen` | llama-server | 12.80 GB | 64 | 65536 |
+| `qwen36` | llama-server | 13.21 GB | 40 | 262144 |
+| `qwencoder` | llama-server | 11.97 GB | 48 | 65536 |
+| `qwenvision` | llama-server | 6.10 GB | 28 | 32768 |
+| `qwopus` | llama-server | 13.53 GB | 40 | 262144 |
+
+Todos van **enteros en la GPU**: todas las capas, el KV cache incluido, sin
+recorte y sin offload a la CPU. Los que no cabían en 16 GB con su cuantización
+original se bajaron de cuantización hasta que entraron.
+
+Los demás engines (`airllm`, `mlx_lm`) tienen sus modelos aparte, en
+`models/airllm/` y `models/mlx_lm/`.
+
+La lista completa y vigente está en `models/` — que es la fuente de verdad: un TOML
+nuevo aparece en `ropero` sin tocar esta tabla.
 
 Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
 `ropero verifier` es `ropero gptoss --high`.
@@ -230,6 +245,161 @@ Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
 Los overrides propios de cada modelo (temperatura del drafter, tipo de KV…)
 también existen: `ROPERO_GEMMA_TEMP`, `ROPERO_GEMMA_MTP_NMAX`,
 `ROPERO_GPTOSS_KV`… y están declarados en el TOML de cada modelo.
+
+### `--n-gpu-layers`: el número real de capas
+
+En los TOMLs de `models/llama/`, `--n-gpu-layers` lleva **el número real de
+capas del GGUF** (leído de `<arch>.block_count` en la cabecera del fichero, no
+de un README ni de una suposición). La razón está en el código de `llama.cpp`:
+
+`common/fit.cpp` hace dos cosas, **en este orden**:
+
+1. Si el modelo no cabe, **reduce el contexto** (no las capas):
+   `"entire model can be fit by reducing context"`.
+2. Y si el usuario fijó `n_gpu_layers != -1`, **aborta**:
+   `"n_gpu_layers already set by user to N, abort"`.
+
+O sea: un `-ngl` fijo desactiva el fitter y el modelo se pide entero en la
+VRAM de golpe. Si no cabe, la carga falla:
+
+```
+allocating 12036.68 MiB on device 0: cudaMalloc failed: out of memory
+llama_server: exiting due to model loading error
+```
+
+Medido el 2026-10-25 con `codoss` (`-ngl 25` fijo): no llegó a responder ni la
+primera tarea.
+
+Por eso la política es:
+
+- **La cuantización se elige para que el modelo entero quepa**, y entonces el
+  `-ngl` con el número exacto de capas es correcto: no hay nada que recortar.
+- Si el modelo **no** cabe entero, el `-ngl` va a `-1` y deja que el fitter
+  recorte el contexto, que es lo único que puede recortar sin castigar el
+  decode.
+- Un `-ngl` fijo con un número **menor** que el total de capas es un offload
+  parcial deliberado: cada token de las capas en CPU cruza el bus PCIe. Es
+  lento, y el bench lo detecta (el log dice `offloaded X/Y layers`).
+
+### El MTP y la VRAM
+
+`--spec-type draft-mtp` crea un **draft context** con su propio espacio de VRAM
+y su KV en `f16`, y el fitter lo mide **junto al modelo principal**
+(`common.cpp`: el MTP se pasa como `extra` a `common_fit_params`). Con el
+margen justo, el MTP se come la VRAM que necesitan las capas del modelo, y el
+server no arranca.
+
+En un portátil de 16 GB el MTP no compensa: el draft context son ~0.5 GB de
+pesos + KV en `f16` (el doble que en `q8_0`), y lo que se gana en t/s no llega
+a lo que se pierde en capacidad de contexto y en el riesgo de que el modelo no
+arranque.
+
+**Política: el roster activo va sin MTP.** Se quitó de todos los TOMLs. Cuando
+el GGUF trae la cabeza MTP incrustada (`<arch>.nextn_predict_layers = 1`), los
+pesos están en el fichero pero **no se cargan** si no se pide el draft context
+(`llama-model.cpp`: la capa nextn sólo se crea con
+`LLAMA_CONTEXT_TYPE_MTP`).
+
+Si algún día hace falta el MTP, se documenta en la cabecera del TOML y se
+comprueba con `ropero status` que el server arranca y que el log dice
+`offloaded N/N layers`.
+
+### Cómo se calcula el KV cache (y por qué no es "capas × ctx")
+
+El KV cache **no lo gastan todas las capas**, y esto cambia el resultado por
+un factor de 4 en los modelos híbridos. La fórmula de llama.cpp
+(`src/llama-kv-cache.cpp`) es:
+
+```
+bytes_por_capa = n_embd_k * sizeof(type_k) + n_embd_v * sizeof(type_v)
+KV = celdas * capas * bytes_por_capa
+```
+
+pero hay que saber **cuántas capas** de cada tipo hay, y eso NO sale de una
+sola regla:
+
+| Tipo de modelo | Cuántas capas gastan KV | Dónde sale |
+|---|---|---|
+| Denso normal | todas | — |
+| Sliding window | 1 de cada N plenas; el resto, con ventana | `<arch>.sliding_window_pattern` (número o lista) |
+| Híbrido recurrente | 1 de cada 4 plenas | `<arch>.full_attention_interval = 4` |
+| Mamba (nemotron) | las de atención, y con `head_count_kv` por capa | lista por capa, 0 = capa mamba |
+
+En `gemma4` además las capas sliding window tienen **otro `head_dim`** (256
+en vez de 512), así que el KV de ese grupo sale por la mitad.
+
+Los números del KV se pueden leer directamente del log del server, que es lo
+que hay que hacer para no adivinar:
+
+```
+llama_kv_cache: size = 1152.00 MiB ( 65536 cells, 16 layers, 1/1 seqs),
+                K (q4_0): 576.00 MiB, V (q4_0): 576.00 MiB
+```
+
+**Calibrado contra los memory breakdown medidos el 2026-10-25** (RTX 5080
+Laptop, 15933 MiB), el error de la fórmula es del **0,00 %** en los 5 casos:
+
+| modelo | calculado | medido |
+|---|---|---|
+| gptoss (12 plenas + 12 SWA-128) | 1632.00 MiB | 1632.00 MiB |
+| gptoss (grupo SWA, 512 celdas) | 6.38 MiB | 6.38 MiB |
+| qwen3.8-27B (16 de 64 de atención) | 1152.00 MiB | 1152.00 MiB |
+| agenta1 (10 de 40 de atención) | 720.00 MiB | 720.00 MiB |
+| agents-tiny (8 de 32 de atención) | 4352.00 MiB | 4352.00 MiB |
+
+El MTP tiene su propio KV (en f16) y su propio compute buffer, aparte: medido
+256 MiB + 66 MiB para el draft context del qwen.
+
+### Cuánta VRAM hace falta
+
+```
+pesos + KV(ctx) + compute buffer + server + holgura <= VRAM libre
+```
+
+El compute buffer escala con `--ubatch-size` (medido: 338 MiB con ubatch 256,
+1182 MiB con ubatch 1024), no con el batch total. El "server + holgura" son
+~475 MiB (contexto CUDA, allocator, fragmentación).
+
+### El modelo excepcional: `qwen36`
+
+Para el caso de "un solo modelo que sirva de coder y de analista, con el
+razonamiento ajustable", el candidato es **`qwen36`** (Qwen3.6-35B-A3B):
+
+- **73.4 % SWE-bench Verified**, 49.5 % SWE-bench Pro, 51.5 % Terminal-Bench 2.0
+- MoE: 35B totales pero **3B activados** por token → el decode va rápido
+- **262144 de contexto nativo**, y el modelo avisa de que por debajo de
+  128K se pierde capacidad de thinking
+- Niveles de razonamiento **low / medium / xhigh** (el template no conoce
+  "high": ese valor da error)
+
+Los runners-up, para cada perfil:
+
+| Modelo | Para qué | Lo bueno | Lo malo |
+|---|---|---|---|
+| `qwen36` | coder + analista, el más fuerte que entra | 73.4 % SWE-bench V, 3B activos, 262K | MoE: la calidad del MoE es menor que la de un denso del mismo tamaño |
+| `muse` | el más listo y con razonamiento fino | SWE-bench Pro **51.2 %** (el más alto de la tabla), IFBench 77.0, AIME 94.7, y **4 niveles** (low/medium/high/xhigh) vía system prompt | Es **denso** 30B: sin MTP va a 15-25 t/s |
+| `laguna` | agente con herramientas | thinking **por petición**, APEX (cuantización por capa, no plana) | 37.5 % TB 2.0; su ctx se queda en 32768 (es denso en atención) |
+| `qwen` | el denso de referencia | Qwen3.8-27B, IQ3_XS | 61.7 % SWE-bench Pro |
+| `fable` | coder con el mejor tool-use | Opus-4.8 tool use, 51.5 % TB | Su GGUF trae la cabeza MTP y hay que quitarla |
+
+**Muse Glimmer** (Meta, Apache 2.0) es probablemente el mejor "analista" del
+roster: gana en SWE-Bench Pro (51.2 vs 50.2), en IFBench (77.0 vs 70.8), en
+AIME 2026 (94.7) y en GPQA Diamond, y su razonamiento se ajusta en cuatro
+niveles con `Reasoning strength: <valor>` en el system prompt. El precio es
+que es denso: sin MTP va lento.
+
+Con offload se puede subir de nivel, pero el offload de un denso sale caro:
+cada token de las capas en CPU cruza el bus PCIe. Con un MoE (que es lo que
+hace rápido al `qwen36`) el offload penaliza mucho menos, porque solo se
+van los expertos.
+
+### `--n-cpu-moe`: fuera
+
+Mandar expertos MoE a la CPU (`--n-cpu-moe`) es la otra forma de que el modelo
+"quepa". No es gratis: cada token recorre los expertos por el bus PCIe y el
+decode se desploma. Con la cuantización correcta **no hace falta**: el modelo
+entero cabe en 16 GB y se queda todo en la GPU.
+
 
 ---
 

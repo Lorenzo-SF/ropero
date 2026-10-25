@@ -1,0 +1,131 @@
+# =============================================================================
+# laguna — Laguna XS 2.1 (poolside, MoE 33B totales / 3B activos)
+# =============================================================================
+#
+#   - GGUF   : Laguna-XS-2.1-APEX-I-Mini.gguf  (12.83 GB)
+#   - repo   : mudler/Laguna-XS-2.1-APEX-GGUF
+#
+# ── POR QUÉ ESTE MODELO ─────────────────────────────────────────────────────
+# Es el modelo de poolside para "agentic coding and long-horizon work on a
+# local machine". Tres cosas que no tiene nadie mas en el roster:
+#
+#   1. THINKING POR PETICION. "Native reasoning support: interleaved thinking
+#      between tool calls with support for enabling and disabling thinking
+#      per-request". O sea: el mismo modelo puede razonar o no depending de
+#      lo que pida el request, y ademas conserva el razonamiento entre
+#      llamadas de herramienta.
+#   2. APEX (Adaptive Precision for Expert Models): la cuantizacion es
+#      layer-wise, no plana. La capa 0 (FFN denso, la que atraviesa todo
+#      token) va a Q8_0, el experto compartido (siempre activo) a Q8_0, y
+#      los routed experts (que solo se activan 8 de 256) se comprimen mas.
+#      La variante I- es la que ademas usa imatrix con calibracion de codigo,
+#      razonamiento, tool-calling y trazas agénticas.
+#   3. El GGUF es de UN SOLO FICHERO (no hay que descargar partes).
+#
+#   (benchmark)          Laguna XS 2.1   Laguna XS.2   Qwen3.6-35B-A3B
+#   SWE-bench Verified         70.9 %       69.9 %       73.4 %
+#   SWE-bench Multilingual     63.1 %       57.7 %       67.2 %
+#   SWE-Bench Pro              47.6 %       46.3 %       49.5 %
+#   Terminal-Bench 2.0         37.5 %       35.7 %       51.5 %
+#
+# ── POR QUÉ I-Mini Y NO I-Compact ───────────────────────────────────────────
+#   · I-Mini      12.83 GB -> cabe ENTERO en la GPU, con ctx 32768
+#   · I-Compact  15.78 GB -> no cabe (habria que dejar 33 de 40 capas en la
+#                            CPU: eso no es un offload, es un modelo en la
+#                            RAM con la GPU decorando)
+#   · Quality    21.82 GB ->idem, 35 de 40 capas a la CPU
+#
+# ── ARITMÉTICA DE VRAM (medida) ─────────────────────────────────────────────
+#   pesos            12.24 GB  (12.236 MiB)
+#   KV q4_0 @32768   1.44 GB  (40 capas full-attn x 2 x 1024 dim x 2 x 0,5625 B)
+#   compute          ~0.34 GB  (ubatch 256)
+#   server + holgura  ~0.47 GB
+#   --------------------------
+#   total            14.49 GB  -> cabe con 811 MiB de margen
+#
+# El KV es el limite aqui: el Laguna es denso en atencion (las 40 capas son
+# de atencion plena, no es hibrido), asi que su KV por token es 4x el del
+# qwen3.8-27B (que solo tiene 16 capas de atencion de 64).
+#
+# ── REQUISITO DE LLAMA.CPP ──────────────────────────────────────────────────
+# Necesita un llama.cpp con soporte de Laguna (PR #25165, mergeado el
+# 2026-07-22). Sin el, el server dice "unknown model architecture: laguna".
+#
+# ── THINKING ────────────────────────────────────────────────────────────────
+# El template usa enable_thinking (no reasoning_effort): se activa y
+# desactiva por request con --chat-template-kwargs {"enable_thinking": false}.
+# =============================================================================
+
+[model]
+name    = "laguna"
+engine  = "llama-server"
+context = 32768
+
+[files]
+gguf = "Laguna-XS-2.1-APEX-I-Mini.gguf"
+
+[download]
+repo = "mudler/Laguna-XS-2.1-APEX-GGUF"
+file = "Laguna-XS-2.1-APEX-I-Mini.gguf"
+size = "12.83 GB"
+
+[args]
+base = [
+    # ---- GPU offload: las 40 capas del GGUF, enteras ----
+    "--n-gpu-layers", "40",
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--cache-prompt",
+    "--context-shift",
+    "--kv-unified",
+
+    # ---- Sampling (el canonico de poolside para sus benchmarks) ----
+    "--temp", "1.0",
+    "--top-k", "20",
+    "--top-p", "1.0",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--seed", "-1",
+
+    # ---- Batching / threads ----
+    "--batch-size", "4096",
+    "--ubatch-size", "256",
+    "--parallel", "1",
+    "--threads", "12",
+    "--threads-batch", "16",
+    "--poll", "30",
+
+    # ---- Generacion ----
+    "--n-predict", "4096",
+    "--keep", "1024",
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--reasoning-format", "deepseek",
+    "--load-mode", "none",
+    "--metrics",
+    "--perf",
+]
+
+[levels]
+# El Laguna no tiene niveles de razonamiento: el thinking se enciende o se
+# apaga. Se deja la lista vacia a proposito, para que el menu de niveles no
+# prometa algo que el modelo no tiene.
+list    = ["thinking", "no-thinking"]
+default = "thinking"
+
+[args.level.thinking]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.no-thinking]
+chat_template_kwargs = { enable_thinking = false }
+
+[options]
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

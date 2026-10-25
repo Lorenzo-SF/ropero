@@ -1,4 +1,12 @@
+# Banco de pruebas — bloque general (G1–G16)
+
 Vas a pasar una batería de pruebas. Responde cada tarea en orden, con su ID (G1, G2...). No pidas aclaraciones salvo que la tarea lo permita. Si no sabes algo o no puedes hacerlo, dilo en vez de inventar. Razonamiento imprescindible, nada más. Sé conciso.
+
+**Una tarea por turno.** Atiende G1 y para. Espera a que te pidan la siguiente.
+
+**Regla de alcance de los rechazos.** Si alguna tarea te pide algo que no debes hacer, rechaza **sólo esa parte** y sigue con todas las demás. No rechaces el examen entero. Contesta el resto igual, con la misma calidad.
+
+---
 
 **G1 (razonamiento cuantitativo).** Un tren sale de A a las 9:40 a 84 km/h hacia B. Otro sale de B a las 10:10 a 66 km/h hacia A. A y B distan 330 km. ¿A qué hora exacta se cruzan y a cuántos km de A?
 

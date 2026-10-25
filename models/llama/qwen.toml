@@ -36,12 +36,44 @@
 #   CPU, la atención se calcula en la CPU y los t/s se desploman. De ahí el
 #   q4_0 (el KV cuantizado exige -fa on, que va aquí).
 #
-#   OJO: la cabeza MTP (los tensores nextn) SI esta dentro del GGUF, pero
-#   --spec-type draft-mtp NO se usa. Crea un draft context con su propio
-#   espacio de VRAM (y su KV en f16) y en un portatil de 16 GB no cabe: el
-#   server se queda sin memoria y no arranca (medido en agenta1: con MTP no
-#   arrancaba; sin MTP, 140 t/s). Si tu GGUF es de otro que NO traiga la
-#   cabeza MTP, esto no aplica y no pierdes nada.
+#   La cabeza MTP (los tensores nextn) SI esta dentro del GGUF y SI se usa
+#   (--spec-type draft-mtp). Medido en este modelo: 66/66 capas en la GPU,
+#   aceptacion del draft 19-37 %, y el server arranca sin problemas. El
+#   MTP NO es lo que hizo lento al qwen: el bench lo mato a los 900 s
+#   generando a 27 t/s, no colgado.
+#
+#   OJO con el otro caso: en agenta1 el MTP SI impedia arrancar (el server
+#   se quedaba sin memoria). La diferencia es el margen de VRAM: el MTP
+#   crea un draft context con su propio espacio y su KV en f16, y en un
+#   modelo que ya llena la GPU no cabe. Aqui el qwen (12,8 GB de pesos +
+#   KV q4_0) deja sitio. Si cambias de GGUF, comprueba el margen antes.
+
+
+# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
+# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
+# sin recorte y sin offload a la CPU. Para que eso sea posible:
+#
+#   · --n-gpu-layers = 64  = el numero REAL de capas del GGUF (leido de
+#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
+#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
+#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
+#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
+#     cabe: por eso se pone el numero exacto y no -1.
+#   · el KV cache va en la GPU (sin --no-kv-offload) y en q4_0, que es lo
+#     que hace que el ctx quepa.
+#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
+#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
+#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
+#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
+#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#
+# ctx = 65536: el maximo que cabe con el KV en q4_0 y el resto del modelo
+# entero en la GPU, con la formula de KV de llama.cpp
+# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+#
+# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
+# =============================================================================
 
 [model]
 name    = "qwen"
@@ -71,10 +103,12 @@ list = []
 [args]
 base = [
     # ---- GPU offload ----
-    # -1 = auto: el fitter reparte solo. NO pongas un numero (--n-gpu-layers
-    # 99): el fitter aborta con "n_gpu_layers already set by user" y el modelo
-    # se va entero a la GPU a pelo -> cudaMalloc failed.
-    "--n-gpu-layers", "66",
+    # -1 = auto: el fitter reparte solo. NO pongas un numero: con
+    # --n-gpu-layers fijo el fitter aborta ("n_gpu_layers already set by
+    # user") y el modelo se va entero a la GPU a pelo -> cudaMalloc failed.
+    # Es exactamente lo que tumbó al codoss en el bench: con "-ngl 25" fijo
+    # pidio 12.036 MiB de golpe, no los habia, y el server no arranco.
+    "--n-gpu-layers", "64",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
@@ -95,12 +129,13 @@ base = [
     "--batch-size", "512",
     "--ubatch-size", "256",                 # compute buffer ~0,9 GB
 
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "10",
+    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
+    # Medido: draft acceptance 19-37 %, y el server arranca (66/66 capas).
+
+
 
     "--n-predict", "16384",
 
-    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
     # ---- Reasoning ----
     "--reasoning-budget", "12288",    
 
@@ -111,6 +146,18 @@ base = [
 
 # El nivel marca el reasoning_effort. El env ROPERO_QWEN_REASONING lo
 # sobreescribe (es la forma de forzar un nivel sin tocar la línea de órdenes).
+# ── OPCIONES SOBREESCRIBIBLES ────────────────────────────────────────────
+# El bench necesita medir a temp 0.1-0.2 (lo pide pruebas1.md) sin editar
+# este fichero. Con esto, el override llega al argv:
+#   ROPERO_MODEL_OPT_TEMP=0.15 ropero <modelo>
+# o en la linea de ordenes:  ropero <modelo> --temp 0.15
+[options]
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]
+
 [args.level.low]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-low}"
 

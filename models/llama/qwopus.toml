@@ -75,10 +75,37 @@
 # El override del contexto es el canónico ROPERO_QWOPUS_CTX.
 # =============================================================================
 
+
+# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
+# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
+# sin recorte y sin offload a la CPU. Para que eso sea posible:
+#
+#   · --n-gpu-layers = 40  = el numero REAL de capas del GGUF (leido de
+#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
+#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
+#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
+#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
+#     cabe: por eso se pone el numero exacto y no -1.
+#   · el KV cache va en la GPU (sin --no-kv-offload) y en q4_0, que es lo
+#     que hace que el ctx quepa.
+#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
+#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
+#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
+#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
+#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#
+# ctx = 32768: el maximo que cabe con el KV en q4_0 y el resto del modelo
+# entero en la GPU, con la formula de KV de llama.cpp
+# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+#
+# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
+# =============================================================================
+
 [model]
 name    = "qwopus"
 engine  = "llama-server"
-context = 131072
+context = 262144
 
 [files]
 gguf   = "Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf"
@@ -86,7 +113,7 @@ gguf   = "Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf"
 [download]
 repo = "xero0000/Qwopus3.6-35B-A3B-Coder-vram13-GGUF"
 file = "Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf"
-size = "12.60 GiB"
+size = "13.53 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -95,7 +122,7 @@ default = "low"
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "42",
+    "--n-gpu-layers", "40",
 
     # ---- Attention ----
     "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
@@ -134,3 +161,13 @@ chat_template_kwargs = { enable_thinking = false }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

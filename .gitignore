@@ -17,3 +17,7 @@ hs_err_pid*.log
 replay_pid*.log
 core
 core.*
+
+# Resultados del bench: transcripciones, logs de opencode y paquetes del
+# juez. Son datos de una corrida, no codigo, y pesan.
+tests/resultados/
