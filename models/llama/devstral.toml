@@ -45,7 +45,7 @@
 [model]
 name    = "devstral"
 engine  = "llama-server"
-context = 32768
+context = 65536
 alias   = "coder_lite"
 
 [files]
@@ -60,8 +60,8 @@ size = "11.47 GB"
 base = [
     "--n-gpu-layers", "40",
 
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--cache-prompt",
     "--cache-reuse", "512",
     "--kv-unified",

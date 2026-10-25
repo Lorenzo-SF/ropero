@@ -203,12 +203,13 @@ Activos:
 |---|---|---|---|---|
 | `agenta1` | llama-server | 11.66 GB | 40 | 262144 |
 | `agents-tiny` | llama-server | 4.48 GB | 32 | 262144 |
-| `devstral` | llama-server | 11.47 GB | 40 | 32768 |
+| `devstral` | llama-server | 11.47 GB | 40 | 65536 |
 | `fable` | llama-server | 13.25 GB | 40 | 262144 |
 | `gemma` | llama-server | 13.28 GB | 30 | 131072 |
 | `gptoss` | llama-server | 12.11 GB | 24 | 131072 |
-| `laguna` | llama-server | 12.83 GB | 40 | 32768 |
+| `laguna` | llama-server | 12.83 GB | 40 | 49152 |
 | `muse` | llama-server | 13.36 GB | 52 | 131072 |
+| `nemotron` | llama-server | 19.76 GB | 52 | 262144 |
 | `ornith` | llama-server | 12.54 GB | 40 | 262144 |
 | `qwen` | llama-server | 12.80 GB | 64 | 65536 |
 | `qwen36` | llama-server | 13.21 GB | 40 | 262144 |
@@ -219,6 +220,14 @@ Activos:
 Todos van **enteros en la GPU**: todas las capas, el KV cache incluido, sin
 recorte y sin offload a la CPU. Los que no cabían en 16 GB con su cuantización
 original se bajaron de cuantización hasta que entraron.
+
+La excepción es el `nemotron`: sus pesos (19.76 GB) no caben de ninguna
+manera en 16 GB, ni con la cuantización más pequeña que existe. Va con
+`--n-cpu-moe 10`, que manda 10 de sus 23 capas de experts a la CPU. Es la
+vía **barata** de offload: el 88 % de sus pesos son los expertos routed, y
+la atención, el lm head y los embeddings se quedan en la GPU. Su ctx sigue
+siendo 262144 porque solo 7 de sus 52 capas gastan KV (las otras son
+Mamba-2).
 
 Los demás engines (`airllm`, `mlx_lm`) tienen sus modelos aparte, en
 `models/airllm/` y `models/mlx_lm/`.

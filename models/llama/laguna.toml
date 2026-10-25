@@ -59,7 +59,7 @@
 [model]
 name    = "laguna"
 engine  = "llama-server"
-context = 32768
+context = 49152
 
 [files]
 gguf = "Laguna-XS-2.1-APEX-I-Mini.gguf"

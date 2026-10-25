@@ -39,21 +39,21 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-context = 65536
+context = 262144
 
 [files]
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
-size = "23.3 GB"
+file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
+size = "19.76 GB"
 
 [args]
 base = [
     # ---- GPU offload (MoE 30B/3B activo, 16GB VRAM justos) ----
-    "--n-gpu-layers", "53",                            # todos los layers GPU-eligible
-    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-35}",  # expertos MoE en CPU
+    "--n-gpu-layers", "52",                            # todos los layers GPU-eligible
+    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-10}",  # expertos MoE en CPU
     "--no-kv-offload",                                 # KV cache en GPU
 
     # ---- Atención ----
