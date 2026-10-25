@@ -103,7 +103,7 @@
 [model]
 name    = "agenta1"
 engine  = "llama-server"
-context = 65536
+context = 262144
 
 [files]
 gguf   = "Agents-A1-IQ2_M.gguf"

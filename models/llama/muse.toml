@@ -62,12 +62,12 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf   = "Muse-Glimmer-30B-UD-IQ2_M.gguf"
+gguf   = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
 
 [download]
 repo = "unsloth/Muse-Glimmer-30B-GGUF"
-file = "Muse-Glimmer-30B-UD-IQ2_M.gguf"
-size = "12.26 GB"
+file = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
+size = "13.36 GB"
 
 [args]
 base = [
@@ -119,3 +119,13 @@ base = [
     # ---- Misc ----
     # --log-verbosity lo pone ropero entry (default 4)
 ]
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

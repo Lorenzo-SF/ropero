@@ -65,7 +65,7 @@
 [model]
 name    = "fable"
 engine  = "llama-server"
-context = 32768
+context = 262144
 
 [files]
 gguf   = "fable-coder-35B-A3B.Q2_K.gguf"
@@ -129,3 +129,13 @@ base = [
     "--metrics",                                        # /metrics endpoint
     "--perf",                                           # libllama perf timings
 ]
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

@@ -103,7 +103,7 @@
 [model]
 name    = "gemma"
 engine  = "llama-server"
-context = 16384
+context = 131072
 
 [files]
 gguf   = "google_gemma-4-26B-A4B-it-IQ3_M.gguf"
@@ -167,3 +167,13 @@ chat_template_kwargs = { enable_thinking = true }
 # [args.flag.vision] se ha ido con el mmproj:
 #   base    = ["--mmproj", "${mmproj}"]
 #   requires = ["mmproj"]
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]

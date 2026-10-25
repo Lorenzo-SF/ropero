@@ -201,18 +201,20 @@ Activos:
 
 | Modelo | Engine | GGUF | Capas (`-ngl`) | ctx |
 |---|---|---|---|---|
-| `agenta1` | llama-server | 11.66 GB | 40 | 65536 |
-| `agents-tiny` | llama-server | 4.48 GB | 32 | 131072 |
+| `agenta1` | llama-server | 11.66 GB | 40 | 262144 |
+| `agents-tiny` | llama-server | 4.48 GB | 32 | 262144 |
 | `devstral` | llama-server | 11.47 GB | 40 | 32768 |
-| `fable` | llama-server | 13.25 GB | 40 | 32768 |
-| `gemma` | llama-server | 13.28 GB | 30 | 16384 |
-| `gptoss` | llama-server | 12.11 GB | 24 | 65536 |
-| `muse` | llama-server | 12.26 GB | 52 | 131072 |
-| `ornith` | llama-server | 12.54 GB | 40 | 65536 |
+| `fable` | llama-server | 13.25 GB | 40 | 262144 |
+| `gemma` | llama-server | 13.28 GB | 30 | 131072 |
+| `gptoss` | llama-server | 12.11 GB | 24 | 131072 |
+| `laguna` | llama-server | 12.83 GB | 40 | 32768 |
+| `muse` | llama-server | 13.36 GB | 52 | 131072 |
+| `ornith` | llama-server | 12.54 GB | 40 | 262144 |
 | `qwen` | llama-server | 12.80 GB | 64 | 65536 |
+| `qwen36` | llama-server | 13.21 GB | 40 | 262144 |
 | `qwencoder` | llama-server | 11.97 GB | 48 | 65536 |
 | `qwenvision` | llama-server | 6.10 GB | 28 | 32768 |
-| `qwopus` | llama-server | 13.53 GB | 40 | 32768 |
+| `qwopus` | llama-server | 13.53 GB | 40 | 262144 |
 
 Todos van **enteros en la GPU**: todas las capas, el KV cache incluido, sin
 recorte y sin offload a la CPU. Los que no cabían en 16 GB con su cuantización
@@ -301,6 +303,95 @@ pesos están en el fichero pero **no se cargan** si no se pide el draft context
 Si algún día hace falta el MTP, se documenta en la cabecera del TOML y se
 comprueba con `ropero status` que el server arranca y que el log dice
 `offloaded N/N layers`.
+
+### Cómo se calcula el KV cache (y por qué no es "capas × ctx")
+
+El KV cache **no lo gastan todas las capas**, y esto cambia el resultado por
+un factor de 4 en los modelos híbridos. La fórmula de llama.cpp
+(`src/llama-kv-cache.cpp`) es:
+
+```
+bytes_por_capa = n_embd_k * sizeof(type_k) + n_embd_v * sizeof(type_v)
+KV = celdas * capas * bytes_por_capa
+```
+
+pero hay que saber **cuántas capas** de cada tipo hay, y eso NO sale de una
+sola regla:
+
+| Tipo de modelo | Cuántas capas gastan KV | Dónde sale |
+|---|---|---|
+| Denso normal | todas | — |
+| Sliding window | 1 de cada N plenas; el resto, con ventana | `<arch>.sliding_window_pattern` (número o lista) |
+| Híbrido recurrente | 1 de cada 4 plenas | `<arch>.full_attention_interval = 4` |
+| Mamba (nemotron) | las de atención, y con `head_count_kv` por capa | lista por capa, 0 = capa mamba |
+
+En `gemma4` además las capas sliding window tienen **otro `head_dim`** (256
+en vez de 512), así que el KV de ese grupo sale por la mitad.
+
+Los números del KV se pueden leer directamente del log del server, que es lo
+que hay que hacer para no adivinar:
+
+```
+llama_kv_cache: size = 1152.00 MiB ( 65536 cells, 16 layers, 1/1 seqs),
+                K (q4_0): 576.00 MiB, V (q4_0): 576.00 MiB
+```
+
+**Calibrado contra los memory breakdown medidos el 2026-10-25** (RTX 5080
+Laptop, 15933 MiB), el error de la fórmula es del **0,00 %** en los 5 casos:
+
+| modelo | calculado | medido |
+|---|---|---|
+| gptoss (12 plenas + 12 SWA-128) | 1632.00 MiB | 1632.00 MiB |
+| gptoss (grupo SWA, 512 celdas) | 6.38 MiB | 6.38 MiB |
+| qwen3.8-27B (16 de 64 de atención) | 1152.00 MiB | 1152.00 MiB |
+| agenta1 (10 de 40 de atención) | 720.00 MiB | 720.00 MiB |
+| agents-tiny (8 de 32 de atención) | 4352.00 MiB | 4352.00 MiB |
+
+El MTP tiene su propio KV (en f16) y su propio compute buffer, aparte: medido
+256 MiB + 66 MiB para el draft context del qwen.
+
+### Cuánta VRAM hace falta
+
+```
+pesos + KV(ctx) + compute buffer + server + holgura <= VRAM libre
+```
+
+El compute buffer escala con `--ubatch-size` (medido: 338 MiB con ubatch 256,
+1182 MiB con ubatch 1024), no con el batch total. El "server + holgura" son
+~475 MiB (contexto CUDA, allocator, fragmentación).
+
+### El modelo excepcional: `qwen36`
+
+Para el caso de "un solo modelo que sirva de coder y de analista, con el
+razonamiento ajustable", el candidato es **`qwen36`** (Qwen3.6-35B-A3B):
+
+- **73.4 % SWE-bench Verified**, 49.5 % SWE-bench Pro, 51.5 % Terminal-Bench 2.0
+- MoE: 35B totales pero **3B activados** por token → el decode va rápido
+- **262144 de contexto nativo**, y el modelo avisa de que por debajo de
+  128K se pierde capacidad de thinking
+- Niveles de razonamiento **low / medium / xhigh** (el template no conoce
+  "high": ese valor da error)
+
+Los runners-up, para cada perfil:
+
+| Modelo | Para qué | Lo bueno | Lo malo |
+|---|---|---|---|
+| `qwen36` | coder + analista, el más fuerte que entra | 73.4 % SWE-bench V, 3B activos, 262K | MoE: la calidad del MoE es menor que la de un denso del mismo tamaño |
+| `muse` | el más listo y con razonamiento fino | SWE-bench Pro **51.2 %** (el más alto de la tabla), IFBench 77.0, AIME 94.7, y **4 niveles** (low/medium/high/xhigh) vía system prompt | Es **denso** 30B: sin MTP va a 15-25 t/s |
+| `laguna` | agente con herramientas | thinking **por petición**, APEX (cuantización por capa, no plana) | 37.5 % TB 2.0; su ctx se queda en 32768 (es denso en atención) |
+| `qwen` | el denso de referencia | Qwen3.8-27B, IQ3_XS | 61.7 % SWE-bench Pro |
+| `fable` | coder con el mejor tool-use | Opus-4.8 tool use, 51.5 % TB | Su GGUF trae la cabeza MTP y hay que quitarla |
+
+**Muse Glimmer** (Meta, Apache 2.0) es probablemente el mejor "analista" del
+roster: gana en SWE-Bench Pro (51.2 vs 50.2), en IFBench (77.0 vs 70.8), en
+AIME 2026 (94.7) y en GPQA Diamond, y su razonamiento se ajusta en cuatro
+niveles con `Reasoning strength: <valor>` en el system prompt. El precio es
+que es denso: sin MTP va lento.
+
+Con offload se puede subir de nivel, pero el offload de un denso sale caro:
+cada token de las capas en CPU cruza el bus PCIe. Con un MoE (que es lo que
+hace rápido al `qwen36`) el offload penaliza mucho menos, porque solo se
+van los expertos.
 
 ### `--n-cpu-moe`: fuera
 

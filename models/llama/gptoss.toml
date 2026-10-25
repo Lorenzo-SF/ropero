@@ -104,7 +104,7 @@
 [model]
 name    = "gptoss"
 engine  = "llama-server"
-context = 65536
+context = 131072
 
 [files]
 gguf = "openai_gpt-oss-20b-MXFP4.gguf"

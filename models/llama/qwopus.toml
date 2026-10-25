@@ -105,7 +105,7 @@
 [model]
 name    = "qwopus"
 engine  = "llama-server"
-context = 32768
+context = 262144
 
 [files]
 gguf   = "Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf"
@@ -161,3 +161,13 @@ chat_template_kwargs = { enable_thinking = false }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
+
+[options]
+# La temperatura se puede pisar desde el entorno (lo usa el bench para
+# medir siempre en el mismo punto: el banco pide 0-0,2 y con temp 1.0 se
+# esta midiendo el sampler, no el modelo).
+list = ["temp"]
+
+[args.option.temp]
+replace = "--temp"
+base = ["--temp", "${value}"]
