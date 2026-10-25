@@ -20,36 +20,53 @@
 # =============================================================================
 
 
-# ── Politica de VRAM (2026-10-25) ───────────────────────────────────────────
-# Este modelo esta en FULL GPU: todas sus capas y su KV cache en la VRAM,
-# sin recorte y sin offload a la CPU. Para que eso sea posible:
+# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
 #
-#   · --n-gpu-layers = 28  = el numero REAL de capas del GGUF (leido de
-#     <arch>.block_count de la cabecera del propio GGUF, no de un README).
-#     OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
-#     fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1
-#     el fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui no
-#     hace falta que recorte nada, porque con la cuantizacion de abajo ya
-#     cabe: por eso se pone el numero exacto y no -1.
-#   · el KV cache va en la GPU (sin --no-kv-offload) y en q8_0, que es lo
-#     que hace que el ctx quepa.
-#   · SIN MTP: --spec-type draft-mtp crea un draft context con su propia
-#     VRAM y su KV en f16, y el fitter lo mide junto al modelo principal.
-#     Con el margen justo, el MTP se come la VRAM y el server no arranca.
-#   · SIN --n-cpu-moe: mandar expertos a la CPU obliga a cada token a
-#     cruzar el bus PCIe en el decode, y el t/s se desploma.
+#   pesos (el GGUF entero, leido de sus offsets)       4.4 GB
+#   KV cache q4_0 @128000 (28 plenas)    3.63 GB
+#   compute buffer (ubatch 512 )                0.338 GB
+#   server + holgura (400)                             0.475 GB
+#   ---------------------------------------------------------------------
+#   total                                              8.84 GB
+#   VRAM libre en la RTX 5080                       15300 MiB
+#   margen                                             6247 MiB
 #
-# ctx = 32768: el maximo que cabe con el KV en q8_0 y el resto del modelo
-# entero en la GPU, con la formula de KV de llama.cpp
-# (n_kv*head_dim*(sizeof(k)+sizeof(v))*n_capas_con_atencion*ctx).
+# COMO SE CALCULA EL KV (que no es "capas x ctx"):
+#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
+#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
+#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
+#     estado RS. Este modelo tiene 0 recurrentes y 28 de atencion.
+#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
+#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
+#   · el KV por token de una capa de atencion es
+#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
 #
-# Medido en: RTX 5080 Laptop, 15933 MiB de VRAM.
-# =============================================================================
+# OFFLOAD: NINGUN offload: las 28 capas del modelo y su KV cache
+#   entero en la VRAM.
+#
+# El ctx NATIVO (el context_length del propio GGUF) es 128000.
+# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
+#   que el ctx train no da mas contexto (server-context.cpp:4955).
+#
+# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
+# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
+# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
+# que sale de <arch>.block_count del GGUF, no de un README).
+#
+# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
+# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
+# margen justo, el MTP se come la VRAM y el server no arranca.
+#
+# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
+# de la capa; sin el flag, a la GPU).
+#
+# El override del contexto es el canónico ROPERO_QWENVISION_CTX.
 
 [model]
 name    = "qwenvision"
 engine  = "llama-server"
-context = 32768
+context = 128000
 port    = 9991
 
 [files]
