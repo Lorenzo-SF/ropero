@@ -3088,9 +3088,7 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
 
   --quant TIPO        quant a aplicar (sin el, el GGUF queda en F16)
   --list-quants       lista los quants que acepta el motor instalado
-  --modelo NOMBRE     cuantiza un modelo del roster (repo y quant salen
-                      del registro; --quant lo pisa)
-  --list-modelos      lista los modelos que ropero sabe cuantizar
+  --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
   --imatrix FICHERO   importance matrix para la cuantizacion
   --out NOMBRE        nombre del GGUF de salida (sin .gguf)
   --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
@@ -3985,50 +3983,9 @@ cmd_config() {
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
-# ── EL REGISTRO DE CUANTIZACION ────────────────────────────────────────────
-# De donde sale cada modelo (los pesos SIN quantizar) y que quant aplicaria
-# ropero. No vive en los TOMLs porque los TOMLs describen el GGUF que ya
-# esta publicado por otros; esto es de donde se fabrica. El quant es una
-# DECISION (calidad por byte dentro de la VRAM de la maquina), no un dato
-# del modelo, asi que va aqui y no desperdigado.
-#
-#   MODELO      REPO DE SAFETENSORS              QUANT
-#   qwen        Qwen/Qwen3.8-27B                 IQ3_XS    3,3 bpw, 12,8 GB
-#   qwen36      Qwen/Qwen3.6-35B-A3B            IQ3_XXS   3,06 bpw (el MoE no
-#                                                            cabe con mas bits)
-#   qwencoder   Qwen/Qwen3-Coder-30B-A3B-Inst... IQ3_XXS
-#   ornith      ornith-ai/Ornith-1.5-35B-A3B     IQ3_XXS
-#   nemotron    nvidia/NVIDIA-Nemotron-3.5-L...  IQ3_XXS
-#   laguna      poolside/Laguna-XS-2.1           IQ3_XXS
-#   gemma       google/gemma-4-26B-A4B-it       IQ3_XXS
-#   fable       Achilles1089/fable-coder-35B...  IQ2_M     2,7 bpw (mejor que
-#                                                            el Q2_K publicado)
-#   qwopus      Jackrong/Qwopus3.6-35B-A3B-C... IQ2_M
-#   agenta1     InternScience/Agents-A1          IQ2_M
-#   muse        meta-models/Muse-Glimmer-30B     IQ3_XS    IQ4_XS no cabe
-#   devstral    mistralai/Devstral-Small-2-24... IQ4_XS    4,25 bpw, cabe
-#   agents-tiny InternScience/Agents-A1-4B       Q8_0      ya esta en el techo
-#   gptoss      openai/gpt-oss-20b               MXFP4     ya viene en MXFP4
-declare -A GGUFFER_MODELOS=(
-    [qwen]="Qwen/Qwen3.8-27B IQ3_XS"
-    [qwen36]="Qwen/Qwen3.6-35B-A3B IQ3_XXS"
-    [qwencoder]="Qwen/Qwen3-Coder-30B-A3B-Instruct IQ3_XXS"
-    [ornith]="ornith-ai/Ornith-1.5-35B-A3B IQ3_XXS"
-    [nemotron]="nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 IQ3_XXS"
-    [laguna]="poolside/Laguna-XS-2.1 IQ3_XXS"
-    [gemma]="google/gemma-4-26B-A4B-it IQ3_XXS"
-    [fable]="Achilles1089/fable-coder-35B-A3B IQ2_M"
-    [qwopus]="Jackrong/Qwopus3.6-35B-A3B-Coder IQ2_M"
-    [agenta1]="InternScience/Agents-A1 IQ2_M"
-    [muse]="meta-models/Muse-Glimmer-30B IQ3_XS"
-    [devstral]="mistralai/Devstral-Small-2-24B-Instruct-2512 IQ4_XS"
-    [agents-tiny]="InternScience/Agents-A1-4B Q8_0"
-    [gptoss]="openai/gpt-oss-20b MXFP4"
-)
-
 cmd_gguffer() {
     local path="" repo="" quant="" out_name="" imatrix="" from_subdir="" include=""
-    local force=0 keep_source=0 keep_inter=0 list_only=0 list_modelos=0 modelo=""
+    local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0
     local inter="f16"
 
     while [[ $# -gt 0 ]]; do
@@ -4055,9 +4012,7 @@ cmd_gguffer() {
             --keep-intermedio) keep_inter=1; shift ;;
             --force)       force=1; shift ;;
             --list-quants) list_only=1; shift ;;
-            --list-modelos) list_modelos=1; shift ;;
-            --modelo)      [[ $# -ge 2 ]] || { echo "ERROR: --modelo requiere un nombre" >&2; return 2; }; modelo="$2"; shift 2 ;;
-            --modelo=*)    modelo="${1#--modelo=}"; shift ;;
+            --no-mtp)      no_mtp=1; shift ;;
             -h|--help)     _ropero_command_help gguffer; return 0 ;;
             *) echo "ERROR: argumento desconocido: $1" >&2; return 2 ;;
         esac
@@ -4085,35 +4040,8 @@ cmd_gguffer() {
         return 0
     fi
 
-    if (( list_modelos == 1 )); then
-        printf 'Modelos que ropero sabe quantizar:\n'
-        local _k
-        for _k in "${!GGUFFER_MODELOS[@]}"; do
-            printf '  %-12s %-58s %s\n' "$_k" "${GGUFFER_MODELOS[$_k]% *}" "${GGUFFER_MODELOS[$_k]##* }"
-        done | sort
-        echo ""
-        echo "Para cuantizar:  ropero gguffer --modelo <modelo> [--quant TIPO]"
-        return 0
-    fi
-
-    # --modelo: el repo y el quant salen del registro de arriba.
-    if [[ -n "$modelo" ]]; then
-        local _entrada="${GGUFFER_MODELOS[$modelo]:-}"
-        if [[ -z "$_entrada" ]]; then
-            echo "ERROR: no conozco el modelo '$modelo'" >&2
-            echo "Usa 'ropero gguffer --list-modelos' para ver la lista." >&2
-            return 1
-        fi
-        if [[ -z "$repo" && -z "$path" ]]; then
-            repo="${_entrada% *}"
-        fi
-        if [[ -z "$quant" ]]; then
-            quant="${_entrada##* }"
-        fi
-    fi
-
     if [[ -z "$path" && -z "$repo" ]]; then
-        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> | --modelo <nombre> [--quant TIPO]" >&2
+        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant TIPO]" >&2
         return 2
     fi
     if [[ -n "$path" && -n "$repo" ]]; then
@@ -4233,8 +4161,19 @@ cmd_gguffer() {
     fi
 
     if [[ ! -f "$out_f16" ]]; then
+        # --no-mtp solo si el conversor lo entiende: no todas las versiones
+        # de llama.cpp lo tienen, y pasar un flag que no existe hace que el
+        # conversor falle con "unrecognized arguments".
+        local conv_args=("$source_dir" --outfile "$out_f16" --outtype "$inter")
+        if (( no_mtp == 1 )); then
+            if grep -qE "no-mtp|no_nextn" "$_convert" 2>/dev/null; then
+                conv_args+=(--no-mtp)
+            else
+                echo "[gguffer] aviso: este conversor no sabe excluir la MTP (--no-mtp); sigo sin el"
+            fi
+        fi
         echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
-        if ! python3 "$_convert" "$source_dir" --outfile "$out_f16" --outtype "$inter"; then
+        if ! python3 "$_convert" "${conv_args[@]}"; then
             # La conversion fallo: el clon de los safetensors se conserva
             # (60 GB, pero es lo que evita volver a bajar) y se dice como
             # reintentar solo esta fase.
@@ -4242,7 +4181,7 @@ cmd_gguffer() {
             echo "ERROR: fallo la conversion a GGUF" >&2
             echo "       conservo los pesos en: $work" >&2
             echo "       reintenta solo la conversion:" >&2
-            echo "         python3 $_convert $source_dir --outfile $out_f16 --outtype $inter" >&2
+            echo "         python3 $_convert ${conv_args[*]}" >&2
             return 1
         fi
     else

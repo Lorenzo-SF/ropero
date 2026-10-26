@@ -125,11 +125,24 @@ class Gguf:
         # seguir la posicion actual, no el final del fichero.
         off = self._offset_tras_kv
         for _ in range(self.n_tensors):
-            name, off = self._str(off)
-            (ndim,) = struct.unpack_from("<I", d, off); off += 4
-            dims = list(struct.unpack_from("<" + "Q" * ndim, d, off)); off += 8 * ndim
-            (ttype,) = struct.unpack_from("<I", d, off); off += 4
-            (toff,) = struct.unpack_from("<Q", d, off); off += 8
+            try:
+                name, off = self._str(off)
+                (ndim,) = struct.unpack_from("<I", d, off); off += 4
+                dims = list(struct.unpack_from("<" + "Q" * ndim, d, off)); off += 8 * ndim
+                (ttype,) = struct.unpack_from("<I", d, off); off += 4
+                (toff,) = struct.unpack_from("<Q", d, off); off += 8
+            except (struct.error, IndexError) as e:
+                # El GGUF declara N tensores pero su indice tiene menos: el
+                # fichero esta mal formado (o truncado). Es el sintoma
+                # clasico de un GGUF cuantizado con un conversor que no
+                # escribio la cabeza MTP pero si dejo la metadata que la
+                # declara: el server muere con "wrong number of tensors;
+                # expected N, got M".
+                raise GgufError(
+                    "el GGUF declara %d tensores pero su indice solo tiene %d: "
+                    "fichero mal formado (truncado, o con la metadata de la "
+                    "cabeza MTP pero sin sus tensores)" % (self.n_tensors, len(self.tensors))
+                )
             self.tensors.append({"name": name, "dims": dims, "type": ttype, "offset": toff})
 
     # se rellena al terminar _leer_kv

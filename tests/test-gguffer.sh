@@ -240,23 +240,7 @@ check "8a. --force -> sin error"                 "$(cond '[ $rc -eq 0 ]')" "rc=$
 check "8b. --force -> el clon viejo no esta"     "$(cond '[ ! -f "$REPO_DIR/viejo.txt" ]')"
 check "8c. --force -> rehizo el GGUF"            "$(cond 'ls "${GGUF_OUT:?}"/*-IQ3_XS.gguf >/dev/null 2>&1')"
 
-# ══ 9. --modelo: el repo y el quant salen del registro ═════════════════════
-rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
-out="$(gguffer --modelo no-existe 2>&1)"; rc=$?
-check "9a. --modelo desconocido -> error"        "$(cond '[ $rc -ne 0 ]')" "rc=$rc"
-check "9b. --modelo desconocido -> lo dice"       "$(cond 'printf %s "$out" | grep -q "no conozco el modelo"')" "$out"
-
-rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
-out="$(gguffer --modelo qwen 2>&1)"; rc=$?
-check "9c. --modelo qwen -> sin error"            "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
-check "9d. --modelo qwen -> usa el repo del registro" \
-      "$(cond 'printf %s "$out" | grep -q "Qwen/Qwen3.8-27B"')" "$out"
-check "9e. --modelo qwen -> el GGUF lleva su nombre" \
-      "$(cond 'ls "${GGUF_OUT:?}"/*Qwen3.8-27B*.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
-check "9f. --modelo qwen -> el quant del registro" \
-      "$(cond 'ls "${GGUF_OUT:?}"/*IQ3_XS.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
-
-# ══ 10. --intermedio bf16: el conversor recibe el outtype pedido ══════════
+# ══ 9. --intermedio bf16: el conversor recibe el outtype pedido ══════════
 rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
 cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
 import struct
@@ -282,12 +266,43 @@ with open(outfile, "wb") as f:
     f.write(body)
 PY
 out="$(gguffer --repo owner/repo --intermedio bf16 2>&1)"; rc=$?
-check "10a. --intermedio bf16 -> sin error"        "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
-check "10b. --intermedio bf16 -> el conversor recibe bf16" \
+check "9a. --intermedio bf16 -> sin error"        "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "9b. --intermedio bf16 -> el conversor recibe bf16" \
       "$(cond '[ "$(cat "${GGUF_OUT:?}"/*.outtype 2>/dev/null)" = "bf16" ]')" \
       "$(cat "${GGUF_OUT:?}"/*.outtype 2>/dev/null)"
-check "10c. --intermedio bf16 -> el fichero se llama BF16" \
+check "9c. --intermedio bf16 -> el fichero se llama BF16" \
       "$(cond 'ls "${GGUF_OUT:?}"/*-BF16.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
+
+# ══ 10. --no-mtp: se pasa al conversor solo si lo soporta ═══════════════════
+rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
+cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
+import struct
+import sys
+
+# este conversor de mentira sabe excluir la MTP: acepta --no-mtp
+args = sys.argv[1:]
+outfile = args[args.index("--outfile") + 1]
+with open(outfile + ".args", "w") as f:
+    f.write(" ".join(args))
+
+def s(x):
+    b = x.encode()
+    return struct.pack("<Q", len(b)) + b
+
+body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
+body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
+body += idx
+body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+with open(outfile, "wb") as f:
+    f.write(body)
+PY
+out="$(gguffer --repo owner/repo --no-mtp 2>&1)"; rc=$?
+check "10a. --no-mtp -> sin error"                "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "10b. --no-mtp -> el conversor lo recibe"   \
+      "$(cond 'grep -q -- "--no-mtp" "$GGUF_OUT"/*.args 2>/dev/null')" \
+      "$(cat "$GGUF_OUT"/*.args 2>/dev/null)"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
