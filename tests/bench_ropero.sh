@@ -91,7 +91,16 @@ OUT_DIR="${OUT_DIR:-$MODELOS_DIR/resultados}"
 # segunda copia de la verdad que se desincroniza sola.
 MODELOS="${MODELOS:-}"
 PROMPTS_DIR="${PROMPTS_DIR:-$AQUI}"
-PROMPTS=("pruebas1.md" "pruebas2a.md" "pruebas2b.md" "prueba_larga.md")
+# Los prompts que se prueban. Se pueden acotar desde fuera (el comentario de
+# arriba lo prometia, pero la variable se sobrescribia sin mirar el entorno):
+#
+#   PROMPTS="pruebas1.md" ./bench_ropero.sh gptoss
+#
+if [[ -n "${PROMPTS:-}" ]]; then
+    read -r -a PROMPTS <<< "$PROMPTS"
+else
+    PROMPTS=("pruebas1.md" "pruebas2a.md" "pruebas2b.md" "prueba_larga.md")
+fi
 PROMPT_JUEZ="pruebas3.md"                   # el que ve la IA juez
 MODELO="${MODELO:-marichocho/Puertourraco}" # provider/model de opencode
 AGENTE="${AGENTE:-build}"
@@ -176,10 +185,10 @@ modelo_responde() {
 
 esperar_modelo() {
   local esperado="${1:-$MODELO_ROPERO_ESPERADO}"
+  local espera="${2:-${ESPERA:-$ESPERA_MIN}}"
   # La espera NUNCA es 0: si ESPERA se quedara vacía, el deadline sería
   # "ahora" y el bench fallaría al instante (matando el server) sin esperar
   # al modelo.
-  local espera="${ESPERA:-$ESPERA_MIN}"
   local deadline=$(( $(date +%s) + espera ))
   while (( $(date +%s) < deadline )); do
     if [[ -n "$esperado" ]]; then
@@ -217,6 +226,30 @@ tokens_por_segundo() {
 ms_por_token() {
   grep -a "eval time" "$1" 2>/dev/null | grep -av "prompt eval" | tail -1 \
     | grep -oE '[0-9]+(\.[0-9]+)? ms per token' | tail -1 | grep -oE '^[0-9.]+'
+}
+
+# ── EL LOG DEL SERVIDOR, POR TAREA ──────────────────────────────────────────
+# El servidor se arranca una vez por modelo, asi que su log acumula los
+# timings de TODAS las tareas. Los tokens/s de una tarea son los que
+# aparecen DESPUES de su marca, no los del final del log (que serian los de
+# la ultima tarea).
+#
+# Por eso, antes de lanzar la tarea se marca el byte en el que acaba el log,
+# y despues se recorta desde ahi. Con el modelo anterior (arranque en frio
+# por tarea) cada tarea tenia su propio log y no hacia falta nada de esto.
+marcar_log() {
+  local log="$1"
+  [[ -f "$log" ]] || { printf '0'; return 0; }
+  wc -c < "$log" | tr -d ' '
+}
+
+recortar_log() {
+  local log="$1" desde="$2" destino="$3"
+  if [[ ! -f "$log" ]]; then
+      : > "$destino"
+      return 0
+  fi
+  tail -c "+$((desde + 1))" "$log" > "$destino" 2>/dev/null || : > "$destino"
 }
 
 # ── ¿EL PROVIDER TIENE ESA VARIANT? ────────────────────────────────────────
@@ -613,20 +646,62 @@ printf 'modelo\ttarea\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_p
 
 # ── LIMPIAR EL ESTADO ENTRE PRUEBAS ─────────────────────────────────────────
 # Sin esto, la segunda prueba de un modelo arranca sobre lo que dejó la
-# primera: el contexto del prompt anterior sigue en el servidor, la VRAM
-# sigue ocupada y el opencode arrastra sesiones del run anterior.
-limpiar_procesos() {
-  local modelo="$1"
-
-  # 1. el opencode que haya quedado vivo (el timeout mata el proceso, pero
-  #    no siempre a los hijos ni al daemon de sesiones)
+# primera: el opencode arrastra sesiones del run anterior.
+#
+# OJO: antes esto mataba TAMBIÉN el servidor de llama.cpp, y el bench lo
+# arrancaba otra vez en cada tarea. Eso es un arranque en frío de 12-20 GB
+# POR TAREA: con el ctx nativo (512K en el nemotron) son minutos de espera
+# antes de medir nada, y el bench se comia el tiempo en vez de medirlo.
+#
+# Ahora el servidor se arranca UNA VEZ por modelo y se deja vivo entre
+# tareas. No se contaminated la conversación: cada tarea es un "opencode
+# run" nuevo, o sea una sesión nueva. Lo que sí queda en el servidor es el
+# cache de prompt (--cache-prompt), que acelera el PROCESADO del prompt,
+# no la generación: los tokens/s que se miden salen del "eval time", no
+# del "prompt eval time".
+limpiar_opencode() {
   pkill -f 'opencode run' 2>/dev/null || true
   pkill -f 'opencode.*--format json' 2>/dev/null || true
   sleep 0.3
+}
 
-  # 2. el servidor de llama.cpp: se para y se relanza limpio
+# Parar el servidor del modelo. Es lo que se hace al final de cada modelo y
+# antes de arrancarlo, para que el puerto quede libre.
+parar_modelo() {
+  local modelo="$1"
   ropero stop "$modelo" >/dev/null 2>&1 || true
   sleep 1
+}
+
+# ── ARRANCAR EL MODELO Y ESPERAR A QUE ESTÉ LISTO ───────────────────────────
+# El server de llama.cpp ABRE EL PUERTO antes de tener los pesos cargados:
+# /v1/models responde en cuanto hay un proceso escuchando. Por eso la espera
+# mira el MODELO que sirve el puerto, no solo que el puerto conteste.
+#
+# Con reintento: un arranque puede quedarse sin VRAM o morir al cargar (el
+# fitter, el KV de 512K, el SSD ocupado). Un reintento lo salva, y el error
+# que se queda dice las dos cosas: que no arrancó y qué dice su log.
+arrancar_modelo() {
+  local modelo="$1" log="$2" flag_nivel="$3" etiqueta="$4"
+  local intento max_intentos=2 espera_local="$ESPERA"
+  for (( intento=1; intento<=max_intentos; intento++ )); do
+    parar_modelo "$modelo"
+    : > "$log"
+    ( cd "$ROPERO_WORK_DIR" && ROPERO_TEMP="$TEMP" nohup ropero "$modelo" $flag_nivel > "$log" 2>&1 & )
+    sleep 1
+    if grep -q "ya está corriendo" "$log" 2>/dev/null; then
+      err "  $etiqueta: el modelo $modelo ya estaba corriendo: no se puede medir en limpio"
+      err "  -> para el ropero $modelo (ropero stop $modelo) y vuelve a lanzarlo"
+      return 2
+    fi
+    if esperar_modelo "$modelo" "$espera_local"; then
+      ok "  $etiqueta: $modelo listo"
+      return 0
+    fi
+    err "  $etiqueta: $modelo no respondió en :$PUERTO tras ${espera_local}s (intento $intento/$max_intentos)"
+    tail -n 15 "$log" | sed 's/^/    /'
+  done
+  return 1
 }
 
 # ── UNA TAREA POR TURNO ────────────────────────────────────────────────────
@@ -700,6 +775,57 @@ for carpeta in "${carpetas[@]}"; do
     printf 'tarea\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\trespundio\tsalida_real\n' > "$out/resumen.tsv"
   fi
 
+  # ── EL MODELO, ARRANCADO UNA VEZ ──────────────────────────────────────────
+  # Antes se arrancaba en cada tarea, en frio: 12-20 GB de pesos a leer del
+  # disco y el KV entero a reservar, POR TAREA. Con el ctx nativo (512K en el
+  # nemotron) eso son minutos, y el bench se comia el tiempo esperando al
+  # modelo en vez de medirlo.
+  #
+  # Ahora se arranca una vez por modelo y se deja vivo para todas sus
+  # tareas. Cada tarea es un "opencode run" nuevo (sesion nueva), asi que la
+  # conversacion no secontamination entre tareas.
+  #
+  # La espera se escala con el ctx del modelo: 900 s de base y 60 s mas por
+  # cada 32K de tokens de contexto. Sin ctx conocido se espera el minimo y se
+  # avisa: NUNCA 0, porque con 0 el bench falla al instante.
+  ctx_para_espera="$(ctx_de_modelo "$modelo")"
+  if [[ -z "$ESPERA" ]]; then
+      if [[ -z "$ctx_para_espera" || "$ctx_para_espera" == "0" ]]; then
+          ESPERA=$ESPERA_MIN
+          warn "  $carpeta: no se el ctx de $modelo; espero ${ESPERA}s (el minimo)"
+      else
+          extra=$(( (ctx_para_espera + 32767) / 32768 ))
+          ESPERA=$(( ESPERA_MIN + extra * 60 ))
+          info "  $carpeta: espero ${ESPERA}s para que cargue (ctx $ctx_para_espera)"
+      fi
+  fi
+
+  # El nivel es un flag (ropero gptoss --high), y SOLO lo acepta un modelo
+  # que lo declare en su [levels].list. Si no lo declara,
+  # `ropero <modelo> --high` es un error de uso:
+  #
+  #     _ropero_usage_error '' "opcion desconocida: '$1'"
+  #
+  # y el modelo NO ARRANCA. Pasarlo a ciegas hacia que 7 de los 15 modelos del
+  # roster no lleguen nunca a levantar el server. El nivel se consulta al
+  # propio ropero, que es quien sabe lo que cada modelo declara.
+  flag_nivel=""
+  if [[ -n "$NIVEL" ]]; then
+      if ropero levels "$modelo" 2>/dev/null | tr " " "\n" | grep -qx "$NIVEL"; then
+          flag_nivel="--$NIVEL"
+      else
+          warn "  $carpeta: $modelo no declara el nivel '$NIVEL'; se mide con el suyo"
+      fi
+  fi
+
+  ROPERO_WORK_DIR="$dir"
+  LOG_MODELO="$out/ropero-modelo.log"
+  if ! arrancar_modelo "$modelo" "$LOG_MODELO" "$flag_nivel" "$carpeta"; then
+      err "  $carpeta: $modelo no arranca; me lo salto entero"
+      ropero stop "$modelo" >/dev/null 2>&1 || true
+      continue
+  fi
+
   # ── las pruebas, y dentro de cada una, las tareas ────────────────────────
   for p in "${PROMPTS[@]}"; do
     prueba="${p%.md}"
@@ -731,7 +857,7 @@ for carpeta in "${carpetas[@]}"; do
       fi
 
       # ── estado limpio entre tareas ───────────────────────────────────────
-      limpiar_procesos "$modelo"
+      limpiar_opencode
 
       work="$dir/$nombre"
       rm -rf "$work"; mkdir -p "$work"
@@ -767,63 +893,18 @@ AGENTS_EOF
       # pasa si el modelo lo declara: `ropero gptoss --high` funciona,
       # `ropero muse --high` no (el muse no tiene niveles: se ajusta con
       # "Reasoning strength: <valor>" en el system prompt).
-      LOG_PRUEBA="$out/ropero-$nombre.log"
+      LOG_PRUEBA="$LOG_MODELO"
 
-      # ── LA ESPERA, SEGUN EL CTX DEL MODELO ────────────────────────────────
-      # Cargar no es lo mismo que abrir un puerto: hay que leer el GGUF del
-      # disco y RESERVAR el KV entero (ctx celdas por cada capa de atencion).
-      # Con el ctx nativo de 262144 son 1.44 GB de KV; en el nemotron, a
-      # 1.000.000 de tokens, son 1.69 GB. Eso tarda mucho mas que el
-      # ctx 65536 con el que se midio el banco la primera vez.
-      #
-      # La espera se escala con el ctx: 900 s de base, y 1 s extra por cada
-      # 32K de tokens de contexto (redondeado a lo alto).
-      ctx_para_espera="$(ctx_de_modelo "$modelo")"
-      if [[ -z "$ESPERA" ]]; then
-          if [[ -z "$ctx_para_espera" || "$ctx_para_espera" == "0" ]]; then
-              # Sin ctx conocido NO se espera 0 segundos: eso hace que el
-              # bench falle al instante y mate el server, sin llegar a
-              # esperar al modelo. Se espera el mínimo y se avisa.
-              ESPERA=$ESPERA_MIN
-              warn "  $tid: no sé el ctx de $modelo; espero ${ESPERA}s (el mínimo)"
-          else
-              extra=$(( (ctx_para_espera + 32767) / 32768 ))
-              ESPERA=$(( ESPERA_MIN + extra * 60 ))
-              info "  $tid: esperando ${ESPERA}s (ctx $ctx_para_espera)"
+      # El modelo NO se rearranca aqui: se arranca una vez por modelo, antes
+      # de las pruebas (ver arrancar_modelo). Aqui solo se comprueba que siga
+      # vivo: si se ha caido (VRAM, fitter, el server matado por el opencode),
+      # se levanta otra vez, y si no, la tarea se salta con el motivo claro.
+      if ! modelo_responde "$modelo"; then
+          warn "  $tid: el modelo $modelo no está sirviendo; lo arranco otra vez"
+          if ! arrancar_modelo "$modelo" "$LOG_PRUEBA" "$flag_nivel" "$tid"; then
+              err "  $tid: no se pudo arrancar $modelo; esta tarea no puntúa"
+              continue
           fi
-      fi
-
-      # El nivel es un flag (ropero gptoss --high), y SOLO lo acepta un
-      # modelo que lo declare en su [levels].list. Si no lo declara,
-      # `ropero <modelo> --high` es un error de uso:
-      #
-      #     _ropero_usage_error '' "opción desconocida: '$1'"
-      #
-      # y el modelo NO ARRANCA. Pasarlo a ciegas hacia que 7 de los 15
-      # modelos del roster no lleguen nunca a levantar el server, y el bench
-      # se quede esperando a un puerto que no va a abrirse.
-      #
-      # El nivel se consulta al propio ropero, que es quien sabe lo que cada
-      # modelo declara (los niveles salen del TOML, no de una lista aqui).
-      flag_nivel=""
-      if [[ -n "$NIVEL" ]]; then
-          if ropero levels "$modelo" 2>/dev/null | tr " " "\n" | grep -qx "$NIVEL"; then
-              flag_nivel="--$NIVEL"
-          else
-              warn "  $tid: $modelo no declara el nivel '$NIVEL'; se mide con el suyo"
-          fi
-      fi
-      ( cd "$dir" && ROPERO_TEMP="$TEMP" nohup ropero "$modelo" $flag_nivel > "$LOG_PRUEBA" 2>&1 & )
-      sleep 1
-
-      if grep -q "ya está corriendo" "$LOG_PRUEBA" 2>/dev/null; then
-          err "  $tid: el modelo ya estaba corriendo: no se puede medir en limpio"
-          err "  -> para el ropero $modelo y vuelve a lanzarlo"
-          continue
-      elif ! esperar_modelo "$modelo"; then
-          err "  $tid: el modelo $modelo no respondió en :$PUERTO tras ${ESPERA}s"
-          tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
-          continue
       fi
 
       # ¿Se arranca en el nivel pedido? Si el modelo no declara ese nivel,
@@ -837,6 +918,7 @@ AGENTS_EOF
       fi
 
       # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
+      # Se lee del log del MODELO: el reparto de capas se anuncia al cargar.
       gpu_nota="ok"
       if gpu_completo "$LOG_PRUEBA"; then
           info "  $GPU_AVISO"
@@ -844,13 +926,6 @@ AGENTS_EOF
           gpu_nota="RECORTADO"
           err "  $tid: $GPU_AVISO"
           err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
-      fi
-
-      # la temperatura con la que se ha medido, del log del servidor
-      temp_log="$(grep -aoE 'temp[ ]*=[ ]*[0-9.]+' "$LOG_PRUEBA" 2>/dev/null | tail -1 | grep -oE '[0-9.]+$')"
-      [[ -n "$temp_log" ]] || temp_log="?"
-      if [[ "$temp_log" != "?" && "$temp_log" != "$TEMP" ]]; then
-          warn "  $tid: temp en el log ($temp_log) != la pedida ($TEMP)"
       fi
 
       # ── ¿CABE ESTE TEST EN EL CONTEXTO DEL MODELO? ──────────────────────
@@ -874,6 +949,10 @@ AGENTS_EOF
       fi
 
       info "  $tid"
+      # La marca del log del servidor: los timings de esta tarea son los que
+      # aparezcan DESPUES de aqui. El servidor es el mismo para todas las
+      # tareas del modelo, asi que su log las acumula.
+      MARCA_LOG="$(marcar_log "$LOG_PRUEBA")"
       t0=$(date +%s)
       # ── LA SESION SE ENCADENA ────────────────────────────────────────────
       # El BLOQUE 3 de la prueba larga se hace "10 turnos despues" del
@@ -917,6 +996,24 @@ AGENTS_EOF
       > "$out/opencode-$nombre.json" 2> "$out/opencode-$nombre.log"
       rc=$?
       dur=$(( $(date +%s) - t0 ))
+
+      # ── EL LOG DE ESTA TAREA ──────────────────────────────────────────────
+      # El del servidor, recortado desde la marca: con un solo servidor para
+      # todas las tareas, el log entero tiene los timings de todas y hay que
+      # quedarse con los de esta. Si no se recorta, los tokens/s de cada
+      # tarea serian los de la ULTIMA.
+      LOG_TAREA="$out/ropero-$nombre.log"
+      # Un segundo de margen: el server puede tener el ultimo timing en el
+      # buffer del stdout, y sin vaciarlo el recorte se queda corto.
+      sleep 1
+      recortar_log "$LOG_PRUEBA" "$MARCA_LOG" "$LOG_TAREA"
+
+      # la temperatura con la que se ha medido, del log del servidor
+      temp_log="$(grep -aoE 'temp[ ]*=[ ]*[0-9.]+' "$LOG_TAREA" 2>/dev/null | tail -1 | grep -oE '[0-9.]+$')"
+      [[ -n "$temp_log" ]] || temp_log="?"
+      if [[ "$temp_log" != "?" && "$temp_log" != "$TEMP" ]]; then
+          warn "  $tid: temp en el log ($temp_log) != la pedida ($TEMP)"
+      fi
 
       # la sesion, exportada
       sid="$(id_sesion "$out/opencode-$nombre.json")"
@@ -974,8 +1071,8 @@ AGENTS_EOF
       esac
       # shellcheck disable=SC2034  # el reset del final tambien cuenta como uso
 
-      ts="$(tokens_por_segundo "$LOG_PRUEBA")"; ts="${ts:-?}"
-      ms="$(ms_por_token "$LOG_PRUEBA")";     ms="${ms:-?}"
+      ts="$(tokens_por_segundo "$LOG_TAREA")"; ts="${ts:-?}"
+      ms="$(ms_por_token "$LOG_TAREA")";     ms="${ms:-?}"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$tid" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" "$respondio" "$salida" \
         >> "$out/resumen.tsv"
