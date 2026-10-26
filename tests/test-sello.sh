@@ -151,6 +151,21 @@ nuevo="$(cat "$LOG_DIR_TEST/args-$TEST_PORT.sha" 2>/dev/null || true)"
 check "4c. el sello guardado cambia con el TOML" \
       "$(cond '[ -n "$nuevo" ] && [ "$nuevo" != "$sello_antes" ]')" "antes: $sello_antes / ahora: $nuevo"
 
+# ── 5. sin sello (server arrancado por una version vieja): reinicia ───────
+# El caso de la transicion: el server lleva la config de antes y no hay
+# forma de saberlo (no hay sello). Se reinicia para que lleve la actual.
+# Solo pasa una vez: al arrancar, el sello se guarda.
+rm -f "$LOG_DIR_TEST/args-$TEST_PORT.sha"
+pid_antes="$(lsof -t -iTCP:"$TEST_PORT" -sTCP:LISTEN 2>/dev/null | head -1)"
+out="$(ropero_test testmodel --background 2>&1)"
+check "5a. sin sello: avisa de que no puede saber" \
+      "$(cond 'printf %s "$out" | grep -q "no hay forma de saber"')" "$out"
+check "5b. sin sello: reinicia" \
+      "$(cond '[ -n "$pid_antes" ] && [ "$pid_antes" != "$(lsof -t -iTCP:'"$TEST_PORT"' -sTCP:LISTEN 2>/dev/null | head -1)" ]')" \
+      "pid antes: $pid_antes"
+check "5c. sin sello: deja el sello guardado" \
+      "$(cond '[ -f "'"$LOG_DIR_TEST"'/args-'"$TEST_PORT"'.sha" ]')" "$(ls -A "$LOG_DIR_TEST")"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then

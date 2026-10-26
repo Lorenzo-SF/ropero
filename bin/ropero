@@ -1866,6 +1866,32 @@ start_model() {
                 fi
                 # sigue con el arranque normal, con la config nueva
                 _reiniciar=1
+            elif [[ -n "$_sello_actual" && -z "$_sello_guardado" ]]; then
+                # Sin sello guardado: el server arranco con una version
+                # anterior de ropero (o lo arranco otra gente), asi que no
+                # hay forma de saber con que config esta corriendo. Se
+                # reinicia para que lleve la de ahora. Solo pasa UNA vez: al
+                # arrancar, el sello se guarda.
+                echo "⚠  '$model' ya corria en :$port y no hay forma de saber con que config arranco."
+                echo "   Lo reinicio para que lleve la config actual."
+                local _pid
+                _pid="$(get_pid_for_port "$port")"
+                if [[ -n "$_pid" ]]; then
+                    _kill_port "$port"
+                    local _wait=0
+                    while (( _wait < 10 )) && port_listening "$port"; do
+                        sleep 1
+                        (( _wait++ ))
+                    done
+                    if port_listening "$port"; then
+                        echo "✗ No se pudo liberar :$port tras matar el server anterior" >&2
+                        return 1
+                    fi
+                else
+                    echo "✗ No se encontro el proceso de :$port" >&2
+                    return 1
+                fi
+                _reiniciar=1
             else
                 echo "Modelo '$model' ya está corriendo en :$port"
                 return 0
