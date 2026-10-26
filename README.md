@@ -225,30 +225,59 @@ ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS --imatrix mi.imatrix
 ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS --no-mtp
 ```
 
-Una cuantización por modelo, con los quant que salen de la VRAM de la
-máquina (15.300 MiB) y de la calidad por byte:
+#### `--out`: dónde acaba el GGUF
 
-| Modelo | Repo de los pesos (sin cuantizar) | Quant | Por qué ese |
+El lanzador busca cada modelo en `$GGUF_DIR/<carpeta>/<fichero>`, que es lo que
+dicen `[model] name` y `[files] gguf` de su `.toml`. `--out` acepta tres
+formas:
+
+| Qué le pasas | Dónde acaba |
+|---|---|
+| `--out mi-modelo` | `$GGUF_DIR/mi-modelo-<quant>.gguf` |
+| `--out ~/models/gguf/qwen` | ahí, con el nombre generado |
+| `--out ~/models/gguf/qwen/Qwen3.8-27B-IQ2_M.gguf` | exactamente ahí |
+
+La tercera es la que interesa: **el nombre lo pone el TOML, no el quant**. El
+GGUF que fabrique el gguffer se llama `<repo>-<quant>.gguf`, y eso casi nunca
+coincide con lo que el `.toml` espera (`Qwen3.8-27B-IQ2_M.gguf`, con punto y
+todo). Con la ruta exacta el fichero sale directamente donde el modelo lo va a
+buscar, sin renombrar nada a mano.
+
+Una cuantización por modelo, con los quant que salen de la VRAM de la
+máquina (15.300 MiB) y de la calidad por byte. La última columna es la ruta
+completa que espera el `.toml` de cada modelo:
+
+| Modelo | Repo de los pesos (sin cuantizar) | Quant | Dónde acaba |
 |---|---|---|---|
-| `qwen` | `Qwen/Qwen3.8-27B` | `IQ3_XS` | 3,3 bpw, 12,8 GB: cabe con ctx 131072 y sobra margen |
-| `qwen36` | `Qwen/Qwen3.6-35B-A3B` | `IQ3_XXS` | el MoE no cabe con más bits |
-| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ3_XXS` | ídem |
-| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `IQ3_XXS` | ídem |
-| `nemotron` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `IQ3_XXS` | MoE híbrido, con cabeza MTP: `--no-mtp` si no la quieres |
-| `laguna` | `poolside/Laguna-XS-2.1` | `IQ3_XXS` | |
-| `gemma` | `google/gemma-4-26B-A4B-it` | `IQ3_XXS` | |
-| `fable` | `Achilles1089/fable-coder-35B-A3B` | `IQ2_M` | 2,7 bpw: mejor que el Q2_K publicado |
-| `qwopus` | `Jackrong/Qwopus3.6-35B-A3B-Coder` | `IQ2_M` | ídem |
-| `agenta1` | `InternScience/Agents-A1` | `IQ2_M` | 256 expertos: no cabe con más |
-| `muse` | `meta-models/Muse-Glimmer-30B` | `IQ3_XS` | el IQ4_XS no cabe |
-| `devstral` | `mistralai/Devstral-Small-2-24B-Instruct-2512` | `IQ4_XS` | 4,25 bpw: cabe y es mejor que el Q3_K_M publicado |
-| `agents-tiny` | `InternScience/Agents-A1-4B` | `Q8_0` | ya está en el techo |
-| `gptoss` | `openai/gpt-oss-20b` | `MXFP4` | **ya viene en MXFP4**: no se cuantiza, el GGUF sale igual |
+| `qwen` | `Qwen/Qwen3.8-27B` | `IQ2_M` | `$GGUF_DIR/qwen/Qwen3.8-27B-IQ2_M.gguf` |
+| `qwen36` | `Qwen/Qwen3.6-35B-A3B` | `IQ3_XXS` | `$GGUF_DIR/qwen36/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf` |
+| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ3_XXS` | `$GGUF_DIR/qwencoder/Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf` |
+| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `IQ2_M` | `$GGUF_DIR/ornith/Ornith-1.5-35B-A3B-IQ2_M.gguf` |
+| `nemotron` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `IQ3_XXS` | `$GGUF_DIR/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf` |
+| `laguna` | `poolside/Laguna-XS-2.1` | `IQ3_M` | `$GGUF_DIR/laguna/Laguna-XS-2.1-APEX-I-Mini.gguf` |
+| `gemma` | `google/gemma-4-26B-A4B-it` | `IQ3_M` | `$GGUF_DIR/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf` |
+| `fable` | `Achilles1089/fable-coder-35B-A3B` | `Q2_K` | `$GGUF_DIR/fable/fable-coder-35B-A3B.Q2_K.gguf` |
+| `qwopus` | `Jackrong/Qwopus3.6-35B-A3B-Coder` | `Q2_K` | `$GGUF_DIR/qwopus/Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf` |
+| `agenta1` | `InternScience/Agents-A1` | `IQ2_M` | `$GGUF_DIR/agenta1/Agents-A1-IQ2_M.gguf` |
+| `muse` | `meta-models/Muse-Glimmer-30B` | `Q3_K_XL` | `$GGUF_DIR/muse/Muse-Glimmer-30B-UD-Q3_K_XL.gguf` |
+| `devstral` | `mistralai/Devstral-Small-2-24B-Instruct-2512` | `Q3_K_M` | `$GGUF_DIR/devstral/Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf` |
+| `agenta-tiny` | `InternScience/Agents-A1-4B` | `Q8_0` | `$GGUF_DIR/agenta-tiny/Agents-A1-4B-Q8_0.gguf` |
+| `gptoss` | `openai/gpt-oss-20b` | `MXFP4` | `$GGUF_DIR/gptoss/openai_gpt-oss-20b-MXFP4.gguf` |
 
 Los repos son de los pesos **sin cuantizar** (el `base_model` de cada GGUF
 publicado). Con `--from-subdir original` se cuantiza de la copia en BF16
 que traen algunos repos, que es lo correcto cuando los pesos de arriba ya
 vienen cuantizados.
+
+Y el imatrix va **antes** de los posicionales, porque `llama-quantize` solo
+parsea las opciones mientras el argumento empiece por `--`: si la flag va
+detrás, se come el parseo del número de hilos y el cuantizador muere con
+`invalid nthread '--imatrix'`. El gguffer ya lo hace bien por su cuenta; si
+llamas al cuantizador a mano, el orden es:
+
+```bash
+llama-quantize --imatrix mi.imatrix entrada.gguf salida.gguf IQ2_M
+```
 
 Lo que no se ve en el comando es lo que pasa **cuando algo falla**, que es
 lo que importa cuando estás descargando 60 GB:

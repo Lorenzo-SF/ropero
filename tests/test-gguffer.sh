@@ -390,6 +390,33 @@ check "13b. el cuantizador recibe el imatrix" "$(cond 'grep -q "imatrix_falso.gg
       "$(cat "$WORK/imatrix_log.txt" 2>/dev/null)"
 check "13c. no dice invalid nthread"        "$(cond '! printf %s "$out" | grep -q "invalid nthread"')" "$out"
 
+# ── 14: --out admite nombre, directorio o ruta exacta ──────────────────────
+# El launcher busca cada modelo en $GGUF_DIR/<carpeta_del_modelo>/<fichero>.
+# Con --out se puede poner el GGUF fabricado justo ahi, con el nombre que
+# espera el TOML.
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/out-nombre --quant IQ3_XS --out "mi-modelo" 2>&1)"
+check "14a. --out nombre: en el GGUF_DIR por defecto" \
+      "$(cond '[ -f "$GGUF_OUT/mi-modelo-IQ3_XS.gguf" ]')" "$out"
+
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/out-dir --quant IQ3_XS --out "$GGUF_OUT/agenta1" 2>&1)"
+check "14b. --out directorio: crea la carpeta del modelo" \
+      "$(cond '[ -f "$GGUF_OUT/agenta1/out-dir-IQ3_XS.gguf" ]')" "$out"
+
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/out-fichero --quant IQ3_XS \
+        --out "$GGUF_OUT/agenta1/Agents-A1-IQ2_M.gguf" 2>&1)"
+check "14c. --out ruta exacta: el nombre del TOML" \
+      "$(cond '[ -f "$GGUF_OUT/agenta1/Agents-A1-IQ2_M.gguf" ]')" "$out"
+check "14d. --out ruta exacta: no inventa otro nombre" \
+      "$(cond '[ ! -f "$GGUF_OUT/agenta1/out-fichero-IQ3_XS.gguf" ]')" "$out"
+
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/out-sinquant --out "$GGUF_OUT/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf" 2>&1)"
+check "14e. --out ruta exacta sin quant: el fichero sale con ese nombre" \
+      "$(cond '[ -f "$GGUF_OUT/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf" ]')" "$out"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then

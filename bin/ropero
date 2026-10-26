@@ -3090,7 +3090,10 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
   --list-quants       lista los quants que acepta el motor instalado
   --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
   --imatrix FICHERO   importance matrix para la cuantizacion
-  --out NOMBRE        nombre del GGUF de salida (sin .gguf)
+  --out RUTA          donde va el GGUF de salida. Acepta tres formas:
+                        · nombre           -> <GGUF_DIR>/<nombre>-<quant>.gguf
+                        · ruta/dir/        -> ahi, con el nombre generado
+                        · ruta/fichero.gguf -> exactamente ahi
   --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
   --include PATRON    que ficheros descargar (por defecto, todos)
   --intermedio TIPO  el GGUF intermedio: f16 (por defecto) o bf16 (la
@@ -3981,12 +3984,50 @@ cmd_config() {
 }
 
 # -----------------------------------------------------------------------------
+# _gguffer_parse_out <ruta>
+#
+# --out admite tres formas, y el que se usa depende de donde va a parar el
+# GGUF: el launcher busca cada modelo en $GGUF_DIR/<carpeta_del_modelo>/, y
+# el gguffer escribia plano en $GGUF_DIR. Con esto, el GGUF se puede poner
+# exactamente donde lo va a buscar el TOML.
+#
+#   nombre              -> $GGUF_DIR/<nombre>-<quant>.gguf   (lo de antes)
+#   ruta/directorio     -> ahi, con el nombre generado
+#   ruta/fichero.gguf   -> exactamente ahi
+#
+# Se distinguen por la "/" y por el sufijo .gguf. El directorio y el fichero
+# exactos se guardan en globales (no en el ambito de la funcion que llama) para
+# que se puedan leer desde cmd_gguffer sin depender del ambito dinamico.
+# -----------------------------------------------------------------------------
+_gguffer_parse_out() {
+    local v="${1:-}"
+    ROPERO_GGUF_OUT_DIR=""
+    ROPERO_GGUF_OUT_FILE=""
+    case "$v" in
+        "")
+            echo "ERROR: --out no puede estar vacio" >&2
+            return 2 ;;
+        *.gguf)
+            # Ruta exacta del fichero: el directorio es el de la ruta.
+            ROPERO_GGUF_OUT_FILE="$v" ;;
+        */*)
+            # Un directorio: se le quita la "/" final si la lleva.
+            ROPERO_GGUF_OUT_DIR="${v%/}" ;;
+        *)
+            # Un nombre suelto: se comporta como antes.
+            out_name="$v" ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 cmd_gguffer() {
     local path="" repo="" quant="" out_name="" imatrix="" from_subdir="" include=""
     local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0
     local inter="f16"
+    ROPERO_GGUF_OUT_DIR=""; ROPERO_GGUF_OUT_FILE=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -4000,8 +4041,8 @@ cmd_gguffer() {
             --quant=*)     quant="${1#--quant=}"; shift ;;
             --imatrix)     [[ $# -ge 2 ]] || { echo "ERROR: --imatrix requiere un fichero" >&2; return 2; }; imatrix="$2"; shift 2 ;;
             --imatrix=*)   imatrix="${1#--imatrix=}"; shift ;;
-            --out)         [[ $# -ge 2 ]] || { echo "ERROR: --out requiere un nombre" >&2; return 2; }; out_name="$2"; shift 2 ;;
-            --out=*)       out_name="${1#--out=}"; shift ;;
+            --out)         [[ $# -ge 2 ]] || { echo "ERROR: --out requiere un nombre o una ruta" >&2; return 2; }; _gguffer_parse_out "$2" || return 2; shift 2 ;;
+            --out=*)       _gguffer_parse_out "${1#--out=}" || return 2; shift ;;
             --from-subdir) [[ $# -ge 2 ]] || { echo "ERROR: --from-subdir requiere un directorio" >&2; return 2; }; from_subdir="$2"; shift 2 ;;
             --from-subdir=*) from_subdir="${1#--from-subdir=}"; shift ;;
             --include)     [[ $# -ge 2 ]] || { echo "ERROR: --include requiere un patrón" >&2; return 2; }; include="$2"; shift 2 ;;
@@ -4080,6 +4121,15 @@ cmd_gguffer() {
     # ── donde vive cada cosa ───────────────────────────────────────────────
     local work_root="${GGUF_WORK_DIR:-$HOME/.cache/ropero/gguffer}"
     local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
+    # Si --out trae un directorio, el GGUF va ahi. Si trae la ruta exacta del
+    # fichero, el directorio es el de esa ruta. El launcher busca cada modelo
+    # en $GGUF_DIR/<carpeta_del_modelo>/, asi que esto es lo que hace que el
+    # GGUF fabricationado caiga donde el TOML lo va a buscar.
+    if [[ -n "$ROPERO_GGUF_OUT_DIR" ]]; then
+        out_dir="$ROPERO_GGUF_OUT_DIR"
+    elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+        out_dir="$(dirname "$ROPERO_GGUF_OUT_FILE")"
+    fi
     mkdir -p "$out_dir"
 
     local work="" source_dir="" nombre="" hf_cache=""
@@ -4101,7 +4151,11 @@ cmd_gguffer() {
         echo "[gguffer] --force: limpio lo cacheado de ${repo:-$path}"
         [[ -n "$repo" ]] && rm -rf "$hf_cache"
         rm -rf "$work"
-        rm -f "$out_dir/${nombre}"*.gguf
+        if [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            rm -f "$ROPERO_GGUF_OUT_FILE"
+        else
+            rm -f "$out_dir/${nombre}"*.gguf
+        fi
     fi
 
     # ── FASE 1: la descarga ─────────────────────────────────────────────────
@@ -4159,6 +4213,15 @@ cmd_gguffer() {
     [[ -z "$out_f16" ]] && out_f16="$out_dir/${nombre}-${inter_up}.gguf"
     local out_final="$out_f16"
     [[ -n "$quant" ]] && out_final="$out_dir/${nombre}-${quant}.gguf"
+    # Si --out trajo la ruta exacta del fichero, esa es la ruta final (por
+    # ejemplo, el nombre que espera el TOML, que no siempre es
+    # <repo>-<quant>.gguf).
+    [[ -n "$ROPERO_GGUF_OUT_FILE" ]] && out_final="$ROPERO_GGUF_OUT_FILE"
+    # Y si no hay quant, esa ruta ES el intermedio: se convierte directamente
+    # ahi, en vez de convertir a un F16 aparte y luego renombrar.
+    if [[ -n "$ROPERO_GGUF_OUT_FILE" && -z "$quant" ]]; then
+        out_f16="$ROPERO_GGUF_OUT_FILE"
+    fi
 
     # El intermedio y el final pueden ser el mismo fichero (--quant F16), y
     # en ese caso el "ya existe" no aplica: es el intermedio del que
