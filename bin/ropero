@@ -1067,29 +1067,44 @@ cmd_levels() {
     _ropero_model_levels "$model" 2>/dev/null || true
 }
 
-# cmd_args <modelo> [nivel] — imprime el argv final que se le pasaria al
-# server, SIN arrancar nada.
+# cmd_args <modelo> [nivel] [--flag ...] — imprime el argv final que se le
+# pasaria al server, SIN arrancar nada.
 #
 # Es el modo de verificar el wiring sin GPU: lo que se ve aqui es
 # exactamente lo que recibiria llama-server (los args globales de ropero
-# + los del modelo + el nivel + los overrides).
+# + los del modelo + el nivel + los flags + los overrides).
 #
-# Sirve para dos cosas que hasta ahora no se podian comprobar:
+# Sirve para tres cosas que hasta ahora no se podian comprobar:
 #   · que el override de temp (ROPERO_TEMP) SUSTITUYE al del TOML y no se
 #     duplica
 #   · que el nivel pedido es uno que el modelo declara (si no, ropero
 #     avisa en vez de arrancar un modelo que luego se cae)
+#   · que un flag del modelo ([args.flag.<flag>]) mete sus args donde
+#     toca
 cmd_args() {
     local model="${1:-}"
-    local level="${2:-}"
+    shift || true
+    # El nivel es el primer argumento que no es un flag; el resto, flags.
+    local level=""
+    local -a flags=()
+    local a
+    for a in "$@"; do
+        if [[ -z "$level" && "$a" != --* ]]; then
+            level="$a"
+            continue
+        fi
+        # El flag se pasa SIN los "--", como hace el CLI: ropero_model_args
+        # los convierte en "--flag <nombre>" para _modelconf.py.
+        flags+=("${a#--}")
+    done
     if [[ -z "$model" ]]; then
-        printf 'USO: ropero args <modelo> [nivel]\n' >&2
+        printf 'USO: ropero args <modelo> [nivel] [--flag ...]\n' >&2
         return 2
     fi
 
     local out=""
     local rc=0
-    out=$(ropero_model_args "$model" "$level" 2>&1) || rc=$?
+    out=$(ropero_model_args "$model" "$level" "${flags[@]}" 2>&1) || rc=$?
     if (( rc != 0 )); then
         printf '%s\n' "$out" >&2
         return "$rc"

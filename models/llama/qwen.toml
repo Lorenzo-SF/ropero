@@ -26,7 +26,28 @@ list    = ["low", "medium", "high", "xhigh"]
 default = "low"
 
 [flags]
-list = []
+# El flag `mtp` activa el speculative decoding con la cabeza NextN que ya
+# esta dentro del GGUF (bloque 64). NO viene de serie: el MTP solo renta si
+# la aceptacion es alta, y con temp 1.0 no lo es.
+#
+# Que cuesta, en VRAM (medido en el log del banco: el draft ocupaba
+# 7.289 MiB con 1855 tokens -> 4.024 KiB/token, que es UNA capa nextn en
+# f16, n_kv=4, hd=256):
+#
+#   ctx     KV del draft (f16)   con --spec-draft-type q4_0
+#   262144        1008 MiB                  288 MiB
+#   196608         756 MiB                  221 MiB
+#   131072         504 MiB                  144 MiB
+#
+# O sea: cuantizar el KV del draft (q4_0) es lo que hace que el MTP quepa
+# con ctx largo. El ctx del draft va atado al del target (el upstream lo
+# pone explicito: cparams.n_ctx = llama_n_ctx(ctx_tgt)), asi que bajarlo
+# por debajo del ctx del target no es una opcion.
+#
+# Con MTP, el fork desactiva ctx_shift y cache_reuse (avisa por log): con
+# turbo3 en la K, el context shift se salta y la calidad baja. Asi que
+# con --mtp hay que quitar el --context-shift.
+list = ["mtp"]
 
 [args]
 base = [
@@ -64,4 +85,29 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
 [args.level.xhigh]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
+
+# ── El flag `mtp` (speculative decoding con la cabeza NextN) ────────────────
+# La cabeza NextN va DENTRO del GGUF (bloque 64: nextn.eh_proj + los tensores
+# de la capa), asi que no hay que descargar ni cargar otro modelo.
+#
+# Los tres valores de abajo no son de tastes: estan medidos por el fork.
+#   --spec-draft-n-max 2       "optimal for this model's MTP head (measured)".
+#                              El default es 10, y con 10 el draft hace 10
+#                              forwards secuenciales para aceptar 2.
+#   --no-spec-draft-backend-sampling
+#                              "keeps CUDA graph reuse high (~25% throughput
+#                              difference)".
+#   --spec-draft-type q4_0     el KV del draft en 4 bits en vez de f16: 4x
+#                              menos VRAM (288 MiB en vez de 1008 a 262144).
+#                              Con la rotacion Hadamard (head_dim 256, se
+#                              activa sola con KV cuantizado) el q4_0 del
+#                              draft no pierde casi nada.
+[args.flag.mtp]
+base = [
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "2",
+    "--spec-draft-type-k", "q4_0",
+    "--spec-draft-type-v", "q4_0",
+    "--no-spec-draft-backend-sampling",
+]
 
