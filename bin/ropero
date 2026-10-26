@@ -3054,7 +3054,7 @@ cmd_help() {
     cat <<'EOF'
 USO: ropero <modelo> [--background|--cpu|--force|--port N]
      ropero install [engines|models|link] [selección] [--force]
-     ropero {engines|models|link|config|status|stop|use|list|template|check} [--help]
+     ropero {engines|models|link|config|status|stop|use|list|template|check|gguffer} [--help]
 
 Instalación de ropero (una línea):
   curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
@@ -3063,6 +3063,9 @@ Instalación de ropero (una línea):
 `check` verifica la instalación. No modifica nada.
 `use <modelo>` asegura que ese modelo sea el que se está sirviendo, y espera
 a que esté listo. Es idempotente: si ya lo está, no toca nada.
+`gguffer` fabrica un GGUF desde un repo de HuggingFace: descarga, convierte,
+cuantiza y verifica. Si algo falla, conserva lo que puede servir para
+reintentar; los safetensors solo se borran cuando el GGUF final valida.
 EOF
 }
 
@@ -3079,6 +3082,34 @@ _ropero_command_help() {
         use)       printf 'USO: ropero use <modelo> [--port N] [--nivel N] [--flag F]\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         template)  printf 'USO: ropero template\n' ;;
+        gguffer)
+            cat <<'EOF'
+USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
+
+  --quant TIPO        quant a aplicar (sin el, el GGUF queda en F16)
+  --list-quants       lista los quants que acepta el motor instalado
+  --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
+  --imatrix FICHERO   importance matrix para la cuantizacion
+  --out NOMBRE        nombre del GGUF de salida (sin .gguf)
+  --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
+  --include PATRON    que ficheros descargar (por defecto, todos)
+  --intermedio TIPO  el GGUF intermedio: f16 (por defecto) o bf16 (la
+                      mitad de disco, y el cuantizador lo acepta igual)
+  --keep-source       no borrar los safetensors aunque el GGUF sea valido
+  --keep-intermedio   no borrar el GGUF intermedio (F16)
+  --force             borra todo lo cacheado de este repo y empieza de cero
+
+QUE PASA SI ALGO FALLA:
+  · la descarga falla   -> se borra el clon a medias y la cache de HF
+  · la conversion falla -> se conservan los safetensors y se dice como
+                          reintentar solo la conversion
+  · la cuantizacion falla -> se conservan los safetensors Y el GGUF
+                          intermedio, y se dice como reintentar solo la
+                          cuantizacion
+  · el GGUF no valida   -> no se borra nada
+  · el GGUF valida      -> se borran los safetensors
+EOF
+            ;;
         check)     printf 'USO: ropero check\n' ;;
         model)     _ropero_usage '' ;;
         *)         cmd_help ;;
@@ -3953,106 +3984,291 @@ cmd_config() {
 # Main
 # -----------------------------------------------------------------------------
 cmd_gguffer() {
-    local path="" repo="" quant="" list_only=0 download_dir=""
+    local path="" repo="" quant="" out_name="" imatrix="" from_subdir="" include=""
+    local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0
+    local inter="f16"
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --path) [[ $# -ge 2 ]] || { echo "ERROR: --path requiere un directorio" >&2; return 2; }; path="$2"; shift 2 ;;
-            --path=*) path="${1#--path=}"; shift ;;
-            --repo) [[ $# -ge 2 ]] || { echo "ERROR: --repo requiere un repo (owner/name)" >&2; return 2; }; repo="$2"; shift 2 ;;
-            --repo=*) repo="${1#--repo=}"; shift ;;
+            --path)        [[ $# -ge 2 ]] || { echo "ERROR: --path requiere un directorio" >&2; return 2; }; path="$2"; shift 2 ;;
+            --path=*)      path="${1#--path=}"; shift ;;
+            --repo)        [[ $# -ge 2 ]] || { echo "ERROR: --repo requiere un repo (owner/name)" >&2; return 2; }; repo="$2"; shift 2 ;;
+            --repo=*)      repo="${1#--repo=}"; shift ;;
             --quant)
                 if [[ $# -eq 1 ]]; then list_only=1; shift
                 else quant="$2"; shift 2; fi ;;
-            --quant=*) quant="${1#--quant=}"; shift ;;
-            -h|--help) printf 'USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant [TIPO]]
-'; return 0 ;;
+            --quant=*)     quant="${1#--quant=}"; shift ;;
+            --imatrix)     [[ $# -ge 2 ]] || { echo "ERROR: --imatrix requiere un fichero" >&2; return 2; }; imatrix="$2"; shift 2 ;;
+            --imatrix=*)   imatrix="${1#--imatrix=}"; shift ;;
+            --out)         [[ $# -ge 2 ]] || { echo "ERROR: --out requiere un nombre" >&2; return 2; }; out_name="$2"; shift 2 ;;
+            --out=*)       out_name="${1#--out=}"; shift ;;
+            --from-subdir) [[ $# -ge 2 ]] || { echo "ERROR: --from-subdir requiere un directorio" >&2; return 2; }; from_subdir="$2"; shift 2 ;;
+            --from-subdir=*) from_subdir="${1#--from-subdir=}"; shift ;;
+            --include)     [[ $# -ge 2 ]] || { echo "ERROR: --include requiere un patrón" >&2; return 2; }; include="$2"; shift 2 ;;
+            --include=*)   include="${1#--include=}"; shift ;;
+            --intermedio)    [[ $# -ge 2 ]] || { echo "ERROR: --intermedio requiere f16 o bf16" >&2; return 2; }; inter="$2"; shift 2 ;;
+            --intermedio=*)  inter="${1#--intermedio=}"; shift ;;
+            --keep-source)    keep_source=1; shift ;;
+            --keep-intermedio) keep_inter=1; shift ;;
+            --force)       force=1; shift ;;
+            --list-quants) list_only=1; shift ;;
+            --no-mtp)      no_mtp=1; shift ;;
+            -h|--help)     _ropero_command_help gguffer; return 0 ;;
             *) echo "ERROR: argumento desconocido: $1" >&2; return 2 ;;
         esac
     done
 
+    # ── ¿de donde sale el motor? ────────────────────────────────────────────
+    local _llama_dir="${LLAMA_DIR:-$HOME/llama.cpp}"
+    local _convert="$_llama_dir/convert_hf_to_gguf.py"
+    local _quantize
+    _quantize="$(command -v llama-quantize 2>/dev/null || echo "$_llama_dir/build/bin/llama-quantize")"
+    local _ggufcheck
+    _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
+    local _libggml
+    for c in "$_llama_dir/build/bin/libggml.so" "$_llama_dir/build/bin/libggml.dylib" "$_llama_dir/build/lib/libggml.so"; do
+        [[ -f "$c" ]] && { _libggml="$c"; break; }
+    done
+    local _gguf_split
+    for c in "$(command -v llama-gguf-split 2>/dev/null || true)" "$_llama_dir/build/bin/llama-gguf-split"; do
+        [[ -n "$c" && -x "$c" ]] && { _gguf_split="$c"; break; }
+    done
+
+    if (( list_only == 1 )); then
+        echo "Quants disponibles (motor: $_quantize):"
+        "$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" | sed 's/^/  /'
+        return 0
+    fi
+
     if [[ -z "$path" && -z "$repo" ]]; then
-        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant [TIPO]]" >&2
+        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant TIPO]" >&2
         return 2
     fi
     if [[ -n "$path" && -n "$repo" ]]; then
         echo "ERROR: usa --path O --repo, no ambos" >&2
         return 2
     fi
+    if [[ -n "$repo" && "$repo" != */* ]]; then
+        echo "ERROR: --repo debe ser owner/name (no '$repo')" >&2
+        return 2
+    fi
 
-    local _llama_dir="${LLAMA_DIR:-$HOME/llama.cpp}"
-    local _convert="$_llama_dir/convert_hf_to_gguf.py"
-    local _quantize
-    _quantize="$(command -v llama-quantize 2>/dev/null || echo "$_llama_dir/build/bin/llama-quantize")"
+    # ── los quants del motor: numero y nombre ───────────────────────────────
+    # El numero es el GGML_TYPE, que es lo que lleva el GGUF en
+    # general.file_type: con eso se puede saber si un GGUF ya esta en el
+    # quant pedido (y saltarse la cuantizacion).
+    local quants_txt quants_num
+    quants_txt="$("$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" || true)"
+    if [[ -z "$quants_txt" ]]; then
+        echo "ERROR: no se puede leer la lista de quants de $_quantize" >&2
+        return 1
+    fi
+    # "    19  or  IQ2_XXS : ..."  ->  "19=IQ2_XXS"
+    quants_num="$(printf '%s\n' "$quants_txt" | sed -nE 's/^[[:space:]]*([0-9]+)[[:space:]]+or[[:space:]]+([A-Z0-9_]+).*/\1=\2/p' | tr '\n' ' ')"
 
-    if (( list_only == 1 )); then
-        echo "Quants disponibles:"
-        "$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" | sed 's/^/  /'
+    # ── validar el quant ANTES de descargar 60 GB ───────────────────────────
+    if [[ -n "$quant" ]]; then
+        local qnum
+        qnum="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "=${quant}$" | head -1 | cut -d= -f1)"
+        if [[ -z "$qnum" ]]; then
+            echo "ERROR: quant no valido: $quant" >&2
+            echo "Usa 'ropero gguffer --list-quants' para ver la lista." >&2
+            return 1
+        fi
+    fi
+
+    # ── donde vive cada cosa ───────────────────────────────────────────────
+    local work_root="${GGUF_WORK_DIR:-$HOME/.cache/ropero/gguffer}"
+    local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
+    mkdir -p "$out_dir"
+
+    local work="" source_dir="" nombre="" hf_cache=""
+    if [[ -n "$repo" ]]; then
+        work="$work_root/${repo//\//__}"
+        source_dir="$work"
+        nombre="${repo##*/}"
+        hf_cache="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--${repo//\//--}"
+    else
+        work="$path"
+        source_dir="$path"
+        nombre="$(basename "$path")"
+    fi
+    [[ -n "$out_name" ]] && nombre="$out_name"
+    local sentinel="$work/.gguffer-complete"
+
+    # ── --force: limpiarlo todo y empezar de cero ───────────────────────────
+    if (( force == 1 )); then
+        echo "[gguffer] --force: limpio lo cacheado de ${repo:-$path}"
+        [[ -n "$repo" ]] && rm -rf "$hf_cache"
+        rm -rf "$work"
+        rm -f "$out_dir/${nombre}"*.gguf
+    fi
+
+    # ── FASE 1: la descarga ─────────────────────────────────────────────────
+    if [[ -n "$repo" ]]; then
+        if [[ -f "$sentinel" ]]; then
+            echo "[gguffer] reutilizo el clon de $repo en $work"
+        else
+            if ! command -v hf >/dev/null 2>&1; then
+                echo "ERROR: falta 'hf' (huggingface_hub) para descargar" >&2
+                return 1
+            fi
+            mkdir -p "$work"
+            echo "[gguffer] descargo $repo en $work..."
+            local hf_args=(download "$repo" --local-dir "$work")
+            [[ -n "$include" ]] && hf_args+=(--include "$include")
+            if ! hf "${hf_args[@]}"; then
+                # Si la descarga falla no queda nada utilizable: se limpia
+                # el clon a medias y la cache de HF, que son justo lo que
+                # dejaria a medias occupying disco.
+                echo "ERROR: fallo la descarga de $repo" >&2
+                rm -rf "$work"
+                [[ -n "$hf_cache" ]] && rm -rf "$hf_cache"
+                echo "       (he limpiado el clon parcial y la cache de HF)" >&2
+                return 1
+            fi
+            touch "$sentinel"
+        fi
+    fi
+
+    if [[ ! -d "$source_dir" ]]; then
+        echo "ERROR: directorio no encontrado: $source_dir" >&2
+        return 1
+    fi
+
+    # Los pesos pueden venir ya cuantizados (el gpt-oss viene en MXFP4).
+    # Cuantizar encima de eso es dequantizar y re-cuantizar: se pierde
+    # calidad sin ganar nada. Si el repo trae 'original/', ahi estan los
+    # pesos sin quantizar.
+    if [[ -n "$from_subdir" ]]; then
+        source_dir="$work/$from_subdir"
+        [[ -d "$source_dir" ]] || { echo "ERROR: no existe $source_dir" >&2; return 1; }
+    fi
+
+    # ── FASE 2: conversion a GGUF ───────────────────────────────────────────
+    local inter_up="${inter^^}"
+    [[ "$inter_up" == "F16" || "$inter_up" == "BF16" ]] || { echo "ERROR: --intermedio solo admite f16 o bf16" >&2; return 2; }
+    local out_f16="$out_dir/${nombre}-${inter_up}.gguf"
+    local out_final="$out_f16"
+    [[ -n "$quant" ]] && out_final="$out_dir/${nombre}-${quant}.gguf"
+
+    # El intermedio y el final pueden ser el mismo fichero (--quant F16), y
+    # en ese caso el "ya existe" no aplica: es el intermedio del que
+    # speak, no un resultado de una corrida anterior.
+    if [[ "$out_final" != "$out_f16" && -f "$out_final" && $force -eq 0 && -z "$path" ]]; then
+        echo "[gguffer] ya existe: $out_final (usa --force para rehacerlo)"
         return 0
     fi
 
-    # Si --repo, descargar primero
-    if [[ -n "$repo" ]]; then
-        if ! command -v hf >/dev/null 2>&1; then
-            echo "ERROR: falta 'hf' (huggingface_hub) para descargar" >&2
+    if [[ ! -f "$out_f16" ]]; then
+        # --no-mtp solo si el conversor lo entiende: no todas las versiones
+        # de llama.cpp lo tienen, y pasar un flag que no existe hace que el
+        # conversor falle con "unrecognized arguments".
+        local conv_args=("$source_dir" --outfile "$out_f16" --outtype "$inter")
+        if (( no_mtp == 1 )); then
+            if grep -qE "no-mtp|no_nextn" "$_convert" 2>/dev/null; then
+                conv_args+=(--no-mtp)
+            else
+                echo "[gguffer] aviso: este conversor no sabe excluir la MTP (--no-mtp); sigo sin el"
+            fi
+        fi
+        echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
+        if ! python3 "$_convert" "${conv_args[@]}"; then
+            # La conversion fallo: el clon de los safetensors se conserva
+            # (60 GB, pero es lo que evita volver a bajar) y se dice como
+            # reintentar solo esta fase.
+            rm -f "$out_f16"
+            echo "ERROR: fallo la conversion a GGUF" >&2
+            echo "       conservo los pesos en: $work" >&2
+            echo "       reintenta solo la conversion:" >&2
+            echo "         python3 $_convert ${conv_args[*]}" >&2
             return 1
         fi
-        download_dir="$(mktemp -d "${TMPDIR:-/tmp}/ropero-gguffer.XXXXXX")"
-        echo "Descargando $repo en $download_dir..."
-        if ! hf download "$repo" --local-dir "$download_dir"; then
-            echo "ERROR: falló la descarga" >&2
-            rm -rf "$download_dir"
-            return 1
-        fi
-        path="$download_dir"
+    else
+        echo "[gguffer] reutilizo el GGUF intermedio: $out_f16"
     fi
 
-    if [[ ! -d "$path" ]]; then
-        echo "ERROR: directorio no encontrado: $path" >&2
-        [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+    # ── FASE 3: la cuantizacion ────────────────────────────────────────────
+    # El file_type del GGUF dice en que quant estan los pesos. Si ya estan
+    # cuantizados (el gpt-oss viene en MXFP4), cuantizar encima es
+    # dequantizar y re-cuantizar: se pierde calidad sin ganar nada. Por eso
+    # se mira ANTES, con el dato real y no con una suposicion.
+    local file_type
+    file_type="$(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1 | tr -dc '0-9')"
+    if [[ -n "$quant" && -n "$file_type" && "$file_type" != "0" && "$file_type" != "$qnum" ]]; then
+        echo "[gguffer] aviso: los pesos del repo ya venian en el quant $file_type."
+        echo "           Cuantizar a $quant encima es dequantizar y re-cuantizar:"
+        echo "           se pierde calidad sin ganar nada."
+        if [[ -d "$work/original" ]]; then
+            echo "           Usa --from-subdir original para cuantizar de los pesos SIN quantizar."
+        fi
+    fi
+    if [[ -n "$quant" && -n "$file_type" && "$file_type" == "$qnum" ]]; then
+        # El GGUF ya esta en ese quant (el caso del gpt-oss, que se
+        # convierte a MXFP4 sin cuantizar). Cuantizar encima seria
+        # dequantizar y re-cuantizar: se pierde calidad sin ganar nada.
+        echo "[gguffer] el GGUF ya esta en $quant (file_type=$file_type): no cuantizo otra vez"
+        if [[ "$out_final" != "$out_f16" ]]; then
+            rm -f "$out_final"
+            mv "$out_f16" "$out_final"
+        fi
+    elif [[ -n "$quant" ]]; then
+        echo "[gguffer] cuantizo a $quant -> $out_final..."
+        local qargs=("$out_f16" "$out_final" "$quant")
+        [[ -n "$imatrix" ]] && qargs+=(--imatrix "$imatrix")
+        if ! "$_quantize" "${qargs[@]}"; then
+            # Aqui NO se borra nada: el clon de los safetensors y el GGUF
+            # intermedio se quedan, y se dice como reintentar solo la
+            # cuantizacion (que es la parte cara).
+            rm -f "$out_final"
+            echo "ERROR: fallo la cuantizacion a $quant" >&2
+            echo "       conservo los pesos en: $work" >&2
+            echo "       conservo el GGUF intermedio en: $out_f16" >&2
+            echo "       reintenta solo la cuantizacion:" >&2
+            echo "         $_quantize ${qargs[*]}" >&2
+            return 1
+        fi
+        if (( keep_inter == 0 )); then rm -f "$out_f16"; fi
+    fi
+
+    # ── FASE 4: verificar el GGUF ───────────────────────────────────────────
+    # Solo si el GGUF esta bien se borran los safetensors: si esta
+    # corrupto, tenerlos vale mas que 60 GB de disco.
+    local verif_ok=0
+    if [[ -n "$_gguf_split" ]]; then
+        if "$_gguf_split" --dry-run "$out_final" "$out_dir/.gguffer-verif" >/dev/null 2>&1; then
+            verif_ok=1
+        fi
+    fi
+    if (( verif_ok == 0 )); then
+        local chk_args=("$out_final")
+        [[ -n "$_libggml" ]] && chk_args+=(--lib "$_libggml")
+        if python3 "$_ggufcheck" "${chk_args[@]}"; then
+            verif_ok=1
+        fi
+    fi
+
+    if (( verif_ok == 0 )); then
+        echo "ERROR: el GGUF no supera la verificacion: $out_final" >&2
+        echo "       NO borro los pesos: estan en $work" >&2
+        echo "       (usa --force para rehacerlo todo desde cero)" >&2
         return 1
     fi
 
-    # Validar quant si se pasó
-    if [[ -n "$quant" ]]; then
-        if ! "$_quantize" --help 2>&1 | grep -qiE "or  ${quant}([^A-Za-z0-9_]|$)"; then
-            echo "ERROR: quant no válido: $quant" >&2
-            echo "Usa 'ropero gguffer --path <dir> --quant' para ver la lista." >&2
-            [[ -n "$download_dir" ]] && rm -rf "$download_dir"
-            return 1
-        fi
+    # ── FASE 5: limpiar ─────────────────────────────────────────────────────
+    if [[ -n "$repo" && $keep_source -eq 0 ]]; then
+        echo "[gguffer] el GGUF esta bien: borro el clon de los safetensors ($work)"
+        rm -rf "$work"
+    elif [[ -n "$repo" ]]; then
+        echo "[gguffer] el GGUF esta bien; conservo los safetensors en $work (--keep-source)"
     fi
+    rm -f "$out_dir/.gguffer-verif"
 
-    local name; name="$(basename "$path")"
-    local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
-    mkdir -p "$out_dir"
-    local out="$out_dir/${name}.gguf"
-
-    echo "Convirtiendo $path -> $out (F16)..."
-    if ! python3 "$_convert" "$path" --outfile "$out" --outtype f16; then
-        echo "ERROR: falló la conversión" >&2
-        [[ -n "$download_dir" ]] && rm -rf "$download_dir"
-        return 1
-    fi
-
-    if [[ -n "$quant" && "$quant" != "F16" && "$quant" != "F32" && "$quant" != "BF16" ]]; then
-        local qout="${out%.gguf}-${quant}.gguf"
-        echo "Cuantizando a $quant -> $qout..."
-        if ! "$_quantize" "$out" "$qout" "$quant"; then
-            echo "ERROR: falló la cuantización" >&2
-            [[ -n "$download_dir" ]] && rm -rf "$download_dir"
-            return 1
-        fi
-        rm -f "$out"
-        out="$qout"
-    fi
-
-    # Limpiar safetensors
-    rm -rf "$path"
-
-    echo "GGUF creado: $out"
+    local _sz
+    _sz="$(du -h "$out_final" 2>/dev/null | cut -f1)"
+    echo "[gguffer] GGUF listo: $out_final (${_sz:-?})"
     return 0
 }
-
 
 main() {
     local subcmd="${1:-}"

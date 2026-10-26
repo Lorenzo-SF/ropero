@@ -178,6 +178,7 @@ curl http://localhost:9999/v1/chat/completions \
 | `ropero config [engine]` | la configuración actual |
 | `ropero check` | verifica la instalación (no modifica nada) |
 | `ropero template` | enseña la plantilla de un modelo |
+| `ropero gguffer` | fabrica un GGUF desde un repo de HuggingFace (descarga → convierte → cuantiza → verifica) |
 
 `ropero install` sin destino pasa por los engines y luego por los modelos.
 
@@ -209,6 +210,66 @@ necesita un cliente que habla con un único endpoint.
 ```bash
 ropero use qwen --port 9999
 ```
+
+### `ropero gguffer`: fabricar el GGUF en casa
+
+Los GGUFs que publica la gente (bartowski, unsloth) los hace el mismo
+`llama-quantize` que lleva el motor de llama.cpp. Este comando es para
+cuando quieres el tuyo: con **tu** imatrix, con el GGUF de otro modelo, o
+con un quant que nadie ha hecho.
+
+```bash
+ropero gguffer --list-quants               # los quants que acepta el motor
+ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS
+ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS --imatrix mi.imatrix
+ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS --no-mtp
+```
+
+Una cuantización por modelo, con los quant que salen de la VRAM de la
+máquina (15.300 MiB) y de la calidad por byte:
+
+| Modelo | Repo de los pesos (sin cuantizar) | Quant | Por qué ese |
+|---|---|---|---|
+| `qwen` | `Qwen/Qwen3.8-27B` | `IQ3_XS` | 3,3 bpw, 12,8 GB: cabe con ctx 131072 y sobra margen |
+| `qwen36` | `Qwen/Qwen3.6-35B-A3B` | `IQ3_XXS` | el MoE no cabe con más bits |
+| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ3_XXS` | ídem |
+| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `IQ3_XXS` | ídem |
+| `nemotron` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `IQ3_XXS` | MoE híbrido, con cabeza MTP: `--no-mtp` si no la quieres |
+| `laguna` | `poolside/Laguna-XS-2.1` | `IQ3_XXS` | |
+| `gemma` | `google/gemma-4-26B-A4B-it` | `IQ3_XXS` | |
+| `fable` | `Achilles1089/fable-coder-35B-A3B` | `IQ2_M` | 2,7 bpw: mejor que el Q2_K publicado |
+| `qwopus` | `Jackrong/Qwopus3.6-35B-A3B-Coder` | `IQ2_M` | ídem |
+| `agenta1` | `InternScience/Agents-A1` | `IQ2_M` | 256 expertos: no cabe con más |
+| `muse` | `meta-models/Muse-Glimmer-30B` | `IQ3_XS` | el IQ4_XS no cabe |
+| `devstral` | `mistralai/Devstral-Small-2-24B-Instruct-2512` | `IQ4_XS` | 4,25 bpw: cabe y es mejor que el Q3_K_M publicado |
+| `agents-tiny` | `InternScience/Agents-A1-4B` | `Q8_0` | ya está en el techo |
+| `gptoss` | `openai/gpt-oss-20b` | `MXFP4` | **ya viene en MXFP4**: no se cuantiza, el GGUF sale igual |
+
+Los repos son de los pesos **sin cuantizar** (el `base_model` de cada GGUF
+publicado). Con `--from-subdir original` se cuantiza de la copia en BF16
+que traen algunos repos, que es lo correcto cuando los pesos de arriba ya
+vienen cuantizados.
+
+Lo que no se ve en el comando es lo que pasa **cuando algo falla**, que es
+lo que importa cuando estás descargando 60 GB:
+
+| Si falla | Qué pasa |
+|---|---|
+| la descarga | se borra el clon a medias **y** la caché de HF |
+| la conversión | se conservan los safetensors y se dice cómo reintentar solo la conversión |
+| la cuantización | se conservan los safetensors **y** el GGUF intermedio, y se dice cómo reintentar solo la cuantización |
+| la verificación del GGUF | no se borra nada |
+| nada (todo bien) | se borran los safetensors, porque el GGUF ya está validado |
+
+`--force` borra lo cacheado de ese repo y lo rehace desde cero. El clon de
+los pesos vive en `~/.cache/ropero/gguffer/<owner>__<repo>` y se reutiliza
+si ya está: reintentar la cuantización no vuelve a bajar el modelo.
+
+Un detalle que marea: hay repos cuyos pesos **ya vienen cuantizados** (el
+gpt-oss viene en MXFP4). Cuantizar encima de eso es dequantizar y
+re-cuantizar: se pierde calidad sin ganar nada. El gguffer lo mira en el
+`file_type` del GGUF convertido y te avisa; para cuantizar de los pesos sin
+cuantizar está `original/` en el repo (`--from-subdir original`).
 
 ### Flags del lanzador
 
