@@ -1,0 +1,25 @@
+# modelo	repo de los pesos sin cuantizar	quants (separados por coma)	repo del imatrix	fichero del imatrix	flags extra
+#
+# La tabla de QUE fabricar. Cada linea es una tirada: el gguffer baja los
+# pesos UNA vez, convierte el GGUF intermedio UNA vez, y de ahi saca todos
+# los quants de la lista.
+#
+# El primer quant de la lista es el "principal": ese va a la ruta que
+# espera el TOML del modelo. Los demas quedan en
+# $GGUF_DIR/_variantes/<modelo>/, con su nombre <repo>-<quant>.gguf.
+#
+# Los pesos SIEMPRE se sacan del repo sin cuantizar (el "base"). Cuantizar
+# encima de un GGUF ya cuantizado es dequantizar y re-cuantizar: se pierde
+# calidad sin ganar nada.
+#
+# ── los que COMPENSA fabricar (no caben en 16 GB con lo que hay) ───────────
+fable	Achilles1089/fable-coder-35B-A3B	IQ2_XXS,IQ2_M	mradermacher/fable-coder-35B-A3B-i1-GGUF	fable-coder-35B-A3B.imatrix.gguf
+nemotron	nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16	IQ2_M	bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF	NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf
+laguna	poolside/Laguna-XS-2.1	IQ2_XXS,IQ2_M	bartowski/Laguna-XS-2.1-GGUF	Laguna-XS-2.1-imatrix.gguf
+qwopus	Jackrong/Qwopus3.6-35B-A3B-Coder	IQ2_M	mradermacher/Qwopus3.6-35B-A3B-Coder-i1-GGUF	Qwopus3.6-35B-A3B-Coder.imatrix.gguf
+agenta1	InternScience/Agents-A1	IQ2_XXS	KikoCis/Agents-A1-IQ2_M-GGUF	Agents-A1.imatrix
+# ── los que ya caben: mejor bajarlos de HF que rehacerlos ────────────────
+# (el segundo quant es para COMPARAR o para subir lo que no existe)
+qwen	Qwen/Qwen3.8-27B	IQ3_XS,MXFP4	bartowski/Qwen3.8-27B-GGUF	Qwen3.8-27B-imatrix.gguf
+devstral	mistralai/Devstral-Small-2-24B-Instruct-2512	Q3_K_M,MXFP4	unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF	imatrix_unsloth.gguf_file
+agenta-tiny	InternScience/Agents-A1-4B	Q8_0,TQ4_1S	bartowski/InternScience_Agents-A1-4B-GGUF	InternScience_Agents-A1-4B-imatrix.gguf

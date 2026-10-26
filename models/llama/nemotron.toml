@@ -15,6 +15,14 @@ repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
 file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
 size = "19.76 GB"
 
+[levels]
+# El nemotron tambien razona por DEFECTO (su template: "enable_thinking if
+# enable_thinking is defined else True"). Por defecto va APAGADO, y se
+# enciende con "ropero nemotron --think".
+#
+# Sin "default" a proposito: sin nivel, el [args].base manda.
+list = ["think"]
+
 [args]
 base = [
     "--n-gpu-layers", "53",                            # todos los layers GPU-eligible
@@ -56,3 +64,11 @@ base = [
     # ---- Misc ----
     # --log-verbosity lo pone ropero entry (default 4)
 ]
+
+# El thinking, a pedido: "ropero nemotron --think".
+#
+# El base lleva "enable_thinking": false y este nivel lleva true. Los dos
+# van en el argv (base, luego nivel) y el ultimo gana: el server se queda
+# con la kwargs del nivel.
+[args.level.think]
+base = ["--chat-template-kwargs", '{"enable_thinking": true}']

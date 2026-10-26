@@ -13,15 +13,32 @@
 # (el modelo pide la tool, recibe un resultado, y la vuelve a pedir). El ctx
 # se deja pequeno para que arrancar cada variante sea rapido.
 #
+# El THINKING es probablemente la palanca MAS IMPORTANTE que el sampling:
+# el template del fable (y el del nemotron) razonan por defecto, y el TOML
+# de ropero les pasa enable_thinking=false para que no razonen. Un coder
+# agentic sin razonamiento es un modelo que pide la primera tool y la
+# vuelve a pedir para siempre.
+#
 # USO:
-#   ./probar-sampling.sh [modelo]        (por defecto, fable)
-#   ./probar-sampling.sh fable 3          (solo las 3 primeras variantes)
+#   ./probar-sampling.sh [modelo] [limite] [--thinking on|off|auto]
+#
+#   ./probar-sampling.sh fable                 (sampling, thinking off)
+#   ./probar-sampling.sh fable 99 --thinking on
+#   ./probar-sampling.sh fable 3 --thinking on
 # =============================================================================
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODELO="${1:-fable}"
 LIMITE="${2:-99}"
+# El thinking: on (el modelo razona), off (no razona) o auto (lo decide el
+# template). El default del template del fable y del nemotron es ON, asi que
+# "off" es una decision del TOML, no del modelo.
+THINKING="off"
+case "${3:-}" in
+    --thinking) THINKING="${4:-on}" ;;
+    on|off|auto) THINKING="${3}" ;;
+esac
 KEY="${API_KEY:-${LLAMA_API_KEY:-sk-local-dev-key}}"
 TURNOS="${TURNOS:-6}"
 CTX="${CTX:-4096}"
@@ -106,7 +123,8 @@ filtrar_base() {
             --temp|--top-k|--top-p|--min-p|--repeat-penalty|--repeat-last-n|\
             --dry-multiplier|--dry-base|--dry-allowed-length|--dry-penalty-last-n|\
             --dry-sequence-breaker|--samplers|--frequency-penalty|--presence-penalty|\
-            --xtc-probability|--seed|--n-predict|--keep|--load-mode|--metrics|--perf|--poll)
+            --xtc-probability|--seed|--n-predict|--keep|--load-mode|--metrics|--perf|--poll|\
+            --chat-template-kwargs)
                 saltar=1
                 continue ;;
         esac
@@ -126,6 +144,7 @@ echo "gguf:     $GGUF"
 echo "server:   $LLAMA_SERVER"
 echo "ctx:      $CTX    (pequeno a proposito: el bucle no depende del ctx)"
 echo "turnos:   $TURNOS"
+echo "thinking: $THINKING"
 echo ""
 
 # ── el bucle ───────────────────────────────────────────────────────────────
@@ -151,6 +170,13 @@ for v in "${VARIANTES[@]}"; do
     # los flags del modelo, y luego los de la variante (al final, para que
     # ganen: el server usa el ultimo valor de cada flag)
     cmd+=("${base_filtrado[@]}")
+    # El thinking va DESPUES de todo: el --chat-template-kwargs pisa al
+    # --reasoning si va despues (arg.cpp: el ultimo valor gana).
+    case "$THINKING" in
+        on)  cmd+=(--reasoning on) ;;
+        off) cmd+=(--reasoning off) ;;
+        auto) : ;;
+    esac
     if [[ -n "$flags" ]]; then
         # shellcheck disable=SC2206
         cmd+=($flags)

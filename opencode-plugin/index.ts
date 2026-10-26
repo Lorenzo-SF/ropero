@@ -100,6 +100,34 @@ async function modelosDeRopero(): Promise<Set<string>> {
   return set
 }
 
+/**
+ * Los NIVELES que declara un modelo ("ropero levels <modelo>").
+ *
+ * Un nivel es un modo del MODELO, no una opción de la petición: el fable y
+ * el nemotron razonan o no razonan según un `--chat-template-kwargs` que va
+ * en el ARGV del server, y ese argv se fija al arrancar. Por eso el nivel
+ * no puede viajar en el body de la petición (como hace el reasoning_effort)
+ * y tiene que llegar al arranque.
+ *
+ * Se cachean: cambiarlos es cosa del repo, no de la sesion.
+ */
+const nivelesPorModelo = new Map<string, Set<string>>()
+
+async function nivelesDe(modelo: string): Promise<Set<string>> {
+  const cached = nivelesPorModelo.get(modelo)
+  if (cached) return cached
+  const r = await ropero(["levels", modelo], 30_000)
+  const set = new Set<string>()
+  if (r.code === 0) {
+    for (const line of r.stdout.split("\n")) {
+      const m = line.trim().match(/^([A-Za-z0-9._-]+)$/)
+      if (m) set.add(m[1])
+    }
+  }
+  nivelesPorModelo.set(modelo, set)
+  return set
+}
+
 /** El texto del primer mensaje de usuario, para el título local. */
 function primerTexto(messages: readonly any[]): string {
   for (const m of messages) {
@@ -124,25 +152,31 @@ export default Plugin.define({
 
     // El modelo que sabemos servido, y la promesa en curso: así dos
     // peticiones seguidas no lanzan dos 'ropero use'.
+    // La clave lleva el NIVEL: el mismo modelo con otro nivel son args
+    // distintos, y el server se reinicia (por eso no se puede cachear solo
+    // el nombre del modelo).
     let servido: string | null = null
     let enCurso: Promise<void> | null = null
     const avisados = new Set<string>()
 
-    async function correr(modelo: string): Promise<void> {
+    async function correr(modelo: string, nivel: string | null): Promise<void> {
       const args = ["use", modelo]
       if (opts.port) args.push("--port", String(opts.port))
+      if (nivel) args.push("--nivel", nivel)
       const r = await ropero(args)
       if (r.code !== 0) {
         throw new Error(
-          `ropero use ${modelo} falló (rc=${r.code})\n` +
+          `ropero use ${modelo}${nivel ? " --nivel " + nivel : ""} falló (rc=${r.code})\n` +
             (r.stderr.trim() || r.stdout.trim() || "(sin salida)"),
         )
       }
       const puerto = r.stdout.match(/ROPERO_PORT=(\d+)/)?.[1]
-      console.log(`[ropero] '${modelo}' listo${puerto ? ` en :${puerto}` : ""}`)
+      console.log(
+        `[ropero] '${modelo}'${nivel ? ` (nivel ${nivel})` : ""} listo${puerto ? ` en :${puerto}` : ""}`,
+      )
     }
 
-    async function asegurar(modelo: string): Promise<void> {
+    async function asegurar(modelo: string, nivel: string | null): Promise<void> {
       // Solo si el modelo es UNO de ropero. Si el modelID de opencode no
       // corresponde a ningún modelo de ropero (un alias propio del config,
       // por ejemplo), el plugin no toca nada: el server ya está sirviendo
@@ -155,7 +189,8 @@ export default Plugin.define({
         }
         return
       }
-      if (servido === modelo) return
+      const clave = `${modelo}@${nivel ?? ""}`
+      if (servido === clave) return
       if (enCurso) {
         try {
           await enCurso
@@ -163,15 +198,15 @@ export default Plugin.define({
           /* el que espera reintenta con su propio modelo */
         }
       }
-      if (servido === modelo) return
-      const p = correr(modelo)
+      if (servido === clave) return
+      const p = correr(modelo, nivel)
       enCurso = p
       try {
         await p
       } finally {
         if (enCurso === p) enCurso = null
       }
-      servido = modelo
+      servido = clave
     }
 
     // "context" corre justo antes de cada peticion al modelo del agent loop,
@@ -182,7 +217,36 @@ export default Plugin.define({
       if (!m || m.providerID !== provider) return
       const modelo = m.id
       if (!modelo) return
-      await asegurar(modelo)
+
+      // El VARIANT de opencode puede ser el nombre de un NIVEL del modelo.
+      // Si lo es, se le pasa al arranque: el nivel va en el argv del server
+      // (no en el body), asi que sin esto no habria forma de pedirlo desde
+      // opencode. Por ejemplo, el fable declara el nivel "think".
+      //
+      // OJO: el nombre del variant y el del nivel no tienen por que ser lo
+      // mismo, y aqui solo se acepta una coincidencia EXACTA con un nivel
+      // que el modelo declare. Si no coincide, no se toca nada: el body lo
+      // lleva (reasoning_effort y companhia) y el server con su default.
+      let nivel: string | null = null
+      const variant = (m as any).variant
+      if (variant && (await nivelesDe(modelo)).has(variant)) nivel = variant
+
+      if (nivel) {
+        // El nivel ya va en el argv del server. Si ademas el body lleva un
+        // reasoningEffort, el template lo recibe con un valor que el modelo
+        // puede no admitir (el qwen35 solo admite xhigh | medium | low), y
+        // el jinja revienta con "Unexpected reasoning effort". Se quita.
+        const opts2 = (event as any).options
+        if (opts2 && "reasoningEffort" in opts2) {
+          try {
+            delete opts2.reasoningEffort
+          } catch {
+            opts2.reasoningEffort = undefined
+          }
+        }
+      }
+
+      await asegurar(modelo, nivel)
     })
 
     // La peticion de TITULO no pasa por "context": es otro tipo de peticion
@@ -191,7 +255,7 @@ export default Plugin.define({
     await ctx.session.hook("model.request", async (event) => {
       const m = event.model
       if (!m || m.providerID !== provider) return
-      if (event.kind === "title") await asegurar(m.id)
+      if (event.kind === "title") await asegurar(m.id, null)
     })
 
     // Y aqui se acota la peticion de titulo.
