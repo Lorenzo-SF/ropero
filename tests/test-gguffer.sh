@@ -94,7 +94,40 @@ if [[ -n "${FAKE_QUANTIZE_GARBAGE:-}" ]]; then
     printf 'esto no es un GGUF' > "$2"
     exit 0
 fi
-cp "$1" "$2"
+# El quantizador real (tools/quantize/quantize.cpp) solo parsea las opciones
+# mientras el argumento empiece por "--", y para en el primero que no. Si una
+# flag llega despues de los posicionales, se come el parseo del numero de
+# hilos y muere con "invalid nthread". Este fake lo reproduce, para que el
+# test lo pille.
+imatrix=""
+seen_positional=0
+prev=""
+for a in "$@"; do
+    if [[ "$prev" == "--imatrix" ]]; then
+        if (( seen_positional )); then
+            echo "llama_quantize: invalid nthread '$a'" >&2
+            exit 1
+        fi
+        imatrix="$a"
+    fi
+    [[ "$a" == --* ]] || seen_positional=1
+    prev="$a"
+done
+if [[ -n "${FAKE_QUANTIZE_LOG:-}" ]]; then
+    printf '%s\n' "$imatrix" > "$FAKE_QUANTIZE_LOG"
+fi
+# Los posicionales van despues de las opciones: <in> [out] <ftype>
+pos=()
+for a in "$@"; do
+    [[ "$a" == --* ]] || pos+=("$a")
+done
+in="${pos[0]}"
+out_f="${pos[1]:-${pos[0]}}"
+if [[ -n "${FAKE_QUANTIZE_GARBAGE:-}" ]]; then
+    printf 'esto no es un GGUF' > "$out_f"
+    exit 0
+fi
+cp "$in" "$out_f"
 exit 0
 EOF
 chmod +x "$LLAMA_DIR_TEST/build/bin/llama-quantize"
@@ -132,6 +165,7 @@ gguffer() {
         FAKE_HF_FAIL="${FAKE_HF_FAIL:-}" \
         FAKE_QUANTIZE_FAIL="${FAKE_QUANTIZE_FAIL:-}" \
         FAKE_QUANTIZE_GARBAGE="${FAKE_QUANTIZE_GARBAGE:-}" \
+        FAKE_QUANTIZE_LOG="${FAKE_QUANTIZE_LOG:-}" \
         bash "$REPO/bin/ropero" gguffer "$@"
 }
 
@@ -343,6 +377,18 @@ printf 'gguf viejo' > "$GGUF_OUT/repo-BF16.gguf"
 out="$(gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
 check "12a. reutiliza el BF16 que habia" "$(cond 'printf %s "$out" | grep -q "reutilizo el GGUF intermedio"')" "$out"
 check "12b. no vuelve a convertir"          "$(cond '[ ! -f "$GGUF_OUT"/*.outtype ]')" "$(ls -A "$GGUF_OUT")"
+
+# ── 13: el --imatrix va ANTES de los posicionales ─────────────────────────
+# El cuantizador real solo parsea las opciones mientras empiecen por "--".
+# Si la flag llega detras, se come el parseo del nthread y muere con
+# "invalid nthread '--imatrix'". Este test lo fija.
+printf 'imatrix falso\n' > "$WORK/imatrix_falso.gguf"
+out="$(FAKE_QUANTIZE_LOG="$WORK/imatrix_log.txt" gguffer --repo owner/imatrix-repo --quant IQ3_XS \
+        --imatrix "$WORK/imatrix_falso.gguf" 2>&1)"; rc=$?
+check "13a. llega a la fase de cuantizacion" "$(cond 'printf %s "$out" | grep -q "cuantizo a IQ3_XS"')" "$out"
+check "13b. el cuantizador recibe el imatrix" "$(cond 'grep -q "imatrix_falso.gguf" "$WORK/imatrix_log.txt" 2>/dev/null')" \
+      "$(cat "$WORK/imatrix_log.txt" 2>/dev/null)"
+check "13c. no dice invalid nthread"        "$(cond '! printf %s "$out" | grep -q "invalid nthread"')" "$out"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"

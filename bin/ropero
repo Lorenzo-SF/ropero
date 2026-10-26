@@ -4203,8 +4203,13 @@ cmd_gguffer() {
     # se mira ANTES, con el dato real y no con una suposicion.
     local file_type
     file_type="$(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1 | tr -dc '0-9')"
-    if [[ -n "$quant" && -n "$file_type" && "$file_type" != "0" && "$file_type" != "$qnum" ]]; then
-        echo "[gguffer] aviso: los pesos del repo ya venian en el quant $file_type."
+    # El nombre del tipo predominante: el numero solo no vale (el 30 es BF16
+    # y IQ4_XS a la vez), asi que se busca en la lista del motor.
+    local tipo_nombre=""
+    [[ -n "$file_type" ]] && tipo_nombre="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "^${file_type}=" | head -1 | cut -d= -f2)"
+    if [[ -n "$quant" && -n "$tipo_nombre" && "$tipo_nombre" != "$qnum" &&
+          "$tipo_nombre" != "F16" && "$tipo_nombre" != "BF16" && "$tipo_nombre" != "F32" ]]; then
+        echo "[gguffer] aviso: los pesos del repo ya venian en el quant $tipo_nombre ($file_type)."
         echo "           Cuantizar a $quant encima es dequantizar y re-cuantizar:"
         echo "           se pierde calidad sin ganar nada."
         if [[ -d "$work/original" ]]; then
@@ -4222,8 +4227,14 @@ cmd_gguffer() {
         fi
     elif [[ -n "$quant" ]]; then
         echo "[gguffer] cuantizo a $quant -> $out_final..."
-        local qargs=("$out_f16" "$out_final" "$quant")
+        # OJO: llama-quantize solo parsea las opciones mientras el argumento
+        # empiece por "--", y para en el primero que no. Las flags van ANTES
+        # de los posicionales: si van detras, "--imatrix" se come el parseo
+        # del numero de hilos y el cuantizador muere con
+        # "invalid nthread '--imatrix'".
+        local qargs=()
         [[ -n "$imatrix" ]] && qargs+=(--imatrix "$imatrix")
+        qargs+=("$out_f16" "$out_final" "$quant")
         if ! "$_quantize" "${qargs[@]}"; then
             # Aqui NO se borra nada: el clon de los safetensors y el GGUF
             # intermedio se quedan, y se dice como reintentar solo la
