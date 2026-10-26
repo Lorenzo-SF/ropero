@@ -256,6 +256,39 @@ check "9e. --modelo qwen -> el GGUF lleva su nombre" \
 check "9f. --modelo qwen -> el quant del registro" \
       "$(cond 'ls "${GGUF_OUT:?}"/*IQ3_XS.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
 
+# ══ 10. --intermedio bf16: el conversor recibe el outtype pedido ══════════
+rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
+cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
+import struct
+import sys
+
+args = sys.argv[1:]
+outfile = args[args.index("--outfile") + 1]
+outtype = args[args.index("--outtype") + 1]
+with open(outfile + ".outtype", "w") as f:
+    f.write(outtype)
+
+def s(x):
+    b = x.encode()
+    return struct.pack("<Q", len(b)) + b
+
+body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
+body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
+body += idx
+body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+with open(outfile, "wb") as f:
+    f.write(body)
+PY
+out="$(gguffer --repo owner/repo --intermedio bf16 2>&1)"; rc=$?
+check "10a. --intermedio bf16 -> sin error"        "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "10b. --intermedio bf16 -> el conversor recibe bf16" \
+      "$(cond '[ "$(cat "${GGUF_OUT:?}"/*.outtype 2>/dev/null)" = "bf16" ]')" \
+      "$(cat "${GGUF_OUT:?}"/*.outtype 2>/dev/null)"
+check "10c. --intermedio bf16 -> el fichero se llama BF16" \
+      "$(cond 'ls "${GGUF_OUT:?}"/*-BF16.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then
