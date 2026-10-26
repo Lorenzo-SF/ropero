@@ -30,7 +30,6 @@ base = [
     # ---- KV cache ----
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
-    "--kv-unified",
 
     # ---- Sampling del Ornith ----
     "--temp", "0.60",

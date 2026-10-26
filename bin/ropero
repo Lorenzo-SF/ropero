@@ -929,6 +929,7 @@ _ropero_usage() {
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
         models)    printf 'USO: ropero models\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        levels)    printf 'USO: ropero levels <modelo>\n' ;;
         # Sin subcomando: la línea del modelo. Es lo que devuelven los typos de
         # flag, y ropero help para el resto.
         *)         printf 'USO: ropero <modelo> [--background] [--cpu] [--force] [--port N]\n' ;;
@@ -1024,6 +1025,96 @@ cmd_template() {
     printf 'Copia a models/<engine>/<nombre>.toml y ajústala. Un modelo retirado\n'
     printf 'va en models/<engine>/fired/<nombre>.toml, con el mismo formato.\n\n'
     cat "$f"
+}
+
+# cmd_levels <modelo> — los niveles de razonamiento que el modelo acepta.
+#
+# Los declara el modelo (su [levels].list del TOML), no el CLI: eso es lo
+# que hace que `ropero gptoss --high` signifique "--high porque gptoss dice
+# que tiene high". Este subcomando es la forma de PREGUNTAR sin arrancar:
+# quien lo necesita (el bench, un script) tiene que saber si el flag es
+# valido antes de pasarlo, porque si el modelo no lo declara, `ropero
+# <modelo> --high` es un error de uso y el modelo NO ARRANCA.
+#
+# Imprime un nivel por linea. Sin argumentos, los de todos los modelos.
+cmd_levels() {
+    local model="${1:-}"
+    if [[ -z "$model" ]]; then
+        local key
+        for key in "${MODEL_NAMES[@]}"; do
+            local lv
+            lv="$(_ropero_model_levels "$key" 2>/dev/null || true)"
+            [[ -n "$lv" ]] && printf '%s: %s\n' "$key" "$(printf '%s' "$lv" | tr '\n' ' ')"
+        done
+        return 0
+    fi
+    _ropero_model_levels "$model" 2>/dev/null || true
+}
+
+# cmd_args <modelo> [nivel] — imprime el argv final que se le pasaria al
+# server, SIN arrancar nada.
+#
+# Es el modo de verificar el wiring sin GPU: lo que se ve aqui es
+# exactamente lo que recibiria llama-server (los args globales de ropero
+# + los del modelo + el nivel + los overrides).
+#
+# Sirve para dos cosas que hasta ahora no se podian comprobar:
+#   · que el override de temp (ROPERO_TEMP) SUSTITUYE al del TOML y no se
+#     duplica
+#   · que el nivel pedido es uno que el modelo declara (si no, ropero
+#     avisa en vez de arrancar un modelo que luego se cae)
+cmd_args() {
+    local model="${1:-}"
+    local level="${2:-}"
+    if [[ -z "$model" ]]; then
+        printf 'USO: ropero args <modelo> [nivel]\n' >&2
+        return 2
+    fi
+
+    local out=""
+    local rc=0
+    out=$(ropero_model_args "$model" "$level" 2>&1) || rc=$?
+    if (( rc != 0 )); then
+        printf '%s\n' "$out" >&2
+        return "$rc"
+    fi
+
+    local -a args=()
+    mapfile -t args <<<"$out"
+
+    # El override de temp: global de ropero, sustituye al del TOML.
+    _ropero_apply_temp_override args
+
+    printf '%s\n' "${args[@]}"
+}
+
+# _ropero_apply_temp_override <array_name>
+#
+# Sustituye el --temp que venga del TOML por el de ROPERO_TEMP (o el
+# nombre viejo ROPERO_MODEL_OPT_TEMP). Sustituye, NO anade: si se
+# anadiera, el temp del TOML (que va antes) ganaria, porque llama-server
+# usa el ULTIMO occurrence.
+#
+# Es global de ropero a proposito: antes cada TOML declaraba su propia
+# seccion [options] list = ["temp"], y si un TOML nuevo no la declaraba
+# el override dejaba de funcionar en silencio (el bench medía a temp 1.0
+# y no lo decia). Con esto, ningun TOML tiene que declarar nada.
+_ropero_apply_temp_override() {
+    local -n _arr="$1"
+    local _temp_override="${ROPERO_TEMP:-${ROPERO_MODEL_OPT_TEMP:-}}"
+    [[ -n "$_temp_override" ]] || return 0
+
+    local -a _sin_temp=()
+    local _i=0
+    while (( _i < ${#_arr[@]} )); do
+        if [[ "${_arr[_i]}" == "--temp" ]]; then
+            (( _i += 2 ))              # salta --temp y su valor
+            continue
+        fi
+        _sin_temp+=("${_arr[_i]}")
+        (( _i += 1 ))
+    done
+    _arr=("${_sin_temp[@]}" "--temp" "$_temp_override")
 }
 
 cmd_status() {
@@ -1597,6 +1688,30 @@ start_model() {
             local -a model_args=("${pre_model_args[@]}")
 
             # ----------------------------------------------------------------
+            # Override del TEMP de muestreo.
+            #
+            # El bench tiene que medir a todos los modelos con el MISMO
+            # temp (pruebas1.md pide 0-0,2). Pero cada TOML trae su temp
+            # propio (agenta1 0.55, qwen 1.0, ...), y el temp que gana es
+            # el ULTIMO del argv.
+            #
+            # Antes esto se resolvia con una seccion [options] en cada TOML
+            # (list = ["temp"]). Eso era una segunda copia de la verdad en
+            # 15 ficheros: si un TOML nuevo no la declara, el override deja
+            # de funcionar y nadie se entera (el bench mide a temp 1.0 y no
+            # lo dice). Ahora el override es GLOBAL de ropero: sustituye el
+            # --temp que venga del TOML, sin que ningun TOML tenga que
+            # declarar nada.
+            #
+            #   ROPERO_TEMP=0.15 ropero <modelo>
+            #   ropero <modelo> --temp 0.15
+            #
+            # (ROPERO_MODEL_OPT_TEMP es el nombre viejo y sigue valiendo,
+            # por si algo de fuera lo usa todavia.)
+            # ----------------------------------------------------------------
+            _ropero_apply_temp_override model_args
+
+            # ----------------------------------------------------------------
             # Selección de device: macOS = Metal; Cachy = CUDA0 (RTX) o CPU.
             # Si --cpu: el override de args (--n-gpu-layers 0 --threads N) se
             # aplica al FINAL del cmd array (ver más abajo) para GANAR sobre
@@ -1637,10 +1752,12 @@ start_model() {
                 --threads 12
                 --threads-batch 24
                 --flash-attn on
-                --jinja                         
-                --kv-unified
+                --jinja
                 --log-verbosity 4
                 --parallel 1
+                --kv-unified                     # global: el KV unificado lo
+                                                # necesitan todos (y lo pidia
+                                                # 14 de 15 TOMLs, duplicado)
 
                 "${model_args[@]}"
             )
@@ -2821,6 +2938,7 @@ _ropero_command_help() {
         link)      printf 'USO: ropero link\n' ;;
         config)    printf 'USO: ropero config [engine] [--show-key]\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        levels)    printf 'USO: ropero levels <modelo>\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         template)  printf 'USO: ropero template\n' ;;
@@ -3816,6 +3934,17 @@ main() {
             shift
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help status; exit 0; fi
             cmd_status "$@"
+            exit $?
+            ;;
+        levels)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help levels; exit 0; fi
+            cmd_levels "$@"
+            exit $?
+            ;;
+        args)
+            shift
+            cmd_args "$@"
             exit $?
             ;;
         stop)

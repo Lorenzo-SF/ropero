@@ -30,7 +30,6 @@ base = [
     "--cache-type-v", "turbo3",                           # nunca q4_0 en V, degrada tool use
     "--cache-prompt",
     "--cache-reuse", "512",                             # reusa bloques KV en prompts similares
-    "--kv-unified",                                     # single user, unified buffer
     "--context-shift",                                  # rolling context en sesiones largas
 
     # ---- Batching / threads ----

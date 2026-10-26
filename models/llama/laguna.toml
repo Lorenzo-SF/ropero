@@ -26,7 +26,6 @@ base = [
     "--cache-type-v", "turbo3",
     "--cache-prompt",
     "--context-shift",
-    "--kv-unified",
 
     # ---- Sampling (el canonico de poolside para sus benchmarks) ----
     "--temp", "1.0",

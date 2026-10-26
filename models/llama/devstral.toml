@@ -23,7 +23,6 @@ base = [
     "--cache-type-v", "turbo3",
     "--cache-prompt",
     "--cache-reuse", "512",
-    "--kv-unified",
     "--context-shift",
 
     "--batch-size", "4096",

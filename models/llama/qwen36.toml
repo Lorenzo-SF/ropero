@@ -26,7 +26,6 @@ base = [
     "--cache-type-v", "turbo3",
     "--cache-prompt",
     "--context-shift",
-    "--kv-unified",                                    # single user, unified buffer
 
     # ---- Positional encoding ----
     "--rope-freq-base", "10000000",                    # theta del repo

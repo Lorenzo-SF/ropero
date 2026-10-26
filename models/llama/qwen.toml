@@ -16,7 +16,10 @@ file = "Qwen3.8-27B-IQ2_M.gguf"
 size = "12.80 GB"
 
 [levels]
-list    = ["low", "medium", "xhigh"]
+# "high" es un ALIAS de "xhigh": el chat template del qwen35 solo acepta
+# low / medium / xhigh (y su default es xhigh), asi que "high" se declara
+# aqui para que el nivel sea visible y valido, no un bloque huerfano.
+list    = ["low", "medium", "high", "xhigh"]
 default = "low"
 
 [flags]

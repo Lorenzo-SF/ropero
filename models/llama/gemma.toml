@@ -14,34 +14,6 @@
 # Ojo: el repo se llama google_gemma-4-26B-A4B-it-GGUF (con el prefijo
 # "google_"), por eso no aparecia al buscar "gemma-4-26B-A4B-it".
 #
-# ── ARITMÉTICA DE VRAM (medida 2026-10-25, con el codigo de llama.cpp) ──────
-#
-#   pesos (el GGUF entero, leido de sus offsets)      12.4 GB
-#   KV cache q4_0 @262144 (5 plenas + 25 SWA)    1.47 GB
-#   compute buffer (ubatch 256 )                0.330 GB
-#   server + holgura (400)                             0.475 GB
-#   ---------------------------------------------------------------------
-#   total                                             14.62 GB
-#   VRAM libre en la RTX 5080                       15300 MiB
-#   margen                                              327 MiB
-#
-# COMO SE CALCULA EL KV (que no es "capas x ctx"):
-#   · el KV se asigna en el backend de la CAPA (llama-kv-cache.cpp:217,
-#     model.dev_layer(il)): una capa en la CPU se lleva su KV a la CPU.
-#   · una capa RECURRENTE (Mamba / gated delta net) no gasta KV: tiene
-#     estado RS. Este modelo tiene 0 recurrentes y 30 de atencion.
-#   · una capa SWA (ventana deslizante) tiene celdas LIMITADAS, no ctx:
-#     size_swa = GGML_PAD(min(ctx, ventana*n_seq_max + n_ubatch), 256).
-#   · el KV por token de una capa de atencion es
-#     (n_head_kv * head_dim * sizeof(K) + n_head_kv * head_dim * sizeof(V)).
-#
-# OFFLOAD: NINGUN offload: las 30 capas del modelo y su KV cache
-#   entero en la VRAM.
-#
-# El ctx NATIVO (el context_length del propio GGUF) es 262144.
-# El contexto del servidor es min(n_ctx_seq, n_ctx_train): pedir mas
-#   que el ctx train no da mas contexto (server-context.cpp:4955).
-#
 # OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
 # fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
 # fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
@@ -85,7 +57,6 @@ base = [
     # ---- KV cache ----
     "--cache-type-k", "q4_0",
     "--cache-type-v", "q4_0",
-    "--kv-unified",
 
     # ---- Sampling ----
     "--temp", "1.0",
