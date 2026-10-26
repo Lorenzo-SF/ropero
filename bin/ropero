@@ -3090,6 +3090,9 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
   --list-quants       lista los quants que acepta el motor instalado
   --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
   --imatrix FICHERO   importance matrix para la cuantizacion
+  --imatrix-repo REPO de donde bajar el imatrix (con --imatrix-file)
+  --imatrix-file FILE el fichero del imatrix dentro de ese repo. Con esto
+                      el gguffer se encarga de bajarlo tambien, y lo cachea
   --out RUTA          donde va el GGUF de salida. Acepta tres formas:
                         · nombre           -> <GGUF_DIR>/<nombre>-<quant>.gguf
                         · ruta/dir/        -> ahi, con el nombre generado
@@ -4025,6 +4028,7 @@ _gguffer_parse_out() {
 # -----------------------------------------------------------------------------
 cmd_gguffer() {
     local path="" repo="" quant="" out_name="" imatrix="" from_subdir="" include=""
+    local imatrix_repo="" imatrix_file=""
     local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0
     local inter="f16"
     ROPERO_GGUF_OUT_DIR=""; ROPERO_GGUF_OUT_FILE=""
@@ -4041,6 +4045,10 @@ cmd_gguffer() {
             --quant=*)     quant="${1#--quant=}"; shift ;;
             --imatrix)     [[ $# -ge 2 ]] || { echo "ERROR: --imatrix requiere un fichero" >&2; return 2; }; imatrix="$2"; shift 2 ;;
             --imatrix=*)   imatrix="${1#--imatrix=}"; shift ;;
+            --imatrix-repo)  [[ $# -ge 2 ]] || { echo "ERROR: --imatrix-repo requiere un repo (owner/name)" >&2; return 2; }; imatrix_repo="$2"; shift 2 ;;
+            --imatrix-repo=*) imatrix_repo="${1#--imatrix-repo=}"; shift ;;
+            --imatrix-file)  [[ $# -ge 2 ]] || { echo "ERROR: --imatrix-file requiere un fichero" >&2; return 2; }; imatrix_file="$2"; shift 2 ;;
+            --imatrix-file=*) imatrix_file="${1#--imatrix-file=}"; shift ;;
             --out)         [[ $# -ge 2 ]] || { echo "ERROR: --out requiere un nombre o una ruta" >&2; return 2; }; _gguffer_parse_out "$2" || return 2; shift 2 ;;
             --out=*)       _gguffer_parse_out "${1#--out=}" || return 2; shift ;;
             --from-subdir) [[ $# -ge 2 ]] || { echo "ERROR: --from-subdir requiere un directorio" >&2; return 2; }; from_subdir="$2"; shift 2 ;;
@@ -4145,6 +4153,47 @@ cmd_gguffer() {
     fi
     [[ -n "$out_name" ]] && nombre="$out_name"
     local sentinel="$work/.gguffer-complete"
+
+    # ── el imatrix: si viene de un repo, se baja aqui ───────────────────────
+    # El imatrix es un fichero aparte del modelo (unos 200 MB) y lo publica
+    # otra gente. Antes habia que bajarlo a mano con hf y pasarle la ruta;
+    # con --imatrix-repo/--imatrix-file se baja solo y se cachea, asi que el
+    # gguffer se encarga de todo el proceso.
+    if [[ -n "$imatrix_repo" || -n "$imatrix_file" ]]; then
+        [[ -n "$imatrix_repo" && -n "$imatrix_file" ]] || {
+            echo "ERROR: --imatrix-repo y --imatrix-file van juntos" >&2; return 2; }
+        if ! command -v hf >/dev/null 2>&1; then
+            echo "ERROR: falta 'hf' (huggingface_hub) para bajar el imatrix" >&2
+            return 1
+        fi
+        # El cache va por repo de imatrix, no por repo de pesos: el mismo
+        # imatrix sirve para cualquier quant del mismo modelo base.
+        local im_dir="$work_root/imatrix/${imatrix_repo//\//__}"
+        # El fichero puede venir con subdirectorio ("imatrix/muse-glimmer.imatrix.gguf"):
+        # hf lo deja en <dir>/<subdir>/<fichero>.
+        local im_dest="$im_dir/$imatrix_file"
+        if [[ -f "$im_dest" ]]; then
+            echo "[gguffer] reutilizo el imatrix: $im_dest"
+            imatrix="$im_dest"
+        else
+            echo "[gguffer] bajo el imatrix de $imatrix_repo/$imatrix_file..."
+            mkdir -p "$im_dir"
+            if ! hf download "$imatrix_repo" "$imatrix_file" --local-dir "$im_dir"; then
+                echo "ERROR: no se pudo bajar el imatrix de $imatrix_repo/$imatrix_file" >&2
+                return 1
+            fi
+            if [[ ! -f "$im_dest" ]]; then
+                echo "ERROR: el imatrix no esta en $im_dest" >&2
+                echo "       revisa el nombre del fichero en $imatrix_repo" >&2
+                return 1
+            fi
+            imatrix="$im_dest"
+        fi
+    fi
+    if [[ -n "$imatrix" && ! -f "$imatrix" ]]; then
+        echo "ERROR: el imatrix no existe: $imatrix" >&2
+        return 1
+    fi
 
     # ── --force: limpiarlo todo y empezar de cero ───────────────────────────
     if (( force == 1 )); then

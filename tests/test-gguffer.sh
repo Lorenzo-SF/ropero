@@ -141,12 +141,27 @@ if [[ "${FAKE_HF_FAIL:-}" == "1" ]]; then
 fi
 local_dir=""
 prev=""
+fichero=""
+sub=0
 for a in "$@"; do
     [[ "$prev" == "--local-dir" ]] && local_dir="$a"
     prev="$a"
 done
 [[ -n "$local_dir" ]] || { echo "fake hf: sin --local-dir" >&2; exit 2; }
+# "hf download <repo> [<fichero>] --local-dir <dir>": si hay fichero, se crea
+# ese (respetando su subdirectorio, como hace el hf de verdad). Si no hay,
+# se finge la descarga del repo entero.
+if [[ "${1:-}" == "download" && -n "${3:-}" && "${3}" != --* ]]; then
+    fichero="$3"
+fi
 mkdir -p "$local_dir"
+if [[ -n "$fichero" ]]; then
+    mkdir -p "$local_dir/$(dirname "$fichero")"
+    printf 'imatrix falso\n' > "$local_dir/$fichero"
+    printf '{"model_type":"qwen35"}\n' > "$local_dir/config.json"
+    printf 'pesos falsos\n' > "$local_dir/model-00001-of-00001.safetensors"
+    exit 0
+fi
 printf '{"model_type":"qwen35"}\n' > "$local_dir/config.json"
 printf 'pesos falsos\n' > "$local_dir/model-00001-of-00001.safetensors"
 exit 0
@@ -416,6 +431,31 @@ rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
 out="$(gguffer --repo owner/out-sinquant --out "$GGUF_OUT/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf" 2>&1)"
 check "14e. --out ruta exacta sin quant: el fichero sale con ese nombre" \
       "$(cond '[ -f "$GGUF_OUT/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf" ]')" "$out"
+
+# ── 15: el gguffer baja el imatrix solo ───────────────────────────────────
+# Antes habia que bajarlo a mano con hf y pasarle la ruta. Con
+# --imatrix-repo/--imatrix-file se encarga el gguffer, y lo cachea.
+rm -rf "$GGUF_OUT"/* "$WORK_ROOT"/*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_QUANTIZE_LOG="$WORK/imatrix_log.txt" gguffer --repo owner/imatrix-descarga \
+        --quant IQ3_XS --imatrix-repo owner/imatrix-repo \
+        --imatrix-file "imatrix/mi.imatrix.gguf" 2>&1)"; rc=$?
+check "15a. baja el imatrix"        "$(cond 'printf %s "$out" | grep -q "bajo el imatrix de owner/imatrix-repo"')" "$out"
+check "15b. lo pasa al cuantizador" "$(cond 'grep -q "mi.imatrix.gguf" "$WORK/imatrix_log.txt" 2>/dev/null')" \
+      "$(cat "$WORK/imatrix_log.txt" 2>/dev/null)"
+check "15c. lo deja en el subdirectorio" \
+      "$(cond '[ -f "$WORK_ROOT/imatrix/owner__imatrix-repo/imatrix/mi.imatrix.gguf" ]')" "$out"
+
+# la segunda vez lo reutiliza, no lo vuelve a bajar
+out="$(FAKE_QUANTIZE_LOG="$WORK/imatrix_log2.txt" gguffer --repo owner/imatrix-descarga2 \
+        --quant IQ3_XS --imatrix-repo owner/imatrix-repo \
+        --imatrix-file "imatrix/mi.imatrix.gguf" 2>&1)"
+check "15d. la segunda vez lo reutiliza" \
+      "$(cond 'printf %s "$out" | grep -q "reutilizo el imatrix"')" "$out"
+
+# si solo va una de las dos, error claro
+out="$(gguffer --repo owner/imatrix-medio --quant IQ3_XS --imatrix-repo owner/imatrix-repo 2>&1)"; rc=$?
+check "15e. --imatrix-repo sin --imatrix-file: error" \
+      "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "van juntos"')" "$out"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"

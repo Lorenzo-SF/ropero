@@ -225,6 +225,23 @@ ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS --imatrix mi.imatrix
 ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS --no-mtp
 ```
 
+#### El imatrix: también se baja solo
+
+El imatrix es un fichero aparte del modelo (unos 200 MB) que publica otra
+gente. Se puede pasar con `--imatrix` (una ruta local) o dejar que el gguffer
+lo baje él, con el repo y el fichero:
+
+```bash
+ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS \
+    --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
+    --imatrix-file Qwen3.8-27B-imatrix.gguf
+```
+
+Se cachea en `~/.cache/ropero/gguffer/imatrix/<owner>__<repo>/`, así que la
+segunda vez no se vuelve a bajar. El mismo imatrix sirve para cualquier quant
+del mismo modelo base: es una tabla de importancia por tensor, no depende del
+quant.
+
 #### `--out`: dónde acaba el GGUF
 
 El lanzador busca cada modelo en `$GGUF_DIR/<carpeta>/<fichero>`, que es lo que
