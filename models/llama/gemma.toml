@@ -88,7 +88,6 @@ base = [
     # ---- KV cache ----
     "--cache-type-k", "q4_0",
     "--cache-type-v", "q4_0",
-    "--kv-unified",
 
     # ---- Sampling ----
     "--temp", "1.0",

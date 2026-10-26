@@ -929,6 +929,7 @@ _ropero_usage() {
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
         models)    printf 'USO: ropero models\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        levels)    printf 'USO: ropero levels <modelo>\n' ;;
         # Sin subcomando: la línea del modelo. Es lo que devuelven los typos de
         # flag, y ropero help para el resto.
         *)         printf 'USO: ropero <modelo> [--background] [--cpu] [--force] [--port N]\n' ;;
@@ -1024,6 +1025,30 @@ cmd_template() {
     printf 'Copia a models/<engine>/<nombre>.toml y ajústala. Un modelo retirado\n'
     printf 'va en models/<engine>/fired/<nombre>.toml, con el mismo formato.\n\n'
     cat "$f"
+}
+
+# cmd_levels <modelo> — los niveles de razonamiento que el modelo acepta.
+#
+# Los declara el modelo (su [levels].list del TOML), no el CLI: eso es lo
+# que hace que `ropero gptoss --high` signifique "--high porque gptoss dice
+# que tiene high". Este subcomando es la forma de PREGUNTAR sin arrancar:
+# quien lo necesita (el bench, un script) tiene que saber si el flag es
+# valido antes de pasarlo, porque si el modelo no lo declara, `ropero
+# <modelo> --high` es un error de uso y el modelo NO ARRANCA.
+#
+# Imprime un nivel por linea. Sin argumentos, los de todos los modelos.
+cmd_levels() {
+    local model="${1:-}"
+    if [[ -z "$model" ]]; then
+        local key
+        for key in "${MODEL_NAMES[@]}"; do
+            local lv
+            lv="$(_ropero_model_levels "$key" 2>/dev/null || true)"
+            [[ -n "$lv" ]] && printf '%s: %s\n' "$key" "$(printf '%s' "$lv" | tr '\n' ' ')"
+        done
+        return 0
+    fi
+    _ropero_model_levels "$model" 2>/dev/null || true
 }
 
 cmd_status() {
@@ -1637,6 +1662,7 @@ start_model() {
                 --flash-attn on
                 --log-verbosity 4
                 --parallel 1
+                --kv-unified
 
                 "${model_args[@]}"
             )
@@ -2817,6 +2843,7 @@ _ropero_command_help() {
         link)      printf 'USO: ropero link\n' ;;
         config)    printf 'USO: ropero config [engine] [--show-key]\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        levels)    printf 'USO: ropero levels <modelo>\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         template)  printf 'USO: ropero template\n' ;;
@@ -3812,6 +3839,12 @@ main() {
             shift
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help status; exit 0; fi
             cmd_status "$@"
+            exit $?
+            ;;
+        levels)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help levels; exit 0; fi
+            cmd_levels "$@"
             exit $?
             ;;
         stop)

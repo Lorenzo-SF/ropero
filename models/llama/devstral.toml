@@ -83,7 +83,6 @@ base = [
     "--cache-type-v", "q4_0",
     "--cache-prompt",
     "--cache-reuse", "512",
-    "--kv-unified",
     "--context-shift",
 
     "--batch-size", "4096",

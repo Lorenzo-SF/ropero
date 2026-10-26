@@ -136,7 +136,6 @@ base = [
     # ---- KV cache ----
     "--cache-type-k", "q4_0",                # 1,07 GB a 131072 (f16 = 4,29 GB)
     "--cache-type-v", "q4_0",
-    "--kv-unified",
 
     # ---- Sampling oficial en modo thinking (ficha de Qwen3.8) ----
     "--temp", "1.0",

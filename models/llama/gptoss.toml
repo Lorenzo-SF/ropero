@@ -167,7 +167,6 @@ base = [
     "--cache-type-k", "q8_0",
     "--cache-type-v", "q8_0",
     "--jinja",
-    "--kv-unified",
     "--kv-offload",
     "--load-mode", "auto",
 ]

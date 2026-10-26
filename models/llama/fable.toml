@@ -109,7 +109,6 @@ base = [
     "--cache-type-v", "q4_0",                           # nunca q4_0 en V, degrada tool use
     "--cache-prompt",
     "--cache-reuse", "512",                             # reusa bloques KV en prompts similares
-    "--kv-unified",                                     # single user, unified buffer
     "--context-shift",                                  # rolling context en sesiones largas
 
     # ---- Speculative decoding (MTP del propio modelo) ----

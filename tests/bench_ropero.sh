@@ -83,7 +83,16 @@ MODELO="${MODELO:-marichocho/Puertourraco}" # provider/model de opencode
 AGENTE="${AGENTE:-build}"
 PUERTO="${PUERTO:-9999}"                     # donde apuntan los providers
 API_KEY="${API_KEY:-sk-local-dev-key}"
-ESPERA="${ESPERA:-900}"                      # segundos esperando al modelo
+# Segundos esperando a que el modelo responda. Con el ctx nativo (262144, y
+# 1M en el nemotron) la carga tarda MUCHO mas que antes: hay que reservar
+# el KV entero (1.44 GB en los hibridos, 1.69 GB en el nemotron a 1M) y
+# paginarlo. Los 900 s de antes eran justos para ctx 65536.
+#
+# Si el modelo declara su ctx, la espera se escala con el: a mas ctx, mas
+# tiempo de carga. El minimo son 900 s (un modelo pequeno en frio, con el
+# SSD ocupado, tambien tarda).
+ESPERA_MIN="${ESPERA_MIN:-900}"
+ESPERA="${ESPERA:-}"
 TIMEOUT="${TIMEOUT:-900}"                    # segundos maximos por TAREA
 # 3600 era una hora y pico colgada sin decir nada; 900 avisa antes.
 FORCE="${FORCE:-0}"                          # 1 = repetir los ya probados
@@ -133,10 +142,33 @@ responde() {
     "http://127.0.0.1:$PUERTO/v1/models" >/dev/null 2>&1
 }
 
+# El server de llama.cpp ABRE EL PUERTO ANTES de que el modelo este listo:
+# /v1/models responde en cuanto hay un proceso escuchando, aunque el server
+# este todavia cargando los pesos y reservando el KV. Con eso, el bench
+# avanzaba al turno siguiente con el modelo sin cargar, y el turno se
+# quedaba sin respuesta: el fallo era del BANCO, no del modelo.
+#
+# Asi que no basta con que el puerto responda: tiene que responder el MODELO
+# que se ha pedido. /v1/models devuelve el alias del modelo servido; si no es
+# el que buscamos, el server es otro (o esta a medio cargar).
+modelo_responde() {
+  local esperado="$1" got
+  got="$(modelo_en_puerto)"
+  [[ -n "$got" ]] || return 1
+  # el alias puede ser el nombre publico o el del modelo fisico
+  [[ "$got" == "$esperado" || "$got" == *"$esperado"* ]] && return 0
+  return 1
+}
+
 esperar_modelo() {
+  local esperado="${1:-$MODELO_ROPERO_ESPERADO}"
   local deadline=$(( $(date +%s) + ESPERA ))
   while (( $(date +%s) < deadline )); do
-    responde && return 0
+    if [[ -n "$esperado" ]]; then
+      modelo_responde "$esperado" && return 0
+    else
+      responde && return 0
+    fi
     sleep 3
   done
   return 1
@@ -167,6 +199,36 @@ tokens_por_segundo() {
 ms_por_token() {
   grep -a "eval time" "$1" 2>/dev/null | grep -av "prompt eval" | tail -1 \
     | grep -oE '[0-9]+(\.[0-9]+)? ms per token' | tail -1 | grep -oE '^[0-9.]+'
+}
+
+# ── ¿EL PROVIDER TIENE ESA VARIANT? ────────────────────────────────────────
+#
+# --variant de opencode es el reasoning effort que se manda al provider, y la
+# doc es explicita: "an unknown variant produces a model-resolution error".
+# O sea, un variant que el modelo no tiene NO se ignora: el run muere sin
+# respuesta, y el bench lo reporta como si el modelo no hubiera contestado.
+#
+# La verdad esta en el catalogo de opencode ("opencode models --json"), no en
+# una lista aqui. Se consulta UNA vez y se cachea: el catalogo no cambia
+# durante una corrida, y `opencode models` tarda.
+#
+# Si no se puede consultar (opencode que no esta, sin red, json que no se
+# entiende), se devuelve "no": es mas seguro no pasar el variant que pasarlo
+# a ciegas y que el turno muera.
+VARIANTES_CACHE=""
+variant_existe() {
+  local variante="${1:-}"
+  [[ -n "$variante" ]] || return 1
+  if [[ -z "$VARIANTES_CACHE" ]]; then
+    VARIANTES_CACHE="$(opencode models --json 2>/dev/null || true)"
+  fi
+  [[ -n "$VARIANTES_CACHE" ]] || return 1
+  # el catalogo puede traer "variants": {"high": {...}} o una lista de ids
+  printf '%s' "$VARIANTES_CACHE" | grep -qE "\"${variante}\"[[:space:]]*:" \
+    && return 0
+  printf '%s' "$VARIANTES_CACHE" | grep -qE "\"id\"[[:space:]]*:[[:space:]]*\"${variante}\"" \
+    && return 0
+  return 1
 }
 
 # ── VERIFICAR QUE EL MODELO ESTA ENTERO EN LA GPU ───────────────────────────
@@ -551,13 +613,42 @@ AGENTS_EOF
       # `ropero muse --high` no (el muse no tiene niveles: se ajusta con
       # "Reasoning strength: <valor>" en el system prompt).
       LOG_PRUEBA="$out/ropero-$nombre.log"
-      # El nivel es un flag (ropero gptoss --high). Los niveles los declara
-      # cada modelo en su TOML, asi que no todos los tienen: si el server no
-      # acepta el flag, se avisa y el modelo se mide con su nivel por
-      # defecto (que es lo unico que se puede hacer con el).
+
+      # ── LA ESPERA, SEGUN EL CTX DEL MODELO ────────────────────────────────
+      # Cargar no es lo mismo que abrir un puerto: hay que leer el GGUF del
+      # disco y RESERVAR el KV entero (ctx celdas por cada capa de atencion).
+      # Con el ctx nativo de 262144 son 1.44 GB de KV; en el nemotron, a
+      # 1.000.000 de tokens, son 1.69 GB. Eso tarda mucho mas que el
+      # ctx 65536 con el que se midio el banco la primera vez.
+      #
+      # La espera se escala con el ctx: 900 s de base, y 1 s extra por cada
+      # 32K de tokens de contexto (redondeado a lo alto).
+      ctx_para_espera="$(ctx_de_modelo "$modelo")"
+      if [[ -z "$ESPERA" && "$ctx_para_espera" != "0" ]]; then
+          extra=$(( (ctx_para_espera + 32767) / 32768 ))
+          ESPERA=$(( ESPERA_MIN + extra * 60 ))
+          info "  $tid: esperando ${ESPERA}s (ctx $ctx_para_espera)"
+      fi
+
+      # El nivel es un flag (ropero gptoss --high), y SOLO lo acepta un
+      # modelo que lo declare en su [levels].list. Si no lo declara,
+      # `ropero <modelo> --high` es un error de uso:
+      #
+      #     _ropero_usage_error '' "opción desconocida: '$1'"
+      #
+      # y el modelo NO ARRANCA. Pasarlo a ciegas hacia que 7 de los 15
+      # modelos del roster no lleguen nunca a levantar el server, y el bench
+      # se quede esperando a un puerto que no va a abrirse.
+      #
+      # El nivel se consulta al propio ropero, que es quien sabe lo que cada
+      # modelo declara (los niveles salen del TOML, no de una lista aqui).
       flag_nivel=""
       if [[ -n "$NIVEL" ]]; then
-          flag_nivel="--$NIVEL"
+          if ropero levels "$modelo" 2>/dev/null | tr " " "\n" | grep -qx "$NIVEL"; then
+              flag_nivel="--$NIVEL"
+          else
+              warn "  $tid: $modelo no declara el nivel '$NIVEL'; se mide con el suyo"
+          fi
       fi
       ( cd "$dir" && ROPERO_MODEL_OPT_TEMP="$TEMP" nohup ropero "$modelo" $flag_nivel > "$LOG_PRUEBA" 2>&1 & )
       sleep 1
@@ -566,8 +657,8 @@ AGENTS_EOF
           err "  $tid: el modelo ya estaba corriendo: no se puede medir en limpio"
           err "  -> para el ropero $modelo y vuelve a lanzarlo"
           continue
-      elif ! esperar_modelo; then
-          err "  $tid: el modelo no respondió en :$PUERTO tras ${ESPERA}s"
+      elif ! esperar_modelo "$modelo"; then
+          err "  $tid: el modelo $modelo no respondió en :$PUERTO tras ${ESPERA}s"
           tail -n 15 "$LOG_PRUEBA" | sed 's/^/    /'
           continue
       fi
@@ -637,8 +728,29 @@ AGENTS_EOF
       if [[ -n "$sesion_cadena" ]]; then
           flag_sesion="--session $sesion_cadena"
       fi
+
+      # ── EL VARIANT DE OPENCODE, SOLO SI EL MODELO LO TIENE ────────────────
+      # --variant es de OPENCODE, no de ropero: es el reasoning effort que se
+      # manda al provider. Y la doc de opencode es explicita: "an unknown
+      # variant produces a model-resolution error". O sea, pasar un variant
+      # que el modelo no tiene NO es que se ignore: es un ERROR, y el run se
+      # queda sin respuesta.
+      #
+      # El nivel que se pide se pasa por el mecanismo que el modelo declara:
+      #   · si declara niveles  -> se arrancan con --<nivel> (flag de ropero)
+      #   · y el AGENTS.md lleva "Reasoning strength: <nivel>" para el que lo
+      #     ajuste por system prompt (el muse).
+      # El --variant solo se pasa si el provider tiene esa variante, que se
+      # consulta en el catalogo de opencode.
+      flag_variant=""
+      if [[ -n "$NIVEL" ]] && variant_existe "$NIVEL"; then
+          flag_variant="--variant $NIVEL"
+      elif [[ -n "$NIVEL" ]]; then
+          info "  $tid: el provider no tiene la variante '$NIVEL'; el nivel va por el AGENTS.md"
+      fi
+
       ( cd "$work" && timeout "$TIMEOUT" opencode run "$(inyectar_corpus "$cuerpo")" \
-        --model "$MODELO" --agent "$AGENTE" --variant "$NIVEL" $flag_sesion --format json ) \
+        --model "$MODELO" --agent "$AGENTE" $flag_variant $flag_sesion --format json ) \
       > "$out/opencode-$nombre.json" 2> "$out/opencode-$nombre.log"
       rc=$?
       dur=$(( $(date +%s) - t0 ))
