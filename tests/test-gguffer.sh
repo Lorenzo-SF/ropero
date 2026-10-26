@@ -215,8 +215,18 @@ if [[ -n "${FAKE_QUANTIZE_LOG:-}" ]]; then
     done
 fi
 # Los posicionales van despues de las opciones: <in> [out] <ftype>
+# OJO: el VALOR de una opcion no es un posicional. "--tensor-type
+# blk\.64\..*=Q4_0" es una opcion con su valor; si se contara el valor
+# como posicional, el cuantizador creeria que el fichero de entrada se
+# llama "blk\.64\..*=Q4_0" (y de ahi el fichero basura en el repo).
 pos=()
+skip=0
 for a in "$@"; do
+    if (( skip )); then skip=0; continue; fi
+    case "$a" in
+        --imatrix|--tensor-type|--output-tensor-type|--token-embedding-type|--tensor-type-file)
+            skip=1; continue ;;
+    esac
     [[ "$a" == --* ]] || pos+=("$a")
 done
 in="${pos[0]}"
@@ -318,9 +328,9 @@ sys.exit(1)
 PY
 out="$(gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
 check "3a. conversion fallida -> error"          "$(cond '[ $rc -ne 0 ]')" "rc=$rc"
-check "3b. conversion fallida -> conserva pesos" "$(cond '[ -d "$REPO_DIR" ]')" "no existe $REPO_DIR"
-check "3c. conversion fallida -> dice como reintentar" \
-      "$(cond 'printf %s "$out" | grep -q "reintenta solo la conversion"')" "$out"
+check "3b. conversion fallida -> borra los pesos" "$(cond '[ ! -d "$REPO_DIR" ]')" "sigue $REPO_DIR"
+check "3c. conversion fallida -> dice que los borro" \
+      "$(cond 'printf %s "$out" | grep -q "borro los pesos"')" "$out"
 check "3d. conversion fallida -> no deja GGUF a medias" \
       "$(cond '[ -z "$(ls -A "$GGUF_OUT" 2>/dev/null)" ]')" "$(ls -A "$GGUF_OUT" 2>/dev/null)"
 
@@ -348,11 +358,11 @@ with open(outfile, "wb") as f:
 PY
 out="$(FAKE_QUANTIZE_FAIL=1 gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
 check "4a. cuantizacion fallida -> error"       "$(cond '[ $rc -ne 0 ]')" "rc=$rc"
-check "4b. cuantizacion fallida -> conserva pesos" "$(cond '[ -d "$REPO_DIR" ]')"
-check "4c. cuantizacion fallida -> conserva el F16" \
+check "4b. cuantizacion fallida -> borra los pesos" "$(cond '[ ! -d "$REPO_DIR" ]')" "sigue $REPO_DIR"
+check "4c. cuantizacion fallida -> conserva el F16 (es lo caro de rehacer)" \
       "$(cond 'ls "${GGUF_OUT:?}"/*-F16.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
-check "4d. cuantizacion fallida -> dice como reintentar" \
-      "$(cond 'printf %s "$out" | grep -q "reintenta solo la cuantizacion"')" "$out"
+check "4d. cuantizacion fallida -> dice que los borro" \
+      "$(cond 'printf %s "$out" | grep -q "borro los pesos"')" "$out"
 
 # ══ 5. el GGUF final no valida: no se borra nada ═════════════════════════
 rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
@@ -784,8 +794,8 @@ check "20c. sin error" "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
 
 # --out-principal sin .gguf: error
 out="$(gguffer --repo owner/principal2 --quant IQ2_XXS \
-        --out-principal "$GGUF_OUT/mi-modelo" 2>&1)"; rc=$?
-check "20d. --out-principal sin .gguf: error" \
+        --out-principal "$WORK/no-existe/mi-modelo" 2>&1)"; rc=$?
+check "20d. --out-principal sin .gguf y sin directorio: error" \
       "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "fichero .gguf"')" "$out"
 
 # con --out-principal, el GGUF intermedio se queda en la carpeta del modelo
@@ -826,6 +836,100 @@ check "21e. sin errores de shell en la salida" \
 out="$(FAKE_CONVERT_COUNT="$WORK/convert_count.txt" gguffer --repo owner/ya-existe --quant IQ3_XS --force 2>&1)"
 check "21f. con --force lo rehace" \
       "$(cond '[ -f "$WORK/convert_count.txt" ]')" "$out"
+
+# ══ 22. AL FALLAR, LOS SAFETENSORS SE BORRAN (salvo --keep-source) ═══════
+# En un trabajo de noche, dejar 60 GB por cada intento fallido llena el
+# disco, y cuando el disco se llena falla tambien lo que ya estaba bien.
+REPO_DIR="$WORK_ROOT/owner__repo"
+rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_QUANTIZE_FAIL=1 gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
+check "22a. si la cuantizacion falla, da error" "$(cond '[ $rc -ne 0 ]')" "rc=$rc"
+check "22b. y BORRA los safetensors"       "$(cond '[ ! -d "$REPO_DIR" ]')" "el clon sigue en $REPO_DIR"
+check "22c. y lo dice"       "$(cond 'printf %s "$out" | grep -q "borro los pesos"')" "$out"
+
+# con --keep-source, se conservan (para no volver a bajar 60 GB)
+REPO_DIR="$WORK_ROOT/owner__repo"
+rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_QUANTIZE_FAIL=1 gguffer --repo owner/repo --quant IQ3_XS --keep-source 2>&1)"; rc=$?
+check "22d. con --keep-source, los safetensors se conservan"       "$(cond '[ -d "$REPO_DIR" ]')" "el clon no esta en $REPO_DIR"
+check "22e. y lo dice"       "$(cond 'printf %s "$out" | grep -q "conservo los pesos"')" "$out"
+
+# ══ 23. EL DIAGNOSTICO: por que no se cuantiza ═══════════════════════════
+REPO_DIR="$WORK_ROOT/owner__repo"
+rm -rf "$REPO_DIR" "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --diagnostico 2>&1)"; rc=$?
+check "23a. el diagnostico sale bien" "$(cond '[ $rc -eq 0 ]')" "$out"
+check "23b. dice cuanto espacio hay"       "$(cond 'printf %s "$out" | grep -q "espacio libre"')" "$out"
+check "23c. dice cuanto hace falta"       "$(cond 'printf %s "$out" | grep -q "espacio a porner"')" "$out"
+check "23d. dice cual es el bloque MTP"       "$(cond 'printf %s "$out" | grep -q "bloque MTP"')" "$out"
+check "23e. dice el argv del cuantizador"       "$(cond 'printf %s "$out" | grep -q "llama-quantize"')" "$out"
+check "23f. y NO cuantiza"       "$(cond '! printf %s "$out" | grep -q "convierten a IQ3_XS"')" "$out"
+
+# ══ 24. EL PRINCIPAL EN UNA CARPETA (el TOML pide otro quant) ═════════════
+# Si el TOML pide "Qwen3.8-27B-IQ2_M" y fabricamos IQ3_XS, el IQ3_XS NO
+# puede ir ahi con ese nombre: seria un nombre mentiroso, y el launcher
+# creeria que el modelo es el IQ2_M.
+mkdir -p "$GGUF_OUT/qwen"
+rm -rf "$WORK_ROOT/owner__repo" "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out-principal "$GGUF_OUT/qwen/" 2>&1)"; rc=$?
+check "24a. con --out-principal de un directorio, sale bien" "$(cond '[ $rc -eq 0 ]')" "$out"
+check "24b. el GGUF va a la carpeta con su nombre propio"       "$(cond '[ -f "$GGUF_OUT/qwen/repo-IQ3_XS.gguf" ]')"       "$(ls -la "$GGUF_OUT/qwen/" 2>/dev/null)"
+
+# y con la ruta exacta, sigue yendo ahi
+rm -rf "$WORK_ROOT/owner__repo" "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT/qwen"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out-principal "$GGUF_OUT/qwen/Mi-Nombre.gguf" 2>&1)"; rc=$?
+check "24c. con la ruta exacta, va exactamente ahi"       "$(cond '[ -f "$GGUF_OUT/qwen/Mi-Nombre.gguf" ]')" \
+      "$(ls -la "$GGUF_OUT/qwen/" 2>/dev/null)"
+
+# ══ 25. CUANTIZAR UN GGUF QUE YA EXISTE (sin convertir) ══════════════════
+# El conversor de pesos no sabe convertir los modelos multimodales con
+# cabeza MTP: sus tensores ("mtp.*") no se pueden mapear y la conversion
+# aborta. Cuando ya hay un GGUF sin quantizar publicado (el BF16 de
+# bartowski), se cuantiza ese y no se toca el conversor.
+mkdir -p "$WORK/gguf-entrada"
+python3 "$WORK/gguf_maker.py" gguf "$WORK/gguf-entrada/Mi-Modelo-BF16.gguf" 3
+rm -rf "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_CONVERT_COUNT="$WORK/convert_count_25.txt" \
+      gguffer --gguf "$WORK/gguf-entrada/Mi-Modelo-BF16.gguf" --quant IQ2_M 2>&1)"; rc=$?
+check "25a. cuantiza el GGUF que ya estaba" "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "25b. y sale un GGUF" \
+      "$(cond 'ls "${GGUF_OUT:?}"/*-IQ2_M.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
+check "25c. y NO convierte los pesos" \
+      "$(cond '[ ! -f "$WORK/convert_count_25.txt" ]')" "convirtio pesos"
+check "25d. y dice cual es el GGUF de entrada" \
+      "$(cond 'printf %s "$out" | grep -q "GGUF de entrada"')" "$out"
+
+# el diagnostico de esa fuente
+rm -rf "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --gguf "$WORK/gguf-entrada/Mi-Modelo-BF16.gguf" --quant IQ2_M --diagnostico 2>&1)"; rc=$?
+check "25e. el diagnostico de un GGUF existente sale bien" "$(cond '[ $rc -eq 0 ]')" "$out"
+check "25f. y dice que no hay pesos que clonar" \
+      "$(cond 'printf %s "$out" | grep -q "no hay pesos que clonar"')" "$out"
+check "25g. y NO cuantiza" \
+      "$(cond '! printf %s "$out" | grep -q "cuantizo a IQ2_M"')" "$out"
+
+# ══ 26. EL GGUF DE ENTRADA DEL USUARIO NO SE TOCA NUNCA ═══════════════════
+# Es un fichero suyo, en su carpeta. Que el gguffer lo borre al terminar
+# (o al fallar, o con --force) seria perder el trabajo de otra persona.
+mkdir -p "$WORK/entrada-del-usuario"
+python3 "$WORK/gguf_maker.py" gguf "$WORK/entrada-del-usuario/Mi.gguf" 3
+rm -rf "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+gguffer --gguf "$WORK/entrada-del-usuario/Mi.gguf" --quant IQ2_M >/dev/null 2>&1
+check "26a. tras una tirada, el GGUF de entrada sigue ahi" \
+      "$(cond '[ -f "$WORK/entrada-del-usuario/Mi.gguf" ]')" "desaparecio"
+
+# y con --force, que limpia "todo lo cacheado"
+gguffer --gguf "$WORK/entrada-del-usuario/Mi.gguf" --quant IQ2_M --force >/dev/null 2>&1
+check "26b. con --force tampoco lo borra" \
+      "$(cond '[ -f "$WORK/entrada-del-usuario/Mi.gguf" ]')" "desaparecio"
+check "26c. ni borra la carpeta del usuario" \
+      "$(cond '[ -d "$WORK/entrada-del-usuario" ]')" "desaparecio la carpeta"
+
+# y si la cuantizacion falla
+rm -rf "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
+FAKE_QUANTIZE_FAIL=1 gguffer --gguf "$WORK/entrada-del-usuario/Mi.gguf" --quant IQ2_M >/dev/null 2>&1
+check "26d. si falla, el GGUF de entrada sigue ahi" \
+      "$(cond '[ -f "$WORK/entrada-del-usuario/Mi.gguf" ]')" "desaparecio"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"

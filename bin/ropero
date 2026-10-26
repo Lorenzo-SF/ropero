@@ -3237,7 +3237,22 @@ _ropero_command_help() {
         template)  printf 'USO: ropero template\n' ;;
         gguffer)
             cat <<'EOF'
-USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
+USO: ropero gguffer --path <dir> | --repo <owner/name> | --gguf <fichero|owner/repo> [opciones]
+
+  --gguf ORIGEN      cuantizar un GGUF QUE YA EXISTE, en vez de clonar y
+                      convertir los pesos. Es el camino cuando el conversor
+                      no sabe convertir el modelo (los multimodales con
+                      cabeza MTP, como el Qwen3.8-27B). Acepta:
+                        · /ruta/al/fichero.gguf   un fichero local
+                        · owner/repo               el unico .gguf sin
+                                                  quantizar del repo
+                        · owner/repo:fichero       ese fichero del repo
+                      Si el GGUF va partido en shards ("-00001-of-00002"), se
+                      bajan todos y se unen solos (llama-gguf-split).
+                      El fichero de entrada NO se borra nunca: es tuyo.
+  --gguf-file FILE  el fichero dentro del repo (con --gguf owner/repo).
+                      Si no se dice, el gguffer busca el unico .gguf sin
+                      quantizar que no sea imatrix ni mmproj.
 
   --quant TIPO        quant a aplicar (sin el, el GGUF queda en F16).
                       Se puede repetir, o pasar varios separados por comas:
@@ -3248,6 +3263,8 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
                       reutilizan el mismo GGUF intermedio.
   --list-quants       lista los quants que acepta el motor instalado
   --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
+  --diagnostico       NO cuantiza: dice por que no se cuantiza (espacio, MTP,
+                      imatrix, el argv exacto del cuantizador) y sale
   --imatrix FICHERO   importance matrix para la cuantizacion
   --imatrix-repo REPO de donde bajar el imatrix (con --imatrix-file)
   --imatrix-file FILE el fichero del imatrix dentro de ese repo. Con esto
@@ -3262,23 +3279,30 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
                       con varios quants: ese va a la carpeta del modelo (la
                       que espera el TOML) y los demas se quedan en el
                       directorio normal, con su nombre <repo>-<quant>.gguf
+                      Si es una CARPETA, el GGUF va ahi con el nombre que
+                      genera el gguffer (<repo>-<quant>.gguf).
   --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
   --include PATRON    que ficheros descargar (por defecto, todos)
   --intermedio TIPO  el GGUF intermedio: f16 (por defecto) o bf16 (la
                       mitad de disco, y el cuantizador lo acepta igual)
-  --keep-source       no borrar los safetensors aunque el GGUF sea valido
+  --keep-source       conservar los safetensors. SIN esta flag se borran
+                      tanto si todo va bien como si algo falla: 60 GB por
+                      intento y, en un trabajo de noche, el disco se llena y
+                      luego falla tambien lo que ya estaba bien.
   --keep-intermedio   no borrar el GGUF intermedio (F16)
   --force             borra todo lo cacheado de este repo y empieza de cero
 
 QUE PASA SI ALGO FALLA:
   · la descarga falla   -> se borra el clon a medias y la cache de HF
-  · la conversion falla -> se conservan los safetensors y se dice como
-                          reintentar solo la conversion
-  · la cuantizacion falla -> se conservan los safetensors Y el GGUF
-                          intermedio, y se dice como reintentar solo la
-                          cuantizacion
+  · la conversion falla -> se borran los safetensors (salvo --keep-source)
+                          y se dice como reintentar solo la conversion
+  · la cuantizacion falla -> se dice que falta (el imatrix, el disco, la
+                          RAM...) y se borran los safetensors (salvo
+                          --keep-source)
   · el GGUF no valida   -> no se borra nada
-  · el GGUF valida      -> se borran los safetensors
+  · el GGUF valida      -> se borran los safetensors (salvo --keep-source)
+  · con --gguf          -> el fichero de entrada NUNCA se borra (es tuyo),
+                          ni al fallar ni con --force
 EOF
             ;;
         check)     printf 'USO: ropero check\n' ;;
@@ -4202,13 +4226,25 @@ _gguffer_parse_out() {
 _gguffer_parse_out_principal() {
     local v="${1:-}"
     ROPERO_GGUF_OUT_PRINCIPAL=""
+    ROPERO_GGUF_OUT_PRINCIPAL_DIR=""
     case "$v" in
         "")
             echo "ERROR: --out-principal no puede estar vacio" >&2
             return 2 ;;
         *.gguf)  ROPERO_GGUF_OUT_PRINCIPAL="$v" ;;
-        *)       echo "ERROR: --out-principal necesita la ruta de un fichero .gguf" >&2
-                  return 2 ;;
+        */)      ROPERO_GGUF_OUT_PRINCIPAL_DIR="${v%/}" ;;
+        *)
+            # Un directorio que ya existe: se trata como carpeta. Es lo que
+            # necesita el caso "el TOML pide un quant que no es el que
+            # fabricamos": el GGUF va a la carpeta del modelo con su nombre
+            # propio, no a la ruta del TOML (que seria un nombre mentiroso).
+            if [[ -d "$v" ]]; then
+                ROPERO_GGUF_OUT_PRINCIPAL_DIR="${v%/}"
+            else
+                echo "ERROR: --out-principal necesita la ruta de un fichero .gguf" >&2
+                echo "       (o un directorio existente, para que ponga el nombre el)" >&2
+                return 2
+            fi ;;
     esac
     return 0
 }
@@ -4276,6 +4312,211 @@ _gguffer_bloque_nextn() {
 }
 
 # -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# CUANTIZAR UN GGUF QUE YA EXISTE (sin pasar por el conversor)
+#
+# Por que: el conversor de pesos de HuggingFace a GGUF no siempre sabe
+# convertir un modelo. El caso real es el Qwen3.8-27B, que es multimodal
+# (Qwen3_5ForConditionalGeneration) y lleva la cabeza MTP. Los tensores de
+# la MTP se llaman "mtp.*" y el conversor los remapea a "model.layers.64.*"
+# (el bloque 64). En el fork que usa ropero (atomic-llama-cpp-turboquant) la
+# clase Qwen3_5TextModel NO usa el mixin de la MTP, asi que esos 15 tensores
+# no se pueden mapear y la conversion aborta:
+#     ValueError: Can not map tensor 'mtp.layers.0.attn_k.weight'
+# Y con --no-mtp tampoco: esa clase ignora el flag.
+#
+# La salida es no convertir: hay gente que ya publico el GGUF sin quantizar
+# (bartowski publica el BF16), y ese GGUF ya tiene la MTP bien metida (como
+# "blk.64.nextn.*"). Cuantizarlo da exactamente lo mismo que convertir y
+# cuantizar, sin tocar el conversor.
+#
+# Y si el GGUF de Bartowski esta partido en shards ("-00001-of-00002"), se
+# bajan todos y se unen con llama-gguf-split --merge.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# _gguffer_ficheros_hf <owner/repo>
+# Los ficheros de un repo de HuggingFace, uno por linea.
+_gguffer_ficheros_hf() {
+    local repo="$1"
+    curl -s --max-time 90 "https://huggingface.co/api/models/$repo" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for f in d.get("siblings", []):
+    print(f["rfilename"])
+'
+}
+
+# _gguffer_prepara_gguf <origen> <gguf_file> <dest_dir>
+#
+# Deja en <dest_dir> un GGUF UNICO y lo dice por stdout (la ruta). Si algo
+# falla, el error va a stderr y el codigo de salida es != 0.
+#
+#   origen     un .gguf local, o "owner/repo" (con ":fichero" opcional)
+#   gguf_file  el fichero dentro del repo (opcional)
+_gguffer_prepara_gguf() {
+    local origen="$1" gguf_file="$2" dest="$3"
+    local repo="" fichero=""
+
+    # ── caso A: un fichero local ────────────────────────────────────────────
+    if [[ -f "$origen" ]]; then
+        echo "$origen"
+        return 0
+    fi
+
+    # ── caso B: un repo de HuggingFace ─────────────────────────────────────
+    if [[ "$origen" == *:* ]]; then
+        repo="${origen%%:*}"
+        fichero="${origen#*:}"
+    else
+        repo="$origen"
+    fi
+    [[ "$repo" == */* ]] || { echo "ERROR: --gguf debe ser un fichero o owner/repo" >&2; return 2; }
+
+    local -a ficheros=()
+    mapfile -t ficheros < <(_gguffer_ficheros_hf "$repo")
+    ((${#ficheros[@]} > 0)) || {
+        echo "ERROR: no se pudo leer el repo $repo de HuggingFace" >&2
+        return 1
+    }
+
+    # Que GGUF del repo: el que se pidio, o el unico que serve (el grande,
+    # sin quantizar, sin imatrix y sin mmproj).
+    if [[ -z "$fichero" ]]; then
+        local -a candidatos=()
+        local f
+        for f in "${ficheros[@]}"; do
+            [[ "$f" == *.gguf ]] || continue
+            [[ "$f" == *imatrix* ]] && continue
+            [[ "$f" == *mmproj* ]] && continue
+            [[ "$f" == *"-0000"* ]] && continue
+            candidatos+=("$f")
+        done
+        if ((${#candidatos[@]} == 0)); then
+            echo "ERROR: el repo $repo no tiene un GGUF sin quantizar." >&2
+            echo "       Dile cual con --gguf-file." >&2
+            return 2
+        elif ((${#candidatos[@]} > 1)); then
+            echo "ERROR: el repo $repo tiene varios GGUFs sin quantizar:" >&2
+            printf '       %s\n' "${candidatos[@]}" >&2
+            echo "       Dile cual con --gguf-file." >&2
+            return 2
+        fi
+        fichero="${candidatos[0]}"
+    fi
+
+    # ── los shards ─────────────────────────────────────────────────────────
+    # "X-00001-of-00002.gguf" son trozos del mismo GGUF: hay que bajarlos
+    # todos y unirlos (llama-gguf-split --merge).
+    local -a shards=()
+    local base="${fichero%.gguf}"
+    if [[ "$base" =~ ^(.*)-0000[0-9]+-of-[0-9]+$ ]]; then
+        local pre="${BASH_REMATCH[1]}"
+        local total="${base##*-of-}"
+        local i
+        for ((i=1; i<=total; i++)); do
+            local n; n="$(printf "%05d" "$i")"
+            local cand="$pre-$n-of-$total.gguf"
+            local ok=0
+            for f in "${ficheros[@]}"; do [[ "$f" == "$cand" ]] && ok=1; done
+            (( ok )) && shards+=("$cand")
+        done
+        ((${#shards[@]} == total)) || {
+            echo "ERROR: el repo $repo no tiene todos los shards de $fichero" >&2
+            echo "       encontrados: ${#shards[@]} de $total" >&2
+            return 1
+        }
+    else
+        shards=("$fichero")
+    fi
+
+    # ── la descarga ────────────────────────────────────────────────────────
+    mkdir -p "$dest" || return 1
+    command -v hf >/dev/null 2>&1 || {
+        echo "ERROR: falta 'hf' (huggingface_hub) para bajar el GGUF" >&2
+        return 1
+    }
+    echo "[gguffer] bajo ${#shards[@]} fichero(s) de $repo..." >&2
+    local -a hf_args=()
+    local s
+    for s in "${shards[@]}"; do hf_args+=("$s"); done
+    if ! hf download "$repo" "${hf_args[@]}" --local-dir "$dest" >&2; then
+        echo "ERROR: no se pudo bajar de $repo: ${shards[*]}" >&2
+        return 1
+    fi
+
+    # ── unir los shards ────────────────────────────────────────────────────
+    if ((${#shards[@]} > 1)); then
+        local _split_bin="${LLAMA_DIR:-$HOME/llama.cpp}/build/bin/llama-gguf-split"
+        if [[ ! -x "$_split_bin" ]]; then
+            echo "ERROR: falta llama-gguf-split para unir los shards ($_split_bin)" >&2
+            echo "       compila llama.cpp, o baja el GGUF sin partir." >&2
+            return 1
+        fi
+        local merged="$dest/${repo##*/}-merged.gguf"
+        echo "[gguffer] uno los ${#shards[@]} shards en $merged..." >&2
+        if ! "$_split_bin" --merge "$dest/${shards[0]}" "$merged" >&2; then
+            echo "ERROR: no se pudieron unir los shards" >&2
+            return 1
+        fi
+        echo "$merged"
+        return 0
+    fi
+
+    echo "$dest/$fichero"
+    return 0
+}
+
+# _gguffer_bloques_sin_imatrix <gguf> <imatrix> <ggufcheck>
+#
+# Que bloques del GGUF NO aparecen en el imatrix. La respuesta es exacta y
+# no hay que adivinar nada: el imatrix se indexa por nombre de tensor, y un
+# bloque entero aparece en el o no aparece.
+#
+# Por que importa: el imatrix se calcula sobre el modelo base (los bloques
+# 0..63 del Qwen3.8) y el GGUF lleva la cabeza MTP como un bloque MAS. Ese
+# bloque no esta en el imatrix, y con un quant very-low-bit el cuantizador
+# aborta:
+#     "Missing importance matrix for tensor blk.64.attn_k.weight"
+# La salida es dejar ese bloque en un quant que NO exija imatrix (Q4_0), que
+# es lo que hizo bartowski con su IQ3_XS del Qwen3.8.
+#
+# OJO: no se comparan TENSOR a tensor, sino BLOQUE a bloque. Las normas
+# (input_layernorm, ssm_alpha...) no estan en ningun imatrix porque no se
+# cuantizan, asi que un bloque "incompleto" no significa nada. Lo que
+# significa algo es un bloque que no aparece ENTERO.
+_gguffer_bloques_sin_imatrix() {
+    local gguf="$1" imatrix="$2" ggufcheck="$3"
+    local -A bloques_gguf=() bloques_imx=()
+    local n b
+
+    while IFS= read -r n; do
+        [[ "$n" == blk.*.* ]] || continue
+        b="${n#blk.}"; b="${b%%.*}"
+        [[ "$b" =~ ^[0-9]+$ ]] || continue
+        bloques_gguf["$b"]=1
+    done < <("$ggufcheck" "$gguf" --nombres 2>/dev/null)
+
+    while IFS= read -r n; do
+        # el imatrix guarda "<tensor>.in_sum2" y "<tensor>.counts"
+        n="${n%.in_sum2}"; n="${n%.counts}"
+        [[ "$n" == blk.*.* ]] || continue
+        b="${n#blk.}"; b="${b%%.*}"
+        [[ "$b" =~ ^[0-9]+$ ]] || continue
+        bloques_imx["$b"]=1
+    done < <("$ggufcheck" "$imatrix" --nombres 2>/dev/null)
+
+    local -a faltan=()
+    for b in "${!bloques_gguf[@]}"; do
+        [[ -n "${bloques_imx[$b]:-}" ]] || faltan+=("$b")
+    done
+    ((${#faltan[@]} > 0)) || return 0
+    printf '%s\n' "${faltan[@]}" | sort -n
+    return 0
+}
+
 # _gguffer_escribe_fuente <gguf> <nombre> <repo_base> <imatrix> <imatrix_repo>
 #                         <imatrix_file> <bloque_mtp> <intermedio>
 #
@@ -4407,16 +4648,137 @@ PY
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# _gguffer_espacio <dir>
+#
+# Bytes libres en el sistema de ficheros que contiene <dir>. Se mide con df
+# sobre el DIRECTORIO (no sobre la raiz): si el trabajo esta en otro disco,
+# el espacio es el de ese disco.
+# -----------------------------------------------------------------------------
+_gguffer_espacio() {
+    local dir="$1"
+    df -PB1 "$dir" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_necesita_espacio <work> <out_f16>
+#
+# Cuanto hace falta para convertir, con el tamano REAL de los pesos.
+#
+# El GGUF intermedio es aproximadamente del tamano de los safetensors: si
+# los pesos son BF16 o F16, el GGUF es igual de grande; si son F32, es la
+# mitad. Sin mirar los pesos no se puede afinar, asi que se toma el peor
+# caso (el GGUF tan grande como los pesos) y se le anade un margen.
+#
+# Se anade el margen porque el GGUF lleva la metadata y los tensores con
+# padding: un 5 % de mas nunca viene mal.
+# -----------------------------------------------------------------------------
+_gguffer_necesita_espacio() {
+    local work="$1" out_f16="$2" bytes=0 tam=0
+    if [[ -d "$work" ]]; then
+        tam="$(du -sb "$work" 2>/dev/null | cut -f1)"
+        bytes="${tam:-0}"
+    fi
+    # el destino puede estar en otro disco
+    local dest_dir
+    dest_dir="$(dirname "$out_f16")"
+    local libre
+    libre="$(_gguffer_espacio "$dest_dir")"
+    [[ -n "$libre" ]] || libre=0
+    # el margen: 5 % de los pesos, y 512 MiB de suelo (la metadata, el log)
+    local margen=$(( bytes / 20 + 536870912 ))
+    printf '%s %s' "$libre" "$margen"
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_diagnostico <modelo_dir> <out_f16> <imatrix> <imatrix_repo>
+#                      <imatrix_file> <cuant>
+#
+# El informe de por que NO se esta cuantizando, SIN cuantizar nada.
+#
+# Esto es lo que hace falta cuando la cuantizacion falla a las tres de la
+# madrugada: en vez de adivinar, el gguffer dice cuanto espacio hay, cuanto
+# hace falta, cual es el bloque MTP, si el imatrix lo cubre, y el argv
+# EXACTO que le pasaria al cuantizador.
+# -----------------------------------------------------------------------------
+_gguffer_diagnostico() {
+    local dir="$1" out_f16="$2" imatrix="$3" imatrix_repo="$4" imatrix_file="$5" quant="$6" origen_gguf="${7:-}"
+    local _ggufcheck
+    _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
+    local _libre _margen _pesos _nextn_bloque _cubre
+    _libre="$(_gguffer_espacio "$dir")"
+    _pesos="$(du -sb "$dir" 2>/dev/null | cut -f1)"
+    _margen=$(( ${_pesos:-0} / 20 + 536870912 ))
+
+    echo "── DIAGNOSTICO ──────────────────────────────────────────────"
+    if [[ -n "$origen_gguf" ]]; then
+        # No hay pesos clonados: el GGUF ya venia hecho. Lo que hay que
+        # mirar es que el fichero esta y cuanto ocupa.
+        echo "  GGUF de entrada:  $origen_gguf"
+        echo "  tamano:           $(numfmt --to=iec-i --suffix=B "$(stat -c %s "$origen_gguf" 2>/dev/null || echo 0)" 2>/dev/null || echo "?")"
+        echo "  (no hay pesos que clonar: no se convierte nada)"
+    else
+        echo "  pesos clonados:   $dir"
+        echo "  tamano:           $(numfmt --to=iec-i --suffix=B "${_pesos:-0}" 2>/dev/null || echo "${_pesos:-0} B")"
+    fi
+    echo "  espacio libre:    $(numfmt --to=iec-i --suffix=B "${_libre:-0}" 2>/dev/null || echo "${_libre:-0} B")"
+    echo "  espacio a porner: $(numfmt --to=iec-i --suffix=B "$_margen" 2>/dev/null || echo "$_margen B")  (GGUF intermedio + margen)"
+    if [[ -n "${_libre:-}" && "${_libre:-0}" -lt "$_margen" ]]; then
+        echo "  ==> NO CABE. Borra el clon o usa otro disco: GGUF_WORK_DIR / GGUF_DIR."
+    fi
+    echo ""
+    echo "  GGUF intermedio:  $out_f16"
+    if [[ -f "$out_f16" ]]; then
+        echo "    ya existe (se reutiliza)"
+        _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
+        echo "    bloque MTP:      ${_nextn_bloque:-ninguno}"
+        echo "    file_type:       $(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1)"
+    else
+        echo "    NO existe: hay que convertir antes"
+        _nextn_bloque=""
+    fi
+    echo ""
+    echo "  imatrix:          ${imatrix:-NINGUNO}"
+    if [[ -n "$imatrix" ]]; then
+        [[ -f "$imatrix" ]] && echo "    fichero: existe ($(numfmt --to=iec-i --suffix=B "$(stat -c %s "$imatrix" 2>/dev/null)" 2>/dev/null))" \
+                           || echo "    fichero: NO EXISTE"
+        [[ -n "$imatrix_repo" ]] && echo "    repo:     $imatrix_repo"
+        [[ -n "$imatrix_file" ]] && echo "    fichero:  $imatrix_file"
+        if [[ -n "$_nextn_bloque" ]]; then
+            _cubre="no"
+            _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null && _cubre="si"
+            echo "    cubre el bloque MTP ($_nextn_bloque): $_cubre"
+            if [[ "$_cubre" == "no" ]]; then
+                echo "    => se anadira --tensor-type "blk\.$_nextn_bloque\..*=${MTP_QUANT:-Q4_0}""
+            fi
+        fi
+    fi
+    echo ""
+    echo "  quant pedido:     ${quant:-?}"
+    echo "  argv del cuantizador (lo que se ejecutaria):"
+    local _args=(--imatrix "$imatrix")
+    [[ -n "$_nextn_bloque" ]] && ! _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null \
+        && _args+=(--tensor-type "blk\.${_nextn_bloque}\..*=${MTP_QUANT:-Q4_0}")
+    echo "    llama-quantize ${_args[*]} <f16> <salida> $quant"
+    echo "─────────────────────────────────────────────────────────────"
+}
+
 cmd_gguffer() {
     local path="" repo="" out_name="" imatrix="" from_subdir="" include=""
+    local gguf_origen="" gguf_file=""
     local -a quants=()
     local imatrix_repo="" imatrix_file=""
-    local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0
+    local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0 diagnostico=0
     local inter="f16"
     ROPERO_GGUF_OUT_DIR=""; ROPERO_GGUF_OUT_FILE=""; ROPERO_GGUF_OUT_PRINCIPAL=""
+    ROPERO_GGUF_OUT_PRINCIPAL_DIR=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --gguf)        [[ $# -ge 2 ]] || { echo "ERROR: --gguf requiere un fichero o un repo" >&2; return 2; }; gguf_origen="$2"; shift 2 ;;
+            --gguf=*)      gguf_origen="${1#--gguf=}"; shift ;;
+            --gguf-file)   [[ $# -ge 2 ]] || { echo "ERROR: --gguf-file requiere un nombre" >&2; return 2; }; gguf_file="$2"; shift 2 ;;
+            --gguf-file=*) gguf_file="${1#--gguf-file=}"; shift ;;
             --path)        [[ $# -ge 2 ]] || { echo "ERROR: --path requiere un directorio" >&2; return 2; }; path="$2"; shift 2 ;;
             --path=*)      path="${1#--path=}"; shift ;;
             --repo)        [[ $# -ge 2 ]] || { echo "ERROR: --repo requiere un repo (owner/name)" >&2; return 2; }; repo="$2"; shift 2 ;;
@@ -4460,6 +4822,7 @@ cmd_gguffer() {
             --force)       force=1; shift ;;
             --list-quants) list_only=1; shift ;;
             --no-mtp)      no_mtp=1; shift ;;
+            --diagnostico)  diagnostico=1; shift ;;
             -h|--help)     _ropero_command_help gguffer; return 0 ;;
             *) echo "ERROR: argumento desconocido: $1" >&2; return 2 ;;
         esac
@@ -4487,8 +4850,8 @@ cmd_gguffer() {
         return 0
     fi
 
-    if [[ -z "$path" && -z "$repo" ]]; then
-        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant TIPO]" >&2
+    if [[ -z "$path" && -z "$repo" && -z "$gguf_origen" ]]; then
+        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> | --gguf <fichero|owner/repo> [--quant TIPO]" >&2
         return 2
     fi
     if [[ -n "$path" && -n "$repo" ]]; then
@@ -4551,11 +4914,36 @@ cmd_gguffer() {
         out_dir="$(dirname "$ROPERO_GGUF_OUT_FILE")"
     elif [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
         out_dir="$(dirname "$ROPERO_GGUF_OUT_PRINCIPAL")"
+    elif [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL_DIR" ]]; then
+        # el principal va a una CARPETA: el nombre lo pone el gguffer
+        out_dir="$ROPERO_GGUF_OUT_PRINCIPAL_DIR"
     fi
     mkdir -p "$out_dir"
 
-    local work="" source_dir="" nombre="" hf_cache=""
-    if [[ -n "$repo" ]]; then
+    local work="" source_dir="" nombre="" hf_cache="" _gguf_entrada=""
+    local _gguf_local=0
+    # El work se puede borrar SOLO si es del gguffer (lo ha descargado el).
+    # Con --gguf de un fichero local, el work es la carpeta del usuario.
+    local _puede_borrar_work=1
+    if [[ -n "$gguf_origen" ]]; then
+        # El GGUF ya hecho (local o de un repo de HF). No hay pesos que
+        # clonar: el work es la carpeta donde se deja el GGUF.
+        if [[ "$gguf_origen" == */* && ! -f "$gguf_origen" && "$gguf_origen" != *:* ]]; then
+            work="$work_root/gguf_${gguf_origen//\//__}"
+        else
+            work="$work_root/gguf_$(printf '%s' "$gguf_origen" | tr -c 'a-zA-Z0-9._-' '_')"
+        fi
+        # Si el GGUF es local, no hay nada que descargar: el work es su
+        # carpeta, que es donde se mira si hace falta.
+        if [[ -f "$gguf_origen" ]]; then
+            work="$(dirname "$gguf_origen")"
+            _gguf_local=1
+            _puede_borrar_work=0
+        fi
+        source_dir="$work"
+        nombre="${gguf_origen##*/}"
+        nombre="${nombre%.gguf}"
+    elif [[ -n "$repo" ]]; then
         work="$work_root/${repo//\//__}"
         source_dir="$work"
         nombre="${repo##*/}"
@@ -4613,16 +5001,46 @@ cmd_gguffer() {
     if (( force == 1 )); then
         echo "[gguffer] --force: limpio lo cacheado de ${repo:-$path}"
         [[ -n "$repo" ]] && rm -rf "$hf_cache"
-        rm -rf "$work"
-        if [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
-            rm -f "$ROPERO_GGUF_OUT_FILE"
+        # Con --gguf de un fichero local, el work es la CARPETA DEL
+        # USUARIO: no se toca. Lo que el usuario ha traido no se borra.
+        if (( _puede_borrar_work == 1 )); then
+            rm -rf "$work"
         else
-            rm -f "$out_dir/${nombre}"*.gguf
+            echo "           (el GGUF de entrada es tuyo: no lo borro)"
+        fi
+        if [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            [[ "$ROPERO_GGUF_OUT_FILE" == "$_gguf_entrada" ]] || rm -f "$ROPERO_GGUF_OUT_FILE"
+        else
+            for _f in "$out_dir/${nombre}"*.gguf; do
+                [[ -e "$_f" ]] || continue
+                # El GGUF de entrada es del usuario: jamas se borra.
+                [[ "$_f" == "$_gguf_entrada" ]] && continue
+                rm -f "$_f"
+            done
         fi
     fi
 
     # ── FASE 1: la descarga ─────────────────────────────────────────────────
-    if [[ -n "$repo" ]]; then
+    if [[ -n "$gguf_origen" ]]; then
+        # Ya hay un GGUF: se baja (si viene de un repo), se unen los shards
+        # si viene partido, y no se convierte NADA. El conversor de pesos
+        # es justo lo que falla con los modelos multimodales con cabeza MTP.
+        local _preparado
+        _preparado="$(_gguffer_prepara_gguf "$gguf_origen" "$gguf_file" "$work")" || return 1
+        if [[ ! -f "$_preparado" ]]; then
+            echo "ERROR: no se pudo preparar el GGUF de $gguf_origen" >&2
+            return 1
+        fi
+        echo "[gguffer] GGUF de entrada: $_preparado"
+        _gguf_entrada="$_preparado"
+        # El nombre del fichero final: el del repo sin el sufijo "-GGUF"
+        # (que es como se llaman los repos de cuantizaciones), para que el
+        # GGUF no se llame "Qwen3.8-27B-GGUF-MXFP4.gguf".
+        if [[ -n "$gguf_file" ]]; then
+            nombre="${gguf_file##*/}"; nombre="${nombre%.gguf}"
+        fi
+        nombre="${nombre%-GGUF}"
+    elif [[ -n "$repo" ]]; then
         if [[ -f "$sentinel" ]]; then
             echo "[gguffer] reutilizo el clon de $repo en $work"
         else
@@ -4674,6 +5092,9 @@ cmd_gguffer() {
         if [[ -f "$_cand" ]]; then out_f16="$_cand"; break; fi
     done
     [[ -z "$out_f16" ]] && out_f16="$out_dir/${nombre}-${inter_up}.gguf"
+    # Con --gguf el intermedio es el GGUF que trajimos, no uno del out_dir:
+    # gana el que ya esta.
+    [[ -n "$_gguf_entrada" ]] && out_f16="$_gguf_entrada"
     # Las rutas finales, una por quant. Con varios quants en una tirada cada
     # uno tiene la suya; con uno solo, --out puede fijar la ruta exacta (por
     # ejemplo, el nombre que espera el TOML, que no siempre es
@@ -4697,6 +5118,12 @@ cmd_gguffer() {
             if (( _qi2 == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
                 # El primer quant de la tirada va exactamente ahi.
                 out_paths+=("$ROPERO_GGUF_OUT_PRINCIPAL")
+            elif (( _qi2 == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL_DIR" ]]; then
+                # El primero va a una CARPETA (el TOML pedia otro quant):
+                # el nombre lo pone el gguffer, no se falsea el del TOML.
+                # OJO: se usa el directorio DEL PRINCIPAL, no $out_dir (que
+                # es el de los secundarios, que puede ser otro).
+                out_paths+=("$ROPERO_GGUF_OUT_PRINCIPAL_DIR/${nombre_base}-${_qp}.gguf")
             elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
                 out_paths+=("$ROPERO_GGUF_OUT_FILE")
             else
@@ -4732,6 +5159,24 @@ cmd_gguffer() {
     elif [[ -f "$out_f16" && $force -eq 0 && -z "$path" && "${out_paths[0]}" != "$out_f16" ]]; then
         echo "[gguffer] ya existe: ${out_paths[0]} (usa --force para rehacerlo)"
         return 0
+    fi
+
+    # ── EL ESPACIO, ANTES DE CONVERTIR ─────────────────────────────────────
+    # Convertir un modelo de 27B escribe un GGUF de tensores de pesos de
+    # decenas de GB. Si el disco se llena a mitad, el conversor muere con un
+    # error que no dice "te has quedado sin disco", y el trabajo de la noche
+    # se pierde. Se comprueba ANTES.
+    if [[ ! -f "$out_f16" && -n "$repo" ]]; then
+        local _libre _margen
+        read -r _libre _margen <<< "$(_gguffer_necesita_espacio "$work" "$out_f16")"
+        if [[ -n "${_libre:-}" && "${_libre:-0}" -lt "${_margen:-0}" ]]; then
+            echo "ERROR: no hay espacio para convertir." >&2
+            echo "       libre:  $(numfmt --to=iec-i --suffix=B "${_libre:-0}" 2>/dev/null)" >&2
+            echo "       hace falta: $(numfmt --to=iec-i --suffix=B "${_margen:-0}" 2>/dev/null) (el GGUF intermedio + margen)" >&2
+            echo "       El GGUF intermedio es del tamano de los pesos (o la mitad si son F32)." >&2
+            echo "       Libera espacio, o pon GGUF_WORK_DIR y GGUF_DIR en otro disco." >&2
+            return 1
+        fi
     fi
 
     if [[ ! -f "$out_f16" ]]; then
@@ -4785,18 +5230,51 @@ cmd_gguffer() {
         fi
         if (( conv_ok == 0 )); then
             tail -20 "$conv_log" >&2
-            # La conversion fallo: el clon de los safetensors se conserva
-            # (60 GB, pero es lo que evita volver a bajar) y se dice como
-            # reintentar solo esta fase.
             rm -f "$out_f16"
             echo "ERROR: fallo la conversion a GGUF" >&2
-            echo "       conservo los pesos en: $work" >&2
-            echo "       reintenta solo la conversion:" >&2
-            echo "         python3 $_convert ${conv_args[*]}" >&2
+            # Por que fallo, que el log del conversor no lo dice claro.
+            if grep -qiE "no space left|disk quota|write error" "$conv_log" 2>/dev/null; then
+                echo "       ==> se ha quedado SIN ESPACIO en disco." >&2
+                echo "       El GGUF intermedio necesita tanto como los pesos (o la mitad si son F32)." >&2
+            elif grep -qiE "MemoryError|OutOfMemory|Cannot allocate memory|Killed" "$conv_log" 2>/dev/null; then
+                echo "       ==> se ha quedado SIN MEMORIA (el conversor se ha comido la RAM)." >&2
+            elif grep -qiE "does not exist|not found|No such file" "$conv_log" 2>/dev/null; then
+                echo "       ==> faltan ficheros en el clon: la descarga esta incompleta." >&2
+                echo "       borra $work y vuelve a lanzar, o baja el repo a mano." >&2
+            fi
+            if (( keep_source == 1 )); then
+                echo "       conservo los pesos en: $work (--keep-source)" >&2
+                echo "       reintenta solo la conversion:" >&2
+                echo "         python3 $_convert ${conv_args[*]}" >&2
+            else
+                # Sin --keep-source, los pesos se borran: 60 GB que se quedan
+                # ahi para siempre y un trabajo de noche que se llena el disco
+                # es peor que volver a bajar. Se avisa de como pedirlos otra
+                # vez, porque el repo es publico.
+                if (( _puede_borrar_work == 1 )); then
+                    echo "       borro los pesos (60 GB) para no dejar el disco lleno." >&2
+                    echo "       no se guardan porque no se paso --keep-source." >&2
+                    rm -rf "$work"
+                else
+                    # El GGUF de entrada es un fichero del usuario, en su
+                    # carpeta: eso no se borra, ni con --force ni al fallar.
+                    echo "       el GGUF de entrada es tuyo: no lo borro." >&2
+                fi
+            fi
             return 1
         fi
     else
         echo "[gguffer] reutilizo el GGUF intermedio: $out_f16"
+    fi
+
+    # ── EL DIAGNOSTICO: POR QUE NO SE CUANTIZA ─────────────────────────────
+    # Con --diagnostico no se cuantiza: se imprime el informe y se sale. Es
+    # lo que hay que mirar cuando la cuantizacion falla a las tres de la
+    # madrugada, en vez de adivinar.
+    if (( diagnostico == 1 )); then
+        _gguffer_diagnostico "$source_dir" "$out_f16" "$imatrix" "$imatrix_repo" \
+                            "$imatrix_file" "${quants[0]:-}" "$_gguf_entrada"
+        return 0
     fi
 
     # ── FASE 3: la cuantizacion ────────────────────────────────────────────
@@ -4822,12 +5300,45 @@ cmd_gguffer() {
     local _nextn_bloque="" _qargs_comunes=()
     [[ -n "$imatrix" ]] && _qargs_comunes+=(--imatrix "$imatrix")
     if [[ -n "$imatrix" && ${#quants[@]} -gt 0 ]]; then
+        # Que bloques del GGUF no estan en el imatrix. Se comparan BLOQUE a
+        # BLOQUE (no tensor a tensor: las normas no estan en ningun imatrix
+        # porque no se cuantizan, y eso no significa nada).
+        # El bloque de la MTP se localiza por DOS vias, y se usan las dos:
+        #
+        #  a) POR LA METADATA (block_count - nextn_predict_layers). Es lo que
+        #     dice el GGUF. Funciona siempre que el conversor haya escrito
+        #     la metadata.
+        #  b) POR COMPARACION con el imatrix: los bloques que el GGUF tiene y
+        #     el imatrix no. Funciona siempre que la metadata falte, que es
+        #     justo lo que pasaba (el conversor de la MTP no la escribia y
+        #     el bloque se quedaba sin cubrir).
+        #
+        # Se cogen los dos y se unen: si los dos coinciden, se aplica una
+        # sola vez (que es lo normal).
+        local -a _sin_imx=()
+        local _b
+        while read -r _b; do
+            [[ -n "$_b" ]] || continue
+            _sin_imx+=("$_b")
+        done < <(_gguffer_bloques_sin_imatrix "$out_f16" "$imatrix" "$_ggufcheck" 2>/dev/null || true)
         _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
-        if [[ -n "$_nextn_bloque" ]] \
-           && ! _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null; then
-            echo "[gguffer] aviso: el imatrix no cubre el bloque $_nextn_bloque (la cabeza MTP)."
-            echo "           Lo cuantizo en ${MTP_QUANT:-Q4_0}, que no exige imatrix."
-            _qargs_comunes+=(--tensor-type "blk\.${_nextn_bloque}\..*=${MTP_QUANT:-Q4_0}")
+        if [[ -n "$_nextn_bloque" ]]; then
+            local _ya=0
+            for _b in "${_sin_imx[@]}"; do [[ "$_b" == "$_nextn_bloque" ]] && _ya=1; done
+            (( _ya )) || _sin_imx+=("$_nextn_bloque")
+        fi
+        if ((${#_sin_imx[@]} > 0)); then
+            local _lista
+            _lista="$(printf '%s ' "${_sin_imx[@]}")"
+            if ((${#_sin_imx[@]} == 1)); then
+                echo "[gguffer] aviso: el imatrix no cubre el bloque ${_sin_imx[0]} (la cabeza MTP)."
+            else
+                echo "[gguffer] aviso: el imatrix no cubre los bloques ${_lista% } (la cabeza MTP)."
+            fi
+            echo "           Lo(s) cuantizo en ${MTP_QUANT:-Q4_0}, que no exige imatrix."
+            for _b in "${_sin_imx[@]}"; do
+                _qargs_comunes+=(--tensor-type "blk\.${_b}\..*=${MTP_QUANT:-Q4_0}")
+            done
         fi
     fi
 
@@ -4892,10 +5403,26 @@ cmd_gguffer() {
             # cuantizacion (que es la parte cara).
             rm -f "$out_q"
             echo "ERROR: fallo la cuantizacion a $quant_i" >&2
-            echo "       conservo los pesos en: $work" >&2
-            echo "       conservo el GGUF intermedio en: $out_f16" >&2
-            echo "       reintenta solo la cuantizacion:" >&2
-            echo "         $_quantize ${qargs[*]}" >&2
+            if (( keep_source == 1 )); then
+                echo "       conservo los pesos en: $work (--keep-source)" >&2
+                echo "       conservo el GGUF intermedio en: $out_f16" >&2
+                echo "       reintenta solo la cuantizacion:" >&2
+                echo "         $_quantize ${qargs[*]}" >&2
+            else
+                # Sin --keep-source, los pesos se borran. Un trabajo de noche
+                # que falla many veces seguidas no puede dejar 60 GB por cada
+                # intento: el disco se llena y luego falla TODO, incluso lo
+                # que ya estaba bien.
+                if (( _puede_borrar_work == 1 )); then
+                    echo "       borro los pesos (60 GB) para no dejar el disco lleno." >&2
+                    echo "       no se guardan porque no se paso --keep-source." >&2
+                    rm -rf "$work"
+                else
+                    # El GGUF de entrada es un fichero del usuario, en su
+                    # carpeta: eso no se borra, ni con --force ni al fallar.
+                    echo "       el GGUF de entrada es tuyo: no lo borro." >&2
+                fi
+            fi
             # El error mas comun: el imatrix no cubre un tensor. Se dice cual,
             # porque el mensaje del cuantizador ("Missing importance matrix
             # for tensor blk.64.attn_k.weight") no dice de donde sale.
@@ -4959,7 +5486,12 @@ cmd_gguffer() {
         for _op in "${out_finals[@]}"; do
             [[ "$_op" == "$out_f16" ]] && _es_resultado=1
         done
-        (( _es_resultado == 0 )) && rm -f "$out_f16"
+        # El GGUF de entrada lo ha traido el usuario: no se borra jamas.
+        if [[ "$out_f16" == "$_gguf_entrada" ]]; then
+            echo "[gguffer] el GGUF de entrada se queda donde esta (es tuyo)"
+        else
+            (( _es_resultado == 0 )) && rm -f "$out_f16"
+        fi
     fi
 
     # ── FASE 6: la procedencia ─────────────────────────────────────────────
