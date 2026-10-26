@@ -30,6 +30,13 @@ PUERTO="${PUERTO:-9999}"
 BASE="http://127.0.0.1:${PUERTO}"
 TURNOS="${TURNOS:-6}"
 
+# El server va con --api-key, asi que TODO endpoint (tambien /props) pide
+# el header Authorization. La key es la misma que usa ropero: la variable
+# LLAMA_API_KEY, y si no esta, el default de ropero. Es lo mismo que hace
+# el bench (tests/bench_ropero.sh).
+API_KEY="${API_KEY:-${LLAMA_API_KEY:-sk-local-dev-key}}"
+AUTH=(-H "Authorization: Bearer $API_KEY")
+
 echo "servidor: $BASE"
 echo ""
 
@@ -37,11 +44,23 @@ echo ""
 # /props devuelve los sampling por defecto del server. Si dry_multiplier es
 # 0, el DRY esta apagado y el bucle no tiene por que romperse.
 echo "=== 1. el sampler"
-props="$(curl -s --max-time 5 "$BASE/props" 2>/dev/null)"
-if [[ -z "$props" ]]; then
-    echo "  NO HAY SERVER en $BASE. Arrancalo con: ropero fable"
-    exit 1
-fi
+tmp="$(mktemp "${TMPDIR:-/tmp}/props.XXXXXX.json")"
+code="$(curl -s -o "$tmp" -w '%{http_code}' --max-time 5 "${AUTH[@]}" "$BASE/props" 2>/dev/null)"
+case "$code" in
+    200) props="$(cat "$tmp")" ;;
+    401|403)
+        echo "  API KEY INCORRECTA (http $code)."
+        echo "  El server va con --api-key; la key debe ser la misma que usa ropero:"
+        echo "    LLAMA_API_KEY=$API_KEY"
+        rm -f "$tmp"; exit 1 ;;
+    000)
+        echo "  NO HAY SERVER en $BASE. Arrancalo con: ropero fable"
+        rm -f "$tmp"; exit 1 ;;
+    *)
+        echo "  /props devolvio http $code"
+        rm -f "$tmp"; exit 1 ;;
+esac
+rm -f "$tmp"
 printf '%s' "$props" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
@@ -78,10 +97,18 @@ misma=0
 ultima=""
 for i in $(seq 1 "$TURNOS"); do
     cuerpo="$(python3 "$SCRIPT_DIR/probar-bucle.py" body "$hist" "$TOOLS")"
-    resp="$(curl -s --max-time 180 -X POST "$BASE/v1/chat/completions" \
+    tmp="$(mktemp "${TMPDIR:-/tmp}/resp.XXXXXX.json")"
+    code="$(curl -s -o "$tmp" -w '%{http_code}' --max-time 180 -X POST \
+            "$BASE/v1/chat/completions" "${AUTH[@]}" \
             -H 'Content-Type: application/json' -d "$cuerpo" 2>/dev/null)"
-    if [[ -z "$resp" ]]; then
-        echo "  turno $i: sin respuesta del server"
+    resp="$(cat "$tmp")"
+    rm -f "$tmp"
+    if [[ "$code" == "401" || "$code" == "403" ]]; then
+        echo "  turno $i: API KEY INCORRECTA (http $code)"
+        break
+    fi
+    if [[ "$code" != "200" || -z "$resp" ]]; then
+        echo "  turno $i: el server devolvio http $code"
         break
     fi
     tool="$(printf '%s' "$resp" | python3 "$SCRIPT_DIR/probar-bucle.py" tool)"
