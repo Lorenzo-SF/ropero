@@ -3125,7 +3125,13 @@ _ropero_command_help() {
             cat <<'EOF'
 USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
 
-  --quant TIPO        quant a aplicar (sin el, el GGUF queda en F16)
+  --quant TIPO        quant a aplicar (sin el, el GGUF queda en F16).
+                      Se puede repetir, o pasar varios separados por comas:
+                        --quant IQ2_XXS --quant IQ3_XS
+                        --quant IQ2_XXS,IQ3_XS
+                      Bajar y convertir los pesos es lo caro; cuantizar es
+                      solo CPU, asi que varios quants en una tirada
+                      reutilizan el mismo GGUF intermedio.
   --list-quants       lista los quants que acepta el motor instalado
   --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
   --imatrix FICHERO   importance matrix para la cuantizacion
@@ -3136,6 +3142,12 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
                         · nombre           -> <GGUF_DIR>/<nombre>-<quant>.gguf
                         · ruta/dir/        -> ahi, con el nombre generado
                         · ruta/fichero.gguf -> exactamente ahi
+                      (con varios quants, la ruta exacta no vale: cada quant
+                      necesita la suya)
+  --out-principal RUTA  la ruta EXACTA del PRIMER quant de la tirada. Util
+                      con varios quants: ese va a la carpeta del modelo (la
+                      que espera el TOML) y los demas se quedan en el
+                      directorio normal, con su nombre <repo>-<quant>.gguf
   --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
   --include PATRON    que ficheros descargar (por defecto, todos)
   --intermedio TIPO  el GGUF intermedio: f16 (por defecto) o bf16 (la
@@ -4056,8 +4068,33 @@ _gguffer_parse_out() {
             # Un directorio: se le quita la "/" final si la lleva.
             ROPERO_GGUF_OUT_DIR="${v%/}" ;;
         *)
-            # Un nombre suelto: se comporta como antes.
+            # Un nombre suelto: el fichero se llama <nombre>-<quant>.gguf.
+            # OJO: "out_name" es un local de cmd_gguffer, y el scoping de bash
+            # es dinamico: esta asignacion la cambia. Por eso esta linea
+            # funciona y no parece que toque nada.
             out_name="$v" ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_parse_out_principal <ruta>
+#
+# --out-principal es la ruta EXACTA del primer quant de la tirada. Con varios
+# quants, cada uno necesita la suya, y esta es la del que va a terminar en la
+# carpeta del modelo (la que espera el TOML). Los demas se quedan en el
+# directorio normal, con su nombre <repo>-<quant>.gguf.
+# -----------------------------------------------------------------------------
+_gguffer_parse_out_principal() {
+    local v="${1:-}"
+    ROPERO_GGUF_OUT_PRINCIPAL=""
+    case "$v" in
+        "")
+            echo "ERROR: --out-principal no puede estar vacio" >&2
+            return 2 ;;
+        *.gguf)  ROPERO_GGUF_OUT_PRINCIPAL="$v" ;;
+        *)       echo "ERROR: --out-principal necesita la ruta de un fichero .gguf" >&2
+                  return 2 ;;
     esac
     return 0
 }
@@ -4167,11 +4204,12 @@ PY
 # Main
 # -----------------------------------------------------------------------------
 cmd_gguffer() {
-    local path="" repo="" quant="" out_name="" imatrix="" from_subdir="" include=""
+    local path="" repo="" out_name="" imatrix="" from_subdir="" include=""
+    local -a quants=()
     local imatrix_repo="" imatrix_file=""
     local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0
     local inter="f16"
-    ROPERO_GGUF_OUT_DIR=""; ROPERO_GGUF_OUT_FILE=""
+    ROPERO_GGUF_OUT_DIR=""; ROPERO_GGUF_OUT_FILE=""; ROPERO_GGUF_OUT_PRINCIPAL=""
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -4181,8 +4219,22 @@ cmd_gguffer() {
             --repo=*)      repo="${1#--repo=}"; shift ;;
             --quant)
                 if [[ $# -eq 1 ]]; then list_only=1; shift
-                else quant="$2"; shift 2; fi ;;
-            --quant=*)     quant="${1#--quant=}"; shift ;;
+                else
+                    # Admite varios: "--quant IQ2_M --quant IQ3_XS" o
+                    # "--quant IQ2_M,IQ3_XS". Lo caro es bajar y convertir los
+                    # pesos (40-60 GB, una hora); cuantizar es solo CPU, asi
+                    # que varios quants en una tirada reutilizan el F16.
+                    IFS=',' read -r -a _qs <<< "$2"
+                    for _q in "${_qs[@]}"; do
+                        [[ -n "$_q" ]] && quants+=("$_q")
+                    done
+                    shift 2; fi ;;
+            --quant=*)
+                IFS=',' read -r -a _qs <<< "${1#--quant=}"
+                for _q in "${_qs[@]}"; do
+                    [[ -n "$_q" ]] && quants+=("$_q")
+                done
+                shift ;;
             --imatrix)     [[ $# -ge 2 ]] || { echo "ERROR: --imatrix requiere un fichero" >&2; return 2; }; imatrix="$2"; shift 2 ;;
             --imatrix=*)   imatrix="${1#--imatrix=}"; shift ;;
             --imatrix-repo)  [[ $# -ge 2 ]] || { echo "ERROR: --imatrix-repo requiere un repo (owner/name)" >&2; return 2; }; imatrix_repo="$2"; shift 2 ;;
@@ -4191,6 +4243,8 @@ cmd_gguffer() {
             --imatrix-file=*) imatrix_file="${1#--imatrix-file=}"; shift ;;
             --out)         [[ $# -ge 2 ]] || { echo "ERROR: --out requiere un nombre o una ruta" >&2; return 2; }; _gguffer_parse_out "$2" || return 2; shift 2 ;;
             --out=*)       _gguffer_parse_out "${1#--out=}" || return 2; shift ;;
+            --out-principal)  [[ $# -ge 2 ]] || { echo "ERROR: --out-principal requiere una ruta" >&2; return 2; }; _gguffer_parse_out_principal "$2" || return 2; shift 2 ;;
+            --out-principal=*) _gguffer_parse_out_principal "${1#--out-principal=}" || return 2; shift ;;
             --from-subdir) [[ $# -ge 2 ]] || { echo "ERROR: --from-subdir requiere un directorio" >&2; return 2; }; from_subdir="$2"; shift 2 ;;
             --from-subdir=*) from_subdir="${1#--from-subdir=}"; shift ;;
             --include)     [[ $# -ge 2 ]] || { echo "ERROR: --include requiere un patrón" >&2; return 2; }; include="$2"; shift 2 ;;
@@ -4256,13 +4310,24 @@ cmd_gguffer() {
     quants_num="$(printf '%s\n' "$quants_txt" | sed -nE 's/^[[:space:]]*([0-9]+)[[:space:]]+or[[:space:]]+([A-Z0-9_]+).*/\1=\2/p' | tr '\n' ' ')"
 
     # ── validar el quant ANTES de descargar 60 GB ───────────────────────────
-    if [[ -n "$quant" ]]; then
-        local qnum
-        qnum="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "=${quant}$" | head -1 | cut -d= -f1)"
-        if [[ -z "$qnum" ]]; then
-            echo "ERROR: quant no valido: $quant" >&2
-            echo "Usa 'ropero gguffer --list-quants' para ver la lista." >&2
-            return 1
+    local -a qnums=()
+    if (( ${#quants[@]} > 0 )); then
+        local q qnum
+        for q in "${quants[@]}"; do
+            qnum="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "=${q}$" | head -1 | cut -d= -f1)"
+            if [[ -z "$qnum" ]]; then
+                echo "ERROR: quant no valido: $q" >&2
+                echo "Usa 'ropero gguffer --list-quants' para ver la lista." >&2
+                return 1
+            fi
+            qnums+=("$qnum")
+        done
+        # Con varios quants, --out no puede ser la ruta exacta de un fichero:
+        # cada quant necesita la suya.
+        if (( ${#quants[@]} > 1 )) && [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            echo "ERROR: con varios quants, --out debe ser un nombre o un directorio" >&2
+            echo "       (la ruta exacta es de un solo fichero)" >&2
+            return 2
         fi
     fi
 
@@ -4400,23 +4465,59 @@ cmd_gguffer() {
         if [[ -f "$_cand" ]]; then out_f16="$_cand"; break; fi
     done
     [[ -z "$out_f16" ]] && out_f16="$out_dir/${nombre}-${inter_up}.gguf"
-    local out_final="$out_f16"
-    [[ -n "$quant" ]] && out_final="$out_dir/${nombre}-${quant}.gguf"
-    # Si --out trajo la ruta exacta del fichero, esa es la ruta final (por
+    # Las rutas finales, una por quant. Con varios quants en una tirada cada
+    # uno tiene la suya; con uno solo, --out puede fijar la ruta exacta (por
     # ejemplo, el nombre que espera el TOML, que no siempre es
     # <repo>-<quant>.gguf).
-    [[ -n "$ROPERO_GGUF_OUT_FILE" ]] && out_final="$ROPERO_GGUF_OUT_FILE"
-    # Y si no hay quant, esa ruta ES el intermedio: se convierte directamente
-    # ahi, en vez de convertir a un F16 aparte y luego renombrar.
-    if [[ -n "$ROPERO_GGUF_OUT_FILE" && -z "$quant" ]]; then
-        out_f16="$ROPERO_GGUF_OUT_FILE"
+    local -a out_paths=()
+    # El nombre base del fichero final: el del repo, o el que se pida con
+    # --out <nombre> (que ya ha sustituido a $nombre mas arriba).
+    local nombre_base="$nombre"
+    if (( ${#quants[@]} == 0 )); then
+        # Sin quant, la salida es el intermedio: se convierte directamente
+        # ahi, en vez de convertir a un F16 aparte y luego renombrar.
+        if [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            out_f16="$ROPERO_GGUF_OUT_FILE"
+            out_paths=("$ROPERO_GGUF_OUT_FILE")
+        else
+            out_paths=("$out_f16")
+        fi
+    else
+        local _qp _qi2=0
+        for _qp in "${quants[@]}"; do
+            if (( _qi2 == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
+                # El primer quant de la tirada va exactamente ahi.
+                out_paths+=("$ROPERO_GGUF_OUT_PRINCIPAL")
+            elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+                out_paths+=("$ROPERO_GGUF_OUT_FILE")
+            else
+                out_paths+=("$out_dir/${nombre_base}-${_qp}.gguf")
+            fi
+            _qi2=$((_qi2+1))
+        done
     fi
 
     # El intermedio y el final pueden ser el mismo fichero (--quant F16), y
     # en ese caso el "ya existe" no aplica: es el intermedio del que
     # speak, no un resultado de una corrida anterior.
-    if [[ "$out_final" != "$out_f16" && -f "$out_final" && $force -eq 0 && -z "$path" ]]; then
-        echo "[gguffer] ya existe: $out_final (usa --force para rehacerlo)"
+    # Con VARIOS quants, el "ya existe" se comprueba uno por uno dentro del
+    # bucle de cuantizacion (los que faltan se hacen, los que estan se
+    # respetan). Aqui solo se corta antes de descargar 60 GB si NO falta
+    # ninguno.
+    if (( ${#quants[@]} > 0 )); then
+        local _falta=0 _op
+        for _op in "${out_paths[@]}"; do
+            [[ "$_op" == "$out_f16" ]] && continue
+            [[ -f "$_op" ]] || _falta=1
+        done
+        if (( _falta == 0 )) && [[ "$out_f16" == "${out_paths[0]}" ]] && $force -eq 0 && -z "$path"; then
+            echo "[gguffer] ya existen todos los quants pedidos:"
+            for _op in "${out_paths[@]}"; do echo "           $_op"; done
+            echo "           (usa --force para rehacerlos)"
+            return 0
+        fi
+    elif [[ -f "$out_f16" && $force -eq 0 && -z "$path" && "${out_paths[0]}" != "$out_f16" ]]; then
+        echo "[gguffer] ya existe: ${out_paths[0]} (usa --force para rehacerlo)"
         return 0
     fi
 
@@ -4496,53 +4597,78 @@ cmd_gguffer() {
     # y IQ4_XS a la vez), asi que se busca en la lista del motor.
     local tipo_nombre=""
     [[ -n "$file_type" ]] && tipo_nombre="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "^${file_type}=" | head -1 | cut -d= -f2)"
-    if [[ -n "$quant" && -n "$tipo_nombre" && "$tipo_nombre" != "$qnum" &&
-          "$tipo_nombre" != "F16" && "$tipo_nombre" != "BF16" && "$tipo_nombre" != "F32" ]]; then
-        echo "[gguffer] aviso: los pesos del repo ya venian en el quant $tipo_nombre ($file_type)."
-        echo "           Cuantizar a $quant encima es dequantizar y re-cuantizar:"
-        echo "           se pierde calidad sin ganar nada."
-        if [[ -d "$work/original" ]]; then
-            echo "           Usa --from-subdir original para cuantizar de los pesos SIN quantizar."
+
+    # ── la cabeza MTP y el imatrix ─────────────────────────────────────────
+    # El imatrix se calcula sobre el modelo base, pero el GGUF lleva la MTP
+    # como un bloque MAS (el siguiente al ultimo). Ese bloque no esta en el
+    # imatrix, y con un quant very-low-bit el cuantizador aborta:
+    #   "Missing importance matrix for tensor blk.64.attn_k.weight".
+    # La salida es dejar ese bloque en un quant que NO exija imatrix (Q4_0),
+    # que es lo que hizo bartowski con su IQ2_M del Qwen3.8. Es lo mismo para
+    # todos los quants de la tirada, asi que se calcula UNA vez.
+    local _nextn_bloque="" _qargs_comunes=()
+    [[ -n "$imatrix" ]] && _qargs_comunes+=(--imatrix "$imatrix")
+    if [[ -n "$imatrix" && ${#quants[@]} -gt 0 ]]; then
+        _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
+        if [[ -n "$_nextn_bloque" ]] \
+           && ! _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null; then
+            echo "[gguffer] aviso: el imatrix no cubre el bloque $_nextn_bloque (la cabeza MTP)."
+            echo "           Lo cuantizo en ${MTP_QUANT:-Q4_0}, que no exige imatrix."
+            _qargs_comunes+=(--tensor-type "blk\.${_nextn_bloque}\..*=${MTP_QUANT:-Q4_0}")
         fi
     fi
-    if [[ -n "$quant" && -n "$file_type" && "$file_type" == "$qnum" ]]; then
-        # El GGUF ya esta en ese quant (el caso del gpt-oss, que se
-        # convierte a MXFP4 sin cuantizar). Cuantizar encima seria
-        # dequantizar y re-cuantizar: se pierde calidad sin ganar nada.
-        echo "[gguffer] el GGUF ya esta en $quant (file_type=$file_type): no cuantizo otra vez"
-        if [[ "$out_final" != "$out_f16" ]]; then
-            rm -f "$out_final"
-            mv "$out_f16" "$out_final"
+
+    # ── el bucle de quants ─────────────────────────────────────────────────
+    # Bajar y convertir los pesos es lo caro (40-60 GB y una hora). Cuantizar
+    # es solo CPU. Por eso se pueden pedir VARIOS quants en una tirada: el
+    # F16 se convierte una vez y se reutiliza para todos.
+    local -a out_finals=()
+    local qi quant_i qnum_i
+    for qi in "${!quants[@]}"; do
+        quant_i="${quants[$qi]}"
+        qnum_i="${qnums[$qi]}"
+        local out_q="${out_paths[$qi]}"
+        out_finals+=("$out_q")
+
+        if [[ -n "$tipo_nombre" && "$tipo_nombre" != "$qnum_i" &&
+              "$tipo_nombre" != "F16" && "$tipo_nombre" != "BF16" && "$tipo_nombre" != "F32" ]]; then
+            echo "[gguffer] aviso: los pesos del repo ya venian en el quant $tipo_nombre ($file_type)."
+            echo "           Cuantizar a $quant_i encima es dequantizar y re-cuantizar:"
+            echo "           se pierde calidad sin ganar nada."
+            if [[ -d "$work/original" ]]; then
+                echo "           Usa --from-subdir original para cuantizar de los pesos SIN quantizar."
+            fi
         fi
-    elif [[ -n "$quant" ]]; then
-        echo "[gguffer] cuantizo a $quant -> $out_final..."
+
+        if [[ -n "$file_type" && "$file_type" == "$qnum_i" ]]; then
+            # El GGUF ya esta en ese quant (el caso del gpt-oss, que se
+            # convierte a MXFP4 sin cuantizar). Cuantizar encima seria
+            # dequantizar y re-cuantizar: se pierde calidad sin ganar nada.
+            echo "[gguffer] el GGUF ya esta en $quant_i (file_type=$file_type): no cuantizo otra vez"
+            if [[ "$out_q" != "$out_f16" ]]; then
+                rm -f "$out_q"
+                mv "$out_f16" "$out_q"
+            fi
+            continue
+        fi
+
+        # El que ya existe de una corrida anterior: no se rehace.
+        if [[ -f "$out_q" && $force -eq 0 && -z "$path" ]]; then
+            echo "[gguffer] ya existe: $out_q (usa --force para rehacerlo)"
+            continue
+        fi
+
+        echo "[gguffer] cuantizo a $quant_i -> $out_q..."
+        # La carpeta del destino puede no existir (con --out-principal es
+        # distinta de la del resto de quants).
+        mkdir -p "$(dirname "$out_q")" 2>/dev/null || true
         # OJO: llama-quantize solo parsea las opciones mientras el argumento
         # empiece por "--", y para en el primero que no. Las flags van ANTES
         # de los posicionales: si van detras, "--imatrix" se come el parseo
         # del numero de hilos y el cuantizador muere con
         # "invalid nthread '--imatrix'".
-        local qargs=()
-        [[ -n "$imatrix" ]] && qargs+=(--imatrix "$imatrix")
-
-        # ── la cabeza MTP y el imatrix ──────────────────────────────────────
-        # El imatrix se calcula sobre el modelo base, pero el GGUF lleva la
-        # MTP como un bloque MAS (el siguiente al ultimo). Ese bloque no esta
-        # en el imatrix, y con un quant very-low-bit el cuantizador aborta:
-        #   "Missing importance matrix for tensor blk.64.attn_k.weight".
-        # La salida es dejar ese bloque en un quant que NO exija imatrix
-        # (Q4_0), que es lo que hizo bartowski con su IQ2_M del Qwen3.8.
-        local _nextn_bloque=""
-        if [[ -n "$imatrix" && -n "$quant" ]]; then
-            _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
-            if [[ -n "$_nextn_bloque" ]] \
-               && ! _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null; then
-                echo "[gguffer] aviso: el imatrix no cubre el bloque $_nextn_bloque (la cabeza MTP)."
-                echo "           Lo cuantizo en ${MTP_QUANT:-Q4_0}, que no exige imatrix."
-                qargs+=(--tensor-type "blk\.${_nextn_bloque}\..*=${MTP_QUANT:-Q4_0}")
-            fi
-        fi
-
-        qargs+=("$out_f16" "$out_final" "$quant")
+        local qargs=("${_qargs_comunes[@]}")
+        qargs+=("$out_f16" "$out_q" "$quant_i")
         # La salida del cuantizador se guarda: si falla, su ultimo error dice
         # por que (el mensaje del gguffer solo no alcanza).
         local _gguffer_qlog="${TMPDIR:-/tmp}/gguffer-quant.$$.log"
@@ -4551,8 +4677,8 @@ cmd_gguffer() {
             # Aqui NO se borra nada: el clon de los safetensors y el GGUF
             # intermedio se quedan, y se dice como reintentar solo la
             # cuantizacion (que es la parte cara).
-            rm -f "$out_final"
-            echo "ERROR: fallo la cuantizacion a $quant" >&2
+            rm -f "$out_q"
+            echo "ERROR: fallo la cuantizacion a $quant_i" >&2
             echo "       conservo los pesos en: $work" >&2
             echo "       conservo el GGUF intermedio en: $out_f16" >&2
             echo "       reintenta solo la cuantizacion:" >&2
@@ -4573,32 +4699,36 @@ cmd_gguffer() {
             fi
             return 1
         fi
-        if (( keep_inter == 0 )); then rm -f "$out_f16"; fi
-    fi
+        # El intermedio se borra al FINAL de todos los quants, no aqui: con
+        # varios quants en una tirada, el siguiente lo necesita.
+    done
 
-    # ── FASE 4: verificar el GGUF ───────────────────────────────────────────
+    # ── FASE 4: verificar los GGUFs ─────────────────────────────────────────
     # Solo si el GGUF esta bien se borran los safetensors: si esta
     # corrupto, tenerlos vale mas que 60 GB de disco.
-    local verif_ok=0
-    if [[ -n "$_gguf_split" ]]; then
-        if "$_gguf_split" --dry-run "$out_final" "$out_dir/.gguffer-verif" >/dev/null 2>&1; then
-            verif_ok=1
+    local out_final verif_ok _q
+    for _q in "${out_finals[@]}"; do
+        out_final="$_q"
+        verif_ok=0
+        if [[ -n "$_gguf_split" ]]; then
+            if "$_gguf_split" --dry-run "$out_final" "$out_dir/.gguffer-verif" >/dev/null 2>&1; then
+                verif_ok=1
+            fi
         fi
-    fi
-    if (( verif_ok == 0 )); then
-        local chk_args=("$out_final")
-        [[ -n "$_libggml" ]] && chk_args+=(--lib "$_libggml")
-        if python3 "$_ggufcheck" "${chk_args[@]}"; then
-            verif_ok=1
+        if (( verif_ok == 0 )); then
+            local chk_args=("$out_final")
+            [[ -n "$_libggml" ]] && chk_args+=(--lib "$_libggml")
+            if python3 "$_ggufcheck" "${chk_args[@]}"; then
+                verif_ok=1
+            fi
         fi
-    fi
-
-    if (( verif_ok == 0 )); then
-        echo "ERROR: el GGUF no supera la verificacion: $out_final" >&2
-        echo "       NO borro los pesos: estan en $work" >&2
-        echo "       (usa --force para rehacerlo todo desde cero)" >&2
-        return 1
-    fi
+        if (( verif_ok == 0 )); then
+            echo "ERROR: el GGUF no supera la verificacion: $out_final" >&2
+            echo "       NO borro los pesos: estan en $work" >&2
+            echo "       (usa --force para rehacerlo todo desde cero)" >&2
+            return 1
+        fi
+    done
 
     # ── FASE 5: limpiar ─────────────────────────────────────────────────────
     if [[ -n "$repo" && $keep_source -eq 0 ]]; then
@@ -4608,11 +4738,24 @@ cmd_gguffer() {
         echo "[gguffer] el GGUF esta bien; conservo los safetensors en $work (--keep-source)"
     fi
     rm -f "$out_dir/.gguffer-verif"
+    # El intermedio se borra DESPUES de todos los quants (si no, el segundo
+    # cuant se queda sin su F16). Pero si el F16 es el resultado (--quant F16),
+    # no se toca: es el fichero final.
+    if (( keep_inter == 0 )) && (( ${#quants[@]} > 0 )); then
+        local _op _es_resultado=0
+        for _op in "${out_finals[@]}"; do
+            [[ "$_op" == "$out_f16" ]] && _es_resultado=1
+        done
+        (( _es_resultado == 0 )) && rm -f "$out_f16"
+    fi
 
     local _sz
-    _sz="$(du -h "$out_final" 2>/dev/null | cut -f1)"
-    echo "[gguffer] GGUF listo: $out_final (${_sz:-?})"
-    if [[ -z "$quant" ]]; then
+    for _q in "${out_finals[@]}"; do
+        out_final="$_q"
+        _sz="$(du -h "$out_final" 2>/dev/null | cut -f1)"
+        echo "[gguffer] GGUF listo: $out_final (${_sz:-?})"
+    done
+    if (( ${#quants[@]} == 0 )); then
         echo "[gguffer] AVISO: NO he cuantizado nada: el GGUF se ha quedado en $inter_up."
         echo "           Para cuantizarlo (reutilizando este mismo intermedio, sin volver"
         echo "           a descargar los pesos):"

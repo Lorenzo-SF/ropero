@@ -266,6 +266,7 @@ gguffer() {
         FAKE_QUANTIZE_GARBAGE="${FAKE_QUANTIZE_GARBAGE:-}" \
         FAKE_QUANTIZE_LOG="${FAKE_QUANTIZE_LOG:-}" \
         FAKE_QUANTIZE_MSG="${FAKE_QUANTIZE_MSG:-}" \
+        FAKE_CONVERT_COUNT="${FAKE_CONVERT_COUNT:-}" \
         bash "$REPO/bin/ropero" gguffer "$@"
 }
 
@@ -642,6 +643,106 @@ check "18a. avisa de que la arch no admite --no-mtp" \
       "$(cond 'printf %s "$out" | grep -q "esta arquitectura no admite --no-mtp"')" "$out"
 check "18b. reintenta sin el y convierte" \
       "$(cond 'printf %s "$out" | grep -q "GGUF listo"')" "$out"
+
+# ── 19: VARIOS quants en una tirada ───────────────────────────────────────
+# Bajar y convertir los pesos es lo caro (40-60 GB y una hora). Cuantizar es
+# solo CPU. Por eso se pueden pedir varios quants de golpe: el GGUF
+# intermedio se convierte UNA vez y se reutiliza para todos.
+# El conversor fake cuenta las conversiones en un fichero.
+cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
+import os, struct, sys
+args = sys.argv[1:]
+outfile = args[args.index("--outfile") + 1]
+contador = os.environ.get("FAKE_CONVERT_COUNT")
+if contador:
+    with open(contador, "a") as f:
+        f.write("x\n")
+def s(x):
+    b = x.encode(); return struct.pack("<Q", len(b)) + b
+body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
+body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
+idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 1) + struct.pack("<Q", 0)
+body += idx
+body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+with open(outfile, "wb") as f:
+    f.write(body)
+PY
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+rm -f "$WORK/convert_count.txt"
+out="$(FAKE_CONVERT_COUNT="$WORK/convert_count.txt" gguffer --repo owner/multi \
+        --quant IQ2_XXS --quant IQ3_XS 2>&1)"; rc=$?
+check "19a. dos quants: sin error"           "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "19b. hace los dos ficheros" \
+      "$(cond '[ -f "$GGUF_OUT/multi-IQ2_XXS.gguf" ] && [ -f "$GGUF_OUT/multi-IQ3_XS.gguf" ]')" \
+      "$(ls -A "$GGUF_OUT")"
+check "19c. convierte UNA sola vez" \
+      "$(cond '[ "$(wc -l < "$WORK/convert_count.txt" 2>/dev/null || echo 0)" = "1" ]')" \
+      "conversiones: $(cat "$WORK/convert_count.txt" 2>/dev/null | wc -l)"
+check "19d. cuantiza a los dos" \
+      "$(cond 'printf %s "$out" | grep -q "cuantizo a IQ2_XXS" && printf %s "$out" | grep -q "cuantizo a IQ3_XS"')" "$out"
+check "19e. avisa de los dos GGUFs" \
+      "$(cond 'printf %s "$out" | grep -q "GGUF listo" && [ "$(printf %s "$out" | grep -c "GGUF listo")" = "2" ]')" "$out"
+
+# con comas es lo mismo
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+rm -f "$WORK/convert_count.txt"
+out="$(FAKE_CONVERT_COUNT="$WORK/convert_count.txt" gguffer --repo owner/multi2 \
+        --quant IQ2_XXS,IQ3_XS 2>&1)"
+check "19f. con comas: hace los dos" \
+      "$(cond '[ -f "$GGUF_OUT/multi2-IQ2_XXS.gguf" ] && [ -f "$GGUF_OUT/multi2-IQ3_XS.gguf" ]')" \
+      "$(ls -A "$GGUF_OUT")"
+
+# un quant invalido entre varios: error claro, y no se descarga nada
+out="$(gguffer --repo owner/multi3 --quant IQ2_XXS --quant QUANT_INVENTADO 2>&1)"; rc=$?
+check "19g. quant invalido: error" \
+      "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "quant no valido: QUANT_INVENTADO"')" "$out"
+
+# con varios quants, la ruta exacta no vale (cada uno necesita la suya)
+out="$(gguffer --repo owner/multi4 --quant IQ2_XXS --quant IQ3_XS \
+        --out "$GGUF_OUT/exacto.gguf" 2>&1)"; rc=$?
+check "19h. varios quants + ruta exacta: error claro" \
+      "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "ruta exacta"')" "$out"
+
+# el intermedio se borra al FINAL: no antes, que el segundo quant lo necesita
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/multi5 --quant IQ2_XXS --quant IQ3_XS 2>&1)"
+check "19i. el intermedio se borra al final" \
+      "$(cond '[ ! -f "$GGUF_OUT/multi5-F16.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+
+# si uno de los quants YA existe, se respeta y se hace el otro
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+printf 'gguf viejo\n' > "$GGUF_OUT/multi6-IQ2_XXS.gguf"
+out="$(gguffer --repo owner/multi6 --quant IQ2_XXS --quant IQ3_XS 2>&1)"
+check "19j. el que ya existe: no lo rehace" \
+      "$(cond 'printf %s "$out" | grep -q "ya existe"')" "$out"
+check "19k. el que faltaba: lo hace" \
+      "$(cond '[ -f "$GGUF_OUT/multi6-IQ3_XS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+
+# si un quant falla a mitad, el otro no se hace y se conserva el intermedio
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_QUANTIZE_FAIL=1 gguffer --repo owner/multi7 --quant IQ2_XXS --quant IQ3_XS 2>&1)"; rc=$?
+check "19l. si un quant falla: error" "$(cond '[ "$rc" != "0" ]')" "rc=$rc: $out"
+check "19m. si un quant falla: conserva el intermedio" \
+      "$(cond '[ -f "$GGUF_OUT/multi7-F16.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+
+# ── 20: --out-principal: el primero va a la ruta exacta, los demas al dir ──
+# Con varios quants, uno va a la carpeta del modelo (la que espera el TOML)
+# y los demas se quedan ahi con su nombre propio, para comparar o subir.
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/principal --quant IQ2_XXS --quant IQ3_XS \
+        --out-principal "$GGUF_OUT/mi-modelo/Modelos-IQ2_XXS.gguf" 2>&1)"; rc=$?
+check "20a. el primero va a la ruta exacta" \
+      "$(cond '[ -f "$GGUF_OUT/mi-modelo/Modelos-IQ2_XXS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+check "20b. el segundo va con su nombre" \
+      "$(cond '[ -f "$GGUF_OUT/principal-IQ3_XS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+check "20c. sin error" "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+
+# --out-principal sin .gguf: error
+out="$(gguffer --repo owner/principal2 --quant IQ2_XXS \
+        --out-principal "$GGUF_OUT/mi-modelo" 2>&1)"; rc=$?
+check "20d. --out-principal sin .gguf: error" \
+      "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "fichero .gguf"')" "$out"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
