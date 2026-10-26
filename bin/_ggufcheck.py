@@ -229,6 +229,12 @@ class Gguf:
             "size_label": self.kv.get("general.size_label"),
             "block_count": self.kv.get("%s.block_count" % arch),
             "nextn": self.kv.get("%s.nextn_predict_layers" % arch),
+            # De donde viene el GGUF: el repo de los pesos sin cuantizar. Lo
+            # pone el conversor al leer el repo de HuggingFace, asi que el
+            # GGUF lleva su propia partida. Es lo que permite hacer el model
+            # card sin mantener una tabla al lado.
+            "base_model_repo": self.kv.get("general.base_model.0.repo_url"),
+            "base_model_name": self.kv.get("general.base_model.0.name"),
         }
         tipos = {}
         for t in self.tensors:
