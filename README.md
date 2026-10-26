@@ -173,6 +173,7 @@ curl http://localhost:9999/v1/chat/completions \
 | `ropero levels <modelo>` | los niveles de razonamiento que **declara** ese modelo |
 | `ropero args <modelo> [nivel]` | el argv final que recibiría el server, **sin arrancar nada** |
 | `ropero stop <modelo>\|all` | para lo que esté corriendo |
+| `ropero use <modelo>` | asegura que **ese** modelo sea el que se sirve, y espera a que esté listo |
 | `ropero install [engines\|models\|link]` | instala engines, modelos o enlaces |
 | `ropero config [engine]` | la configuración actual |
 | `ropero check` | verifica la instalación (no modifica nada) |
@@ -184,6 +185,30 @@ curl http://localhost:9999/v1/chat/completions \
 nivel (`--low` / `--medium` / `--high`) solo existe si el modelo lo declara
 en su TOML, y un nivel que no declara es un error de uso que deja el
 modelo sin arrancar. Por eso hay que poder preguntar antes.
+
+### `ropero use`: que el modelo que pides sea el que te responde
+
+El server de llama.cpp **no valida el campo `"model"` del body**: atiende con
+el modelo que tenga cargado. Así que si pides `qwen` por HTTP y hay un
+`gptoss` cargado, te contesta el `gptoss`. Sin error, sin aviso.
+
+`ropero use <modelo>` cierra ese hueco:
+
+- Si ese modelo ya se está sirviendo en el puerto destino, no toca nada y
+  sale con 0 (idempotente: se puede llamar en cada petición).
+- Si hay **otro** modelo en ese puerto, lo para **por puerto** (no por
+  nombre: `ropero stop <modelo>` mata en el primer puerto gestionado que
+  encaje, que puede no ser el suyo) y arranca el pedido.
+- Espera a que el modelo esté **listo de verdad**, no a que el puerto
+  escuche (esto ya lo hacía el arranque en background).
+
+El puerto es, por orden: `--port`, el `MODEL_PORT` del modelo, y el puerto
+base. Con `--port` el modelo se sirve ahí aunque esté pineado, que es lo que
+necesita un cliente que habla con un único endpoint.
+
+```bash
+ropero use qwen --port 9999
+```
 
 ### Flags del lanzador
 

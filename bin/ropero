@@ -927,6 +927,7 @@ _ropero_usage() {
         list)      printf 'USO: ropero list\n' ;;
         templates) printf 'USO: ropero templates\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        use)       printf 'USO: ropero use <modelo> [--port N] [--nivel N] [--flag F]\n' ;;
         models)    printf 'USO: ropero models\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
         levels)    printf 'USO: ropero levels <modelo>\n' ;;
@@ -1420,6 +1421,108 @@ cmd_stop() {
         echo "  Activos ahora: ninguno" >&2
     fi
     return 1
+}
+
+# -----------------------------------------------------------------------------
+# cmd_use <modelo> [--port N] [--nivel N] [--flag F]
+#
+#   Asegura que el modelo pedido SEA el que se está sirviendo, y espera a que
+#   esté listo. Idempotente.
+#
+# POR QUÉ EXISTE
+#   llama-server NO valida el campo "model" del body: atiende con el modelo
+#   que tenga cargado. O sea que pedir "marichocho/qwen" mientras hay un
+#   gptoss cargado NO da error: te contesta el gptoss. Registrar todos los
+#   modelos en el cliente sin más es una segunda copia de la verdad que
+#   miente en silencio.
+#
+#   Esto es lo que hace que el registro sea de fiar: el modelo que pides es
+#   el modelo que te responde.
+#
+#   EL PUERTO
+#     El destino es, por orden: --port, el MODEL_PORT del modelo (si está
+#     pineado), y el puerto base. Si el modelo está pineado en otro puerto,
+#     se dice cuál es: el cliente tiene que apuntar ahí.
+#
+#   IDEMPOTENTE
+#     Si ese modelo ya está sirviéndose en el puerto destino, no se toca nada
+#     y se sale con 0. Es lo que permite llamarlo en cada petición.
+# -----------------------------------------------------------------------------
+cmd_use() {
+    local model="" port_override="" level="" model_flags_set="" model_opts_set=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --port)
+                [[ $# -ge 2 ]] || _ropero_usage_error use "--port requiere un número de puerto"
+                port_override="$2"; shift 2 ;;
+            --nivel)
+                [[ $# -ge 2 ]] || _ropero_usage_error use "--nivel requiere un valor"
+                level="$2"; shift 2 ;;
+            --flag)
+                [[ $# -ge 2 ]] || _ropero_usage_error use "--flag requiere un valor"
+                model_flags_set+="${model_flags_set:+ }${2}"; shift 2 ;;
+            --*)
+                _ropero_usage_error use "opción desconocida: '$1'" ;;
+            *)
+                [[ -z "$model" ]] || _ropero_usage_error use "use acepta un solo modelo; recibidos: $model y $1"
+                model="$1"; shift ;;
+        esac
+    done
+
+    [[ -n "$model" ]] || _ropero_usage_error use "falta el modelo (uso: ropero use <modelo>)"
+
+    # Modelo desconocido → typo casi seguro. Se comprueba contra MODEL_NAMES
+    # (scripts + alias públicos), igual que hace cmd_stop: comparar contra lo
+    # que hay escuchando daría un acierto falso y luego un "no encontrado".
+    # Con `case` y no con `=~`: aquí se quiere coincidencia EXACTA de token, y
+    # un "q" no puede dar por bueno un "qwen".
+    local key="${model//-/_}"
+    case " ${MODEL_NAMES[*]} " in
+        *" $key "*) ;;
+        *) _ropero_usage_error use "modelo desconocido: '$model' (mira 'ropero list')" ;;
+    esac
+
+    # Puerto destino: --port > MODEL_PORT del modelo > puerto base.
+    local port="$port_override"
+    local pinned=""
+    if [[ -z "$port" ]]; then
+        pinned=$(_model_port "$key" 2>/dev/null || echo "")
+        port="${pinned:-$PORT}"
+    fi
+
+    if port_listening "$port"; then
+        local current
+        current=$(get_model_on_port "$port" 2>/dev/null || echo "")
+        if [[ "$current" == "$model" ]]; then
+            echo "✓ '$model' ya está sirviéndose en :$port"
+            echo "ROPERO_PORT=$port"
+            return 0
+        fi
+        # Otra cosa en el puerto destino: se para POR PUERTO, no por nombre.
+        # Parar por nombre mata en el primer puerto gestionado que encaje,
+        # que puede no ser este (la trampa de 'ropero stop <modelo>').
+        local eng
+        eng=$(_engine_human "$port" 2>/dev/null || echo "?")
+        echo "→ parando '$current' ($eng) en :$port"
+        if ! _stop_port "$port"; then
+            echo "✗ no se pudo parar lo que hay en :$port" >&2
+            return 1
+        fi
+    fi
+
+    if [[ -n "$pinned" && "$pinned" != "$port" ]]; then
+        echo "→ el modelo está pineado en :$pinned; se sirve en :$port" >&2
+    fi
+
+    # El arranque en background ya espera al MODELO (no solo al puerto) y
+    # respeta ROPERO_START_TIMEOUT.
+    start_model "$model" 1 0 0 "$port_override" "$level" "$model_flags_set" "$model_opts_set"
+    local rc=$?
+    if (( rc == 0 )); then
+        echo "ROPERO_PORT=$port"
+    fi
+    return $rc
 }
 
 # -----------------------------------------------------------------------------
@@ -2951,13 +3054,15 @@ cmd_help() {
     cat <<'EOF'
 USO: ropero <modelo> [--background|--cpu|--force|--port N]
      ropero install [engines|models|link] [selección] [--force]
-     ropero {engines|models|link|config|status|stop|list|template|check} [--help]
+     ropero {engines|models|link|config|status|stop|use|list|template|check} [--help]
 
 Instalación de ropero (una línea):
   curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
 
 `install` gestiona engines, modelos y enlaces. Sin destino abre engines y luego modelos.
 `check` verifica la instalación. No modifica nada.
+`use <modelo>` asegura que ese modelo sea el que se está sirviendo, y espera
+a que esté listo. Es idempotente: si ya lo está, no toca nada.
 EOF
 }
 
@@ -2971,6 +3076,7 @@ _ropero_command_help() {
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
         levels)    printf 'USO: ropero levels <modelo>\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        use)       printf 'USO: ropero use <modelo> [--port N] [--nivel N] [--flag F]\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         template)  printf 'USO: ropero template\n' ;;
         check)     printf 'USO: ropero check\n' ;;
@@ -3982,6 +4088,12 @@ main() {
             shift
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help stop; exit 0; fi
             cmd_stop "$@"
+            exit $?
+            ;;
+        use)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help use; exit 0; fi
+            cmd_use "$@"
             exit $?
             ;;
     *)
