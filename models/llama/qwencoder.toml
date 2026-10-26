@@ -13,7 +13,7 @@ gguf   = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
 [download]
 repo = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
 file = "Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf"
-size = "11.97 GB"
+size = "12.85 GB"
 
 [args]
 base = [

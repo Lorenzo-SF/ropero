@@ -5,7 +5,10 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 196608
+# ctx NATIVO del GGUF (262144). Cabe con turbo3: el IQ2_M real son 10.52 GB
+# (no 12.80: ese size era del IQ3_XS), y a 262144 el KV turbo3 son 3.5-4 GB.
+# Margen estimado: 350-870 MiB de los 15.300 MiB libres.
+context = 262144
 
 [files]
 gguf   = "Qwen3.8-27B-IQ2_M.gguf"
@@ -13,7 +16,7 @@ gguf   = "Qwen3.8-27B-IQ2_M.gguf"
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-IQ2_M.gguf"
-size = "12.80 GB"
+size = "10.52 GB"
 
 [levels]
 # "high" es un ALIAS de "xhigh": el chat template del qwen35 solo acepta
