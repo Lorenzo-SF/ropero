@@ -4217,7 +4217,10 @@ cmd_gguffer() {
     local out_final="$out_f16"
     [[ -n "$quant" ]] && out_final="$out_dir/${nombre}-${quant}.gguf"
 
-    if [[ -f "$out_final" && $force -eq 0 && -z "$path" ]]; then
+    # El intermedio y el final pueden ser el mismo fichero (--quant F16), y
+    # en ese caso el "ya existe" no aplica: es el intermedio del que
+    # speak, no un resultado de una corrida anterior.
+    if [[ "$out_final" != "$out_f16" && -f "$out_final" && $force -eq 0 && -z "$path" ]]; then
         echo "[gguffer] ya existe: $out_final (usa --force para rehacerlo)"
         return 0
     fi
@@ -4245,7 +4248,7 @@ cmd_gguffer() {
     # dequantizar y re-cuantizar: se pierde calidad sin ganar nada. Por eso
     # se mira ANTES, con el dato real y no con una suposicion.
     local file_type
-    file_type="$(python3 "$_ggufcheck" "$out_f16" --info 2>/dev/null | grep -o '"file_type":[^,}]*' | head -1 | tr -dc '0-9')"
+    file_type="$(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1 | tr -dc '0-9')"
     if [[ -n "$quant" && -n "$file_type" && "$file_type" != "0" && "$file_type" != "$qnum" ]]; then
         echo "[gguffer] aviso: los pesos del repo ya venian en el quant $file_type."
         echo "           Cuantizar a $quant encima es dequantizar y re-cuantizar:"
@@ -4259,8 +4262,10 @@ cmd_gguffer() {
         # convierte a MXFP4 sin cuantizar). Cuantizar encima seria
         # dequantizar y re-cuantizar: se pierde calidad sin ganar nada.
         echo "[gguffer] el GGUF ya esta en $quant (file_type=$file_type): no cuantizo otra vez"
-        rm -f "$out_final"
-        mv "$out_f16" "$out_final"
+        if [[ "$out_final" != "$out_f16" ]]; then
+            rm -f "$out_final"
+            mv "$out_f16" "$out_final"
+        fi
     elif [[ -n "$quant" ]]; then
         echo "[gguffer] cuantizo a $quant -> $out_final..."
         local qargs=("$out_f16" "$out_final" "$quant")

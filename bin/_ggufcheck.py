@@ -195,6 +195,19 @@ def main(argv):
         print(json.dumps(r, indent=2, default=str))
         return 0
 
+    # --tipo-predominante: el tipo de tensor que mas hay. Es el tipo de
+    # los pesos, que es lo que dice si el GGUF ya esta quantizado. No
+    # sirve el 'general.file_type' porque el conversor no lo pone.
+    if "--tipo-predominante" in argv:
+        if not g.tensors:
+            print(0)
+            return 1
+        conteo = {}
+        for t in g.tensors:
+            conteo[t["type"]] = conteo.get(t["type"], 0) + 1
+        print(max(conteo, key=lambda k: conteo[k]))
+        return 0
+
     print("GGUF: %s" % path)
     print("  %.2f GiB | arch=%s | tensores=%d | file_type=%s | %s | nextn=%s"
           % (g.tam / 1073741824.0, r["arch"], r["tensores"], r["file_type"],
