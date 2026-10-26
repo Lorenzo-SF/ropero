@@ -13,7 +13,7 @@ gguf   = "Qwen3.8-27B-IQ2_M.gguf"
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-IQ2_M.gguf"
-size = "12.80 GB"
+size = "10.52 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]

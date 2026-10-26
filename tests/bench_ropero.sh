@@ -45,16 +45,30 @@
 # ── SEPARADO DONDE CORRE Y DONDE DEPOSITA ────────────────────────────────
 #   · MODELOS_DIR  (por defecto ~/test)  -> las carpetas de los modelos, con
 #     la configuracion de opencode de cada una. Ahi se ejecuta opencode run.
-#   · OUT_DIR      (por defecto <este directorio>/resultados) -> donde quedan
-#     los resultados. Va en .gitignore.
+#   · OUT_DIR      (por defecto ~/test/resultados) -> donde quedan los
+#     resultados: una carpeta por modelo y el paquete del juez.
+#
+# ── INDEPENDIENTE DE DONDE ESTE EL SCRIPT ────────────────────────────────
+#   El bench se puede copiar a donde uno hace las pruebas (~/test/) o
+#   dejarlo en el repo. NO depende de estar junto al repo de ropero:
+#     · el ctx del modelo lo pregunta al ropero INSTALADO (`ropero list`),
+#       que es el que arranca;
+#     · los prompts se buscan en PROMPTS_DIR (por defecto, junto al
+#       script);
+#     · los modelos y los resultados, en MODELOS_DIR y OUT_DIR.
+#   Antes el ctx se buscaba con una ruta RELATIVA al script
+#   ($AQUI/../models/llama/), que con el bench copiado daba ctx=0, la
+#   espera se quedaba vacia y el bench fallaba al instante matando el
+#   server de llama.cpp.
 #
 # USO:
-#   ./bench_ropero.sh                # todos los modelos
+#   ./bench_ropero.sh                # lista los modelos y sale (no prueba nada)
 #   ./bench_ropero.sh gptoss qwen    # solo esos
+#   ./bench_ropero.sh all            # todos los de MODELOS_DIR
 #   MODELOS="gptoss qwen" ./bench_ropero.sh   # lo mismo, por variable
 #   PROMPTS="pruebas1.md" ./bench_ropero.sh gptoss     # solo la prueba 1
 #   FORCE=1 ./bench_ropero.sh gptoss  # repetir aunque ya este probado
-#   TEMP=0.1 ./bench_ropero.sh        # medir a otra temperatura
+#   TEMP=0.1 ./bench_ropero.sh gptoss # medir a otra temperatura
 #
 # Los prompts se pueden cambiar por variable, pero la lista por defecto son
 # los cuatro bloques del banco: pruebas1 (G1-G16), pruebas2a (S1-S9),
@@ -70,10 +84,10 @@ AQUI="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── AJUSTES ────────────────────────────────────────────────────────────────
 MODELOS_DIR="${MODELOS_DIR:-$HOME/test}"
-OUT_DIR="${OUT_DIR:-$AQUI/resultados}"
-# Filtro de carpetas a probar. Vacio = todas las de MODELOS_DIR.
-# No hay una lista fija aqui a proposito: la lista de modelos que hay en el
-# roster vive en models/llama/, y escribirla tambien en el script seria una
+OUT_DIR="${OUT_DIR:-$MODELOS_DIR/resultados}"
+# Que se prueba se decide con los argumentos (o MODELOS=), no con una lista
+# fija aqui a proposito: la lista de modelos que hay en el roster vive en
+# models/llama/, y escribirla tambien en el script seria una
 # segunda copia de la verdad que se desincroniza sola.
 MODELOS="${MODELOS:-}"
 PROMPTS_DIR="${PROMPTS_DIR:-$AQUI}"
@@ -371,6 +385,40 @@ sys.exit(1 if mal else 0)
 PYEOF
 }
 
+# ── SIN ARGUMENTOS: LISTAR Y SALIR ────────────────────────────────────────
+# Esto va ANTES del precheck a proposito: listar los modelos disponibles no
+# necesita ni ropero ni opencode. Probar, si.
+#
+#   listar_modelos — lo que hay en MODELOS_DIR, con su nombre de ropero.
+listar_modelos() {
+  local d c n=0 m
+  echo "Modelos disponibles en $MODELOS_DIR:"
+  for d in "$MODELOS_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    c="$(basename "$d")"
+    [[ "$c" == "resultados" ]] && continue
+    m="${MODELO_ROPERO[$c]:-$c}"
+    printf '  %-16s (ropero: %s)\n' "$c" "$m"
+    n=$((n + 1))
+  done
+  (( n > 0 )) || echo "  (ninguna carpeta de modelo)"
+  echo ""
+  echo "Para probar:   ./bench_ropero.sh <modelo> [<modelo> ...]"
+  echo "               ./bench_ropero.sh all"
+}
+
+pedidos=()
+if [[ -n "$MODELOS" ]]; then
+  read -r -a pedidos <<< "$MODELOS"
+elif [[ $# -gt 0 ]]; then
+  pedidos=("$@")
+fi
+
+if [[ ${#pedidos[@]} -eq 0 ]]; then
+  listar_modelos
+  exit 0
+fi
+
 # ── PRECHECK ───────────────────────────────────────────────────────────────
 for b in ropero opencode curl python3; do
   command -v "$b" >/dev/null 2>&1 || { err "falta '$b' en el PATH"; exit 1; }
@@ -390,40 +438,41 @@ if command -v flock >/dev/null 2>&1; then
   flock -n 9 || { err "ya hay otra corrida de bench en marcha"; exit 1; }
 fi
 
-# ── CARROJERAS ─────────────────────────────────────────────────────────────
-# Tres formas de elegir, en este orden de precedencia:
-#   1. argumentos en la linea de orden:      ./bench_ropero.sh gptoss qwen
-#   2. la variable MODELOS:                   MODELOS="gptoss qwen" ./bench_ropero.sh
-#   3. todas las carpetas de MODELOS_DIR
+# ── QUÉ SE PRUEBA ──────────────────────────────────────────────────────────
+# SIN ARGUMENTOS NO SE PRUEBA NADA: se listan los modelos disponibles y se
+# sale. Probar 15 modelos sin querer tarda horas, llena la VRAM de modelos
+# que no te interesan y deja el portatil encogido.
+#
+#   ./bench_ropero.sh gptoss qwen   -> prueba esos
+#   ./bench_ropero.sh all            -> prueba todos los de MODELOS_DIR
+#   MODELOS="gptoss qwen" ./bench_ropero.sh
+#   ./bench_ropero.sh                -> lista los disponibles y sale
+#
+# Los modelos son las CARPETAS de MODELOS_DIR: ~/test/<modelo>/. El nombre
+# de la carpeta es el nombre del modelo de ropero, salvo en los dos casos
+# del mapa MODELO_ROPERO.
+
 carpetas=()
-for d in "$MODELOS_DIR"/*/; do
-  [[ -d "$d" ]] || continue
-  c="$(basename "$d")"
-  # El directorio de resultados vive dentro de MODELOS_DIR cuando el bench
-  # se ejecuta desde ahi (p.ej. ~/test/). No es un modelo: se salta.
-  [[ "$d" == "$OUT_DIR/" ]] && continue
-  if [[ $# -gt 0 ]]; then
-    keep=0
-    for o in "$@"; do [[ "$c" == "$o" ]] && keep=1; done
-    (( keep )) || continue
-  elif [[ -n "$MODELOS" ]]; then
-    keep=0
-    for o in $MODELOS; do [[ "$c" == "$o" ]] && keep=1; done
-    (( keep )) || continue
+if [[ "${pedidos[0]}" == "all" ]]; then
+  for d in "$MODELOS_DIR"/*/; do
+    [[ -d "$d" ]] || continue
+    c="$(basename "$d")"
+    [[ "$c" == "resultados" ]] && continue
+    carpetas+=("$c")
+  done
+  if [[ ${#carpetas[@]} -eq 0 ]]; then
+    err "no hay carpetas de modelo en $MODELOS_DIR"
+    exit 1
   fi
-  carpetas+=("$c")
-done
-
-if [[ ${#carpetas[@]} -eq 0 ]]; then
-  err "no hay carpetas que probar en $MODELOS_DIR"
-  exit 1
-fi
-
-# El bench dentro de MODELOS_DIR funciona, pero conviene saberlo: el
-# directorio de resultados queda mezclado con las carpetas de los modelos.
-if [[ "$AQUI" == "$MODELOS_DIR" || "$AQUI" == "$MODELOS_DIR/" ]]; then
-  warn "el bench está dentro de MODELOS_DIR ($MODELOS_DIR); los resultados van a $OUT_DIR"
-  warn "  (si prefieres, deja el bench en otro sitio y usa MODELOS_DIR=$MODELOS_DIR)"
+else
+  for o in "${pedidos[@]}"; do
+    if [[ ! -d "$MODELOS_DIR/$o" ]]; then
+      err "no hay carpeta para '$o' en $MODELOS_DIR"
+      listar_modelos
+      exit 1
+    fi
+    carpetas+=("$o")
+  done
 fi
 
 # ── EL CORPUS DE LA PRUEBA LARGA ───────────────────────────────────────────

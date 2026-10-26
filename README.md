@@ -236,7 +236,7 @@ Activos:
 >
 > ```console
 > $ ropero list
->   qwen         slot :9999 / :9998    ctx=196608     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-IQ2_M.gguf
+>   qwen         slot :9999 / :9998    ctx=163840     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-IQ2_M.gguf
 >   nemotron     slot :9999 / :9998    ctx=1048576    ngl=52 cpu-moe=18          q4_0    engine=llama-server   gguf=NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf
 > ```
 >
@@ -470,7 +470,7 @@ Los runners-up, para cada perfil:
 | `qwen36` | coder + analista, el más fuerte que entra | 73.4 % SWE-bench V, 3B activos, 262K | MoE: la calidad del MoE es menor que la de un denso del mismo tamaño |
 | `muse` | el más listo y con razonamiento fino | SWE-bench Pro **51.2 %** (el más alto de la tabla), IFBench 77.0, AIME 94.7, y **4 niveles** (low/medium/high/xhigh) vía system prompt | Es **denso** 30B: sin MTP va a 15-25 t/s |
 | `laguna` | agente con herramientas | thinking **por petición**, APEX (cuantización por capa, no plana) | 37.5 % TB 2.0; es denso en atención (su KV es 8× la de un MoE), así que paga `--n-cpu-moe 4` para el ctx nativo |
-| `qwen` | el denso de referencia | Qwen3.8-27B, IQ3_XS | 61.7 % SWE-bench Pro |
+| `qwen` | el denso de referencia | Qwen3.8-27B, IQ2_M | 61.7 % SWE-bench Pro |
 | `fable` | coder con el mejor tool-use | Opus-4.8 tool use, 51.5 % TB | Su GGUF trae la cabeza MTP y hay que quitarla |
 
 **Muse Glimmer** (Meta, Apache 2.0) es probablemente el mejor "analista" del
