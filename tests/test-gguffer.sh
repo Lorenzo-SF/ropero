@@ -304,6 +304,46 @@ check "10b. --no-mtp -> el conversor lo recibe"   \
       "$(cond 'grep -q -- "--no-mtp" "$GGUF_OUT"/*.args 2>/dev/null')" \
       "$(cat "$GGUF_OUT"/*.args 2>/dev/null)"
 
+# ══ 11. sin --quant: avisa de que NO ha cuantizado ══════════════════════════
+rm -rf "$REPO_DIR" "$GGUF_OUT"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/repo 2>&1)"; rc=$?
+check "11a. sin --quant -> sin error"             "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "11b. sin --quant -> lo deja en F16"        "$(cond 'ls "$GGUF_OUT"/*-F16.gguf >/dev/null 2>&1')" "$(ls -A "$GGUF_OUT")"
+check "11c. sin --quant -> AVISA de que no ha cuantizado" \
+      "$(cond 'printf %s "$out" | grep -q "NO he cuantizado"')" "$out"
+check "11d. sin --quant -> dice como cuantizarlo" \
+      "$(cond 'printf %s "$out" | grep -q "ropero gguffer --repo"')" "$out"
+
+# ══ 12. reutiliza un intermedio que ya haya (F16 o BF16) ═══════════════════
+rm -rf "$REPO_DIR" "$GGUF_OUT"/* "$WORK/hfcache"; mkdir -p "$GGUF_OUT"
+cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
+import struct
+import sys
+
+args = sys.argv[1:]
+outfile = args[args.index("--outfile") + 1]
+with open(outfile + ".outtype", "w") as f:
+    f.write(args[args.index("--outtype") + 1])
+
+def s(x):
+    b = x.encode()
+    return struct.pack("<Q", len(b)) + b
+
+body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
+body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
+body += idx
+body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+with open(outfile, "wb") as f:
+    f.write(body)
+PY
+# un BF16 de una corrida anterior: se debe reutilizar, no convertir
+printf 'gguf viejo' > "$GGUF_OUT/repo-BF16.gguf"
+out="$(gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
+check "12a. reutiliza el BF16 que habia" "$(cond 'printf %s "$out" | grep -q "reutilizo el GGUF intermedio"')" "$out"
+check "12b. no vuelve a convertir"          "$(cond '[ ! -f "$GGUF_OUT"/*.outtype ]')" "$(ls -A "$GGUF_OUT")"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then

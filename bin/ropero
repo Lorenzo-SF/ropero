@@ -4148,7 +4148,15 @@ cmd_gguffer() {
     # ── FASE 2: conversion a GGUF ───────────────────────────────────────────
     local inter_up="${inter^^}"
     [[ "$inter_up" == "F16" || "$inter_up" == "BF16" ]] || { echo "ERROR: --intermedio solo admite f16 o bf16" >&2; return 2; }
-    local out_f16="$out_dir/${nombre}-${inter_up}.gguf"
+    # El intermedio se reutiliza SEA CUAL SEA el que haya (F16 o BF16): si
+    # te has quedado con uno del paso anterior, no se vuelve a convertir.
+    # Importa porque el nombre depende de --intermedio y cambiar la flag
+    # entre pasos dejaba el intermedio viejo huérfano.
+    local out_f16="" _cand
+    for _cand in "$out_dir/${nombre}-F16.gguf" "$out_dir/${nombre}-BF16.gguf"; do
+        if [[ -f "$_cand" ]]; then out_f16="$_cand"; break; fi
+    done
+    [[ -z "$out_f16" ]] && out_f16="$out_dir/${nombre}-${inter_up}.gguf"
     local out_final="$out_f16"
     [[ -n "$quant" ]] && out_final="$out_dir/${nombre}-${quant}.gguf"
 
@@ -4267,6 +4275,12 @@ cmd_gguffer() {
     local _sz
     _sz="$(du -h "$out_final" 2>/dev/null | cut -f1)"
     echo "[gguffer] GGUF listo: $out_final (${_sz:-?})"
+    if [[ -z "$quant" ]]; then
+        echo "[gguffer] AVISO: NO he cuantizado nada: el GGUF se ha quedado en $inter_up."
+        echo "           Para cuantizarlo (reutilizando este mismo intermedio, sin volver"
+        echo "           a descargar los pesos):"
+        echo "             ropero gguffer --repo ${repo:-(<repo>)} --quant <QUANT>"
+    fi
     return 0
 }
 
