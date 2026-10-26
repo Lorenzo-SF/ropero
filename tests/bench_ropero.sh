@@ -162,7 +162,11 @@ modelo_responde() {
 
 esperar_modelo() {
   local esperado="${1:-$MODELO_ROPERO_ESPERADO}"
-  local deadline=$(( $(date +%s) + ESPERA ))
+  # La espera NUNCA es 0: si ESPERA se quedara vacía, el deadline sería
+  # "ahora" y el bench fallaría al instante (matando el server) sin esperar
+  # al modelo.
+  local espera="${ESPERA:-$ESPERA_MIN}"
+  local deadline=$(( $(date +%s) + espera ))
   while (( $(date +%s) < deadline )); do
     if [[ -n "$esperado" ]]; then
       modelo_responde "$esperado" && return 0
@@ -395,6 +399,9 @@ carpetas=()
 for d in "$MODELOS_DIR"/*/; do
   [[ -d "$d" ]] || continue
   c="$(basename "$d")"
+  # El directorio de resultados vive dentro de MODELOS_DIR cuando el bench
+  # se ejecuta desde ahi (p.ej. ~/test/). No es un modelo: se salta.
+  [[ "$d" == "$OUT_DIR/" ]] && continue
   if [[ $# -gt 0 ]]; then
     keep=0
     for o in "$@"; do [[ "$c" == "$o" ]] && keep=1; done
@@ -410,6 +417,13 @@ done
 if [[ ${#carpetas[@]} -eq 0 ]]; then
   err "no hay carpetas que probar en $MODELOS_DIR"
   exit 1
+fi
+
+# El bench dentro de MODELOS_DIR funciona, pero conviene saberlo: el
+# directorio de resultados queda mezclado con las carpetas de los modelos.
+if [[ "$AQUI" == "$MODELOS_DIR" || "$AQUI" == "$MODELOS_DIR/" ]]; then
+  warn "el bench está dentro de MODELOS_DIR ($MODELOS_DIR); los resultados van a $OUT_DIR"
+  warn "  (si prefieres, deja el bench en otro sitio y usa MODELOS_DIR=$MODELOS_DIR)"
 fi
 
 # ── EL CORPUS DE LA PRUEBA LARGA ───────────────────────────────────────────
@@ -440,11 +454,46 @@ inyectar_corpus() {
 
 # El ctx de cada modelo se lee de su TOML (la fuente de verdad). Con esto el
 # bench puede COMPROBAR que el test cabe antes de lanzar, y avisar si no.
+# ctx_de_modelo <modelo> — el contexto del modelo, o 0 si no se sabe.
+#
+# POR QUÉ NO SE BUSCA EL TOML RELATIVO AL BENCH
+#   El bench está pensado para poder copiarse a donde uno hace las pruebas
+#   (~/test/ y compañía), y el TOML vive en el repo de ropero, no junto al
+#   bench. Con la ruta relativa, un bench copiado devolvía ctx=0, la espera
+#   se quedaba en 0, y el bench fallaba al instante y mataba el server sin
+#   llegar a esperar al modelo.
+#
+#   La fuente de verdad es el ropero INSTALADO (es el que arranca):
+#   `ropero list` deriva el ctx de los TOMLs. Si no está en el PATH, se
+#   busca el TOML en los sitios habituales.
 ctx_de_modelo() {
-    local modelo="$1"
-    local toml="$AQUI/../models/llama/$modelo.toml"
-    [[ -f "$toml" ]] || { printf '0\n'; return; }
-    sed -n 's/^context[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$toml" | head -1
+    local modelo="$1" ctx=""
+
+    if command -v ropero >/dev/null 2>&1; then
+        ctx=$(ropero list 2>/dev/null | awk -v want="$modelo" '
+            $1 == want {
+                for (i = 1; i <= NF; i++)
+                    if ($i ~ /^ctx=/) { sub(/^ctx=/, "", $i); print $i; exit }
+            }')
+    fi
+    if [[ -n "$ctx" && "$ctx" != "0" ]]; then
+        printf '%s\n' "$ctx"
+        return 0
+    fi
+
+    local d toml
+    for d in "${ROPERO_ROOT:-}" "$AQUI/.." "$AQUI/../.." "$HOME/ropero" "$HOME/setup"; do
+        [[ -n "$d" ]] || continue
+        toml="$d/models/llama/$modelo.toml"
+        [[ -f "$toml" ]] || continue
+        ctx=$(sed -n 's/^context[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$toml" | head -1)
+        if [[ -n "$ctx" && "$ctx" != "0" ]]; then
+            printf '%s\n' "$ctx"
+            return 0
+        fi
+    done
+
+    printf '0\n'
 }
 
 GLOBAL="$OUT_DIR/resumen-global.tsv"
@@ -624,10 +673,18 @@ AGENTS_EOF
       # La espera se escala con el ctx: 900 s de base, y 1 s extra por cada
       # 32K de tokens de contexto (redondeado a lo alto).
       ctx_para_espera="$(ctx_de_modelo "$modelo")"
-      if [[ -z "$ESPERA" && "$ctx_para_espera" != "0" ]]; then
-          extra=$(( (ctx_para_espera + 32767) / 32768 ))
-          ESPERA=$(( ESPERA_MIN + extra * 60 ))
-          info "  $tid: esperando ${ESPERA}s (ctx $ctx_para_espera)"
+      if [[ -z "$ESPERA" ]]; then
+          if [[ -z "$ctx_para_espera" || "$ctx_para_espera" == "0" ]]; then
+              # Sin ctx conocido NO se espera 0 segundos: eso hace que el
+              # bench falle al instante y mate el server, sin llegar a
+              # esperar al modelo. Se espera el mínimo y se avisa.
+              ESPERA=$ESPERA_MIN
+              warn "  $tid: no sé el ctx de $modelo; espero ${ESPERA}s (el mínimo)"
+          else
+              extra=$(( (ctx_para_espera + 32767) / 32768 ))
+              ESPERA=$(( ESPERA_MIN + extra * 60 ))
+              info "  $tid: esperando ${ESPERA}s (ctx $ctx_para_espera)"
+          fi
       fi
 
       # El nivel es un flag (ropero gptoss --high), y SOLO lo acepta un

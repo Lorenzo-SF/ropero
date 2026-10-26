@@ -73,6 +73,33 @@ function ropero(args: string[], timeoutMs = 900_000): Promise<Resultado> {
   })
 }
 
+/**
+ * Los modelos que ropero conoce, según el ropero INSTALADO (que es el que
+ * arranca). Se cachea: cambia muy rara vez y `ropero list` no es gratis.
+ *
+ * POR QUÉ ESTE FILTRO
+ *   El modelID de opencode no siempre es un modelo de ropero. Por ejemplo,
+ *   un config que declare "Puertourraco" como nombre del provider local no
+ *   tiene por qué corresponderse con ningún modelo de ropero. En ese caso el
+ *   plugin NO hace nada: el server ya está sirviendo lo que sea, y meter a
+ *   ropero por medio solo conseguiría romper la petición.
+ */
+let modelosConocidos: Set<string> | null = null
+
+async function modelosDeRopero(): Promise<Set<string>> {
+  if (modelosConocidos) return modelosConocidos
+  const r = await ropero(["list"], 30_000)
+  const set = new Set<string>()
+  if (r.code === 0) {
+    for (const line of r.stdout.split("\n")) {
+      const m = line.match(/^\s{2}([A-Za-z0-9._-]+)\s+/)
+      if (m) set.add(m[1])
+    }
+  }
+  modelosConocidos = set
+  return set
+}
+
 /** El texto del primer mensaje de usuario, para el título local. */
 function primerTexto(messages: readonly any[]): string {
   for (const m of messages) {
@@ -99,6 +126,7 @@ export default Plugin.define({
     // peticiones seguidas no lanzan dos 'ropero use'.
     let servido: string | null = null
     let enCurso: Promise<void> | null = null
+    const avisados = new Set<string>()
 
     async function correr(modelo: string): Promise<void> {
       const args = ["use", modelo]
@@ -115,6 +143,18 @@ export default Plugin.define({
     }
 
     async function asegurar(modelo: string): Promise<void> {
+      // Solo si el modelo es UNO de ropero. Si el modelID de opencode no
+      // corresponde a ningún modelo de ropero (un alias propio del config,
+      // por ejemplo), el plugin no toca nada: el server ya está sirviendo
+      // lo que tenga y llamar a ropero solo rompería la petición.
+      const conocidos = await modelosDeRopero()
+      if (!conocidos.has(modelo)) {
+        if (!avisados.has(modelo)) {
+          avisados.add(modelo)
+          console.log(`[ropero] '${modelo}' no es un modelo de ropero: no hago nada`)
+        }
+        return
+      }
       if (servido === modelo) return
       if (enCurso) {
         try {
