@@ -132,6 +132,34 @@ imatrix_reciente() {
         | head -1
 }
 
+# El imatrix EXACTO que uso esta cuantizacion, segun la procedencia.
+#
+#   imatrix_de <repo_de_los_pesos> <repo_del_imatrix> <fichero_del_imatrix>
+#
+# El gguffer deja el imatrix en ~/.cache/ropero/gguffer/imatrix/<owner>__<repo>/
+# donde <owner>__<repo> es el repo de HF del que se BAJO la matriz (no el de
+# los pesos). Con la procedencia se sabe el nombre exacto del fichero: sin
+# ella, "el mas reciente de la cache" puede ser la matriz de otro modelo.
+imatrix_de() {
+    local pesos="$1" repo="$2" fichero="$3" cache dir
+    cache="${GGUF_IMATRIX_CACHE:-$HOME/.cache/ropero/gguffer/imatrix}"
+    [[ -d "$cache" ]] || return 0
+    if [[ -n "$repo" ]]; then
+        dir="$cache/${repo//\//__}"
+        if [[ -n "$fichero" && -f "$dir/$fichero" ]]; then
+            printf '%s' "$dir/$fichero"
+            return 0
+        fi
+        if [[ -d "$dir" ]]; then
+            find "$dir" -type f \( -name '*.gguf' -o -name '*.gguf_file' -o -name '*.imatrix' \) 2>/dev/null \
+                | head -1
+            return 0
+        fi
+    fi
+    [[ -n "$pesos" ]] && imatrix_reciente "$pesos"
+    return 0
+}
+
 # ── la lista de GGUFs ─────────────────────────────────────────────────────
 listar_ggufs() {
     if [[ -n "$FICHERO" ]]; then
@@ -144,6 +172,7 @@ listar_ggufs() {
 subir_uno() {
     local f="$1"
     local carpeta base quant destino base_model repo_url
+    local fuente_repo="" imx_repo="" imx_file=""
 
     if [[ ! -f "$f" ]]; then
         echo "  [x] no existe: $f" >&2
@@ -183,50 +212,74 @@ elif n:
     echo "     destino: $destino"
     [[ -n "$base_model" ]] && echo "     base:    $base_model"
 
+    # ── la procedencia ──
+    # El GGUF NO lleva el base_model en su metadata: el conversor de
+    # llama.cpp no lo escribe (convert_hf_to_gguf.py no llama a
+    # add_base_model_repo_url). Quien lo sabe es el gguffer, que deja el
+    # .fuente.json al lado del GGUF. Sin esto, el imatrix se buscaria "el
+    # mas reciente de la cache", que con varios es el equivocado.
+    if [[ -f "$f.fuente.json" ]]; then
+        local _fuente
+        _fuente="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    raise SystemExit(0)
+imx = d.get("imatrix") or {}
+print(d.get("fuente_repo") or "")
+print(imx.get("repo") or "")
+print(imx.get("fichero") or "")
+' "$f.fuente.json" 2>/dev/null)"
+        fuente_repo="$(printf '%s\n' "$_fuente" | sed -n '1p')"
+        imx_repo="$(printf '%s\n' "$_fuente" | sed -n '2p')"
+        imx_file="$(printf '%s\n' "$_fuente" | sed -n '3p')"
+    fi
+
     # ── el repo ──
     if ! hf repo info "$destino" >/dev/null 2>&1; then
         hf repo create "$destino" --repo-type model || return 1
     fi
 
     # ── el model card ──
+    # Lo escribe quant/model-card.py: el README con la nota de que esto es
+    # una cuantizacion de terceros (el modelo NO es mio) y el
+    # CUANTIZATION.md con las condiciones de la cuantizacion.
     local card="$carpeta/README.md"
-    {
-        cat <<EOF
----
-base_model: ${base_model:-DESCONOCIDO}
-library_name: llama-cpp
-tags:
-  - gguf
-  - ${quant}
----
-
-# ${base} — ${quant}
-
-GGUF fabricado a mano con \`ropero gguffer\` (llama.cpp, cuantizador oficial).
-
-- **Quant**: ${quant}
-- **Base model**: ${base_model:-DESCONOCIDO}
-EOF
-        if [[ -n "$NOTA" ]]; then
-            printf '\n%s\n' "$NOTA"
-        fi
-        cat <<'EOF'
-
-Cuantizado con el importance matrix que va en este repo, sobre el corpus
-habitual.
-EOF
-    } > "$card"
+    local cond="$carpeta/CUANTIZATION.md"
+    local _card_args=(--gguf "$f" --readme "$card" --condiciones "$cond")
+    [[ -n "$HF_USER" ]] && _card_args+=(--usuario "$HF_USER")
+    if ! python3 "$AQUI/model-card.py" "${_card_args[@]}" 2>/tmp/model-card.$$.err; then
+        echo "ERROR: no se pudo escribir el model card" >&2
+        cat /tmp/model-card.$$.err >&2
+        rm -f /tmp/model-card.$$.err
+        return 1
+    fi
+    if [[ -s /tmp/model-card.$$.err ]]; then
+        cat /tmp/model-card.$$.err >&2
+    fi
+    rm -f /tmp/model-card.$$.err
 
     hf upload "$destino" "$f" --repo-type model || return 1
     # El imatrix, si esta en la cache del gguffer. Se sube al repo para que
     # la gente pueda refinar sus propias cuantizaciones con el mismo.
+    #
+    # Se busca por el repo de la PROCEDENCIA (el de los pesos, que es el
+    # que el gguffer uso para bajar la matriz), no por el base_model del
+    # GGUF: ese no existe, porque el conversor no lo escribe.
     local imx
-    imx="$(imatrix_reciente "$base_model")"
+    imx="$(imatrix_de "$fuente_repo" "$imx_repo" "$imx_file")"
+    if [[ -z "$imx" ]]; then
+        imx="$(imatrix_reciente "$base_model")"
+    fi
     if [[ -n "$imx" ]]; then
         echo "     imatrix: $imx"
         hf upload "$destino" "$imx" --repo-type model || return 1
+    else
+        echo "     aviso: no hay imatrix en la cache; el repo quedara sin matriz" >&2
     fi
     hf upload "$destino" "$card" --repo-type model --include "README.md" || return 1
+    hf upload "$destino" "$cond" --repo-type model --include "CUANTIZATION.md" || return 1
 
     # ── el marcador ──
     printf '%s\n' "$destino" > "$carpeta/$MARCADOR"

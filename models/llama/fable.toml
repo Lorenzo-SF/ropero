@@ -15,6 +15,16 @@ repo = "mradermacher/fable-coder-35B-A3B-GGUF"
 file = "fable-coder-35B-A3B.Q2_K.gguf"
 size = "13.25 GB"
 
+[levels]
+# El fable razona por DEFECTO: su chat template abre <think> si no le dicen
+# lo contrario. Un coder agentic que razona antes de cada tool call es lo
+# que se enrollaba en el bucle de "Skill vault-index" 40 veces seguidas.
+#
+# Por defecto va APAGADO (lo dice el [args].base de abajo), y se activa con
+# "ropero fable --think". No hay "default" a proposito: sin nivel, el base
+# manda y el thinking esta off.
+list = ["think"]
+
 [args]
 base = [
     # ---- GPU offload ----
@@ -90,3 +100,16 @@ base = [
     "--metrics",                                        # /metrics endpoint
     "--perf",                                           # libllama perf timings
 ]
+
+# El thinking, a pedido: "ropero fable --think".
+#
+# El base lleva "enable_thinking": false y este nivel lleva true. Los dos
+# van en el argv, en este orden (base, luego nivel), y el ultimo gana: el
+# server se queda con la kwargs del nivel. En el arg.cpp de llama.cpp el
+# --chat-template-kwargs se procesa en orden y cada uno pisa al anterior.
+#
+# OJO: esto NO es lo mismo que el nivel "high" del qwopus. Ahi el nivel
+# cambia el effort del razonamiento; aqui no hay effort (el fable no lo
+# trae), solo se enciende o se apaga.
+[args.level.think]
+base = ["--chat-template-kwargs", '{"enable_thinking": true}']

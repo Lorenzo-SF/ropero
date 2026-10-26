@@ -95,9 +95,40 @@ event.result = "titulo local"
 
 | hook | cuándo | qué hace |
 |---|---|---|
-| `context` | justo antes de cada petición del agent loop | `ropero use` del modelo de la sesión |
+| `context` | justo antes de cada petición del agent loop | `ropero use` del modelo de la sesión, con su nivel si lo tiene |
 | `model.request` | en cada petición, con `kind` = `primary` \| `compaction` \| `title` \| `generate` | `ropero use` también para el título |
 | `title` | en la petición de título | acota tokens y effort, o pone el título en local |
 
 `hook("prompt")` **no** vale para esto: no tiene `model` (la resolución del
 modelo ocurre después de la admisión).
+
+## El variant y los niveles del modelo
+
+Un **nivel** es un modo del modelo, no una opción de la petición. El fable
+y el nemotron razonan o no razonan según un `--chat-template-kwargs` que va
+en el **argv del server**, y el argv se fija al arrancar: el nivel no puede
+viajar en el body de la petición.
+
+Por eso, si el **variant** de opencode se llama igual que un nivel que el
+modelo declara, el plugin se lo pasa al arranque:
+
+```ts
+// ropero levels fable  ->  think
+// variant "think"      ->  ropero use fable --nivel think
+```
+
+Si el variant no coincide con ningún nivel del modelo, no se toca nada: el
+body lleva el `reasoning_effort` de siempre y el server arranca con su
+default.
+
+> Cuando el plugin pasa un nivel, **quita el `reasoningEffort` del body**. El
+> nivel ya va en el argv, y un `reasoningEffort` con un valor que el template
+> no admite (el qwen35 solo admite `xhigh | medium | low`) hace que el jinja
+> reviente con `Unexpected reasoning effort`.
+
+Los niveles de cada modelo:
+
+```bash
+ropero levels            # todos
+ropero levels fable      # los de uno
+```

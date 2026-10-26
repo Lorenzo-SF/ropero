@@ -4276,6 +4276,85 @@ _gguffer_bloque_nextn() {
 }
 
 # -----------------------------------------------------------------------------
+# _gguffer_escribe_fuente <gguf> <nombre> <repo_base> <imatrix> <imatrix_repo>
+#                         <imatrix_file> <bloque_mtp> <intermedio>
+#
+# Escribe <gguf>.fuente.json al lado del GGUF: el registro de COMO se hizo
+# esa cuantizacion.
+#
+# Sin esto, un GGUF es un fichero opaco: no se sabe de que modelo salio, con
+# que importance matrix, ni si la cabeza MTP quedo en un quant aparte. Y eso
+# es justo lo que hay que contar en el model card de HuggingFace, para que
+# quien lo baja sepa lo que tiene entre manos.
+#
+# El fichero va en JSON plano (python3 lo lee sin dependencias) y lo escribe
+# el shell: los valores son repo, quant, nombres de fichero y numeros, y no
+# llevan comillas ni saltos de linea. Por si acaso, se escapan.
+# -----------------------------------------------------------------------------
+_gguffer_esc() {
+    local s="${1:-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+}
+
+_gguffer_escribe_fuente() {
+    local gguf="$1" nombre="$2" repo_base="$3" imatrix="$4"
+    local imatrix_repo="$5" imatrix_file="$6" bloque_mtp="$7" intermedio="$8"
+    local _ggufcheck
+    _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
+
+    local dest="${gguf}.fuente.json"
+    local meta="" base_model="" base_name="" quant="" arch="" block_count=""
+    if [[ -f "$gguf" ]]; then
+        meta="$(python3 "$_ggufcheck" "$gguf" --meta 2>/dev/null || true)"
+        base_model="$(printf '%s\n' "$meta" | sed -n 's/^base_model=//p' | head -1)"
+        base_name="$(printf '%s\n' "$meta" | sed -n 's/^base_model_name=//p' | head -1)"
+        quant="$(printf '%s\n' "$meta" | sed -n 's/^file_type=//p' | head -1)"
+        arch="$(printf '%s\n' "$meta" | sed -n 's/^arch=//p' | head -1)"
+        block_count="$(printf '%s\n' "$meta" | sed -n 's/^block_count=//p' | head -1)"
+    fi
+    # El nombre del quant tambien sale del nombre del fichero: "x.Q2_K.gguf".
+    [[ -n "$quant" ]] || quant="${nombre##*.}"
+
+    local imx_sha=""
+    [[ -n "$imatrix" && -f "$imatrix" ]] && imx_sha="$(sha256sum "$imatrix" 2>/dev/null | cut -d' ' -f1)"
+
+    local mtp_json="null"
+    if [[ -n "$bloque_mtp" ]]; then
+        mtp_json="{\"bloque\": ${bloque_mtp}, \"quant\": \"${MTP_QUANT:-Q4_0}\", \"nota\": \"la cabeza MTP no la cubre el imatrix (se calcula sobre el modelo base), asi que queda en este quant\"}"
+    fi
+
+    local imx_json="null"
+    if [[ -n "$imatrix" ]]; then
+        imx_json="{\"fichero\": \"$(basename "$imatrix")\""
+        [[ -n "$imatrix_repo" ]] && imx_json+=", \"repo\": \"$(_gguffer_esc "$imatrix_repo")\""
+        [[ -n "$imx_sha" ]] && imx_json+=", \"sha256\": \"$imx_sha\""
+        imx_json+="}"
+    fi
+
+    {
+        printf '{\n'
+        printf '  "gguf": "%s",\n' "$(_gguffer_esc "$nombre.gguf")"
+        printf '  "quant": "%s",\n' "$(_gguffer_esc "$quant")"
+        printf '  "fuente_repo": "%s",\n' "$(_gguffer_esc "$repo_base")"
+        printf '  "base_model": "%s",\n' "$(_gguffer_esc "$base_model")"
+        printf '  "base_model_name": "%s",\n' "$(_gguffer_esc "$base_name")"
+        printf '  "arch": "%s",\n' "$(_gguffer_esc "$arch")"
+        printf '  "block_count": "%s",\n' "$(_gguffer_esc "$block_count")"
+        printf '  "intermedio": "%s",\n' "$(_gguffer_esc "$intermedio")"
+        printf '  "imatrix": %s,\n' "$imx_json"
+        printf '  "mtp": %s,\n' "$mtp_json"
+        printf '  "herramienta": "ropero gguffer (llama.cpp llama-quantize)",\n'
+        printf '  "fecha": "%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '}\n'
+    } > "$dest" 2>/dev/null || { rm -f "$dest"; return 1; }
+
+    echo "[gguffer] procedencia: $dest"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # _gguffer_arreglar_tokenizer <dir>
 #
 # Parchea el tokenizer_config.json de un clon de pesos para que lo entienda
@@ -4882,6 +4961,18 @@ cmd_gguffer() {
         done
         (( _es_resultado == 0 )) && rm -f "$out_f16"
     fi
+
+    # ── FASE 6: la procedencia ─────────────────────────────────────────────
+    # Un GGUF sin saber COMO se hizo no se puede publicar con verguenza: de
+    # donde salio el modelo, con que quant, con que importance matrix, y si
+    # la cabeza MTP quedo en un quant aparte. Eso es lo que va al model card.
+    local _q _qname
+    for _q in "${out_finals[@]}"; do
+        out_final="$_q"
+        _qname="$(basename "$out_final" .gguf)"
+        _gguffer_escribe_fuente "$out_final" "$_qname" "$repo" "$imatrix" \
+            "$imatrix_repo" "$imatrix_file" "$_nextn_bloque" "$inter_up"
+    done
 
     local _sz
     for _q in "${out_finals[@]}"; do
