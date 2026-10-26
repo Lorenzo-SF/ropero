@@ -67,11 +67,18 @@ def _cargar_libggml(rutas):
 
 
 class Gguf:
-    def __init__(self, path, lib_rutas=()):
+    def __init__(self, path, lib_rutas=(), solo_cabecera=False):
         self.path = path
         self.tam = os.path.getsize(path)
-        with open(path, "rb") as f:
-            self.data = f.read()
+        # Con solo_cabecera se lee SOLO la cabecera (metadata + indice de
+        # tensores), no los datos. Sin esto, listar los nombres de un GGUF de
+        # 10 GB era leerse 10 GB en memoria: inviable.
+        if solo_cabecera:
+            with open(path, "rb") as f:
+                self.data = self._leer_cabecera(f)
+        else:
+            with open(path, "rb") as f:
+                self.data = f.read()
         d = self.data
         if d[:4] != b"GGUF":
             raise GgufError("no empieza por GGUF (magico: %r)" % d[:4])
@@ -84,6 +91,55 @@ class Gguf:
         self._leer_kv(off)
         self._leer_tensores()
         self.lib = _cargar_libggml(lib_rutas)
+
+    def _leer_cabecera(self, f):
+        """Lee SOLO la cabecera (metadata + indice de tensores), no los datos.
+
+        Sin esto, listar los nombres de un GGUF de 10 GB era leerse 10 GB en
+        memoria. El indice de tensores va justo detras de la metadata, asi
+        que su tamano no se sabe hasta leerla: se lee a trozos, probando.
+        """
+        f.seek(0)
+        cab = f.read(24)
+        if len(cab) < 24:
+            raise GgufError("fichero demasiado corto")
+        # magic(4) + version(4) + n_tensors(8) + n_kv(8) = 24
+        n_tensors, n_kv = struct.unpack_from("<QQ", cab, 8)
+
+        def aux(buf):
+            a = Gguf.__new__(Gguf)
+            a.data = buf
+            a.n_kv = n_kv
+            a.n_tensors = n_tensors
+            a.kv = {}
+            a.tensors = []
+            a._offset_tras_kv = 0
+            return a
+
+        # 1. la metadata
+        for tam in (65536, 262144, 1048576, 4194304, 16777216, 67108864):
+            f.seek(0)
+            buf = f.read(tam)
+            try:
+                a = aux(buf)
+                a._leer_kv(24)
+            except (struct.error, IndexError):
+                continue          # falta mas metadata
+            fin = a._offset_tras_kv
+            # 2. el indice de tensores, que va justo detras
+            for extra in (n_tensors * 64 + 8192, n_tensors * 160 + 8192,
+                          n_tensors * 320 + 8192):
+                f.seek(fin)
+                buf2 = buf[:fin] + f.read(extra)
+                try:
+                    b = aux(buf2)
+                    b._offset_tras_kv = fin
+                    b._leer_tensores()
+                except (struct.error, IndexError, GgufError):
+                    continue      # falta mas indice
+                return buf2
+            return buf[:fin]
+        raise GgufError("no se pudo leer la metadata")
 
     def _str(self, off):
         (l,) = struct.unpack_from("<Q", self.data, off); off += 8
@@ -183,7 +239,7 @@ class Gguf:
 
 def main(argv):
     if len(argv) < 2:
-        print("uso: _ggufcheck.py FICHERO [--info] [--lib RUTA]", file=sys.stderr)
+        print("uso: _ggufcheck.py FICHERO [--info] [--lib RUTA] [--nombres] [--bloque N] [--tipo-predominante]", file=sys.stderr)
         return 2
     path = argv[1]
     info_only = "--info" in argv
@@ -194,8 +250,11 @@ def main(argv):
     if not os.path.exists(path):
         print("[x] no existe: %s" % path, file=sys.stderr)
         return 1
+    # --nombres y --bloque solo necesitan la cabecera: leer el GGUF entero
+    # (10 GB) para listar nombres era inviable.
+    solo_cabecera = ("--nombres" in argv) or ("--bloque" in argv)
     try:
-        g = Gguf(path, libs)
+        g = Gguf(path, libs, solo_cabecera=solo_cabecera)
     except GgufError as e:
         print("[x] GGUF invalido: %s" % e, file=sys.stderr)
         return 1
@@ -220,6 +279,27 @@ def main(argv):
             conteo[t["type"]] = conteo.get(t["type"], 0) + 1
         print(max(conteo, key=lambda k: conteo[k]))
         return 0
+
+    # --nombres: un nombre de tensor por linea. Sirve para comparar un GGUF
+    # con un imatrix (que es otro GGUF) sin quantized nada: el imatrix se
+    # indexa por nombre de tensor, y hay que saber si cubre los que el
+    # modelo tiene.
+    if "--nombres" in argv:
+        for t in g.tensors:
+            print(t["name"])
+        return 0
+
+    # --bloque N: los nombres de los tensores del bloque N. El bloque de la
+    # cabeza MTP (el nextn) es el siguiente al ultimo, y es el que los
+    # imatrix publicos no cubren.
+    for i, a in enumerate(argv):
+        if a == "--bloque" and i + 1 < len(argv):
+            bloque = argv[i + 1]
+            pre = "blk.%s." % bloque
+            for t in g.tensors:
+                if t["name"].startswith(pre):
+                    print(t["name"])
+            return 0
 
     print("GGUF: %s" % path)
     print("  %.2f GiB | arch=%s | tensores=%d | file_type=%s | %s | nextn=%s"

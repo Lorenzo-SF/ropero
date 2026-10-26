@@ -6,6 +6,7 @@
 # USO:
 #   ropero <modelo> [--background] [--cpu] [--force] [--port N]
 #   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
+#   ropero path <modelo>   (la ruta donde busca el GGUF de ese modelo)
 #   ropero models      (descarga solo los modelos, sin engines)
 #   ropero install [engines|models|link] [selección] [--force]
 #   ropero check      (verifica la instalación, no modifica nada)
@@ -928,9 +929,11 @@ _ropero_usage() {
         templates) printf 'USO: ropero templates\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
         use)       printf 'USO: ropero use <modelo> [--port N] [--nivel N] [--flag F]\n' ;;
+        path)      printf 'USO: ropero path <modelo>\n' ;;
         models)    printf 'USO: ropero models\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
         levels)    printf 'USO: ropero levels <modelo>\n' ;;
+        path)      printf 'USO: ropero path <modelo>\n' ;;
         # Sin subcomando: la línea del modelo. Es lo que devuelven los typos de
         # flag, y ropero help para el resto.
         *)         printf 'USO: ropero <modelo> [--background] [--cpu] [--force] [--port N]\n' ;;
@@ -1042,6 +1045,42 @@ cmd_template() {
     printf 'Copia a models/<engine>/<nombre>.toml y ajústala. Un modelo retirado\n'
     printf 'va en models/<engine>/fired/<nombre>.toml, con el mismo formato.\n\n'
     cat "$f"
+}
+
+# cmd_path <modelo> — la ruta donde el launcher va a buscar el GGUF del modelo.
+#
+# Es $GGUF_DIR/<[model] name>/<[files] gguf>, que es como el launcher lo
+# resuelve (bin/ropero, el preflight) y como lo deja la descarga. Todo lo que
+# fabrique un GGUF (el gguffer) necesita saber esa ruta exacta: el nombre que
+# genera el gguffer es <repo>-<quant>.gguf, y eso casi nunca es lo que espera
+# el TOML.
+#
+# Por que existe este comando y no que cada uno lea el TOML: el TOML se
+# cambia, y un lector propio se queda viejo sin avisar. Aqui la respuesta la
+# da el propio launcher, que es la unica fuente de verdad.
+cmd_path() {
+    local model="${1:-}"
+    if [[ -z "$model" ]]; then
+        echo "USO: ropero path <modelo>" >&2
+        return 2
+    fi
+    local key="${model//-/_}"
+    case " ${MODEL_NAMES[*]} " in
+        *" $key "*) ;;
+        *) echo "ERROR: modelo desconocido: '$model' (mira 'ropero list')" >&2; return 1 ;;
+    esac
+    if [[ "${MODEL_FORMAT[$key]:-}" != "gguf" ]]; then
+        echo "ERROR: '$model' no usa GGUF (formato: ${MODEL_FORMAT[$key]:-?})" >&2
+        return 1
+    fi
+    local dir gguf
+    dir="$(_ropero_model_dir "$key")"
+    gguf="${MODEL_GGUF[$key]:-}"
+    if [[ -z "$gguf" ]]; then
+        echo "ERROR: '$model' no declara un GGUF en su [files]" >&2
+        return 1
+    fi
+    printf '%s\n' "$GGUF_DIR/$dir/$gguf"
 }
 
 # cmd_levels <modelo> — los niveles de razonamiento que el modelo acepta.
@@ -4024,6 +4063,107 @@ _gguffer_parse_out() {
 }
 
 # -----------------------------------------------------------------------------
+# _gguffer_imatrix_cubre_bloque <imatrix> <bloque> <ggufcheck>
+#
+# Devuelve 0 si el imatrix tiene entradas para el bloque dado, 1 si no tiene
+# ninguna.
+#
+# Por que importa: el imatrix se calcula sobre el modelo base (64 capas), pero
+# el GGUF lleva la cabeza MTP como un bloque mas (el 65). Ese bloque no esta
+# en el imatrix, y si el quant es very-low-bit (IQ2_M, IQ3_XXS...) el
+# cuantizador aborta con "Missing importance matrix for tensor blk.64...".
+# Es lo que hacia bartowski con su IQ2_M del Qwen3.8: dejo el bloque de la
+# MTP en Q4_0, que no exige imatrix.
+#
+# Se compara el bloque entero (no tensor a tensor): los tensores que el
+# imatrix no tiene son normalmente las normas f32, que no se cuantizan y no
+# exigen imatrix. Lo que aborta el cuantizador es un bloque entero sin
+# cobertura.
+# -----------------------------------------------------------------------------
+_gguffer_imatrix_cubre_bloque() {
+    local imatrix="$1" bloque="$2" _ggufcheck="$3"
+    local n_im
+    n_im="$(python3 "$_ggufcheck" "$imatrix" --nombres 2>/dev/null \
+            | sed 's/\.in_sum2$//; s/\.counts$//' \
+            | grep -c "^blk\.${bloque}\." || true)"
+    [[ "${n_im:-0}" -gt 0 ]]
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_bloque_nextn <gguf> <ggufcheck>
+#
+# El numero del bloque donde vive la cabeza MTP, o vacio si el GGUF no la
+# trae. Es el bloque siguiente al ultimo: el conversor suma los bloques de la
+# MTP al block_count (conversion/qwen.py: self.block_count += n_mtp).
+# -----------------------------------------------------------------------------
+_gguffer_bloque_nextn() {
+    local gguf="$1" _ggufcheck="$2"
+    local bloques
+    bloques="$(python3 "$_ggufcheck" "$gguf" --nombres 2>/dev/null \
+               | sed -n 's/^blk\.\([0-9]\+\)\..*/\1/p' | sort -n -u)"
+    [[ -n "$bloques" ]] || return 1
+    # El bloque con tensores nextn es el de la MTP.
+    local b
+    for b in $bloques; do
+        if python3 "$_ggufcheck" "$gguf" --bloque "$b" 2>/dev/null | grep -q "nextn\."; then
+            printf '%s' "$b"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_arreglar_tokenizer <dir>
+#
+# Parchea el tokenizer_config.json de un clon de pesos para que lo entienda
+# un transformers v4.
+#
+# Por que: hay repos guardados con transformers v5, cuyo tokenizer_class es
+# "TokenizersBackend". La v4 no tiene esa clase y la conversion del GGUF
+# muere con "ValueError: Tokenizer class TokenizersBackend does not exist or
+# is not currently imported". El tokenizer.json es un fast tokenizer estandar,
+# asi que con poner "PreTrainedTokenizerFast" (que si conoce la v4) vale.
+#
+# Se toca el CLON (una copia local), no el repo de HuggingFace, y se guarda
+# un .bak por si acaso.
+# -----------------------------------------------------------------------------
+_gguffer_arreglar_tokenizer() {
+    # OJO: "local dir="$1" cfg="$dir/.."" NO vale: en bash las expansiones de
+    # una misma declaracion local se hacen ANTES de asignar, y $dir sale
+    # vacio. Por eso van en dos lineas.
+    local dir="$1"
+    local cfg="$dir/tokenizer_config.json"
+    [[ -f "$cfg" ]] || return 1
+    grep -q '"tokenizer_class"' "$cfg" || return 1
+    [[ -f "$cfg.bak" ]] || cp "$cfg" "$cfg.bak"
+    python3 - "$cfg" <<'PY'
+import json, sys
+ruta = sys.argv[1]
+try:
+    with open(ruta, encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    sys.exit(1)
+viejo = d.get("tokenizer_class")
+if viejo == "TokenizersBackend":
+    d["tokenizer_class"] = "PreTrainedTokenizerFast"
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+# Otra clase desconocida: si el repo trae tokenizer.json, el fast generico
+# tambien vale.
+import os
+if os.path.exists(os.path.join(os.path.dirname(ruta), "tokenizer.json")):
+    d["tokenizer_class"] = "PreTrainedTokenizerFast"
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
 cmd_gguffer() {
@@ -4293,7 +4433,27 @@ cmd_gguffer() {
             fi
         fi
         echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
-        if ! python3 "$_convert" "${conv_args[@]}"; then
+        local conv_log="${TMPDIR:-/tmp}/gguffer-conv.$$.log"
+        local conv_ok=0
+        if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
+            conv_ok=1
+        elif grep -q "Tokenizer class .* does not exist" "$conv_log" 2>/dev/null \
+             && _gguffer_arreglar_tokenizer "$source_dir"; then
+            # Algunos repos se han guardado con transformers v5, cuyo
+            # tokenizer_class es "TokenizersBackend". Con transformers v4 esa
+            # clase no existe y la conversion muere con "Tokenizer class
+            # TokenizersBackend does not exist". El tokenizer.json es un fast
+            # tokenizer estandar, asi que basta con poner la clase que si
+            # conoce la v4, y reintentar.
+            echo "[gguffer] el tokenizer del repo usa una clase que tu transformers no conoce."
+            echo "           (TokenizersBackend es de transformers v5)"
+            echo "           Lo cambio a PreTrainedTokenizerFast y reintento..."
+            if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
+                conv_ok=1
+            fi
+        fi
+        if (( conv_ok == 0 )); then
+            tail -20 "$conv_log" >&2
             # La conversion fallo: el clon de los safetensors se conserva
             # (60 GB, pero es lo que evita volver a bajar) y se dice como
             # reintentar solo esta fase.
@@ -4346,8 +4506,31 @@ cmd_gguffer() {
         # "invalid nthread '--imatrix'".
         local qargs=()
         [[ -n "$imatrix" ]] && qargs+=(--imatrix "$imatrix")
+
+        # ── la cabeza MTP y el imatrix ──────────────────────────────────────
+        # El imatrix se calcula sobre el modelo base, pero el GGUF lleva la
+        # MTP como un bloque MAS (el siguiente al ultimo). Ese bloque no esta
+        # en el imatrix, y con un quant very-low-bit el cuantizador aborta:
+        #   "Missing importance matrix for tensor blk.64.attn_k.weight".
+        # La salida es dejar ese bloque en un quant que NO exija imatrix
+        # (Q4_0), que es lo que hizo bartowski con su IQ2_M del Qwen3.8.
+        local _nextn_bloque=""
+        if [[ -n "$imatrix" && -n "$quant" ]]; then
+            _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
+            if [[ -n "$_nextn_bloque" ]] \
+               && ! _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null; then
+                echo "[gguffer] aviso: el imatrix no cubre el bloque $_nextn_bloque (la cabeza MTP)."
+                echo "           Lo cuantizo en ${MTP_QUANT:-Q4_0}, que no exige imatrix."
+                qargs+=(--tensor-type "blk\.${_nextn_bloque}\..*=${MTP_QUANT:-Q4_0}")
+            fi
+        fi
+
         qargs+=("$out_f16" "$out_final" "$quant")
-        if ! "$_quantize" "${qargs[@]}"; then
+        # La salida del cuantizador se guarda: si falla, su ultimo error dice
+        # por que (el mensaje del gguffer solo no alcanza).
+        local _gguffer_qlog="${TMPDIR:-/tmp}/gguffer-quant.$$.log"
+        if ! "$_quantize" "${qargs[@]}" >"$_gguffer_qlog" 2>&1; then
+            tail -20 "$_gguffer_qlog" >&2
             # Aqui NO se borra nada: el clon de los safetensors y el GGUF
             # intermedio se quedan, y se dice como reintentar solo la
             # cuantizacion (que es la parte cara).
@@ -4357,6 +4540,20 @@ cmd_gguffer() {
             echo "       conservo el GGUF intermedio en: $out_f16" >&2
             echo "       reintenta solo la cuantizacion:" >&2
             echo "         $_quantize ${qargs[*]}" >&2
+            # El error mas comun: el imatrix no cubre un tensor. Se dice cual,
+            # porque el mensaje del cuantizador ("Missing importance matrix
+            # for tensor blk.64.attn_k.weight") no dice de donde sale.
+            if grep -q "Missing importance matrix for tensor" "$_gguffer_qlog" 2>/dev/null; then
+                local _t_missing
+                _t_missing="$(sed -n 's/.*Missing importance matrix for tensor \([^ ]*\).*/\1/p' "$_gguffer_qlog" | head -1)"
+                echo "       el imatrix no cubre el tensor: ${_t_missing:-?}" >&2
+                if [[ -n "$_nextn_bloque" && "${_t_missing:-}" == blk."$_nextn_bloque".* ]]; then
+                    echo "       es el bloque $_nextn_bloque, el de la cabeza MTP." >&2
+                    echo "       El imatrix se calcula sobre el modelo base, que no la tiene." >&2
+                    echo "       Opciones: dejar ese bloque en ${MTP_QUANT:-Q4_0} (--tensor-type)," >&2
+                    echo "       o convertir sin MTP (--no-mtp) y renombrar el GGUF." >&2
+                fi
+            fi
             return 1
         fi
         if (( keep_inter == 0 )); then rm -f "$out_f16"; fi
@@ -4488,6 +4685,12 @@ main() {
             shift
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help levels; exit 0; fi
             cmd_levels "$@"
+            exit $?
+            ;;
+        path)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help path; exit 0; fi
+            cmd_path "$@"
             exit $?
             ;;
         args)

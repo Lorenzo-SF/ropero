@@ -56,13 +56,30 @@ args = sys.argv[1:]
 outfile = args[args.index("--outfile") + 1]
 src = args[0]
 
+# El conversor real pide el tokenizer con AutoTokenizer, y con transformers
+# v4 la clase "TokenizersBackend" (de la v5) no existe. Este fake reproduce
+# ese error si el clon trae esa clase, para que se pueda probar el arreglo.
+import json, os
+cfg = os.path.join(src, "tokenizer_config.json")
+if os.path.exists(cfg):
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            c = json.load(f)
+    except Exception:
+        c = {}
+    if c.get("tokenizer_class") == "TokenizersBackend":
+        sys.stderr.write(
+            "ValueError: Tokenizer class TokenizersBackend does not exist "
+            "or is not currently imported.\n")
+        sys.exit(1)
+
 def s(x):
     b = x.encode()
     return struct.pack("<Q", len(b)) + b
 
 body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
 body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
-body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
 idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
 body += idx
 body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
@@ -71,12 +88,69 @@ with open(outfile, "wb") as f:
 print("fake convert: %s -> %s" % (src, outfile))
 PY
 
+# ── generadores de GGUF e imatrix para el caso de la MTP ─────────────────
+# Un GGUF con N bloques y, opcionalmente, un bloque de MTP (nextn) que el
+# imatrix NO cubre: es el caso real del Qwen3.8-27B.
+cat >"$WORK/gguf_maker.py" <<'PY'
+import struct, sys
+
+def s(x):
+    b = x.encode(); return struct.pack("<Q", len(b)) + b
+
+def escribe(path, tensores, arch="qwen35", nextn=0):
+    # n_kv: architecture + file_type + block_count (+ nextn)
+    n_kv = 4 if nextn else 3
+    body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", len(tensores)) + struct.pack("<Q", n_kv)
+    body += s("general.architecture") + struct.pack("<I", 8) + s(arch)
+    body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
+    body += s("%s.block_count" % arch) + struct.pack("<I", 4) + struct.pack("<I", 4)
+    if nextn:
+        body += s("%s.nextn_predict_layers" % arch) + struct.pack("<I", 4) + struct.pack("<I", nextn)
+    for n, dims in tensores:
+        body += s(n) + struct.pack("<I", 2)
+        for d in dims: body += struct.pack("<Q", d)
+        body += struct.pack("<I", 1) + struct.pack("<Q", 0)
+    body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+    open(path, "wb").write(body)
+
+def imatrix(path, tensores):
+    # Un imatrix es un GGUF con pares <tensor>.in_sum2 + <tensor>.counts
+    salida = []
+    for n, dims in tensores:
+        salida.append((n + ".in_sum2", [dims[0], 1]))
+        salida.append((n + ".counts", [1, 1]))
+    escribe(path, salida, arch="imatrix")
+
+if __name__ == "__main__":
+    modo = sys.argv[1]
+    ruta = sys.argv[2]
+    nbloques = int(sys.argv[3])
+    if modo == "gguf":
+        ts = []
+        for i in range(nbloques):
+            ts += [("blk.%d.attn_k.weight" % i, [5120, 1024]),
+                   ("blk.%d.ffn_down.weight" % i, [17408, 5120])]
+        # el bloque de la MTP, con sus tensores nextn
+        ts += [("blk.%d.attn_k.weight" % nbloques, [5120, 1024]),
+               ("blk.%d.ffn_down.weight" % nbloques, [17408, 5120]),
+               ("blk.%d.nextn.eh_proj.weight" % nbloques, [6144, 5120])]
+        escribe(ruta, ts, nextn=1)
+    else:
+        # el imatrix solo cubre los bloques 0..n-1: el de la MTP no
+        ts = []
+        for i in range(nbloques):
+            ts += [("blk.%d.attn_k.weight" % i, [5120, 1024]),
+                   ("blk.%d.ffn_down.weight" % i, [17408, 5120])]
+        imatrix(ruta, ts)
+PY
+
 # ── el cuantizador fake ───────────────────────────────────────────────────
 cat >"$LLAMA_DIR_TEST/build/bin/llama-quantize" <<'EOF'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "--help" ]]; then
     cat <<'H'
     19  or  IQ2_XXS :  2.06 bpw quantization
+    29  or  IQ2_M   :  2.70 bpw quantization
     22  or  IQ3_XS  :  3.3 bpw quantization
     30  or  IQ4_XS  :  4.25 bpw quantization
     38  or  MXFP4_MOE :  MXFP4 MoE
@@ -87,7 +161,11 @@ H
     exit 0
 fi
 if [[ -n "${FAKE_QUANTIZE_FAIL:-}" ]]; then
-    echo "fake: fallo la cuantizacion" >&2
+    if [[ -n "${FAKE_QUANTIZE_MSG:-}" ]]; then
+        echo "$FAKE_QUANTIZE_MSG" >&2
+    else
+        echo "fake: fallo la cuantizacion" >&2
+    fi
     exit 1
 fi
 if [[ -n "${FAKE_QUANTIZE_GARBAGE:-}" ]]; then
@@ -115,6 +193,12 @@ for a in "$@"; do
 done
 if [[ -n "${FAKE_QUANTIZE_LOG:-}" ]]; then
     printf '%s\n' "$imatrix" > "$FAKE_QUANTIZE_LOG"
+    # los overrides de tipo por tensor, tal cual los recibe
+    prev=""
+    for a in "$@"; do
+        [[ "$prev" == "--tensor-type" ]] && printf 'tensor-type: %s\n' "$a" >> "$FAKE_QUANTIZE_LOG"
+        prev="$a"
+    done
 fi
 # Los posicionales van despues de las opciones: <in> [out] <ftype>
 pos=()
@@ -181,6 +265,7 @@ gguffer() {
         FAKE_QUANTIZE_FAIL="${FAKE_QUANTIZE_FAIL:-}" \
         FAKE_QUANTIZE_GARBAGE="${FAKE_QUANTIZE_GARBAGE:-}" \
         FAKE_QUANTIZE_LOG="${FAKE_QUANTIZE_LOG:-}" \
+        FAKE_QUANTIZE_MSG="${FAKE_QUANTIZE_MSG:-}" \
         bash "$REPO/bin/ropero" gguffer "$@"
 }
 
@@ -239,7 +324,7 @@ def s(x):
 
 body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
 body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
-body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
 idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
 body += idx
 body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
@@ -307,7 +392,7 @@ def s(x):
 
 body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
 body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
-body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
 idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
 body += idx
 body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
@@ -340,7 +425,7 @@ def s(x):
 
 body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
 body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
-body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
 idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
 body += idx
 body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
@@ -380,7 +465,7 @@ def s(x):
 
 body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
 body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
-body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 0)
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
 idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 0) + struct.pack("<Q", 0)
 body += idx
 body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
@@ -456,6 +541,79 @@ check "15d. la segunda vez lo reutiliza" \
 out="$(gguffer --repo owner/imatrix-medio --quant IQ3_XS --imatrix-repo owner/imatrix-repo 2>&1)"; rc=$?
 check "15e. --imatrix-repo sin --imatrix-file: error" \
       "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "van juntos"')" "$out"
+
+# ── 16: la cabeza MTP y el imatrix ─────────────────────────────────────────
+# El imatrix se calcula sobre el modelo base (64 capas), pero el GGUF lleva
+# la MTP como un bloque MAS. Ese bloque no esta en el imatrix, y con un quant
+# very-low-bit el cuantizador aborta con "Missing importance matrix for
+# tensor blk.64.attn_k.weight". La salida: cuantizar ese bloque en un quant
+# que NO exija imatrix, que es lo que hizo bartowski con su IQ2_M.
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+mkdir -p "$WORK/mtp-src"; echo '{}' > "$WORK/mtp-src/config.json"
+python3 "$WORK/gguf_maker.py" gguf "$GGUF_OUT/mtp-src-F16.gguf" 3
+python3 "$WORK/gguf_maker.py" imatrix "$WORK/mtp.imatrix" 3
+# el imatrix cubre 0..2, el GGUF tiene ademas el bloque 3 (la MTP)
+out="$(FAKE_QUANTIZE_LOG="$WORK/mtp_log.txt" gguffer --path "$WORK/mtp-src" --quant IQ2_M \
+        --imatrix "$WORK/mtp.imatrix" 2>&1)"
+check "16a. ve que el imatrix no cubre el bloque de la MTP" \
+      "$(cond 'printf %s "$out" | grep -q "el imatrix no cubre el bloque 3"')" "$out"
+check "16b. lo cuantiza en Q4_0, que no exige imatrix" \
+      "$(cond 'grep -q "tensor-type: blk.*3.*Q4_0" "$WORK/mtp_log.txt" 2>/dev/null')" \
+      "$(cat "$WORK/mtp_log.txt" 2>/dev/null)"
+
+# el log del cuantizador se guarda: si falla, el gguffer dice que tensor falta
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+mkdir -p "$WORK/mtp-src2"; echo '{}' > "$WORK/mtp-src2/config.json"
+python3 "$WORK/gguf_maker.py" gguf "$GGUF_OUT/mtp-src2-F16.gguf" 3
+out="$(FAKE_QUANTIZE_FAIL=1 FAKE_QUANTIZE_MSG='Missing importance matrix for tensor blk.3.attn_k.weight' \
+       gguffer --path "$WORK/mtp-src2" --quant IQ2_M --imatrix "$WORK/mtp.imatrix" 2>&1)"
+check "16c. si falla, dice que tensor no cubre el imatrix" \
+      "$(cond 'printf %s "$out" | grep -q "el imatrix no cubre el tensor: blk.3.attn_k.weight"')" "$out"
+
+# ── 17: el tokenizer de transformers v5 en un clon de transformers v4 ──────
+# Hay repos guardados con transformers v5, cuyo tokenizer_class es
+# "TokenizersBackend". Con transformers v4 la conversion muere con
+# "Tokenizer class TokenizersBackend does not exist".
+mkdir -p "$WORK/tok-src"
+printf '{"tokenizer_class":"TokenizersBackend","model_max_length":262144}\n' \
+    > "$WORK/tok-src/tokenizer_config.json"
+printf '{"model_max_length":262144}\n' > "$WORK/tok-src/tokenizer.json"
+# un conversor propio: el de transformers v4 no conoce "TokenizersBackend"
+cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
+import json, os, struct, sys
+args = sys.argv[1:]
+outfile = args[args.index("--outfile") + 1]
+src = args[0]
+cfg = os.path.join(src, "tokenizer_config.json")
+if os.path.exists(cfg):
+    try:
+        with open(cfg, encoding="utf-8") as f:
+            c = json.load(f)
+    except Exception:
+        c = {}
+    if c.get("tokenizer_class") == "TokenizersBackend":
+        sys.stderr.write("ValueError: Tokenizer class TokenizersBackend does not exist "
+                         "or is not currently imported.\n")
+        sys.exit(1)
+def s(x):
+    b = x.encode(); return struct.pack("<Q", len(b)) + b
+body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
+body += s("general.architecture") + struct.pack("<I", 8) + s("qwen35")
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
+idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 1) + struct.pack("<Q", 0)
+body += idx
+body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+with open(outfile, "wb") as f:
+    f.write(body)
+PY
+out="$(gguffer --path "$WORK/tok-src" --quant IQ3_XS 2>&1)"
+check "17a. cambia la clase del tokenizer" \
+      "$(cond 'grep -q "PreTrainedTokenizerFast" "$WORK/tok-src/tokenizer_config.json"')" \
+      "$(cat "$WORK/tok-src/tokenizer_config.json" 2>/dev/null)"
+check "17b. guarda una copia del original" \
+      "$(cond '[ -f "$WORK/tok-src/tokenizer_config.json.bak" ]')" "$out"
+check "17c. avisa de lo que ha hecho" \
+      "$(cond 'printf %s "$out" | grep -q "PreTrainedTokenizerFast y reintento"')" "$out"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
