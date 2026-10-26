@@ -125,15 +125,29 @@ if __name__ == "__main__":
     modo = sys.argv[1]
     ruta = sys.argv[2]
     nbloques = int(sys.argv[3])
-    if modo == "gguf":
+    if modo == "gguf-sin-mtp":
         ts = []
         for i in range(nbloques):
             ts += [("blk.%d.attn_k.weight" % i, [5120, 1024]),
                    ("blk.%d.ffn_down.weight" % i, [17408, 5120])]
-        # el bloque de la MTP, con sus tensores nextn
+        escribe(ruta, ts, nextn=0)
+    elif modo == "nombres":
+        for t in sys.argv[4:]:
+            print(t)
+    elif modo == "gguf":
+        ts = []
+        for i in range(nbloques):
+            ts += [("blk.%d.attn_k.weight" % i, [5120, 1024]),
+                   ("blk.%d.ffn_down.weight" % i, [17408, 5120])]
+        # El bloque de la MTP. OJO: sus tensores se llaman como los de
+        # cualquier otro bloque. NO llevan "nextn" en el nombre: el
+        # conversor crea el bloque de la MTP con los nombres NORMALES
+        # ("blk.64.attn_k.weight"). Por eso la MTP se localiza con la
+        # METADATA (block_count - nextn_predict_layers) y no buscando
+        # "nextn." en los nombres: asi se encuentra en los GGUFs de verdad.
         ts += [("blk.%d.attn_k.weight" % nbloques, [5120, 1024]),
                ("blk.%d.ffn_down.weight" % nbloques, [17408, 5120]),
-               ("blk.%d.nextn.eh_proj.weight" % nbloques, [6144, 5120])]
+               ("blk.%d.ffn_up.weight" % nbloques, [17408, 5120])]
         escribe(ruta, ts, nextn=1)
     else:
         # el imatrix solo cubre los bloques 0..n-1: el de la MTP no
@@ -570,6 +584,36 @@ out="$(FAKE_QUANTIZE_FAIL=1 FAKE_QUANTIZE_MSG='Missing importance matrix for ten
        gguffer --path "$WORK/mtp-src2" --quant IQ2_M --imatrix "$WORK/mtp.imatrix" 2>&1)"
 check "16c. si falla, dice que tensor no cubre el imatrix" \
       "$(cond 'printf %s "$out" | grep -q "el imatrix no cubre el tensor: blk.3.attn_k.weight"')" "$out"
+
+# ── 16b: la MTP se localiza por la METADATA, no por el nombre del tensor ───
+# El bug: la deteccion buscaba tensores con "nextn." en el nombre. En los
+# GGUFs de verdad los tensores de la MTP se llaman como los de cualquier
+# otro bloque ("blk.64.attn_k.weight"), SIN "nextn". Asi que la deteccion
+# no encontraba nada, el fix no se aplicaba, y la cuantizacion moria con
+# "Missing importance matrix for tensor blk.64.attn_k.weight".
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+mkdir -p "$WORK/mtp-src3"; echo '{}' > "$WORK/mtp-src3/config.json"
+python3 "$WORK/gguf_maker.py" gguf "$GGUF_OUT/mtp-src3-F16.gguf" 3
+out="$(FAKE_QUANTIZE_LOG="$WORK/mtp_log3.txt" gguffer --path "$WORK/mtp-src3" --quant IQ2_M \
+        --imatrix "$WORK/mtp.imatrix" 2>&1)"
+check "16b. encuentra la MTP por la metadata (block_count - nextn)" \
+      "$(cond 'printf %s "$out" | grep -q "el imatrix no cubre el bloque 3"')" "$out"
+check "16c. los tensores de la MTP NO llevan 'nextn' en el nombre" \
+      "$(cond '! python3 "'"$REPO"'/bin/_ggufcheck.py" "$GGUF_OUT/mtp-src3-F16.gguf" --nombres 2>/dev/null | grep -q nextn')" \
+      "un GGUF real no tiene tensores con 'nextn' en el nombre"
+
+# un GGUF SIN MTP (nextn=0): no hay bloque MTP, y no se toca nada
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+mkdir -p "$WORK/sin-mtp"; echo '{}' > "$WORK/sin-mtp/config.json"
+python3 "$WORK/gguf_maker.py" gguf-sin-mtp "$GGUF_OUT/sin-mtp-F16.gguf" 3
+python3 "$WORK/gguf_maker.py" imatrix "$WORK/sin-mtp.imatrix" 3
+out="$(FAKE_QUANTIZE_LOG="$WORK/sinmtp_log.txt" gguffer --path "$WORK/sin-mtp" --quant IQ2_M \
+        --imatrix "$WORK/sin-mtp.imatrix" 2>&1)"
+check "16d. sin MTP: no inventa un bloque" \
+      "$(cond '! printf %s "$out" | grep -q "el imatrix no cubre el bloque"')" "$out"
+check "16e. sin MTP: no mete un --tensor-type" \
+      "$(cond '! grep -q "tensor-type" "$WORK/sinmtp_log.txt" 2>/dev/null')" \
+      "$(cat "$WORK/sinmtp_log.txt" 2>/dev/null)"
 
 # ── 17: el tokenizer de transformers v5 en un clon de transformers v4 ──────
 # Hay repos guardados con transformers v5, cuyo tokenizer_class es

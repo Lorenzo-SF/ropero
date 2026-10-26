@@ -239,7 +239,7 @@ class Gguf:
 
 def main(argv):
     if len(argv) < 2:
-        print("uso: _ggufcheck.py FICHERO [--info] [--lib RUTA] [--nombres] [--bloque N] [--tipo-predominante]", file=sys.stderr)
+        print("uso: _ggufcheck.py FICHERO [--info] [--lib RUTA] [--nombres] [--bloque N] [--meta] [--tipo-predominante]", file=sys.stderr)
         return 2
     path = argv[1]
     info_only = "--info" in argv
@@ -265,6 +265,23 @@ def main(argv):
     r = g.resumen()
     if info_only:
         print(json.dumps(r, indent=2, default=str))
+        return 0
+
+    # --meta: la metadata que hace falta para saber donde esta la cabeza
+    # MTP, en formato "clave=valor" (una por linea), para que un script lo
+    # pueda leer. El bloque de la MTP son los ULTIMOS bloques del GGUF:
+    # el conversor suma los bloques de la MTP al block_count
+    # (conversion/qwen.py: self.block_count += n_mtp), asi que la MTP son
+    # los bloques [block_count - nextn_predict_layers, block_count - 1].
+    if "--meta" in argv:
+        arch = r["arch"]
+        print("arch=%s" % arch)
+        print("block_count=%s" % r["block_count"])
+        print("nextn_predict_layers=%s" % (r["nextn"] if r["nextn"] is not None else 0))
+        b_mtp = ""
+        if r["block_count"] and r["nextn"]:
+            b_mtp = int(r["block_count"]) - int(r["nextn"])
+        print("bloque_mtp=%s" % b_mtp)
         return 0
 
     # --tipo-predominante: el tipo de tensor que mas hay. Es el tipo de
