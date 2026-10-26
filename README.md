@@ -170,6 +170,8 @@ curl http://localhost:9999/v1/chat/completions \
 | `ropero <modelo>` | arranca el modelo |
 | `ropero list` | los modelos disponibles y los retirados |
 | `ropero status` | qué está corriendo, en qué puerto, con qué RAM |
+| `ropero levels <modelo>` | los niveles de razonamiento que **declara** ese modelo |
+| `ropero args <modelo> [nivel]` | el argv final que recibiría el server, **sin arrancar nada** |
 | `ropero stop <modelo>\|all` | para lo que esté corriendo |
 | `ropero install [engines\|models\|link]` | instala engines, modelos o enlaces |
 | `ropero config [engine]` | la configuración actual |
@@ -177,6 +179,11 @@ curl http://localhost:9999/v1/chat/completions \
 | `ropero template` | enseña la plantilla de un modelo |
 
 `ropero install` sin destino pasa por los engines y luego por los modelos.
+
+`ropero levels` y `ropero args` son de **preguntar, no de arrancar**: el
+nivel (`--low` / `--medium` / `--high`) solo existe si el modelo lo declara
+en su TOML, y un nivel que no declara es un error de uso que deja el
+modelo sin arrancar. Por eso hay que poder preguntar antes.
 
 ### Flags del lanzador
 
@@ -199,23 +206,19 @@ El vocabulario es del modelo, no del CLI: si un modelo no declara `--vision`,
 
 Activos:
 
-| Modelo | Engine | GGUF | Capas (`-ngl`) | ctx | Offload | VRAM | Margen |
-|---|---|---|---|---|---|---|---|
-| `agenta1` | llama-server | 11.66 GB | 40 | 262144 | — | 13.0 | 1938 |
-| `agents-tiny` | llama-server | 4.48 GB | 32 | 262144 | — | 9.2 | 5871 |
-| `devstral` | llama-server | 11.47 GB | 18 | 393216 | `--n-gpu-layers 18` | 14.5 | 484 |
-| `fable` | llama-server | 13.25 GB | 40 | 262144 | `--n-cpu-moe 2` | 14.5 | 429 |
-| `gemma` | llama-server | 13.28 GB | 30 | 262144 | — | 14.6 | 327 |
-| `gptoss` | llama-server | 12.11 GB | 24 | 131072 | — | 13.7 | 1312 |
-| `laguna` | llama-server | 12.83 GB | 40 | 262144 | `--n-cpu-moe 4` | 14.6 | 342 |
-| `muse` | llama-server | 13.36 GB | 52 | 131072 | — | 14.5 | 413 |
-| `nemotron` | llama-server | 19.76 GB | 52 | 1048576 | `--n-cpu-moe 18` | 14.7 | 291 |
-| `ornith` | llama-server | 12.54 GB | 40 | 262144 | — | 13.4 | 1550 |
-| `qwen` | llama-server | 12.80 GB | 55 | 262144 | `--n-gpu-layers 55` | 14.7 | 282 |
-| `qwen36` | llama-server | 13.21 GB | 40 | 262144 | — | 14.5 | 458 |
-| `qwencoder` | llama-server | 11.97 GB | 48 | 262144 | `--n-cpu-moe 22` | 14.5 | 403 |
-| `qwenvision` | llama-server | 6.10 GB | 28 | 128000 | — | 8.8 | 6247 |
-| `qwopus` | llama-server | 13.53 GB | 40 | 262144 | — | 14.3 | 679 |
+> La lista **vigente** está en `ropero list`: sale de los TOMLs, con el
+> ctx, el offload (`ngl` / `cpu-moe`) y el tipo de KV de cada modelo.
+>
+> ```console
+> $ ropero list
+>   qwen         slot :9999 / :9998    ctx=196608     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-IQ2_M.gguf
+>   nemotron     slot :9999 / :9998    ctx=1048576    ngl=52 cpu-moe=18          q4_0    engine=llama-server   gguf=NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf
+> ```
+>
+> No hay una tabla de VRAM aquí a propósito: el margen libre depende del tipo
+> de KV (`turbo3` vs `q4_0` ocupan distinto) y de la cuantización, así que
+> cualquier número escrito en el README se desincroniza en cuanto cambia un
+> TOML. Para calcularlo, el modelo se arranca y se mira su log.
 
 **Cada modelo lleva su ctx nativo** (el `context_length` de su propio GGUF) y
 el offload justo para que quepa en los 15.300 MiB libres de la RTX 5080.
@@ -244,10 +247,31 @@ Los que pagan offload:
 - **`qwencoder`**: 48 capas de atención completa, su KV son 6.75 GB a 262144.
   Con `--n-cpu-moe 22` entra. Es el que peor sale en decode del roster.
 - **`devstral`** y **`qwen`**: son densos, así que no hay experts que mandar
-  a la CPU: el offload es por capas (`--n-gpu-layers 18` y `55`).
+  a la CPU: el offload es por capas (`--n-gpu-layers` en su TOML).
 
 Si el ctx largo no es lo prioritario en un modelo concreto, bajar su ctx
 (`ROPERO_<MODELO>_CTX`) aligera el offload y el decode recupera velocidad.
+
+### El KV `turbo3` y el `--context-shift`
+
+Los TOMLs usan `turbo3` (3 bits con rotación Hadamard, del fork
+`atomic-llama-cpp-turboquant`): el KV entra casi 4 veces más apretado que
+en f16, que es lo que permite el ctx largo.
+
+Pero hay una contrapartida que **no es de ropero, es del fork**: con
+`turbo3`/`turbo2`/`turbo4` en la **K**, el `--context-shift` se **salta**
+(sin crash, pero la calidad de la salida baja después del shift). Los tipos
+`q8_0`/`q4_0` sí desplazan bien.
+
+O sea: si un modelo lleva `--context-shift` **y** `turbo3` en la K, hay que
+elegir:
+
+- bajar el ctx para que **no** llegue a fullness (entonces no hay shift que
+  saltarse), o
+- poner `q8_0` en la K y `turbo3` en la V (la V no participa del shift).
+
+El `ropero list` muestra el tipo de KV de cada modelo: si pone `turbo3` y el
+modelo trae `--context-shift`, es un caso de estos.
 
 Los demás engines (`airllm`, `mlx_lm`) tienen sus modelos aparte, en
 `models/airllm/` y `models/mlx_lm/`.
@@ -265,11 +289,15 @@ Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
 | `ROPERO_<MODELO>_CTX` | el contexto del modelo |
 | `ROPERO_<MODELO>_GGUF` | otra cuantización del mismo repo |
 | `ROPERO_<MODELO>_PORT` | el puerto del modelo |
-| `ROPERO_MODEL_OPT_<OPCIÓN>` | el valor de una opción con valor |
+| `ROPERO_TEMP` | el `--temp` del muestreo, **sustituye** al del TOML |
 | `LLAMA_API_KEY` | la clave de la API (por defecto `sk-local-dev-key`) |
 | `HOST` | dónde escuchar (por defecto `0.0.0.0`) |
 | `GGUF_DIR` | dónde están los GGUF (por defecto `~/models/gguf`) |
 | `SAFETENSORS_DIR` | dónde están los checkpoints (por defecto `~/models/safetensors`) |
+
+`ROPERO_TEMP` es global a propósito: el bench tiene que medir a todos los
+modelos con el **mismo** temp, y cada TOML trae el suyo. Sustituye, no
+añade (en el argv gana el último `--temp`, que es el del override).
 
 Los overrides propios de cada modelo (temperatura del drafter, tipo de KV…)
 también existen: `ROPERO_GEMMA_TEMP`, `ROPERO_GEMMA_MTP_NMAX`,

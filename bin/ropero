@@ -969,8 +969,24 @@ cmd_list() {
             port_desc="slot :$PORT / :$CPU_PORT"
         fi
         if [[ "$engine" == "llama-server" ]]; then
-            printf "  %-12s %-21s ctx=%-10s engine=%-14s gguf=%s\n" \
-                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_GGUF[$m]}"
+            # El offload y el tipo de KV se DERIVAN de los args del TOML
+            # (los mismos que se le pasan al server), no de una tabla
+            # escrita a mano: una tabla esa diverge en silencio en cuanto
+            # un TOML cambia, y nadie se entera hasta que el modelo no
+            # arranca por falta de VRAM.
+            local -a margs=()
+            mapfile -t margs < <(ropero_model_args "$m" "" 2>/dev/null || true)
+            local offload="" kv="" _i
+            for (( _i = 0; _i < ${#margs[@]}; _i++ )); do
+                case "${margs[_i]}" in
+                    --n-gpu-layers) offload="ngl=${margs[_i+1]:-?}" ;;
+                    --n-cpu-moe)     offload="${offload:+$offload }cpu-moe=${margs[_i+1]:-?}" ;;
+                    --cache-type-k)  kv="${margs[_i+1]:-?}" ;;
+                esac
+            done
+            printf "  %-12s %-21s ctx=%-10s %-26s %-8s engine=%-14s gguf=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" \
+                "${offload:-offload=none}" "${kv:-kv=?}" "$engine" "${MODEL_GGUF[$m]}"
         else
             # Para los engines con servidor propio, lo útil ver de un vistazo
             # es el formato del checkpoint: un .safetensors no se puede meter

@@ -449,6 +449,12 @@ ropero_model_args() {
     if [[ -n "$target" ]]; then
         # El nombre "humano" del modelo físico es MODEL_ALIAS[target].
         name="${MODEL_ALIAS[$target]:-$target}"
+    elif [[ "$name" != "${MODEL_ALIAS[$key]:-}" ]]; then
+        # La key de los arrays normaliza los guiones a guiones bajos
+        # (agents-tiny -> agents_tiny), pero _modelconf.py busca por el
+        # [model].name del TOML, que los lleva con guiones. Sin esta
+        # traduccion, `ropero agents_tiny` no encuentra el modelo.
+        name="${MODEL_ALIAS[$key]:-$name}"
     fi
     shift 2 2>/dev/null || true
 
