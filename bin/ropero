@@ -217,6 +217,31 @@ unset _mp _mpv
 # -----------------------------------------------------------------------------
 port_listening() { lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 get_pid_for_port() { lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
+
+# -----------------------------------------------------------------------------
+# _ropero_sello_path <puerto>
+# _ropero_sello_calc <args...>
+#
+# El "sello" de un server: un hash de los args con los que se arranco. Se
+# guarda al lado de los logs, por puerto.
+#
+# Para que sirve: `ropero <modelo>` con el modelo YA corriendo decia
+# "ya esta corriendo" y se iba, sin reiniciar. Asi que cualquier cambio en
+# el TOML (el sampling, un flag, el ctx) se quedaba sin aplicar para
+# siempre, y sin avisar: el server se quedaba con la config de antes.
+# Pasaba con el fable y su --dry-multiplier: el TOML ya lo tenia, pero el
+# server de siempre habia arrancado antes del cambio, asi que el DRY seguia
+# apagado y el bucle de tool calls seguia igual.
+#
+# Con el sello, al volver a arrancar un modelo que ya corre se compara el
+# sello guardado con el de ahora: si difieren, el TOML cambio, y el server
+# se reinicia para aplicar la config nueva.
+# -----------------------------------------------------------------------------
+_ropero_sello_path() { printf '%s/args-%s.sha' "${LOG_DIR:-$HOME/.logs/ropero}" "$1"; }
+_ropero_sello_calc() {
+    [[ $# -eq 0 ]] && { printf ''; return 0; }
+    printf '%s\n' "$@" | sha256sum | cut -d' ' -f1
+}
 get_model_on_port() {
     # El patrón tolera el espacio opcional alrededor de los dos puntos.
     #
@@ -1532,6 +1557,11 @@ cmd_use() {
 
     if port_listening "$port"; then
         local current
+        # _reiniciar: el server de este MISMO modelo corre con una config
+        # anterior. Se reinicia, y con esto se salta el bloque de "puerto
+        # ocupado por OTRO modelo" de abajo (que es de otro caso: aqui el
+        # puerto es el de este modelo, no hay conflicto).
+        local _reiniciar=0
         current=$(get_model_on_port "$port" 2>/dev/null || echo "")
         if [[ "$current" == "$model" ]]; then
             echo "✓ '$model' ya está sirviéndose en :$port"
@@ -1797,11 +1827,55 @@ start_model() {
 
     if port_listening "$port"; then
         local current
+        # _reiniciar: el server de este MISMO modelo corre con una config
+        # anterior. Se reinicia, y con esto se salta el bloque de "puerto
+        # ocupado por OTRO modelo" de abajo (que es de otro caso: aqui el
+        # puerto es el de este modelo, no hay conflicto).
+        local _reiniciar=0
         current=$(get_model_on_port "$port" 2>/dev/null || echo "")
         if [[ "$current" == "$model" ]]; then
-            echo "Modelo '$model' ya está corriendo en :$port"
-            return 0
+            # ── ¿corre con la config de AHORA? ─────────────────────────────
+            # El sello son los args del modelo (los del TOML). Si no coinciden
+            # con los del server vivo, el TOML cambio y hay que reiniciar
+            # para que el cambio se aplique.
+            local _sello_f _sello_actual _sello_guardado
+            _sello_f="$(_ropero_sello_path "$port")"
+            _sello_actual="$(_ropero_sello_calc "${pre_model_args[@]}")"
+            _sello_guardado=""
+            [[ -f "$_sello_f" ]] && _sello_guardado="$(cat "$_sello_f" 2>/dev/null || true)"
+            if [[ -n "$_sello_actual" && -n "$_sello_guardado" &&
+                  "$_sello_actual" != "$_sello_guardado" ]]; then
+                echo "⚠  '$model' corre en :$port con una config ANTERIOR (su TOML cambio)."
+                echo "   Lo reinicio para aplicar la nueva."
+                local _pid
+                _pid="$(get_pid_for_port "$port")"
+                if [[ -n "$_pid" ]]; then
+                    _kill_port "$port"
+                    local _wait=0
+                    while (( _wait < 10 )) && port_listening "$port"; do
+                        sleep 1
+                        (( _wait++ ))
+                    done
+                    if port_listening "$port"; then
+                        echo "✗ No se pudo liberar :$port tras matar el server anterior" >&2
+                        return 1
+                    fi
+                else
+                    echo "✗ No se encontro el proceso de :$port" >&2
+                    return 1
+                fi
+                # sigue con el arranque normal, con la config nueva
+                _reiniciar=1
+            else
+                echo "Modelo '$model' ya está corriendo en :$port"
+                return 0
+            fi
         fi
+
+        # Puerto ocupado por un modelo DISTINTO (o por el mismo, si el
+        # reinicio de arriba no pudo matarlo). Aqui no se toca nada sin
+        # --force.
+        if (( _reiniciar == 0 )); then
         # Puerto destino ocupado por OTRO modelo. Default: NO matar
         # automáticamente. El usuario decide con `ropero stop <modelo>` o
         # con `--force` (uso interactivo; pensado para que un humano en
@@ -1838,6 +1912,7 @@ start_model() {
             echo "  O usa --force para rotar interactivamente (mata solo este slot)." >&2
             return 1
         fi
+        fi   # fin del if _reiniciar
     fi
 
     # Contexto efectivo: el que declara el modelo, salvo override por entorno
@@ -1946,6 +2021,19 @@ start_model() {
             fi
 
             alaja separator "Arrancando $model en :$port (bin: $LLAMA_BIN, ctx: $ctx_size, $port_reason)" --color
+            # El sello de esta config, para poder detectar mas adelante que el
+            # TOML cambio (y entonces reiniciar en vez de decir "ya corre").
+            # OJO: se sella con pre_model_args, NO con model_args. Son cosas
+            # distintas (model_args lleva cosas que anade el launcher) y si
+            # el sello se calculara distinto en cada sitio, nunca coincidiria
+            # y el modelo se reiniciaria siempre.
+            local _sello_f _sello_actual
+            _sello_f="$(_ropero_sello_path "$port")"
+            _sello_actual="$(_ropero_sello_calc "${pre_model_args[@]}")"
+            if [[ -n "$_sello_actual" ]]; then
+                mkdir -p "$LOG_DIR" 2>/dev/null || true
+                printf '%s' "$_sello_actual" > "$_sello_f" 2>/dev/null || true
+            fi
             if (( background == 0 )); then
                 "${cmd[@]}" 2>&1 | colorize "$model" "$engine"
                 local rc=${PIPESTATUS[0]}
