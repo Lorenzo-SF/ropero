@@ -5,74 +5,21 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-# ctx 131072 (la mitad del nativo, que son 262144). Con el IQ3_XS a 262144
-# no cabe: el KV solo son 3904 MiB pero el total se va a 16.9 GB.
-#
-# MEDIDO en el arranque real (log del 2026-10-26, RTX 5080 Laptop):
-#
-#   pesos del modelo en la GPU          11514 MiB   (el embed y el output
-#                                                    van al host: 682 MiB)
-#   RS (estado recurrente, 48 capas)      448.88 MiB
-#   compute buffer (ubatch 256)           610.01 MiB
-#   KV (16 capas plenas, 131072 celdas)
-#     K turbo3  + V turbo3                1600 MiB   (12,5 KiB/token)
-#     K q4_0    + V turbo3                1952 MiB   (15,25 KiB/token)
-#     K q8_0    + V turbo3                2368 MiB   (18,5 KiB/token)
-#   ------------------------------------------------------
-#   total SIN MTP (K turbo3)             14173 MiB   -> +1059 de margen
-#   total CON MTP (K turbo3)             14927 MiB   ->  +305 de margen
-#   (el MTP context son 754 MiB: 144 de KV del draft en q4_0 + 610 de compute)
-#
-# POR QUE turbo3 EN LA K Y NO q4_0: el kernel de flash attention del fork
-# tiene 78 combinaciones de (K, V) y NO incluye ninguna q4_0+turbo*:
-# con K q4_0 y V turbo3 el server peta en el warmup con
-# "ggml/src/ggml-cuda/fattn.cu:2935: fatal error" (GGML_ABORT). Las que si
-# existen con turbo en la V: turbo3+turbo3, turbo2+turbo3, q8_0+turbo3,
-# f16+turbo3.
-#
-# Y con turbo en la K el --context-shift se corrompe en silencio (el turbo
-# lleva su propia base WHT que su dequant no deshace, y el K-shift hace
-# dequant -> RoPE -> requant). Por eso aqui NO lleva --context-shift: sin
-# shift no hay corrupcion. Con MTP, el fork desactiva el ctx_shift igual.
-context = 131072
+context = 163840
 
 [files]
-gguf   = "Qwen3.8-27B-IQ3_XS.gguf"
+gguf   = "Qwen3.8-27B-IQ2_M.gguf"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-IQ3_XS.gguf"
+file = "Qwen3.8-27B-IQ2_M.gguf"
 size = "12.80 GB"
 
 [levels]
-# "high" es un ALIAS de "xhigh": el chat template del qwen35 solo acepta
-# low / medium / xhigh (y su default es xhigh), asi que "high" se declara
-# aqui para que el nivel sea visible y valido, no un bloque huerfano.
 list    = ["low", "medium", "high", "xhigh"]
 default = "low"
 
 [flags]
-# El flag `mtp` activa el speculative decoding con la cabeza NextN que ya
-# esta dentro del GGUF (bloque 64). NO viene de serie: el MTP solo renta si
-# la aceptacion es alta, y con temp 1.0 no lo es.
-#
-# Que cuesta, en VRAM (medido en el log del banco: el draft ocupaba
-# 7.289 MiB con 1855 tokens -> 4.024 KiB/token, que es UNA capa nextn en
-# f16, n_kv=4, hd=256):
-#
-#   ctx     KV del draft (f16)   con --spec-draft-type q4_0
-#   262144        1008 MiB                  288 MiB
-#   196608         756 MiB                  221 MiB
-#   131072         504 MiB                  144 MiB
-#
-# O sea: cuantizar el KV del draft (q4_0) es lo que hace que el MTP quepa
-# con ctx largo. El ctx del draft va atado al del target (el upstream lo
-# pone explicito: cparams.n_ctx = llama_n_ctx(ctx_tgt)), asi que bajarlo
-# por debajo del ctx del target no es una opcion.
-#
-# Con MTP, el fork desactiva ctx_shift y cache_reuse (avisa por log): con
-# turbo3 en la K, el context shift se salta y la calidad baja. Asi que
-# con --mtp hay que quitar el --context-shift.
 list = ["mtp"]
 
 [args]
@@ -112,40 +59,12 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 [args.level.xhigh]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
-# ── El flag `mtp` (speculative decoding con la cabeza NextN) ────────────────
-# La cabeza NextN va DENTRO del GGUF (bloque 64: nextn.eh_proj + los tensores
-# de la capa), asi que no hay que descargar ni cargar otro modelo.
-#
-# Los tres valores de abajo no son de tastes: estan medidos por el fork.
-#   --spec-draft-n-max 2       "optimal for this model's MTP head (measured)".
-#                              El default es 10, y con 10 el draft hace 10
-#                              forwards secuenciales para aceptar 2.
-#   --no-spec-draft-backend-sampling
-#                              "keeps CUDA graph reuse high (~25% throughput
-#                              difference)".
-#   --spec-draft-type q4_0     el KV del draft en 4 bits en vez de f16.
-#                              MEDIDO en el arranque real: el KV del draft
-#                              son 144 MiB (1 capa nextn, K y V en q4_0, a
-#                              131072). En f16 serian 512 MiB.
-#
-# Lo que NO se puede bajar (y es la mitad del coste del MTP): el compute
-# buffer del draft context son 610 MiB, IGUAL que el del target, porque el
-# draft hereda el ubatch (256) del target. El draft solo procesa 1 token
-# por forward, asi que esa reserva es exagerada, pero el fork no expone
-# ningun flag para bajarla (el upstream tiene params_spec.n_ubatch; el
-# fork no lo copia en common_base_params_to_speculative).
-#
-# El MTP context completo son 754 MiB, y el fitter lo SUMA al margen que
-# quiere dejar libre (1024 por defecto + 754 = 1778), asi que con el MTP
-# el --fit casi nunca puede 만족acerse. No es un error: el fitter avisa
-# ("restoring the pre-fit parameters") y el server sigue con lo que le
-# diste. Para bajar el margen: -fitt 256.
 [args.flag.mtp]
 base = [
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "q4_0",
-    "--spec-draft-type-v", "q4_0",
+    "--spec-draft-type-k", "turbo3",
+    "--spec-draft-type-v", "turbo3",
     "--no-spec-draft-backend-sampling",
 ]
 
