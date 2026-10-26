@@ -5,7 +5,7 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-context = 1048576
+context = 524288
 
 [files]
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
@@ -17,16 +17,16 @@ size = "19.76 GB"
 
 [args]
 base = [
-    "--n-gpu-layers", "52",                            # todos los layers GPU-eligible
-    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-18}",   # experts de las 18 primeras capas a la CPU
+    "--n-gpu-layers", "-1",                            # todos los layers GPU-eligible
+    #"--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-18}",   # experts de las 18 primeras capas a la CPU
 
     # ---- Atención ----
     # -fa on lo pone ropero entry globalmente
     # NO --swa-full (Nemotron usa Mamba SSM, no SWA)
-
+	#"--fit off",
     # ---- KV cache ----
-    "--cache-type-k", "q4_0",                          # agresivo (mamba SSM no usa esto, attn sí)
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",                          # agresivo (mamba SSM no usa esto, attn sí)
+    "--cache-type-v", "turbo3",
     "--cache-prompt",
     "--context-shift",
 

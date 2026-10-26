@@ -3,7 +3,7 @@
 # =============================================================================
 
 [model]
-name    = "agents-tiny"
+name    = "agenta-tiny"
 engine  = "llama-server"
 context = 262144
 

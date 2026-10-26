@@ -22,10 +22,7 @@ default = "low"
 [args]
 base = [
     # ---- GPU offload: que el fitter reparta ----
-    "--n-gpu-layers", "41",
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
+    "--n-gpu-layers", "42",
 
     # ---- KV cache ----
     "--cache-type-k", "turbo3",
