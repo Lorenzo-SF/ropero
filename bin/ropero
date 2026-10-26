@@ -4386,23 +4386,62 @@ _gguffer_prepara_gguf() {
     # sin quantizar, sin imatrix y sin mmproj).
     if [[ -z "$fichero" ]]; then
         local -a candidatos=()
+        local -a shard_grupos=()
         local f
         for f in "${ficheros[@]}"; do
             [[ "$f" == *.gguf ]] || continue
             [[ "$f" == *imatrix* ]] && continue
             [[ "$f" == *mmproj* ]] && continue
-            [[ "$f" == *"-0000"* ]] && continue
+            if [[ "$f" == *"-0000"* ]]; then
+                # Un shard. El grupo es el prefijo ("X-00001-of-00002"): de
+                # cada grupo se ofrece el PRIMER shard, y el gguffer baja el
+                # grupo entero y lo une.
+                local _pre="${f%.gguf}"
+                _pre="${_pre%-0000[0-9]-of-[0-9]*}"
+                local _dup=0 _g
+                for _g in "${shard_grupos[@]}"; do [[ "$_g" == "$_pre" ]] && _dup=1; done
+                (( _dup )) || shard_grupos+=("$_pre")
+            else
+                candidatos+=("$f")
+            fi
+        done
+        # Los shards tambien son candidatos: el BF16 del Qwen3.8 va partido
+        # en dos ficheros, en una subcarpeta. De cada grupo se ofrece el
+        # PRIMER shard, y el gguffer baja el grupo entero y lo une.
+        for f in "${ficheros[@]}"; do
+            [[ "$f" == *"-00001-of-"* ]] || continue
+            [[ "$f" == *imatrix* ]] && continue
+            [[ "$f" == *mmproj* ]] && continue
             candidatos+=("$f")
         done
         if ((${#candidatos[@]} == 0)); then
             echo "ERROR: el repo $repo no tiene un GGUF sin quantizar." >&2
             echo "       Dile cual con --gguf-file." >&2
             return 2
-        elif ((${#candidatos[@]} > 1)); then
-            echo "ERROR: el repo $repo tiene varios GGUFs sin quantizar:" >&2
-            printf '       %s\n' "${candidatos[@]}" >&2
-            echo "       Dile cual con --gguf-file." >&2
-            return 2
+        fi
+        if ((${#candidatos[@]} > 1)); then
+            # Hay varios: el que interesa es el SIN cuantizar (bf16/f16).
+            # Los demas ya son quants de otra gente, y cuantizar encima de
+            # un quant es dequantizar y re-cuantizar.
+            local -a sin_quantizar=()
+            for f in "${candidatos[@]}"; do
+                case "$(basename "$f")" in
+                    *bf16*|*BF16*|*f16*|*F16*) sin_quantizar+=("$f") ;;
+                esac
+            done
+            if ((${#sin_quantizar[@]} == 1)); then
+                candidatos=("${sin_quantizar[0]}")
+            elif ((${#sin_quantizar[@]} == 0)); then
+                echo "ERROR: el repo $repo no tiene ningun GGUF sin quantizar" >&2
+                echo "       (lo que hay son quants: cuantizar encima no aporta nada)" >&2
+                echo "       Dile cual con --gguf-file." >&2
+                return 2
+            else
+                echo "ERROR: el repo $repo tiene varios GGUFs sin quantizar:" >&2
+                printf '       %s\n' "${sin_quantizar[@]}" >&2
+                echo "       Dile cual con --gguf-file." >&2
+                return 2
+            fi
         fi
         fichero="${candidatos[0]}"
     fi
@@ -5040,6 +5079,10 @@ cmd_gguffer() {
             nombre="${gguf_file##*/}"; nombre="${nombre%.gguf}"
         fi
         nombre="${nombre%-GGUF}"
+        # Sin el sufijo del shard ("-00001-of-00002") ni el del tipo
+        # ("-bf16"): el nombre es el del MODELO, no el del fichero de
+        # entrada. El GGUF final se llama "Qwen3.8-27B-MXFP4.gguf".
+        nombre="$(printf '%s' "$nombre" | sed -E 's/-[0-9]{5}-of-[0-9]+$//; s/-(bf16|BF16|f16|F16)$//')"
     elif [[ -n "$repo" ]]; then
         if [[ -f "$sentinel" ]]; then
             echo "[gguffer] reutilizo el clon de $repo en $work"

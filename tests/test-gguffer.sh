@@ -182,10 +182,6 @@ if [[ -n "${FAKE_QUANTIZE_FAIL:-}" ]]; then
     fi
     exit 1
 fi
-if [[ -n "${FAKE_QUANTIZE_GARBAGE:-}" ]]; then
-    printf 'esto no es un GGUF' > "$2"
-    exit 0
-fi
 # El quantizador real (tools/quantize/quantize.cpp) solo parsea las opciones
 # mientras el argumento empiece por "--", y para en el primero que no. Si una
 # flag llega despues de los posicionales, se come el parseo del numero de
@@ -265,7 +261,12 @@ fi
 mkdir -p "$local_dir"
 if [[ -n "$fichero" ]]; then
     mkdir -p "$local_dir/$(dirname "$fichero")"
-    printf 'imatrix falso\n' > "$local_dir/$fichero"
+    if [[ "${FAKE_HF_GGUF:-}" == "1" ]]; then
+        # Un GGUF de verdad (lo hace el generador de test).
+        python3 "$FAKE_HF_GGUF_MAKER" gguf "$local_dir/$fichero" 3
+    else
+        printf 'imatrix falso\n' > "$local_dir/$fichero"
+    fi
     printf '{"model_type":"qwen35"}\n' > "$local_dir/config.json"
     printf 'pesos falsos\n' > "$local_dir/model-00001-of-00001.safetensors"
     exit 0
@@ -275,6 +276,58 @@ printf 'pesos falsos\n' > "$local_dir/model-00001-of-00001.safetensors"
 exit 0
 EOF
 chmod +x "$BIN_DIR/hf"
+
+# ── un curl fake: la API de HuggingFace con la lista de ficheros de un repo ─
+# El gguffer usa la API para saber que ficheros tiene un repo (y si el GGUF
+# va partido en shards). Con este curl se falsea SOLO esa llamada.
+cat >"$BIN_DIR/curl" <<'EOF'
+#!/usr/bin/env bash
+# Si la URL es la API de un modelo, se devuelve la lista de ficheros.
+for a in "$@"; do
+    case "$a" in
+        https://huggingface.co/api/models/*)
+            repo="${a##*/}"
+            cat <<JSON
+{"siblings":[
+ {"rfilename":"README.md"},
+ {"rfilename":"Qwen3.8-27B-imatrix.gguf"},
+ {"rfilename":"mmproj-Qwen3.8-27B-bf16.gguf"},
+ {"rfilename":"Qwen3.8-27B-IQ2_M.gguf"},
+ {"rfilename":"Qwen3.8-27B-Q8_0.gguf"},
+ {"rfilename":"Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf"},
+ {"rfilename":"Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00002-of-00002.gguf"}
+]}
+JSON
+            exit 0 ;;
+    esac
+done
+exec /usr/bin/curl "$@"
+EOF
+chmod +x "$BIN_DIR/curl"
+
+# ── un llama-gguf-split fake: une los shards ─────────────────────────────
+mkdir -p "$LLAMA_DIR_TEST/build/bin"
+cat >"$LLAMA_DIR_TEST/build/bin/llama-gguf-split" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "--merge" ]]; then
+    # El merge de verdad: un solo GGUF con los tensores de los shards. Aqui
+    # vale con concatenar el primero (lo que importa es que el gguffer lo
+    # llame con los shards en el orden correcto y con el nombre de salida).
+    out="${3:-merged.gguf}"
+    cat "$2" > "$out"
+    echo "fake merge: $2 -> $out"
+    exit 0
+fi
+if [[ "${1:-}" == "--dry-run" ]]; then
+    # El dry-run comprueba si el fichero es un GGUF que se puede partir.
+    # Si no lo es, falla (como el de verdad).
+    f="${2:-}"
+    if [[ -f "$f" ]] && head -c 4 "$f" | grep -q GGUF; then exit 0; fi
+    exit 1
+fi
+exit 0
+EOF
+chmod +x "$LLAMA_DIR_TEST/build/bin/llama-gguf-split"
 
 # ── correr el gguffer ─────────────────────────────────────────────────────
 gguffer() {
@@ -286,6 +339,8 @@ gguffer() {
         GGUF_WORK_DIR="$WORK_ROOT" \
         HF_HOME="$WORK/hfcache" \
         FAKE_HF_FAIL="${FAKE_HF_FAIL:-}" \
+        FAKE_HF_GGUF="${FAKE_HF_GGUF:-}" \
+        FAKE_HF_GGUF_MAKER="${FAKE_HF_GGUF_MAKER:-$WORK/gguf_maker.py}" \
         FAKE_QUANTIZE_FAIL="${FAKE_QUANTIZE_FAIL:-}" \
         FAKE_QUANTIZE_GARBAGE="${FAKE_QUANTIZE_GARBAGE:-}" \
         FAKE_QUANTIZE_LOG="${FAKE_QUANTIZE_LOG:-}" \
@@ -930,6 +985,20 @@ rm -rf "${GGUF_OUT:?}"/*; mkdir -p "$GGUF_OUT"
 FAKE_QUANTIZE_FAIL=1 gguffer --gguf "$WORK/entrada-del-usuario/Mi.gguf" --quant IQ2_M >/dev/null 2>&1
 check "26d. si falla, el GGUF de entrada sigue ahi" \
       "$(cond '[ -f "$WORK/entrada-del-usuario/Mi.gguf" ]')" "desaparecio"
+
+# ══ 27. UN REPO CON SHARDS: se baja, se une y se cuantiza ════════════════
+# El BF16 del Qwen3.8 va partido en dos ficheros, en una subcarpeta. El
+# gguffer tiene que encontrarlo solo (es el unico sin cuantizar), bajar los
+# dos shards y unirlos.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_HF_GGUF=1 gguffer --gguf owner/Qwen3.8-27B-GGUF --quant IQ2_M 2>&1)"; rc=$?
+check "27a. baja el repo y cuantiza" "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "27b. uno los shards" \
+      "$(cond 'printf %s "$out" | grep -q "uno los 2 shards"')" "$out"
+check "27c. el GGUF final tiene el nombre del MODELO (sin shards ni bf16)" \
+      "$(cond '[ -f "$GGUF_OUT/Qwen3.8-27B-IQ2_M.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+check "27d. no baja el imatrix ni el mmproj" \
+      "$(cond '! printf %s "$out" | grep -q "imatrix.gguf"')" "$out"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
