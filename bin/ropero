@@ -3095,6 +3095,8 @@ USO: ropero gguffer --path <dir> | --repo <owner/name> [opciones]
   --out NOMBRE        nombre del GGUF de salida (sin .gguf)
   --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
   --include PATRON    que ficheros descargar (por defecto, todos)
+  --intermedio TIPO  el GGUF intermedio: f16 (por defecto) o bf16 (la
+                      mitad de disco, y el cuantizador lo acepta igual)
   --keep-source       no borrar los safetensors aunque el GGUF sea valido
   --keep-intermedio   no borrar el GGUF intermedio (F16)
   --force             borra todo lo cacheado de este repo y empieza de cero
@@ -4027,6 +4029,7 @@ declare -A GGUFFER_MODELOS=(
 cmd_gguffer() {
     local path="" repo="" quant="" out_name="" imatrix="" from_subdir="" include=""
     local force=0 keep_source=0 keep_inter=0 list_only=0 list_modelos=0 modelo=""
+    local inter="f16"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -4046,6 +4049,8 @@ cmd_gguffer() {
             --from-subdir=*) from_subdir="${1#--from-subdir=}"; shift ;;
             --include)     [[ $# -ge 2 ]] || { echo "ERROR: --include requiere un patrón" >&2; return 2; }; include="$2"; shift 2 ;;
             --include=*)   include="${1#--include=}"; shift ;;
+            --intermedio)    [[ $# -ge 2 ]] || { echo "ERROR: --intermedio requiere f16 o bf16" >&2; return 2; }; inter="$2"; shift 2 ;;
+            --intermedio=*)  inter="${1#--intermedio=}"; shift ;;
             --keep-source)    keep_source=1; shift ;;
             --keep-intermedio) keep_inter=1; shift ;;
             --force)       force=1; shift ;;
@@ -4213,7 +4218,9 @@ cmd_gguffer() {
     fi
 
     # ── FASE 2: conversion a GGUF ───────────────────────────────────────────
-    local out_f16="$out_dir/${nombre}-F16.gguf"
+    local inter_up="${inter^^}"
+    [[ "$inter_up" == "F16" || "$inter_up" == "BF16" ]] || { echo "ERROR: --intermedio solo admite f16 o bf16" >&2; return 2; }
+    local out_f16="$out_dir/${nombre}-${inter_up}.gguf"
     local out_final="$out_f16"
     [[ -n "$quant" ]] && out_final="$out_dir/${nombre}-${quant}.gguf"
 
@@ -4226,8 +4233,8 @@ cmd_gguffer() {
     fi
 
     if [[ ! -f "$out_f16" ]]; then
-        echo "[gguffer] convierto $source_dir -> $out_f16 (F16)..."
-        if ! python3 "$_convert" "$source_dir" --outfile "$out_f16" --outtype f16; then
+        echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
+        if ! python3 "$_convert" "$source_dir" --outfile "$out_f16" --outtype "$inter"; then
             # La conversion fallo: el clon de los safetensors se conserva
             # (60 GB, pero es lo que evita volver a bajar) y se dice como
             # reintentar solo esta fase.
@@ -4235,7 +4242,7 @@ cmd_gguffer() {
             echo "ERROR: fallo la conversion a GGUF" >&2
             echo "       conservo los pesos en: $work" >&2
             echo "       reintenta solo la conversion:" >&2
-            echo "         python3 $_convert $source_dir --outfile $out_f16 --outtype f16" >&2
+            echo "         python3 $_convert $source_dir --outfile $out_f16 --outtype $inter" >&2
             return 1
         fi
     else
