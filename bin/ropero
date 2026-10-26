@@ -922,7 +922,7 @@ _port_legend() {
 # -----------------------------------------------------------------------------
 _ropero_usage() {
     case "${1:-}" in
-        install)   printf 'USO: ropero install [engines|models|link] [selección] [--force]\n' ;;
+        install)   printf 'USO: ropero install [engines|models|link|opencode-plugin] [selección] [--force]\n' ;;
         check)     printf 'USO: ropero --check\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         templates) printf 'USO: ropero templates\n' ;;
@@ -3068,7 +3068,7 @@ EOF
 
 _ropero_command_help() {
     case "${1:-}" in
-        install)   printf 'USO: ropero install [engines|models|link] [selección] [--force]\n' ;;
+        install)   printf 'USO: ropero install [engines|models|link|opencode-plugin] [selección] [--force]\n' ;;
         engines)   printf 'USO: ropero engines [llama|airllm|mlx|tensorrt|flm|all] [--force]\n' ;;
         models)    printf 'USO: ropero models [modelo[, modelo...]] [--force]\n' ;;
         link)      printf 'USO: ropero link\n' ;;
@@ -3762,7 +3762,7 @@ cmd_install() {
             # la ayuda de engines), y el help no debe inicializar el entorno.
             --help|-h) help_requested=1 ;;
             --force|-f) force=1 ;;
-            engines|models|link) [[ -z "$target" ]] || _ropero_usage_error install "destino repetido: '$arg'"; target="$arg" ;;
+            engines|models|link|opencode-plugin) [[ -z "$target" ]] || _ropero_usage_error install "destino repetido: '$arg'"; target="$arg" ;;
             *) raw+="${raw:+ }$arg" ;;
         esac
     done
@@ -3777,11 +3777,69 @@ cmd_install() {
             if (( force == 1 )); then cmd_models --force ${raw:+"$raw"}; else cmd_models ${raw:+"$raw"}; fi
             ;;
         link) [[ -z "$raw" ]] || _ropero_usage_error link "link no acepta selección"; _ropero_relink_all "$(ropero_detect_os)" ;;
+        opencode-plugin) _ropero_install_opencode_plugin ;;
         '')
             _ropero_install_engines_selected "$raw" "$force" || return $?
             if (( force == 1 )); then cmd_models --force; else cmd_models; fi
             ;;
     esac
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_install_opencode_plugin — copia el plugin de opencode al home.
+#
+# POR QUÉ COPIA Y NO ENLACE
+#   El plugin se carga desde ~/.config/opencode/plugins/. Un symlink al repo
+#   tiene el mismo problema que el config: el watcher de opencode (inotify)
+#   no sigue symlinks, así que los cambios en el plugin no se recargan.
+#   Con una copia, el plugin que corre es el que está en el home. El precio es
+#   que hay que volver a copiarlo cuando cambia, y por eso este comando
+#   avisa si el destino no está al día.
+# -----------------------------------------------------------------------------
+_ropero_install_opencode_plugin() {
+    local src="$ROPERO_ROOT/opencode-plugin/index.ts"
+    local dst_dir="$HOME/.config/opencode/plugins/ropero-modelo"
+    local dst="$dst_dir/index.ts"
+
+    if [[ ! -f "$src" ]]; then
+        echo "✗ no encuentro el plugin en $src" >&2
+        echo "  (¿estás en el repo de ropero?)" >&2
+        return 1
+    fi
+
+    mkdir -p "$dst_dir" || { echo "✗ no pude crear $dst_dir" >&2; return 1; }
+
+    if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+        echo "✓ el plugin ya está al día en $dst"
+    else
+        if [[ -f "$dst" ]]; then
+            local bak="$dst.bak"
+            local n=0
+            while [[ -e "$bak" ]]; do n=$((n+1)); bak="$dst.bak.$n"; done
+            cp -p "$dst" "$bak" 2>/dev/null && echo "  copia anterior → $bak"
+        fi
+        if cp "$src" "$dst"; then
+            echo "✓ plugin instalado en $dst"
+        else
+            echo "✗ no pude copiar el plugin a $dst" >&2
+            return 1
+        fi
+    fi
+
+    # ¿está declarado en el config de opencode?
+    local cfg="$HOME/.config/opencode/opencode.jsonc"
+    [[ -f "$cfg" ]] || cfg="$HOME/.config/opencode/opencode.json"
+    if [[ -f "$cfg" ]]; then
+        if grep -q "ropero-modelo" "$cfg"; then
+            echo "✓ el config de opencode declara el plugin"
+        else
+            echo "⚠ el config de opencode NO declara el plugin. Añade:"
+            echo '    "plugins": [{ "package": "./plugins/ropero-modelo", "options": { "provider": "marichocho", "port": 9999 } }]'
+        fi
+    else
+        echo "⚠ no encuentro el config de opencode (~/.config/opencode/opencode.jsonc)"
+    fi
+    return 0
 }
 
 _ropero_config_lan_ip() {
