@@ -734,8 +734,8 @@ out="$(gguffer --repo owner/principal --quant IQ2_XXS --quant IQ3_XS \
         --out-principal "$GGUF_OUT/mi-modelo/Modelos-IQ2_XXS.gguf" 2>&1)"; rc=$?
 check "20a. el primero va a la ruta exacta" \
       "$(cond '[ -f "$GGUF_OUT/mi-modelo/Modelos-IQ2_XXS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
-check "20b. el segundo va con su nombre" \
-      "$(cond '[ -f "$GGUF_OUT/principal-IQ3_XS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+check "20b. el segundo va con su nombre, en la carpeta del principal" \
+      "$(cond '[ -f "$GGUF_OUT/mi-modelo/principal-IQ3_XS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
 check "20c. sin error" "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
 
 # --out-principal sin .gguf: error
@@ -743,6 +743,16 @@ out="$(gguffer --repo owner/principal2 --quant IQ2_XXS \
         --out-principal "$GGUF_OUT/mi-modelo" 2>&1)"; rc=$?
 check "20d. --out-principal sin .gguf: error" \
       "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "fichero .gguf"')" "$out"
+
+# con --out-principal, el GGUF intermedio se queda en la carpeta del modelo
+# (y no en la raiz del GGUF_DIR, que es donde lo dejaria sin --out)
+rm -rf "$GGUF_OUT"/*; mkdir -p "$GGUF_OUT"
+printf 'imatrix falso\n' > "$WORK/imatrix_falso.gguf"
+out="$(FAKE_QUANTIZE_LOG="$WORK/principal_log.txt" gguffer --repo owner/principal3 \
+        --quant IQ2_XXS --imatrix "$WORK/imatrix_falso.gguf" \
+        --out-principal "$GGUF_OUT/mi-modelo/Modelos-IQ2_XXS.gguf" 2>&1)"
+check "20e. el intermedio va a la carpeta del modelo" \
+      "$(cond 'printf %s "$out" | grep -q "mi-modelo/principal3-F16.gguf"')" "$out"
 
 # ── 21: "ya existe" no descarga 60 GB ──────────────────────────────────────
 # Si el GGUF final ya esta de una corrida anterior, el gguffer tiene que

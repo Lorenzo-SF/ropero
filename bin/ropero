@@ -4338,10 +4338,15 @@ cmd_gguffer() {
     # fichero, el directorio es el de esa ruta. El launcher busca cada modelo
     # en $GGUF_DIR/<carpeta_del_modelo>/, asi que esto es lo que hace que el
     # GGUF fabricationado caiga donde el TOML lo va a buscar.
+    # Con --out-principal, y sin --out, el directorio es el del principal:
+    # asi el GGUF intermedio se queda en la carpeta del modelo y no suelta en
+    # la raiz del GGUF_DIR.
     if [[ -n "$ROPERO_GGUF_OUT_DIR" ]]; then
         out_dir="$ROPERO_GGUF_OUT_DIR"
     elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
         out_dir="$(dirname "$ROPERO_GGUF_OUT_FILE")"
+    elif [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
+        out_dir="$(dirname "$ROPERO_GGUF_OUT_PRINCIPAL")"
     fi
     mkdir -p "$out_dir"
 
