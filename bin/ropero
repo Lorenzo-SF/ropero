@@ -4505,12 +4505,16 @@ cmd_gguffer() {
     # respetan). Aqui solo se corta antes de descargar 60 GB si NO falta
     # ninguno.
     if (( ${#quants[@]} > 0 )); then
-        local _falta=0 _op
+        local _falta=0 _hay_otro=0 _op
         for _op in "${out_paths[@]}"; do
+            # El F16 como resultado (--quant F16) lo gestiona el flujo normal.
             [[ "$_op" == "$out_f16" ]] && continue
+            _hay_otro=1
             [[ -f "$_op" ]] || _falta=1
         done
-        if (( _falta == 0 )) && [[ "$out_f16" == "${out_paths[0]}" ]] && $force -eq 0 && -z "$path"; then
+        # OJO: $force -eq 0 va dentro de [[ ]]. Fuera, bash lo parsea como
+        # "ejecutar el comando 0" (por el &&) y el if NUNCA se cumple.
+        if (( _falta == 0 && _hay_otro == 1 )) && [[ $force -eq 0 && -z "$path" ]]; then
             echo "[gguffer] ya existen todos los quants pedidos:"
             for _op in "${out_paths[@]}"; do echo "           $_op"; done
             echo "           (usa --force para rehacerlos)"

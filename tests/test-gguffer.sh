@@ -744,6 +744,35 @@ out="$(gguffer --repo owner/principal2 --quant IQ2_XXS \
 check "20d. --out-principal sin .gguf: error" \
       "$(cond '[ "$rc" != "0" ] && printf %s "$out" | grep -q "fichero .gguf"')" "$out"
 
+# ── 21: "ya existe" no descarga 60 GB ──────────────────────────────────────
+# Si el GGUF final ya esta de una corrida anterior, el gguffer tiene que
+# cortarse ANTES de descargar los pesos. Es lo que evita rehacer 40 GB de
+# descarga y una hora de conversion para nada.
+rm -rf "$GGUF_OUT"/* "$REPO_DIR"; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/ya-existe --quant IQ3_XS 2>&1)"
+check "21a. la primera vez lo hace" \
+      "$(cond '[ -f "$GGUF_OUT/ya-existe-IQ3_XS.gguf" ]')" "$out"
+rm -rf "$REPO_DIR"; rm -f "$WORK/convert_count.txt"
+out="$(FAKE_CONVERT_COUNT="$WORK/convert_count.txt" gguffer --repo owner/ya-existe --quant IQ3_XS 2>&1)"; rc=$?
+check "21b. la segunda vez dice que ya existe" \
+      "$(cond 'printf %s "$out" | grep -q "ya existe"')" "$out"
+check "21c. la segunda vez NO convierte" \
+      "$(cond '[ ! -f "$WORK/convert_count.txt" ]')" \
+      "conversiones: $(cat "$WORK/convert_count.txt" 2>/dev/null | wc -l)"
+check "21d. la segunda vez NO borra el GGUF" \
+      "$(cond '[ -f "$GGUF_OUT/ya-existe-IQ3_XS.gguf" ]')" "$(ls -A "$GGUF_OUT")"
+# Un "command not found" en la salida significa un error de shell en el
+# gguffer. Con "$force -eq 0" fuera de [[ ]] pasaba: bash intentaba ejecutar
+# el comando "0", y el corte temprano NUNCA se cumplia (se re-descargaban
+# 60 GB). Este test lo fija.
+check "21e. sin errores de shell en la salida" \
+      "$(cond '! printf %s "$out" | grep -q "command not found"')" "$out"
+
+# con --force, rehace
+out="$(FAKE_CONVERT_COUNT="$WORK/convert_count.txt" gguffer --repo owner/ya-existe --quant IQ3_XS --force 2>&1)"
+check "21f. con --force lo rehace" \
+      "$(cond '[ -f "$WORK/convert_count.txt" ]')" "$out"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then
