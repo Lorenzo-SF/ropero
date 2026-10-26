@@ -5,18 +5,44 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-# ctx NATIVO del GGUF (262144). Cabe con turbo3: el IQ2_M real son 10.52 GB
-# (no 12.80: ese size era del IQ3_XS), y a 262144 el KV turbo3 son 3.5-4 GB.
-# Margen estimado: 350-870 MiB de los 15.300 MiB libres.
-context = 262144
+# ctx 131072 (la mitad del nativo, que son 262144). Con el IQ3_XS a 262144
+# no cabe: el KV solo son 3904 MiB pero el total se va a 16.9 GB.
+#
+# MEDIDO en el arranque real (log del 2026-10-26, RTX 5080 Laptop):
+#
+#   pesos del modelo en la GPU          11514 MiB   (el embed y el output
+#                                                    van al host: 682 MiB)
+#   RS (estado recurrente, 48 capas)      448.88 MiB
+#   compute buffer (ubatch 256)           610.01 MiB
+#   KV (16 capas plenas, 131072 celdas)
+#     K turbo3  + V turbo3                1600 MiB   (12,5 KiB/token)
+#     K q4_0    + V turbo3                1952 MiB   (15,25 KiB/token)
+#     K q8_0    + V turbo3                2368 MiB   (18,5 KiB/token)
+#   ------------------------------------------------------
+#   total SIN MTP (K turbo3)             14173 MiB   -> +1059 de margen
+#   total CON MTP (K turbo3)             14927 MiB   ->  +305 de margen
+#   (el MTP context son 754 MiB: 144 de KV del draft en q4_0 + 610 de compute)
+#
+# POR QUE turbo3 EN LA K Y NO q4_0: el kernel de flash attention del fork
+# tiene 78 combinaciones de (K, V) y NO incluye ninguna q4_0+turbo*:
+# con K q4_0 y V turbo3 el server peta en el warmup con
+# "ggml/src/ggml-cuda/fattn.cu:2935: fatal error" (GGML_ABORT). Las que si
+# existen con turbo en la V: turbo3+turbo3, turbo2+turbo3, q8_0+turbo3,
+# f16+turbo3.
+#
+# Y con turbo en la K el --context-shift se corrompe en silencio (el turbo
+# lleva su propia base WHT que su dequant no deshace, y el K-shift hace
+# dequant -> RoPE -> requant). Por eso aqui NO lleva --context-shift: sin
+# shift no hay corrupcion. Con MTP, el fork desactiva el ctx_shift igual.
+context = 131072
 
 [files]
-gguf   = "Qwen3.8-27B-IQ2_M.gguf"
+gguf   = "Qwen3.8-27B-IQ3_XS.gguf"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-IQ2_M.gguf"
-size = "10.52 GB"
+file = "Qwen3.8-27B-IQ3_XS.gguf"
+size = "12.80 GB"
 
 [levels]
 # "high" es un ALIAS de "xhigh": el chat template del qwen35 solo acepta
@@ -53,8 +79,8 @@ list = ["mtp"]
 base = [
     "--n-gpu-layers", "66",
 
-    "--cache-type-k", "turbo3",              
-    "--cache-type-v", "turbo3",
+    "--cache-type-k", "turbo3",              # el kernel de FA no tiene q4_0+turbo3
+    "--cache-type-v", "turbo3",              # (fattn.cu:2935 -> GGML_ABORT)
 
     "--temp", "1.0",
     "--top-p", "0.95",
@@ -97,11 +123,23 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 #   --no-spec-draft-backend-sampling
 #                              "keeps CUDA graph reuse high (~25% throughput
 #                              difference)".
-#   --spec-draft-type q4_0     el KV del draft en 4 bits en vez de f16: 4x
-#                              menos VRAM (288 MiB en vez de 1008 a 262144).
-#                              Con la rotacion Hadamard (head_dim 256, se
-#                              activa sola con KV cuantizado) el q4_0 del
-#                              draft no pierde casi nada.
+#   --spec-draft-type q4_0     el KV del draft en 4 bits en vez de f16.
+#                              MEDIDO en el arranque real: el KV del draft
+#                              son 144 MiB (1 capa nextn, K y V en q4_0, a
+#                              131072). En f16 serian 512 MiB.
+#
+# Lo que NO se puede bajar (y es la mitad del coste del MTP): el compute
+# buffer del draft context son 610 MiB, IGUAL que el del target, porque el
+# draft hereda el ubatch (256) del target. El draft solo procesa 1 token
+# por forward, asi que esa reserva es exagerada, pero el fork no expone
+# ningun flag para bajarla (el upstream tiene params_spec.n_ubatch; el
+# fork no lo copia en common_base_params_to_speculative).
+#
+# El MTP context completo son 754 MiB, y el fitter lo SUMA al margen que
+# quiere dejar libre (1024 por defecto + 754 = 1778), asi que con el MTP
+# el --fit casi nunca puede 만족acerse. No es un error: el fitter avisa
+# ("restoring the pre-fit parameters") y el server sigue con lo que le
+# diste. Para bajar el margen: -fitt 256.
 [args.flag.mtp]
 base = [
     "--spec-type", "draft-mtp",
