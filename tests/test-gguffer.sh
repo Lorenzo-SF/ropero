@@ -615,6 +615,34 @@ check "17b. guarda una copia del original" \
 check "17c. avisa de lo que ha hecho" \
       "$(cond 'printf %s "$out" | grep -q "PreTrainedTokenizerFast y reintento"')" "$out"
 
+# ── 18: el conversor que no admite --no-mtp para esta arch ─────────────────
+# El nemotron: el conversor acepta el flag, pero no para NemotronHForCausalLM.
+# Y no hace falta: sin el mixin de MTP, el conversor ya deja fuera la nextn.
+mkdir -p "$WORK/nem-src"; echo '{}' > "$WORK/nem-src/config.json"
+cat >"$LLAMA_DIR_TEST/convert_hf_to_gguf.py" <<'PY'
+import struct, sys
+args = sys.argv[1:]
+outfile = args[args.index("--outfile") + 1]
+if "--no-mtp" in args:
+    sys.stderr.write("ERROR: --mtp / --no-nextn are not supported for NemotronHForCausalLM\n")
+    sys.exit(1)
+def s(x):
+    b = x.encode(); return struct.pack("<Q", len(b)) + b
+body = b"GGUF" + struct.pack("<I", 3) + struct.pack("<Q", 1) + struct.pack("<Q", 2)
+body += s("general.architecture") + struct.pack("<I", 8) + s("nemotron_h")
+body += s("general.file_type") + struct.pack("<I", 4) + struct.pack("<I", 1)
+idx = s("blk.0.weight") + struct.pack("<I", 1) + struct.pack("<Q", 4) + struct.pack("<I", 1) + struct.pack("<Q", 0)
+body += idx
+body = body.ljust((len(body) + 31) // 32 * 32, b"\x00") + b"\x00" * 16
+with open(outfile, "wb") as f:
+    f.write(body)
+PY
+out="$(gguffer --path "$WORK/nem-src" --quant IQ2_M --no-mtp 2>&1)"
+check "18a. avisa de que la arch no admite --no-mtp" \
+      "$(cond 'printf %s "$out" | grep -q "esta arquitectura no admite --no-mtp"')" "$out"
+check "18b. reintenta sin el y convierte" \
+      "$(cond 'printf %s "$out" | grep -q "GGUF listo"')" "$out"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then

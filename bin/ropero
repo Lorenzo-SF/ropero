@@ -4451,6 +4451,23 @@ cmd_gguffer() {
             if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
                 conv_ok=1
             fi
+        elif grep -q -- "--mtp / --no-nextn are not supported" "$conv_log" 2>/dev/null \
+             && [[ " ${conv_args[*]} " == *" --no-mtp "* ]]; then
+            # El conversor acepta --no-mtp, pero no para ESTA arquitectura.
+            # Y no hace falta: si la arch no tiene el mixin de MTP
+            # (conversion/nemotron.py no lo tiene, conversion/qwen.py si), el
+            # conversor ya deja fuera la capa nextn. El GGUF sale con 52
+            # bloques y SIN la metadata nextn_predict_layers, que es
+            # justamente lo que hace que el server lo cargue bien.
+            echo "[gguffer] aviso: esta arquitectura no admite --no-mtp."
+            echo "           Reintento sin el: el conversor ya deja fuera la MTP."
+            local _i
+            for _i in "${!conv_args[@]}"; do
+                [[ "${conv_args[$_i]}" == "--no-mtp" ]] && unset 'conv_args[_i]'
+            done
+            if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
+                conv_ok=1
+            fi
         fi
         if (( conv_ok == 0 )); then
             tail -20 "$conv_log" >&2
