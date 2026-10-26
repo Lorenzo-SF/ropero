@@ -178,6 +178,7 @@ curl http://localhost:9999/v1/chat/completions \
 | `ropero config [engine]` | la configuración actual |
 | `ropero check` | verifica la instalación (no modifica nada) |
 | `ropero template` | enseña la plantilla de un modelo |
+| `ropero gguffer` | fabrica un GGUF desde un repo de HuggingFace (descarga → convierte → cuantiza → verifica) |
 
 `ropero install` sin destino pasa por los engines y luego por los modelos.
 
@@ -209,6 +210,41 @@ necesita un cliente que habla con un único endpoint.
 ```bash
 ropero use qwen --port 9999
 ```
+
+### `ropero gguffer`: fabricar el GGUF en casa
+
+Los GGUFs que publica la gente (bartowski, unsloth) los hace el mismo
+`llama-quantize` que lleva el motor de llama.cpp. Este comando es para
+cuando quieres el tuyo: con **tu** imatrix, con el GGUF de otro modelo, o
+con un quant que nadie ha hecho.
+
+```bash
+ropero gguffer --list-modelos              # qué sabe cuantizar
+ropero gguffer --modelo qwen               # el repo y el quant salen del registro
+ropero gguffer --repo Qwen/Qwen3.8-27B --quant IQ3_XS
+ropero gguffer --modelo qwen --imatrix mi.imatrix
+```
+
+Lo que no se ve en el comando es lo que pasa **cuando algo falla**, que es
+lo que importa cuando estás descargando 60 GB:
+
+| Si falla | Qué pasa |
+|---|---|
+| la descarga | se borra el clon a medias **y** la caché de HF |
+| la conversión | se conservan los safetensors y se dice cómo reintentar solo la conversión |
+| la cuantización | se conservan los safetensors **y** el GGUF intermedio, y se dice cómo reintentar solo la cuantización |
+| la verificación del GGUF | no se borra nada |
+| nada (todo bien) | se borran los safetensors, porque el GGUF ya está validado |
+
+`--force` borra lo cacheado de ese repo y lo rehace desde cero. El clon de
+los pesos vive en `~/.cache/ropero/gguffer/<owner>__<repo>` y se reutiliza
+si ya está: reintentar la cuantización no vuelve a bajar el modelo.
+
+Un detalle que marea: hay repos cuyos pesos **ya vienen cuantizados** (el
+gpt-oss viene en MXFP4). Cuantizar encima de eso es dequantizar y
+re-cuantizar: se pierde calidad sin ganar nada. El gguffer lo mira en el
+`file_type` del GGUF convertido y te avisa; para cuantizar de los pesos sin
+cuantizar está `original/` en el repo (`--from-subdir original`).
 
 ### Flags del lanzador
 
