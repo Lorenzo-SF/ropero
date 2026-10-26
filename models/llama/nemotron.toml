@@ -17,8 +17,8 @@ size = "19.76 GB"
 
 [args]
 base = [
-    "--n-gpu-layers", "-1",                            # todos los layers GPU-eligible
-    #"--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-18}",   # experts de las 18 primeras capas a la CPU
+    "--n-gpu-layers", "53",                            # todos los layers GPU-eligible
+    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-12}",   # experts de las 18 primeras capas a la CPU
 
     # ---- Atención ----
     # -fa on lo pone ropero entry globalmente
