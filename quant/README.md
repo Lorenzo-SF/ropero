@@ -6,6 +6,7 @@ Todo lo de fabricar GGUFs con `ropero gguffer`, en un sitio y con un guion.
 
 | Fichero | Que hace |
 |---|---|
+| `ACRITO.md` | **El procedimiento completo**, con los comandos exactos y los errores que salen. |
 | `modelos.tsv` | **La tabla de QUE fabricar.** La fuente de verdad. |
 | `cuantizar-todos.sh` | Cuantiza segun la tabla (varios quants por tirada). |
 | `verificar-gguf.sh` | Comprueba un GGUF sin necesidad de GPU. |
@@ -62,3 +63,32 @@ Cada línea de la tabla descarga el repo de pesos entero (40-60 GB) y genera
 un GGUF intermedio del mismo tamaño. **El pico son ~120 GB por modelo.** El
 gguffer borra el clon y el intermedio cuando el GGUF final valida, y
 reutiliza el clon si relanzas la misma línea.
+
+
+## La fuente "gguf": cuantizar un GGUF que ya existe
+
+A veces el conversor de pesos no sabe convertir el modelo. El caso real es
+el **Qwen3.8-27B**: es multimodal y lleva cabeza MTP, y el conversor del
+fork que usa ropero no sabe mapear los tensores de la MTP, asi que la
+conversion aborta (y con `--no-mtp` tambien, porque esa clase ignora el
+flag).
+
+La salida es no convertir: hay gente que ya publica el GGUF sin cuantizar
+(bartowski publica el BF16 del Qwen3.8), y ese GGUF ya tiene la MTP bien
+metida. Se cuantiza ese:
+
+```bash
+ropero gguffer \
+  --gguf bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf \
+  --quant MXFP4 \
+  --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
+  --imatrix-file Qwen3.8-27B-imatrix.gguf
+```
+
+En la tabla, esto es la septima columna, **"fuente"**: vacia = clonar los
+pesos y convertir; puesta = un GGUF que ya esta hecho. Si el GGUF va
+partido en shards, se bajan todos y se unen solos.
+
+**El fichero de entrada no se borra nunca**: es del usuario.
+
+El detalle entero del caso, con las medidas, esta en **ACRITO.md**.
