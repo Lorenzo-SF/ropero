@@ -385,6 +385,63 @@ sys.exit(1 if mal else 0)
 PYEOF
 }
 
+# ── LA RESPUESTA SE REPITE? ───────────────────────────────────────────────
+#
+# El fallo del fable: emitia la MISMA tool call 40 veces seguidas hasta que
+# opencode abortaba con "MAXIMUM STEPS REACHED". En el texto plano eso se ve
+# como un bloque de palabras repetido.
+#
+# Se busca un bloque de 8 palabras CONSECUTIVAS que aparezca 3 o mas veces
+# en sitios distintos. Es lo bastante ancho para no confundirlo con codigo
+# normal (que repite tokens, no frases enteras) y lo bastante estrecho para
+# pillar un bucle.
+#
+# Devuelve 1 y lista los indicios si la respuesta se repite; 0 si no.
+repetitiva() {
+    local sesion="$1"
+    python3 - "$sesion" <<'PYEOF'
+import json, re, sys
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    sys.exit(0)
+try:
+    texto = []
+    for m in d.get("messages", []):
+        if m.get("type") != "assistant":
+            continue
+        for c in (m.get("content") or []):
+            if c.get("type") == "text":
+                texto.append(c.get("text") or "")
+    t = "\n".join(texto)
+    if not t.strip():
+        sys.exit(0)
+    palabras = re.findall(r"\S+", t)
+    N = 8
+    if len(palabras) < N * 3:
+        sys.exit(0)
+    vistos = {}
+    for i in range(len(palabras) - N + 1):
+        clave = " ".join(palabras[i:i + N])
+        vistos.setdefault(clave, []).append(i)
+    mal = []
+    for clave, pos in vistos.items():
+        if len(pos) >= 3:
+            mal.append((len(pos), clave))
+    if not mal:
+        sys.exit(0)
+    mal.sort(reverse=True)
+    for n, clave in mal[:3]:
+        print("el bloque '%s' aparece %d veces" % (clave, n))
+    sys.exit(1)
+except SystemExit:
+    raise
+except Exception:
+    # si el analisis falla, no se marca nada: es un check, no un juez
+    sys.exit(0)
+PYEOF
+}
+
 # ── SIN ARGUMENTOS: LISTAR Y SALIR ────────────────────────────────────────
 # Esto va ANTES del precheck a proposito: listar los modelos disponibles no
 # necesita ni ropero ni opencode. Probar, si.
@@ -889,6 +946,18 @@ AGENTS_EOF
           err "  $tid: la respuesta pega una salida de OTRA máquina:"
           salida_inventada "$out/sesion-$nombre.md" "$work" 2>/dev/null | sed 's/^/    /'
           err "  -> el juez tiene que saberlo: es evidencia falsa"
+        fi
+      fi
+
+      # ── ¿SE REPITE? ───────────────────────────────────────────────────────
+      # Un bucle de tool calls o de frases: el modelo dice lo mismo una y
+      # otra vez. Es el fallo que hizo que el fable quemara 40 turnos.
+      if [[ -f "$out/sesion-$nombre.md" ]]; then
+        if repetitiva "$out/sesion-$nombre.md"; then
+          salida="REPETIDA"
+          err "  $tid: la respuesta se REPITE:"
+          repetitiva "$out/sesion-$nombre.md" 2>/dev/null | sed 's/^/    /'
+          err "  -> el modelo se ha enrollado: el juez no debe contarlo como respuesta"
         fi
       fi
 

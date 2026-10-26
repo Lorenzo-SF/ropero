@@ -52,6 +52,33 @@ base = [
     "--min-p", "0.05",
     "--repeat-penalty", "1.0",                          # sin penalty (Qwen3.6 OK)
     "--repeat-last-n", "64",
+    # ---- DRY: Don't Repeat Yourself ----
+    # El fable se enrollaba en el bucle de las tool calls: emitia la MISMA
+    # llamada ("Skill vault-index") 40 veces seguidas, y opencode abortaba
+    # con "MAXIMUM STEPS REACHED". En el log del server se veia:
+    #   sampler chain: logits -> ?penalties -> ?dry -> ... -> top_k -> ... -> min_p -> ?xtc -> temp-ext -> dist
+    # El "?" delante de dry y de penalties = DESACTIVADOS. Sin nada que
+    # penalice la repeticion, el sampler hace justo lo que le piden: repetir
+    # el token mas probable. Y con un Q2_K (2,98 BPW) ese token es siempre
+    # el mismo.
+    #
+    # El DRY penaliza la repeticion de secuencias (y los sequence breakers
+    # cortan la penalizacion en los sitios donde repetir es NORMAL: saltos de
+    # linea, ":", "}", cierre de bloque de codigo...). Esta es la MISMA
+    # receta que ya llevan el qwopus y el ornith, que son del mismo arch
+    # (qwen35moe) y del mismo tipo de modelo.
+    #
+    # OJO: OpenCode manda temperature/top_p/top_k/min_p en cada peticion, pero
+    # NO manda repeat_penalty, ni frequency_penalty, ni presence_penalty, ni
+    # dry_multiplier. Por eso estos valores del launcher se aplican de
+    # verdad (el server los usa como default y solo los pisa si vienen en el
+    # body: tools/server/server-schema.cpp, "has_value").
+    "--dry-multiplier", "0.8",
+    "--dry-base", "1.75",
+    "--dry-allowed-length", "5",
+    "--dry-penalty-last-n", "1024",
+    "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
+    "--samplers", "min_p;top_k;top_p;temp;dry",
     "--seed", "-1",
 
     # ---- Generación ----
