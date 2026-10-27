@@ -1,0 +1,49 @@
+# =============================================================================
+# metalqwen — Qwen3.8-27B-MLX
+# =============================================================================
+ 
+[model]
+name    = "metalqwen"
+engine  = "mlx_lm"
+context = 65536
+format  = "safetensors"
+path    = "Qwen3.8-27B-MLX"
+port    = 9992
+
+[files]
+ 
+[limits]
+min_ram_gb = 28
+ram_fraction = 0.8
+kv_kib_per_token = 48
+
+[download]
+repo = "PocketAiHub/Qwen3.8-27B-MLX"
+file = "Qwen3.8-27B-MLX"
+size = "12.1 GB"
+ 
+
+[args]
+base = [
+    # ── Sampling: los de OpenAI para gpt-oss ──
+    "--temp", "1.0",
+    "--top-p", "1.0",
+    "--top-k", "0",
+
+    "--chat-template-args", '{"reasoning_effort":"${env:ROPERO_METALOSS_EFFORT:-high}"}',
+
+    # ── Tope de tokens generados ──
+    "--max-tokens", "4096",
+
+    # ── Prompt cache ──
+    "--prompt-cache-size", "32",
+    "--prompt-cache-bytes", "134217728",
+
+    # ── Prefill ──
+    "--prefill-step-size", "4096",
+
+    # ── Pipelining ──
+    "--pipeline",
+
+    "--log-level", "INFO",
+]
