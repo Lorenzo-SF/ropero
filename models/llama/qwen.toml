@@ -8,7 +8,7 @@ engine  = "llama-server"
 context = 163840
 
 [files]
-gguf   = "Qwen3.8-27B-IQ2_M.gguf"
+gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"

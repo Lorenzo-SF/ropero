@@ -8,7 +8,7 @@ engine  = "llama-server"
 context = 524288
 
 [files]
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
@@ -26,7 +26,7 @@ list = ["think"]
 [args]
 base = [
     "--n-gpu-layers", "53",                            # todos los layers GPU-eligible
-    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-12}",   # experts de las 12 primeras capas a la CPU
+    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-18}",   # experts de las 12 primeras capas a la CPU
 
     # ---- Atención ----
     # -fa on lo pone ropero entry globalmente

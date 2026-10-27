@@ -52,8 +52,7 @@ base = [
 
     # ---- Modelo / carga ----
     "--jinja",                                          # chat template Qwen3.6
-    "--chat-template-kwargs", '{"enable_thinking": false}',  # coder = directo, sin thinking
-    "--reasoning-format", "deepseek",                   # limpia tags thinking del output
+    "--reasoning", "off",                   # limpia tags thinking del output
 
     # ---- Sampling (canónico Qwen3.6 coder) ----
     "--temp", "0.6",
