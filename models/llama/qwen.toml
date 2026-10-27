@@ -5,7 +5,7 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 131072
+context = 196608
 
 [files]
 gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
@@ -24,7 +24,7 @@ list = ["mtp"]
 
 [args]
 base = [
-    "--n-gpu-layers", "-1",
+    "--n-gpu-layers", "66",
     "--cache-type-k", "q4_0",              # el kernel de FA no tiene q4_0+q4_0
     "--cache-type-v", "q4_0",              # (fattn.cu:2935 -> GGML_ABORT)
     "--temp", "1.0",

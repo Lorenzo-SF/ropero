@@ -2025,22 +2025,22 @@ start_model() {
                 --ctx-size "$ctx_size"
                 --threads 10
                 --threads-batch 20
-                -fa on
+                --flash-attn on
                 --jinja
-                --log-verbosity 3
+                --log-verbosity 4
                 --parallel 1
-                --cache-prompt
-                --cache-reuse 512
-                --context-shift
-                --batch-size 2048
-                --ubatch-size 512
-                --poll 30
                 --load-mode none
+                --kv-unified                     # global: el KV unificado lo
+                --kv-offload
+                --batch-size 4096
+                --ubatch-size 1024
+                --cache-reuse 512
+                --cache-prompt
+                --context-shift
+                --poll 30
                 --metrics
                 --perf
                 --seed -1
-                --kv-offload
-                --kv-unified                     # global: el KV unificado lo
                                                 # necesitan todos (y lo pidia
                                                 # 14 de 15 TOMLs, duplicado)
 

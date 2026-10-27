@@ -8,44 +8,60 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "openai_gpt-oss-20b-MXFP4.gguf"
+gguf = "gpt-oss-20b-UD-Q8_K_XL.gguf"
 
 [download]
-repo = "bartowski/openai_gpt-oss-20b-GGUF-MXFP4-Experimental"
-file = "openai_gpt-oss-20b-MXFP4.gguf"
-size = "12.11 GB"
+repo = "unsloth/gpt-oss-20b-GGUF"
+file = "gpt-oss-20b-UD-Q8_K_XL.gguf"
+size = "13.2 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
 default = "medium"
 
-[aliases]
-verifier = "high"
-designer = "medium"
-
 [args]
 base = [
-    "--n-gpu-layers", "25",
-    "--temp", "1.0",
-    "--min-p", "0.0",
-    "--top-p", "1.0",
-    "--top-k", "${env:ROPERO_GPTOSS_TOPK:-40}",
-    "--threads", "12",
-    "--threads-batch", "24",
+    "--n-gpu-layers", "99",
+    "--temp", "0.8",
+    "--top-k", "40",
+    "--min-p", "0.05",
     "--reasoning-format", "auto",
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+]
+
+[args.level.low]
+chat_template_kwargs = { reasoning_effort = "low" }
+base = [
+    "--spec-type","ngram-simple",
+    "--spec-ngram-simple-size-n","6",
+    "--spec-ngram-simple-size-m","16",
+    "--spec-draft-n-min","1",
+    "--spec-draft-n-max","2"
 ]
 
 
-[args.level.low]
-chat_template_kwargs = { enable_thinking = false }
-
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = true }
+chat_template_kwargs = { reasoning_effort = "medium" }
+base = [
+    "--spec-type","ngram-simple",
+    "--spec-ngram-simple-size-n","12",
+    "--spec-ngram-simple-size-m","48",
+    "--spec-draft-n-min","1",
+    "--spec-draft-n-max","3"
+]
+
 
 [args.level.high]
-chat_template_kwargs = { enable_thinking = true }
+chat_template_kwargs = { reasoning_effort = "high" }
+base = [
+    "--spec-type","ngram-simple",
+    "--spec-ngram-simple-size-n","8",
+    "--spec-ngram-simple-size-m","32",
+    "--spec-draft-n-min","1",
+    "--spec-draft-n-max","4"
+]
+
