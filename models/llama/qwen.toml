@@ -1,25 +1,5 @@
 # =============================================================================
-# qwen38-apex — Qwen3.8-27B EfficientThink (VAL APEX I MiniPlus V3)
-# =============================================================================
-#
-#   - GGUF principal : Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf (14.162 GB)
-#   - MTP (drafter)  : speculative/dflash2-qwen38-27b-Q4_K_M.gguf  (1.143 GB)
-#   - mmproj (visión): mmproj-Qwen3.8-27B-Q4_K_M.gguf               (0.522 GB)
-#
-# Contexto 32768: es lo que recomienda la ficha oficial para llama.cpp (el
-# nativo del modelo son 262144).
-#
-# Sampling de la ficha:
-#   temp 0.60, top_p 0.95, top_k 20, min_p 0.05,
-#   repeat_penalty 1.00, presence_penalty 0.0
-#
-# El MTP va en [args].base (no en un flag): el bundle se descarga entero, así
-# que el drafter está siempre en disco y --spec-type draft-mtp siempre aplica.
-#
-# El proyector de visión es un flag: sin `--vision` el servidor arranca sin
-# torre de visión (menos VRAM) y sólo lee texto.
-#
-# El override del contexto es el canónico ROPERO_QWEN38_APEX_CTX.
+# qwen — Qwen3.8-27B (base, denso 27B + VLM) con GGUF de bartowski
 # =============================================================================
 
 [model]
@@ -28,65 +8,54 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf   = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
-mtp    = "dflash2-qwen38-27b-Q4_K_M.gguf"
-mmproj = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
+gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
 
 [download]
-repo = "IsValorum/Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3-GGUF"
-file = "Qwen3.8-27B-EfficientThink-VAL-APEX-I-MiniPlus-V3.gguf"
-size = "14.162 GB"
-
-# El drafter vive en el subdirectorio `speculative/` del repo, pero el nombre
-# final es plano: el modelo lo busca en la raíz de $GGUF_DIR.
-[download.aux.mtp]
-file = "speculative/dflash2-qwen38-27b-Q4_K_M.gguf"
-name = "dflash2-qwen38-27b-Q4_K_M.gguf"
-size = "1.143 GB"
-
-[download.aux.mmproj]
-file = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
-name = "mmproj-Qwen3.8-27B-Q4_K_M.gguf"
-size = "0.522 GB"
+repo = "bartowski/Qwen3.8-27B-GGUF"
+file = "Qwen3.8-27B-UD-IQ3_S.gguf"
+size = "11.20 GB"
 
 [levels]
-list    = ["low", "medium", "high"]
-default = "medium"
+list    = ["low", "medium", "high", "xhigh"]
+default = "low"
 
 [flags]
-list = ["vision"]
+list = ["mtp"]
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
-    "--jinja",
-    "--temp", "0.60",
+    "--n-gpu-layers", "-1",
+    "--cache-type-k", "q4_0",              # el kernel de FA no tiene q4_0+q4_0
+    "--cache-type-v", "q4_0",              # (fattn.cu:2935 -> GGML_ABORT)
+    "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
-    "--min-p", "0.05",
+    "--min-p", "0.0",
     "--repeat-penalty", "1.0",
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "--kv-unified",
     "--n-predict", "16384",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-
-    # ---- Decoding especulativo (MTP) ----
-    "--spec-type", "draft-mtp",
-    "--model-draft", "${mtp}",
+    "--reasoning-preserve",
+    "--reasoning-budget", "12288",    
+    "--checkpoint-min-step","256",
 ]
 
 [args.level.low]
-chat_template_kwargs = { enable_thinking = false }
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-low}"
 
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = true }
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-medium}"
 
 [args.level.high]
-chat_template_kwargs = { enable_thinking = true }
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
-[args.flag.vision]
-base = ["--mmproj", "${mmproj}"]
-requires = ["mmproj"]
+[args.level.xhigh]
+reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
+
+[args.flag.mtp]
+base = [
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "2",
+    "--spec-draft-type-k", "q4_0",
+    "--spec-draft-type-v", "q4_0",
+    "--no-spec-draft-backend-sampling",
+]
+

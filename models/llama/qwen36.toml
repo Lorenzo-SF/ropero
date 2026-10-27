@@ -1,0 +1,49 @@
+# =============================================================================
+# qwen36 — Qwen3.6-35B-A3B (MoE híbrido, 35B totales / 3B activos)
+# =============================================================================
+
+[model]
+name    = "qwen36"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+
+[download]
+repo = "unsloth/Qwen3.6-35B-A3B-GGUF"
+file = "Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf"
+size = "13.21 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "41",
+    "--cache-type-k", "q4_0",                          # agresivo (10 capas de atencion)
+    "--cache-type-v", "q4_0",
+    "--rope-freq-base", "10000000",                    # theta del repo
+    "--temp", "1.0",                                   # canonico del repo
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--n-predict", "4096",
+    "--keep", "1024",
+    "--reasoning-format", "deepseek",                  # limpia tags <think>
+]
+
+[levels]
+list    = ["low", "medium", "xhigh"]
+default = "low"
+
+# El reasoning_effort se pasa como --chat-template-kwargs. El chat template
+# del modelo solo conoce low / medium / xhigh: "high" no existe y da error.
+[args.level.low]
+reasoning_effort = "low"
+
+[args.level.medium]
+reasoning_effort = "medium"
+
+[args.level.xhigh]
+reasoning_effort = "xhigh"
+

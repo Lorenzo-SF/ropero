@@ -1,0 +1,60 @@
+# modelo	repo de los pesos sin cuantizar	quants (separados por coma)	repo del imatrix	fichero del imatrix	flags extra	fuente
+#
+# La tabla de QUE fabricar. Cada linea es una tirada: el gguffer baja los
+# pesos UNA vez, convierte el GGUF intermedio UNA vez, y de ahi saca todos
+# los quants de la lista.
+#
+# El primer quant de la lista es el "principal": ese va a la ruta que
+# espera el TOML del modelo. Los demas quedan en
+# $GGUF_DIR/_variantes/<modelo>/, con su nombre <repo>-<quant>.gguf.
+#
+# Los pesos SIEMPRE se sacan del repo sin cuantizar (el "base"). Cuantizar
+# encima de un GGUF ya cuantizado es dequantizar y re-cuantizar: se pierde
+# calidad sin ganar nada.
+#
+# LA COLUMNA "fuente" (la ultima, opcional)
+# -----------------------------------------
+# Vacia: la fuente son los PESOS del repo de la 2a columna, y el gguffer
+# los clona y convierte.
+#
+# Puesta: la fuente es un GGUF QUE YA ESTA HECHO, y no se clona ni se
+# convierte NADA. Es el camino cuando el conversor de pesos no sabe
+# convertir el modelo. Se escribe "owner/repo" (el gguffer busca el unico
+# .gguf sin quantizar) o "owner/repo:fichero/dentro/del/repo".
+#
+# Por que hace falta (medido el 2026-10-27): el Qwen3.8-27B es multimodal
+# (Qwen3_5ForConditionalGeneration) y lleva cabeza MTP. Sus tensores se
+# llaman "mtp.*" y el conversor los remapea al bloque 64. En el fork que usa
+# ropero (atomic-llama-cpp-turboquant) la clase Qwen3_5TextModel no usa el
+# mixin de la MTP, asi que esos tensores no se pueden mapear y la
+# conversion aborta con:
+#     ValueError: Can not map tensor 'mtp.layers.0.attn_k.weight'
+# Y con --no-mtp tampoco, porque esa clase ignora el flag.
+#
+# El GGUF que publica bartowski YA tiene la MTP bien metida (como
+# "blk.64.nextn.*"), asi que cuantizar ese da lo mismo que convertir y
+# cuantizar, sin tocar el conversor. Ademas esta partido en shards, y el
+# gguffer los une solo con llama-gguf-split --merge.
+#
+# DESCARTADOS (2026-10-27): fable y nemotron.
+#   · fable   -> el Q2_K ya cabe, y con mas bits (IQ3_S, IQ4_XS) tampoco
+#                cabria; el hueco de VRAM no se cierra con un quant mas bajo
+#                sin que el coder se degrade mas que lo que ya degrada.
+#   · nemotron -> ya cabe con IQ3_XXS y va muy bien a 512K de ctx con 53
+#                capas y 12 de MoE en la CPU. Cuantizarlo mas es tirar
+#                rendimiento (IQ2_M) sin ganar nada que se note.
+#
+# ── los que COMPENSA fabricar (no caben en 16 GB con lo que hay) ───────────
+laguna	poolside/Laguna-XS-2.1	IQ2_XXS,IQ2_M	bartowski/Laguna-XS-2.1-GGUF	Laguna-XS-2.1-imatrix.gguf
+qwopus	Jackrong/Qwopus3.6-35B-A3B-Coder	IQ2_M	mradermacher/Qwopus3.6-35B-A3B-Coder-i1-GGUF	Qwopus3.6-35B-A3B-Coder.imatrix.gguf
+agenta1	InternScience/Agents-A1	IQ2_XXS	KikoCis/Agents-A1-IQ2_M-GGUF	Agents-A1.imatrix
+# ── los que ya caben: mejor bajarlos de HF que rehacerlos ────────────────
+# (el segundo quant es para COMPARAR o para subir lo que no existe)
+#
+# qwen: el IQ3_XS YA LO PUBLICA bartowski (12.80 GB), asi que no se
+# fabrica: se baja. El MXFP4 no existe para nadie, ese si se fabrica, y
+# desde el BF16 de bartowski (no de los pesos en HF, que no se convert).
+# El GGUF BF16 va partido en 2 shards: el gguffer los baja y los une.
+qwen	Qwen/Qwen3.8-27B	MXFP4	bartowski/Qwen3.8-27B-GGUF	Qwen3.8-27B-imatrix.gguf		bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf
+devstral	mistralai/Devstral-Small-2-24B-Instruct-2512	Q3_K_M,MXFP4	unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF	imatrix_unsloth.gguf_file
+agenta-tiny	InternScience/Agents-A1-4B	Q8_0,TQ4_1S	bartowski/InternScience_Agents-A1-4B-GGUF	InternScience_Agents-A1-4B-imatrix.gguf

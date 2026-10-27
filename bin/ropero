@@ -6,6 +6,7 @@
 # USO:
 #   ropero <modelo> [--background] [--cpu] [--force] [--port N]
 #   ropero list | status [--craft] [--watch [ms]] | stop <modelo>|all | help
+#   ropero path <modelo>   (la ruta donde busca el GGUF de ese modelo)
 #   ropero models      (descarga solo los modelos, sin engines)
 #   ropero install [engines|models|link] [selección] [--force]
 #   ropero check      (verifica la instalación, no modifica nada)
@@ -216,6 +217,31 @@ unset _mp _mpv
 # -----------------------------------------------------------------------------
 port_listening() { lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 get_pid_for_port() { lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
+
+# -----------------------------------------------------------------------------
+# _ropero_sello_path <puerto>
+# _ropero_sello_calc <args...>
+#
+# El "sello" de un server: un hash de los args con los que se arranco. Se
+# guarda al lado de los logs, por puerto.
+#
+# Para que sirve: `ropero <modelo>` con el modelo YA corriendo decia
+# "ya esta corriendo" y se iba, sin reiniciar. Asi que cualquier cambio en
+# el TOML (el sampling, un flag, el ctx) se quedaba sin aplicar para
+# siempre, y sin avisar: el server se quedaba con la config de antes.
+# Pasaba con el fable y su --dry-multiplier: el TOML ya lo tenia, pero el
+# server de siempre habia arrancado antes del cambio, asi que el DRY seguia
+# apagado y el bucle de tool calls seguia igual.
+#
+# Con el sello, al volver a arrancar un modelo que ya corre se compara el
+# sello guardado con el de ahora: si difieren, el TOML cambio, y el server
+# se reinicia para aplicar la config nueva.
+# -----------------------------------------------------------------------------
+_ropero_sello_path() { printf '%s/args-%s.sha' "${LOG_DIR:-$HOME/.logs/ropero}" "$1"; }
+_ropero_sello_calc() {
+    [[ $# -eq 0 ]] && { printf ''; return 0; }
+    printf '%s\n' "$@" | sha256sum | cut -d' ' -f1
+}
 get_model_on_port() {
     # El patrón tolera el espacio opcional alrededor de los dos puntos.
     #
@@ -820,7 +846,6 @@ _render_status_compact() {
 
     # ── Cabecera ──────────────────────────────────────────────────────────
     printf "${BOLD}${CYAN_B}─── ROPERO STATUS ───${NC}  ${DIM}%s${NC}\n" "$(date +%H:%M:%S)"
-    echo
 
     # ── Sistema (resumen en 2 líneas) ─────────────────────────────────────
     # Temperatura en amarillo para que llame la atención (es lo que más
@@ -829,30 +854,38 @@ _render_status_compact() {
         "$cpu_ghz" "$ram_mb" "$cpu_temp" "$cpu_fan"
     printf "  ${GRN_B}GPU${NC}  ${BOLD}%s GHz${NC} · %s MB · ${YELLOW}%s°C${NC} · fan %s RPM\n" \
         "$gpu_ghz" "$vram_mb" "$gpu_temp" "$gpu_fan"
-    echo
 
-    # ── Puertos (tabla padded) ────────────────────────────────────────────
-    # Cabecera + separador dim. Anchos: SLOT=9, PUERTO=6, ESTADO=6,
-    # MODELO=22 (con elipsis si >22), PID=7, UPTIME=8, ENGINE=15.
-    # SLOT lleva el dueño del puerto: "dGPU"/"CPU" para los slots por defecto,
-    # el nombre del modelo para los puertos pineados (MODEL_PORT).
-    printf "  ${YEL_B}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
-        "SLOT" "PORT" "ESTADO" "MODELO" "PID" "UPTIME" "ENGINE"
-    printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
-        "─────────" "──────" "──────" "──────────────────────" "───────" "────────" "───────────────"
+        # ── Puertos (tabla de alaja) ──────────────────────────────────────────
+    # El color va por celda: --row-N-color es una lista POSICIONAL (una por
+    # columna), así que van los 7 explícitos para dejar la celda ESTADO (2)
+    # en verde. Ojo: una lista de 1 color se aplicaría a TODAS las celdas,
+    # y los huecos no existen (se compactan al parsear).
+    # Los efectos van aparte: --row-N-effects es de toda la fila, y
+    # --row-N-<efecto> es la máscara que decide en qué celdas se aplica.
+    local alaja_bin="${ROPERO_ALAJA:-$HOME/.local/bin/alaja}"
+    [ -x "$alaja_bin" ] || alaja_bin="$(command -v alaja 2>/dev/null || true)"
+    if [ -z "$alaja_bin" ]; then
+        printf "${DIM}(alaja no encontrado)${NC}\n" >&2
+        return 1
+    fi
 
-    # Filas
-    local i=0
+    local C_NORM="hex:#CDD6F4"   # texto normal
+    local C_ON="hex:#A6E3A1"     # estado ON
+    local C_HDR="hex:#F9E2AF"    # cabecera
+
+    local row_args=() opts=()
+    local i=0 r=0
     while (( i < ${#ROPERO_SLOT_ROWS[@]} )); do
         local slot="${ROPERO_SLOT_ROWS[$((i+0))]}"
         local port="${ROPERO_SLOT_ROWS[$((i+1))]}"
         local state="${ROPERO_SLOT_ROWS[$((i+2))]}"
         local model="${ROPERO_SLOT_ROWS[$((i+3))]}"
-        local pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
+        # local pid="${ROPERO_SLOT_ROWS[$((i+4))]}"
         local uptime="${ROPERO_SLOT_ROWS[$((i+5))]}"
         local engine="${ROPERO_SLOT_ROWS[$((i+6))]}"
 
-        # Truncar slot/modelo largos (preservan ancho de columna)
+        # Truncar slot/modelo largos: alaja NO trunca, el ancho de columna
+        # sale del contenido más largo, así que el corte va aquí.
         if (( ${#slot} > 9 )); then
             slot="${slot:0:6}..."
         fi
@@ -860,17 +893,27 @@ _render_status_compact() {
             model="${model:0:19}..."
         fi
 
-        # Estado coloreado. Color FUERA del campo %-Ns para que el pad no
-        # cuente bytes ANSI.
+        row_args+=(--rows "$slot;$port;$state;$model;$uptime;$engine")
+
+        r=$((r+1))
         if [[ "$state" == "ON" ]]; then
-            printf "  %-9s %-6s ${GRN_B}%-6s${NC} %-22s %-7s %-8s %-15s\n" \
-                "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
+            opts+=(--row-$r-color "$C_NORM;$C_NORM;$C_ON;$C_NORM;$C_NORM;$C_NORM;$C_NORM")
+            opts+=(--row-$r-effects "bold")
+            opts+=(--row-$r-bold "false;false;true;false;false;false")
         else
-            printf "  ${DIM}%-9s %-6s %-6s %-22s %-7s %-8s %-15s${NC}\n" \
-                "$slot" "$port" "$state" "$model" "$pid" "$uptime" "$engine"
+            opts+=(--row-$r-effects "dim")
         fi
         i=$((i+7))
     done
+
+    "$alaja_bin" table \
+        --border none \
+        --padding 0 \
+        --headers-color "$C_HDR" \
+        --headers-effects "bold" \
+        --headers "SLOT;PORT;ESTADO;MODELO;UPTIME;ENGINE" \
+        ${row_args[@]+"${row_args[@]}"} \
+        ${opts[@]+"${opts[@]}"}
 }
 
 # -----------------------------------------------------------------------------
@@ -905,13 +948,17 @@ _port_legend() {
 # -----------------------------------------------------------------------------
 _ropero_usage() {
     case "${1:-}" in
-        install)   printf 'USO: ropero install [engines|models|link] [selección] [--force]\n' ;;
+        install)   printf 'USO: ropero install [engines|models|link|opencode-plugin] [selección] [--force]\n' ;;
         check)     printf 'USO: ropero --check\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         templates) printf 'USO: ropero templates\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        use)       printf 'USO: ropero use <modelo> [--port N] [--nivel N] [--flag F]\n' ;;
+        path)      printf 'USO: ropero path <modelo>\n' ;;
         models)    printf 'USO: ropero models\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        levels)    printf 'USO: ropero levels <modelo>\n' ;;
+        path)      printf 'USO: ropero path <modelo>\n' ;;
         # Sin subcomando: la línea del modelo. Es lo que devuelven los typos de
         # flag, y ropero help para el resto.
         *)         printf 'USO: ropero <modelo> [--background] [--cpu] [--force] [--port N]\n' ;;
@@ -951,8 +998,24 @@ cmd_list() {
             port_desc="slot :$PORT / :$CPU_PORT"
         fi
         if [[ "$engine" == "llama-server" ]]; then
-            printf "  %-12s %-21s ctx=%-10s engine=%-14s gguf=%s\n" \
-                "$alias" "$port_desc" "${MODEL_CTX[$m]}" "$engine" "${MODEL_GGUF[$m]}"
+            # El offload y el tipo de KV se DERIVAN de los args del TOML
+            # (los mismos que se le pasan al server), no de una tabla
+            # escrita a mano: una tabla esa diverge en silencio en cuanto
+            # un TOML cambia, y nadie se entera hasta que el modelo no
+            # arranca por falta de VRAM.
+            local -a margs=()
+            mapfile -t margs < <(ropero_model_args "$m" "" 2>/dev/null || true)
+            local offload="" kv="" _i
+            for (( _i = 0; _i < ${#margs[@]}; _i++ )); do
+                case "${margs[_i]}" in
+                    --n-gpu-layers) offload="ngl=${margs[_i+1]:-?}" ;;
+                    --n-cpu-moe)     offload="${offload:+$offload }cpu-moe=${margs[_i+1]:-?}" ;;
+                    --cache-type-k)  kv="${margs[_i+1]:-?}" ;;
+                esac
+            done
+            printf "  %-12s %-21s ctx=%-10s %-26s %-8s engine=%-14s gguf=%s\n" \
+                "$alias" "$port_desc" "${MODEL_CTX[$m]}" \
+                "${offload:-offload=none}" "${kv:-kv=?}" "$engine" "${MODEL_GGUF[$m]}"
         else
             # Para los engines con servidor propio, lo útil ver de un vistazo
             # es el formato del checkpoint: un .safetensors no se puede meter
@@ -1007,6 +1070,147 @@ cmd_template() {
     printf 'Copia a models/<engine>/<nombre>.toml y ajústala. Un modelo retirado\n'
     printf 'va en models/<engine>/fired/<nombre>.toml, con el mismo formato.\n\n'
     cat "$f"
+}
+
+# cmd_path <modelo> — la ruta donde el launcher va a buscar el GGUF del modelo.
+#
+# Es $GGUF_DIR/<[model] name>/<[files] gguf>, que es como el launcher lo
+# resuelve (bin/ropero, el preflight) y como lo deja la descarga. Todo lo que
+# fabrique un GGUF (el gguffer) necesita saber esa ruta exacta: el nombre que
+# genera el gguffer es <repo>-<quant>.gguf, y eso casi nunca es lo que espera
+# el TOML.
+#
+# Por que existe este comando y no que cada uno lea el TOML: el TOML se
+# cambia, y un lector propio se queda viejo sin avisar. Aqui la respuesta la
+# da el propio launcher, que es la unica fuente de verdad.
+cmd_path() {
+    local model="${1:-}"
+    if [[ -z "$model" ]]; then
+        echo "USO: ropero path <modelo>" >&2
+        return 2
+    fi
+    local key="${model//-/_}"
+    case " ${MODEL_NAMES[*]} " in
+        *" $key "*) ;;
+        *) echo "ERROR: modelo desconocido: '$model' (mira 'ropero list')" >&2; return 1 ;;
+    esac
+    if [[ "${MODEL_FORMAT[$key]:-}" != "gguf" ]]; then
+        echo "ERROR: '$model' no usa GGUF (formato: ${MODEL_FORMAT[$key]:-?})" >&2
+        return 1
+    fi
+    local dir gguf
+    dir="$(_ropero_model_dir "$key")"
+    gguf="${MODEL_GGUF[$key]:-}"
+    if [[ -z "$gguf" ]]; then
+        echo "ERROR: '$model' no declara un GGUF en su [files]" >&2
+        return 1
+    fi
+    printf '%s\n' "$GGUF_DIR/$dir/$gguf"
+}
+
+# cmd_levels <modelo> — los niveles de razonamiento que el modelo acepta.
+#
+# Los declara el modelo (su [levels].list del TOML), no el CLI: eso es lo
+# que hace que `ropero gptoss --high` signifique "--high porque gptoss dice
+# que tiene high". Este subcomando es la forma de PREGUNTAR sin arrancar:
+# quien lo necesita (el bench, un script) tiene que saber si el flag es
+# valido antes de pasarlo, porque si el modelo no lo declara, `ropero
+# <modelo> --high` es un error de uso y el modelo NO ARRANCA.
+#
+# Imprime un nivel por linea. Sin argumentos, los de todos los modelos.
+cmd_levels() {
+    local model="${1:-}"
+    if [[ -z "$model" ]]; then
+        local key
+        for key in "${MODEL_NAMES[@]}"; do
+            local lv
+            lv="$(_ropero_model_levels "$key" 2>/dev/null || true)"
+            [[ -n "$lv" ]] && printf '%s: %s\n' "$key" "$(printf '%s' "$lv" | tr '\n' ' ')"
+        done
+        return 0
+    fi
+    _ropero_model_levels "$model" 2>/dev/null || true
+}
+
+# cmd_args <modelo> [nivel] [--flag ...] — imprime el argv final que se le
+# pasaria al server, SIN arrancar nada.
+#
+# Es el modo de verificar el wiring sin GPU: lo que se ve aqui es
+# exactamente lo que recibiria llama-server (los args globales de ropero
+# + los del modelo + el nivel + los flags + los overrides).
+#
+# Sirve para tres cosas que hasta ahora no se podian comprobar:
+#   · que el override de temp (ROPERO_TEMP) SUSTITUYE al del TOML y no se
+#     duplica
+#   · que el nivel pedido es uno que el modelo declara (si no, ropero
+#     avisa en vez de arrancar un modelo que luego se cae)
+#   · que un flag del modelo ([args.flag.<flag>]) mete sus args donde
+#     toca
+cmd_args() {
+    local model="${1:-}"
+    shift || true
+    # El nivel es el primer argumento que no es un flag; el resto, flags.
+    local level=""
+    local -a flags=()
+    local a
+    for a in "$@"; do
+        if [[ -z "$level" && "$a" != --* ]]; then
+            level="$a"
+            continue
+        fi
+        # El flag se pasa SIN los "--", como hace el CLI: ropero_model_args
+        # los convierte en "--flag <nombre>" para _modelconf.py.
+        flags+=("${a#--}")
+    done
+    if [[ -z "$model" ]]; then
+        printf 'USO: ropero args <modelo> [nivel] [--flag ...]\n' >&2
+        return 2
+    fi
+
+    local out=""
+    local rc=0
+    out=$(ropero_model_args "$model" "$level" "${flags[@]}" 2>&1) || rc=$?
+    if (( rc != 0 )); then
+        printf '%s\n' "$out" >&2
+        return "$rc"
+    fi
+
+    local -a args=()
+    mapfile -t args <<<"$out"
+
+    # El override de temp: global de ropero, sustituye al del TOML.
+    _ropero_apply_temp_override args
+
+    printf '%s\n' "${args[@]}"
+}
+
+# _ropero_apply_temp_override <array_name>
+#
+# Sustituye el --temp que venga del TOML por el de ROPERO_TEMP (o el
+# nombre viejo ROPERO_MODEL_OPT_TEMP). Sustituye, NO anade: si se
+# anadiera, el temp del TOML (que va antes) ganaria, porque llama-server
+# usa el ULTIMO occurrence.
+#
+# Es global de ropero a proposito: antes cada TOML declaraba su propia
+# seccion [options] list = ["temp"], y si un TOML nuevo no la declaraba
+# el override dejaba de funcionar en silencio (el bench medía a temp 1.0
+# y no lo decia). Con esto, ningun TOML tiene que declarar nada.
+_ropero_apply_temp_override() {
+    local -n _arr="$1"
+    local _temp_override="${ROPERO_TEMP:-${ROPERO_MODEL_OPT_TEMP:-}}"
+    [[ -n "$_temp_override" ]] || return 0
+
+    local -a _sin_temp=()
+    local _i=0
+    while (( _i < ${#_arr[@]} )); do
+        if [[ "${_arr[_i]}" == "--temp" ]]; then
+            (( _i += 2 ))              # salta --temp y su valor
+            continue
+        fi
+        _sin_temp+=("${_arr[_i]}")
+        (( _i += 1 ))
+    done
+    _arr=("${_sin_temp[@]}" "--temp" "$_temp_override")
 }
 
 cmd_status() {
@@ -1284,6 +1488,113 @@ cmd_stop() {
 }
 
 # -----------------------------------------------------------------------------
+# cmd_use <modelo> [--port N] [--nivel N] [--flag F]
+#
+#   Asegura que el modelo pedido SEA el que se está sirviendo, y espera a que
+#   esté listo. Idempotente.
+#
+# POR QUÉ EXISTE
+#   llama-server NO valida el campo "model" del body: atiende con el modelo
+#   que tenga cargado. O sea que pedir "marichocho/qwen" mientras hay un
+#   gptoss cargado NO da error: te contesta el gptoss. Registrar todos los
+#   modelos en el cliente sin más es una segunda copia de la verdad que
+#   miente en silencio.
+#
+#   Esto es lo que hace que el registro sea de fiar: el modelo que pides es
+#   el modelo que te responde.
+#
+#   EL PUERTO
+#     El destino es, por orden: --port, el MODEL_PORT del modelo (si está
+#     pineado), y el puerto base. Si el modelo está pineado en otro puerto,
+#     se dice cuál es: el cliente tiene que apuntar ahí.
+#
+#   IDEMPOTENTE
+#     Si ese modelo ya está sirviéndose en el puerto destino, no se toca nada
+#     y se sale con 0. Es lo que permite llamarlo en cada petición.
+# -----------------------------------------------------------------------------
+cmd_use() {
+    local model="" port_override="" level="" model_flags_set="" model_opts_set=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --port)
+                [[ $# -ge 2 ]] || _ropero_usage_error use "--port requiere un número de puerto"
+                port_override="$2"; shift 2 ;;
+            --nivel)
+                [[ $# -ge 2 ]] || _ropero_usage_error use "--nivel requiere un valor"
+                level="$2"; shift 2 ;;
+            --flag)
+                [[ $# -ge 2 ]] || _ropero_usage_error use "--flag requiere un valor"
+                model_flags_set+="${model_flags_set:+ }${2}"; shift 2 ;;
+            --*)
+                _ropero_usage_error use "opción desconocida: '$1'" ;;
+            *)
+                [[ -z "$model" ]] || _ropero_usage_error use "use acepta un solo modelo; recibidos: $model y $1"
+                model="$1"; shift ;;
+        esac
+    done
+
+    [[ -n "$model" ]] || _ropero_usage_error use "falta el modelo (uso: ropero use <modelo>)"
+
+    # Modelo desconocido → typo casi seguro. Se comprueba contra MODEL_NAMES
+    # (scripts + alias públicos), igual que hace cmd_stop: comparar contra lo
+    # que hay escuchando daría un acierto falso y luego un "no encontrado".
+    # Con `case` y no con `=~`: aquí se quiere coincidencia EXACTA de token, y
+    # un "q" no puede dar por bueno un "qwen".
+    local key="${model//-/_}"
+    case " ${MODEL_NAMES[*]} " in
+        *" $key "*) ;;
+        *) _ropero_usage_error use "modelo desconocido: '$model' (mira 'ropero list')" ;;
+    esac
+
+    # Puerto destino: --port > MODEL_PORT del modelo > puerto base.
+    local port="$port_override"
+    local pinned=""
+    if [[ -z "$port" ]]; then
+        pinned=$(_model_port "$key" 2>/dev/null || echo "")
+        port="${pinned:-$PORT}"
+    fi
+
+    if port_listening "$port"; then
+        local current
+        # _reiniciar: el server de este MISMO modelo corre con una config
+        # anterior. Se reinicia, y con esto se salta el bloque de "puerto
+        # ocupado por OTRO modelo" de abajo (que es de otro caso: aqui el
+        # puerto es el de este modelo, no hay conflicto).
+        local _reiniciar=0
+        current=$(get_model_on_port "$port" 2>/dev/null || echo "")
+        if [[ "$current" == "$model" ]]; then
+            echo "✓ '$model' ya está sirviéndose en :$port"
+            echo "ROPERO_PORT=$port"
+            return 0
+        fi
+        # Otra cosa en el puerto destino: se para POR PUERTO, no por nombre.
+        # Parar por nombre mata en el primer puerto gestionado que encaje,
+        # que puede no ser este (la trampa de 'ropero stop <modelo>').
+        local eng
+        eng=$(_engine_human "$port" 2>/dev/null || echo "?")
+        echo "→ parando '$current' ($eng) en :$port"
+        if ! _stop_port "$port"; then
+            echo "✗ no se pudo parar lo que hay en :$port" >&2
+            return 1
+        fi
+    fi
+
+    if [[ -n "$pinned" && "$pinned" != "$port" ]]; then
+        echo "→ el modelo está pineado en :$pinned; se sirve en :$port" >&2
+    fi
+
+    # El arranque en background ya espera al MODELO (no solo al puerto) y
+    # respeta ROPERO_START_TIMEOUT.
+    start_model "$model" 1 0 0 "$port_override" "$level" "$model_flags_set" "$model_opts_set"
+    local rc=$?
+    if (( rc == 0 )); then
+        echo "ROPERO_PORT=$port"
+    fi
+    return $rc
+}
+
+# -----------------------------------------------------------------------------
 # Lanzamiento de modelo
 # -----------------------------------------------------------------------------
 start_model() {
@@ -1516,11 +1827,81 @@ start_model() {
 
     if port_listening "$port"; then
         local current
+        # _reiniciar: el server de este MISMO modelo corre con una config
+        # anterior. Se reinicia, y con esto se salta el bloque de "puerto
+        # ocupado por OTRO modelo" de abajo (que es de otro caso: aqui el
+        # puerto es el de este modelo, no hay conflicto).
+        local _reiniciar=0
         current=$(get_model_on_port "$port" 2>/dev/null || echo "")
         if [[ "$current" == "$model" ]]; then
-            echo "Modelo '$model' ya está corriendo en :$port"
-            return 0
+            # ── ¿corre con la config de AHORA? ─────────────────────────────
+            # El sello son los args del modelo (los del TOML). Si no coinciden
+            # con los del server vivo, el TOML cambio y hay que reiniciar
+            # para que el cambio se aplique.
+            local _sello_f _sello_actual _sello_guardado
+            _sello_f="$(_ropero_sello_path "$port")"
+            _sello_actual="$(_ropero_sello_calc "${pre_model_args[@]}")"
+            _sello_guardado=""
+            [[ -f "$_sello_f" ]] && _sello_guardado="$(cat "$_sello_f" 2>/dev/null || true)"
+            if [[ -n "$_sello_actual" && -n "$_sello_guardado" &&
+                  "$_sello_actual" != "$_sello_guardado" ]]; then
+                echo "⚠  '$model' corre en :$port con una config ANTERIOR (su TOML cambio)."
+                echo "   Lo reinicio para aplicar la nueva."
+                local _pid
+                _pid="$(get_pid_for_port "$port")"
+                if [[ -n "$_pid" ]]; then
+                    _kill_port "$port"
+                    local _wait=0
+                    while (( _wait < 10 )) && port_listening "$port"; do
+                        sleep 1
+                        (( _wait++ ))
+                    done
+                    if port_listening "$port"; then
+                        echo "✗ No se pudo liberar :$port tras matar el server anterior" >&2
+                        return 1
+                    fi
+                else
+                    echo "✗ No se encontro el proceso de :$port" >&2
+                    return 1
+                fi
+                # sigue con el arranque normal, con la config nueva
+                _reiniciar=1
+            elif [[ -n "$_sello_actual" && -z "$_sello_guardado" ]]; then
+                # Sin sello guardado: el server arranco con una version
+                # anterior de ropero (o lo arranco otra gente), asi que no
+                # hay forma de saber con que config esta corriendo. Se
+                # reinicia para que lleve la de ahora. Solo pasa UNA vez: al
+                # arrancar, el sello se guarda.
+                echo "⚠  '$model' ya corria en :$port y no hay forma de saber con que config arranco."
+                echo "   Lo reinicio para que lleve la config actual."
+                local _pid
+                _pid="$(get_pid_for_port "$port")"
+                if [[ -n "$_pid" ]]; then
+                    _kill_port "$port"
+                    local _wait=0
+                    while (( _wait < 10 )) && port_listening "$port"; do
+                        sleep 1
+                        (( _wait++ ))
+                    done
+                    if port_listening "$port"; then
+                        echo "✗ No se pudo liberar :$port tras matar el server anterior" >&2
+                        return 1
+                    fi
+                else
+                    echo "✗ No se encontro el proceso de :$port" >&2
+                    return 1
+                fi
+                _reiniciar=1
+            else
+                echo "Modelo '$model' ya está corriendo en :$port"
+                return 0
+            fi
         fi
+
+        # Puerto ocupado por un modelo DISTINTO (o por el mismo, si el
+        # reinicio de arriba no pudo matarlo). Aqui no se toca nada sin
+        # --force.
+        if (( _reiniciar == 0 )); then
         # Puerto destino ocupado por OTRO modelo. Default: NO matar
         # automáticamente. El usuario decide con `ropero stop <modelo>` o
         # con `--force` (uso interactivo; pensado para que un humano en
@@ -1557,6 +1938,7 @@ start_model() {
             echo "  O usa --force para rotar interactivamente (mata solo este slot)." >&2
             return 1
         fi
+        fi   # fin del if _reiniciar
     fi
 
     # Contexto efectivo: el que declara el modelo, salvo override por entorno
@@ -1578,6 +1960,30 @@ start_model() {
             export ROPERO_CTX="$ctx_size"
 
             local -a model_args=("${pre_model_args[@]}")
+
+            # ----------------------------------------------------------------
+            # Override del TEMP de muestreo.
+            #
+            # El bench tiene que medir a todos los modelos con el MISMO
+            # temp (pruebas1.md pide 0-0,2). Pero cada TOML trae su temp
+            # propio (agenta1 0.55, qwen 1.0, ...), y el temp que gana es
+            # el ULTIMO del argv.
+            #
+            # Antes esto se resolvia con una seccion [options] en cada TOML
+            # (list = ["temp"]). Eso era una segunda copia de la verdad en
+            # 15 ficheros: si un TOML nuevo no la declara, el override deja
+            # de funcionar y nadie se entera (el bench mide a temp 1.0 y no
+            # lo dice). Ahora el override es GLOBAL de ropero: sustituye el
+            # --temp que venga del TOML, sin que ningun TOML tenga que
+            # declarar nada.
+            #
+            #   ROPERO_TEMP=0.15 ropero <modelo>
+            #   ropero <modelo> --temp 0.15
+            #
+            # (ROPERO_MODEL_OPT_TEMP es el nombre viejo y sigue valiendo,
+            # por si algo de fuera lo usa todavia.)
+            # ----------------------------------------------------------------
+            _ropero_apply_temp_override model_args
 
             # ----------------------------------------------------------------
             # Selección de device: macOS = Metal; Cachy = CUDA0 (RTX) o CPU.
@@ -1617,13 +2023,30 @@ start_model() {
                 --api-key "$LLAMA_API_KEY"
                 --alias "$model"
                 --ctx-size "$ctx_size"
-                --flash-attn on
-                --log-verbosity 4
+                --threads 10
+                --threads-batch 20
+                -fa on
+                --jinja
+                --log-verbosity 3
                 --parallel 1
+                --cache-prompt
+                --cache-reuse 512
+                --context-shift
+                --batch-size 2048
+                --ubatch-size 512
+                --poll 30
+                --load-mode none
+                --metrics
+                --perf
+                --seed -1
+                --kv-offload
+                --kv-unified                     # global: el KV unificado lo
+                                                # necesitan todos (y lo pidia
+                                                # 14 de 15 TOMLs, duplicado)
 
                 "${model_args[@]}"
             )
-
+    
             # Override --cpu al FINAL del cmd para ganar sobre args del modelo.
             # Ojo: --cpu mueve el DISPOSITIVO, no el puerto. Si el modelo tiene
             # MODEL_PORT, se queda en su puerto y solo se apaga la GPU.
@@ -1635,6 +2058,19 @@ start_model() {
             fi
 
             alaja separator "Arrancando $model en :$port (bin: $LLAMA_BIN, ctx: $ctx_size, $port_reason)" --color
+            # El sello de esta config, para poder detectar mas adelante que el
+            # TOML cambio (y entonces reiniciar en vez de decir "ya corre").
+            # OJO: se sella con pre_model_args, NO con model_args. Son cosas
+            # distintas (model_args lleva cosas que anade el launcher) y si
+            # el sello se calculara distinto en cada sitio, nunca coincidiria
+            # y el modelo se reiniciaria siempre.
+            local _sello_f _sello_actual
+            _sello_f="$(_ropero_sello_path "$port")"
+            _sello_actual="$(_ropero_sello_calc "${pre_model_args[@]}")"
+            if [[ -n "$_sello_actual" ]]; then
+                mkdir -p "$LOG_DIR" 2>/dev/null || true
+                printf '%s' "$_sello_actual" > "$_sello_f" 2>/dev/null || true
+            fi
             if (( background == 0 )); then
                 "${cmd[@]}" 2>&1 | colorize "$model" "$engine"
                 local rc=${PIPESTATUS[0]}
@@ -2459,8 +2895,8 @@ ropero_install_llama() {
         ropero_warn "$LLAMA_DIR existe pero no es un clon de git; lo sustituyo"
         rm -rf "$LLAMA_DIR"
     fi
-
     if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+    # if ! git clone -q git@github.com:AtomicBot-ai/atomic-llama-cpp-turboquant.git "$LLAMA_DIR"; then
         ropero_err "clone de llama.cpp falló"
         return 0
     fi
@@ -2782,27 +3218,104 @@ cmd_help() {
     cat <<'EOF'
 USO: ropero <modelo> [--background|--cpu|--force|--port N]
      ropero install [engines|models|link] [selección] [--force]
-     ropero {engines|models|link|config|status|stop|list|template|check} [--help]
+     ropero {engines|models|link|config|status|stop|use|list|template|check|gguffer} [--help]
 
 Instalación de ropero (una línea):
   curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
 
 `install` gestiona engines, modelos y enlaces. Sin destino abre engines y luego modelos.
 `check` verifica la instalación. No modifica nada.
+`use <modelo>` asegura que ese modelo sea el que se está sirviendo, y espera
+a que esté listo. Es idempotente: si ya lo está, no toca nada.
+`gguffer` fabrica un GGUF desde un repo de HuggingFace: descarga, convierte,
+cuantiza y verifica. Si algo falla, conserva lo que puede servir para
+reintentar; los safetensors solo se borran cuando el GGUF final valida.
 EOF
 }
 
 _ropero_command_help() {
     case "${1:-}" in
-        install)   printf 'USO: ropero install [engines|models|link] [selección] [--force]\n' ;;
+        install)   printf 'USO: ropero install [engines|models|link|opencode-plugin] [selección] [--force]\n' ;;
         engines)   printf 'USO: ropero engines [llama|airllm|mlx|tensorrt|flm|all] [--force]\n' ;;
         models)    printf 'USO: ropero models [modelo[, modelo...]] [--force]\n' ;;
         link)      printf 'USO: ropero link\n' ;;
         config)    printf 'USO: ropero config [engine] [--show-key]\n' ;;
         status)    printf 'USO: ropero status [--craft] [--watch [ms]]\n' ;;
+        levels)    printf 'USO: ropero levels <modelo>\n' ;;
         stop)      printf 'USO: ropero stop <modelo>|all\n' ;;
+        use)       printf 'USO: ropero use <modelo> [--port N] [--nivel N] [--flag F]\n' ;;
         list)      printf 'USO: ropero list\n' ;;
         template)  printf 'USO: ropero template\n' ;;
+        gguffer)
+            cat <<'EOF'
+USO: ropero gguffer --path <dir> | --repo <owner/name> | --gguf <fichero|owner/repo> [opciones]
+
+  --gguf ORIGEN      cuantizar un GGUF QUE YA EXISTE, en vez de clonar y
+                      convertir los pesos. Es el camino cuando el conversor
+                      no sabe convertir el modelo (los multimodales con
+                      cabeza MTP, como el Qwen3.8-27B). Acepta:
+                        · /ruta/al/fichero.gguf   un fichero local
+                        · owner/repo               el unico .gguf sin
+                                                  quantizar del repo
+                        · owner/repo:fichero       ese fichero del repo
+                      Si el GGUF va partido en shards ("-00001-of-00002"), se
+                      bajan todos y se unen solos (llama-gguf-split).
+                      El fichero de entrada NO se borra nunca: es tuyo.
+  --gguf-file FILE  el fichero dentro del repo (con --gguf owner/repo).
+                      Si no se dice, el gguffer busca el unico .gguf sin
+                      quantizar que no sea imatrix ni mmproj.
+
+  --quant TIPO        quant a aplicar (sin el, el GGUF queda en F16).
+                      Se puede repetir, o pasar varios separados por comas:
+                        --quant IQ2_XXS --quant IQ3_XS
+                        --quant IQ2_XXS,IQ3_XS
+                      Bajar y convertir los pesos es lo caro; cuantizar es
+                      solo CPU, asi que varios quants en una tirada
+                      reutilizan el mismo GGUF intermedio.
+  --list-quants       lista los quants que acepta el motor instalado
+  --no-mtp            excluye la cabeza MTP del GGUF (si el repo la trae)
+  --diagnostico       NO cuantiza: dice por que no se cuantiza (espacio, MTP,
+                      imatrix, el argv exacto del cuantizador) y sale
+  --imatrix FICHERO   importance matrix para la cuantizacion
+  --imatrix-repo REPO de donde bajar el imatrix (con --imatrix-file)
+  --imatrix-file FILE el fichero del imatrix dentro de ese repo. Con esto
+                      el gguffer se encarga de bajarlo tambien, y lo cachea
+  --out RUTA          donde va el GGUF de salida. Acepta tres formas:
+                        · nombre           -> <GGUF_DIR>/<nombre>-<quant>.gguf
+                        · ruta/dir/        -> ahi, con el nombre generado
+                        · ruta/fichero.gguf -> exactamente ahi
+                      (con varios quants, la ruta exacta no vale: cada quant
+                      necesita la suya)
+  --out-principal RUTA  la ruta EXACTA del PRIMER quant de la tirada. Util
+                      con varios quants: ese va a la carpeta del modelo (la
+                      que espera el TOML) y los demas se quedan en el
+                      directorio normal, con su nombre <repo>-<quant>.gguf
+                      Si es una CARPETA, el GGUF va ahi con el nombre que
+                      genera el gguffer (<repo>-<quant>.gguf).
+  --from-subdir DIR   subcarpeta del repo de la que sacar los pesos
+  --include PATRON    que ficheros descargar (por defecto, todos)
+  --intermedio TIPO  el GGUF intermedio: f16 (por defecto) o bf16 (la
+                      mitad de disco, y el cuantizador lo acepta igual)
+  --keep-source       conservar los safetensors. SIN esta flag se borran
+                      tanto si todo va bien como si algo falla: 60 GB por
+                      intento y, en un trabajo de noche, el disco se llena y
+                      luego falla tambien lo que ya estaba bien.
+  --keep-intermedio   no borrar el GGUF intermedio (F16)
+  --force             borra todo lo cacheado de este repo y empieza de cero
+
+QUE PASA SI ALGO FALLA:
+  · la descarga falla   -> se borra el clon a medias y la cache de HF
+  · la conversion falla -> se borran los safetensors (salvo --keep-source)
+                          y se dice como reintentar solo la conversion
+  · la cuantizacion falla -> se dice que falta (el imatrix, el disco, la
+                          RAM...) y se borran los safetensors (salvo
+                          --keep-source)
+  · el GGUF no valida   -> no se borra nada
+  · el GGUF valida      -> se borran los safetensors (salvo --keep-source)
+  · con --gguf          -> el fichero de entrada NUNCA se borra (es tuyo),
+                          ni al fallar ni con --force
+EOF
+            ;;
         check)     printf 'USO: ropero check\n' ;;
         model)     _ropero_usage '' ;;
         *)         cmd_help ;;
@@ -3486,7 +3999,7 @@ cmd_install() {
             # la ayuda de engines), y el help no debe inicializar el entorno.
             --help|-h) help_requested=1 ;;
             --force|-f) force=1 ;;
-            engines|models|link) [[ -z "$target" ]] || _ropero_usage_error install "destino repetido: '$arg'"; target="$arg" ;;
+            engines|models|link|opencode-plugin) [[ -z "$target" ]] || _ropero_usage_error install "destino repetido: '$arg'"; target="$arg" ;;
             *) raw+="${raw:+ }$arg" ;;
         esac
     done
@@ -3501,11 +4014,69 @@ cmd_install() {
             if (( force == 1 )); then cmd_models --force ${raw:+"$raw"}; else cmd_models ${raw:+"$raw"}; fi
             ;;
         link) [[ -z "$raw" ]] || _ropero_usage_error link "link no acepta selección"; _ropero_relink_all "$(ropero_detect_os)" ;;
+        opencode-plugin) _ropero_install_opencode_plugin ;;
         '')
             _ropero_install_engines_selected "$raw" "$force" || return $?
             if (( force == 1 )); then cmd_models --force; else cmd_models; fi
             ;;
     esac
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_install_opencode_plugin — copia el plugin de opencode al home.
+#
+# POR QUÉ COPIA Y NO ENLACE
+#   El plugin se carga desde ~/.config/opencode/plugins/. Un symlink al repo
+#   tiene el mismo problema que el config: el watcher de opencode (inotify)
+#   no sigue symlinks, así que los cambios en el plugin no se recargan.
+#   Con una copia, el plugin que corre es el que está en el home. El precio es
+#   que hay que volver a copiarlo cuando cambia, y por eso este comando
+#   avisa si el destino no está al día.
+# -----------------------------------------------------------------------------
+_ropero_install_opencode_plugin() {
+    local src="$ROPERO_ROOT/opencode-plugin/index.ts"
+    local dst_dir="$HOME/.config/opencode/plugins/ropero-modelo"
+    local dst="$dst_dir/index.ts"
+
+    if [[ ! -f "$src" ]]; then
+        echo "✗ no encuentro el plugin en $src" >&2
+        echo "  (¿estás en el repo de ropero?)" >&2
+        return 1
+    fi
+
+    mkdir -p "$dst_dir" || { echo "✗ no pude crear $dst_dir" >&2; return 1; }
+
+    if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+        echo "✓ el plugin ya está al día en $dst"
+    else
+        if [[ -f "$dst" ]]; then
+            local bak="$dst.bak"
+            local n=0
+            while [[ -e "$bak" ]]; do n=$((n+1)); bak="$dst.bak.$n"; done
+            cp -p "$dst" "$bak" 2>/dev/null && echo "  copia anterior → $bak"
+        fi
+        if cp "$src" "$dst"; then
+            echo "✓ plugin instalado en $dst"
+        else
+            echo "✗ no pude copiar el plugin a $dst" >&2
+            return 1
+        fi
+    fi
+
+    # ¿está declarado en el config de opencode?
+    local cfg="$HOME/.config/opencode/opencode.jsonc"
+    [[ -f "$cfg" ]] || cfg="$HOME/.config/opencode/opencode.json"
+    if [[ -f "$cfg" ]]; then
+        if grep -q "ropero-modelo" "$cfg"; then
+            echo "✓ el config de opencode declara el plugin"
+        else
+            echo "⚠ el config de opencode NO declara el plugin. Añade:"
+            echo '    "plugins": [{ "package": "./plugins/ropero-modelo", "options": { "provider": "marichocho", "port": 9999 } }]'
+        fi
+    else
+        echo "⚠ no encuentro el config de opencode (~/.config/opencode/opencode.jsonc)"
+    fi
+    return 0
 }
 
 _ropero_config_lan_ip() {
@@ -3616,109 +4187,1393 @@ cmd_config() {
 }
 
 # -----------------------------------------------------------------------------
+# _gguffer_parse_out <ruta>
+#
+# --out admite tres formas, y el que se usa depende de donde va a parar el
+# GGUF: el launcher busca cada modelo en $GGUF_DIR/<carpeta_del_modelo>/, y
+# el gguffer escribia plano en $GGUF_DIR. Con esto, el GGUF se puede poner
+# exactamente donde lo va a buscar el TOML.
+#
+#   nombre              -> $GGUF_DIR/<nombre>-<quant>.gguf   (lo de antes)
+#   ruta/directorio     -> ahi, con el nombre generado
+#   ruta/fichero.gguf   -> exactamente ahi
+#
+# Se distinguen por la "/" y por el sufijo .gguf. El directorio y el fichero
+# exactos se guardan en globales (no en el ambito de la funcion que llama) para
+# que se puedan leer desde cmd_gguffer sin depender del ambito dinamico.
+# -----------------------------------------------------------------------------
+_gguffer_parse_out() {
+    local v="${1:-}"
+    ROPERO_GGUF_OUT_DIR=""
+    ROPERO_GGUF_OUT_FILE=""
+    case "$v" in
+        "")
+            echo "ERROR: --out no puede estar vacio" >&2
+            return 2 ;;
+        *.gguf)
+            # Ruta exacta del fichero: el directorio es el de la ruta.
+            ROPERO_GGUF_OUT_FILE="$v" ;;
+        */*)
+            # Un directorio: se le quita la "/" final si la lleva.
+            ROPERO_GGUF_OUT_DIR="${v%/}" ;;
+        *)
+            # Un nombre suelto: el fichero se llama <nombre>-<quant>.gguf.
+            # OJO: "out_name" es un local de cmd_gguffer, y el scoping de bash
+            # es dinamico: esta asignacion la cambia. Por eso esta linea
+            # funciona y no parece que toque nada.
+            out_name="$v" ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_parse_out_principal <ruta>
+#
+# --out-principal es la ruta EXACTA del primer quant de la tirada. Con varios
+# quants, cada uno necesita la suya, y esta es la del que va a terminar en la
+# carpeta del modelo (la que espera el TOML). Los demas se quedan en el
+# directorio normal, con su nombre <repo>-<quant>.gguf.
+# -----------------------------------------------------------------------------
+_gguffer_parse_out_principal() {
+    local v="${1:-}"
+    ROPERO_GGUF_OUT_PRINCIPAL=""
+    ROPERO_GGUF_OUT_PRINCIPAL_DIR=""
+    case "$v" in
+        "")
+            echo "ERROR: --out-principal no puede estar vacio" >&2
+            return 2 ;;
+        *.gguf)  ROPERO_GGUF_OUT_PRINCIPAL="$v" ;;
+        */)      ROPERO_GGUF_OUT_PRINCIPAL_DIR="${v%/}" ;;
+        *)
+            # Un directorio que ya existe: se trata como carpeta. Es lo que
+            # necesita el caso "el TOML pide un quant que no es el que
+            # fabricamos": el GGUF va a la carpeta del modelo con su nombre
+            # propio, no a la ruta del TOML (que seria un nombre mentiroso).
+            if [[ -d "$v" ]]; then
+                ROPERO_GGUF_OUT_PRINCIPAL_DIR="${v%/}"
+            else
+                echo "ERROR: --out-principal necesita la ruta de un fichero .gguf" >&2
+                echo "       (o un directorio existente, para que ponga el nombre el)" >&2
+                return 2
+            fi ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_imatrix_cubre_bloque <imatrix> <bloque> <ggufcheck>
+#
+# Devuelve 0 si el imatrix tiene entradas para el bloque dado, 1 si no tiene
+# ninguna.
+#
+# Por que importa: el imatrix se calcula sobre el modelo base (64 capas), pero
+# el GGUF lleva la cabeza MTP como un bloque mas (el 65). Ese bloque no esta
+# en el imatrix, y si el quant es very-low-bit (IQ2_M, IQ3_XXS...) el
+# cuantizador aborta con "Missing importance matrix for tensor blk.64...".
+# Es lo que hacia bartowski con su IQ2_M del Qwen3.8: dejo el bloque de la
+# MTP en Q4_0, que no exige imatrix.
+#
+# Se compara el bloque entero (no tensor a tensor): los tensores que el
+# imatrix no tiene son normalmente las normas f32, que no se cuantizan y no
+# exigen imatrix. Lo que aborta el cuantizador es un bloque entero sin
+# cobertura.
+# -----------------------------------------------------------------------------
+_gguffer_imatrix_cubre_bloque() {
+    local imatrix="$1" bloque="$2" _ggufcheck="$3"
+    local n_im
+    n_im="$(python3 "$_ggufcheck" "$imatrix" --nombres 2>/dev/null \
+            | sed 's/\.in_sum2$//; s/\.counts$//' \
+            | grep -c "^blk\.${bloque}\." || true)"
+    [[ "${n_im:-0}" -gt 0 ]]
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_bloque_nextn <gguf> <ggufcheck>
+#
+# El numero del bloque donde vive la cabeza MTP, o vacio si el GGUF no la
+# trae. Es el bloque siguiente al ultimo: el conversor suma los bloques de la
+# MTP al block_count (conversion/qwen.py: self.block_count += n_mtp).
+# -----------------------------------------------------------------------------
+# OJO: NO se busca por el nombre del tensor. Los tensores de la MTP se
+# llaman como los de cualquier otro bloque ("blk.64.attn_k.weight"), SIN
+# "nextn" en el nombre. Buscar "nextn." en los nombres no encuentra nada,
+# y por eso el fix del MTP no se aplicaba y la cuantizacion moria con
+# "Missing importance matrix for tensor blk.64.attn_k.weight".
+#
+# Lo que SÍ dice donde esta la MTP es la metadata del GGUF: el conversor
+# suma los bloques de la MTP al block_count (conversion/qwen.py:
+# self.block_count += n_mtp), y la MTP son los ULTIMOS bloques:
+#
+#     bloque_mtp = block_count - nextn_predict_layers
+#
+# Qwen3.8 denso: block_count=65, nextn=1 -> bloque 64.
+# fable:         block_count=41, nextn=1 -> bloque 40.
+# nemotron:      nextn=0 -> no hay MTP.
+_gguffer_bloque_nextn() {
+    local gguf="$1" _ggufcheck="$2"
+    local bloque tensores
+    bloque="$(python3 "$_ggufcheck" "$gguf" --meta 2>/dev/null \
+               | sed -n 's/^bloque_mtp=//p' | head -1)"
+    [[ -n "$bloque" && "$bloque" != "0" ]] || return 1
+    # Que el bloque exista de verdad en el GGUF.
+    tensores="$(python3 "$_ggufcheck" "$gguf" --bloque "$bloque" 2>/dev/null | head -1)"
+    [[ -n "$tensores" ]] || return 1
+    printf '%s' "$bloque"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────────────────────
+# CUANTIZAR UN GGUF QUE YA EXISTE (sin pasar por el conversor)
+#
+# Por que: el conversor de pesos de HuggingFace a GGUF no siempre sabe
+# convertir un modelo. El caso real es el Qwen3.8-27B, que es multimodal
+# (Qwen3_5ForConditionalGeneration) y lleva la cabeza MTP. Los tensores de
+# la MTP se llaman "mtp.*" y el conversor los remapea a "model.layers.64.*"
+# (el bloque 64). En el fork que usa ropero (atomic-llama-cpp-turboquant) la
+# clase Qwen3_5TextModel NO usa el mixin de la MTP, asi que esos 15 tensores
+# no se pueden mapear y la conversion aborta:
+#     ValueError: Can not map tensor 'mtp.layers.0.attn_k.weight'
+# Y con --no-mtp tampoco: esa clase ignora el flag.
+#
+# La salida es no convertir: hay gente que ya publico el GGUF sin quantizar
+# (bartowski publica el BF16), y ese GGUF ya tiene la MTP bien metida (como
+# "blk.64.nextn.*"). Cuantizarlo da exactamente lo mismo que convertir y
+# cuantizar, sin tocar el conversor.
+#
+# Y si el GGUF de Bartowski esta partido en shards ("-00001-of-00002"), se
+# bajan todos y se unen con llama-gguf-split --merge.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# _gguffer_ficheros_hf <owner/repo>
+# Los ficheros de un repo de HuggingFace, uno por linea.
+_gguffer_ficheros_hf() {
+    local repo="$1"
+    curl -s --max-time 90 "https://huggingface.co/api/models/$repo" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for f in d.get("siblings", []):
+    print(f["rfilename"])
+'
+}
+
+# _gguffer_prepara_gguf <origen> <gguf_file> <dest_dir>
+#
+# Deja en <dest_dir> un GGUF UNICO y lo dice por stdout (la ruta). Si algo
+# falla, el error va a stderr y el codigo de salida es != 0.
+#
+#   origen     un .gguf local, o "owner/repo" (con ":fichero" opcional)
+#   gguf_file  el fichero dentro del repo (opcional)
+_gguffer_prepara_gguf() {
+    local origen="$1" gguf_file="$2" dest="$3"
+    local repo="" fichero=""
+
+    # ── caso A: un fichero local ────────────────────────────────────────────
+    if [[ -f "$origen" ]]; then
+        echo "$origen"
+        return 0
+    fi
+
+    # ── caso B: un repo de HuggingFace ─────────────────────────────────────
+    if [[ "$origen" == *:* ]]; then
+        repo="${origen%%:*}"
+        fichero="${origen#*:}"
+    else
+        repo="$origen"
+    fi
+    [[ "$repo" == */* ]] || { echo "ERROR: --gguf debe ser un fichero o owner/repo" >&2; return 2; }
+
+    local -a ficheros=()
+    mapfile -t ficheros < <(_gguffer_ficheros_hf "$repo")
+    ((${#ficheros[@]} > 0)) || {
+        echo "ERROR: no se pudo leer el repo $repo de HuggingFace" >&2
+        return 1
+    }
+
+    # Que GGUF del repo: el que se pidio, o el unico que serve (el grande,
+    # sin quantizar, sin imatrix y sin mmproj).
+    if [[ -z "$fichero" ]]; then
+        local -a candidatos=()
+        local -a shard_grupos=()
+        local f
+        for f in "${ficheros[@]}"; do
+            [[ "$f" == *.gguf ]] || continue
+            [[ "$f" == *imatrix* ]] && continue
+            [[ "$f" == *mmproj* ]] && continue
+            if [[ "$f" == *"-0000"* ]]; then
+                # Un shard. El grupo es el prefijo ("X-00001-of-00002"): de
+                # cada grupo se ofrece el PRIMER shard, y el gguffer baja el
+                # grupo entero y lo une.
+                local _pre="${f%.gguf}"
+                _pre="${_pre%-0000[0-9]-of-[0-9]*}"
+                local _dup=0 _g
+                for _g in "${shard_grupos[@]}"; do [[ "$_g" == "$_pre" ]] && _dup=1; done
+                (( _dup )) || shard_grupos+=("$_pre")
+            else
+                candidatos+=("$f")
+            fi
+        done
+        # Los shards tambien son candidatos: el BF16 del Qwen3.8 va partido
+        # en dos ficheros, en una subcarpeta. De cada grupo se ofrece el
+        # PRIMER shard, y el gguffer baja el grupo entero y lo une.
+        for f in "${ficheros[@]}"; do
+            [[ "$f" == *"-00001-of-"* ]] || continue
+            [[ "$f" == *imatrix* ]] && continue
+            [[ "$f" == *mmproj* ]] && continue
+            candidatos+=("$f")
+        done
+        if ((${#candidatos[@]} == 0)); then
+            echo "ERROR: el repo $repo no tiene un GGUF sin quantizar." >&2
+            echo "       Dile cual con --gguf-file." >&2
+            return 2
+        fi
+        if ((${#candidatos[@]} > 1)); then
+            # Hay varios: el que interesa es el SIN cuantizar (bf16/f16).
+            # Los demas ya son quants de otra gente, y cuantizar encima de
+            # un quant es dequantizar y re-cuantizar.
+            local -a sin_quantizar=()
+            for f in "${candidatos[@]}"; do
+                case "$(basename "$f")" in
+                    *bf16*|*BF16*|*f16*|*F16*) sin_quantizar+=("$f") ;;
+                esac
+            done
+            if ((${#sin_quantizar[@]} == 1)); then
+                candidatos=("${sin_quantizar[0]}")
+            elif ((${#sin_quantizar[@]} == 0)); then
+                echo "ERROR: el repo $repo no tiene ningun GGUF sin quantizar" >&2
+                echo "       (lo que hay son quants: cuantizar encima no aporta nada)" >&2
+                echo "       Dile cual con --gguf-file." >&2
+                return 2
+            else
+                echo "ERROR: el repo $repo tiene varios GGUFs sin quantizar:" >&2
+                printf '       %s\n' "${sin_quantizar[@]}" >&2
+                echo "       Dile cual con --gguf-file." >&2
+                return 2
+            fi
+        fi
+        fichero="${candidatos[0]}"
+    fi
+
+    # ── los shards ─────────────────────────────────────────────────────────
+    # "X-00001-of-00002.gguf" son trozos del mismo GGUF: hay que bajarlos
+    # todos y unirlos (llama-gguf-split --merge).
+    local -a shards=()
+    local base="${fichero%.gguf}"
+    if [[ "$base" =~ ^(.*)-0000[0-9]+-of-[0-9]+$ ]]; then
+        local pre="${BASH_REMATCH[1]}"
+        local total="${base##*-of-}"
+        local i
+        for ((i=1; i<=total; i++)); do
+            local n; n="$(printf "%05d" "$i")"
+            local cand="$pre-$n-of-$total.gguf"
+            local ok=0
+            for f in "${ficheros[@]}"; do [[ "$f" == "$cand" ]] && ok=1; done
+            (( ok )) && shards+=("$cand")
+        done
+        ((${#shards[@]} == total)) || {
+            echo "ERROR: el repo $repo no tiene todos los shards de $fichero" >&2
+            echo "       encontrados: ${#shards[@]} de $total" >&2
+            return 1
+        }
+    else
+        shards=("$fichero")
+    fi
+
+    # ── la descarga ────────────────────────────────────────────────────────
+    mkdir -p "$dest" || return 1
+    command -v hf >/dev/null 2>&1 || {
+        echo "ERROR: falta 'hf' (huggingface_hub) para bajar el GGUF" >&2
+        return 1
+    }
+    echo "[gguffer] bajo ${#shards[@]} fichero(s) de $repo..." >&2
+    local -a hf_args=()
+    local s
+    for s in "${shards[@]}"; do hf_args+=("$s"); done
+    if ! hf download "$repo" "${hf_args[@]}" --local-dir "$dest" >&2; then
+        echo "ERROR: no se pudo bajar de $repo: ${shards[*]}" >&2
+        return 1
+    fi
+
+    # ── unir los shards ────────────────────────────────────────────────────
+    if ((${#shards[@]} > 1)); then
+        local _split_bin="${LLAMA_DIR:-$HOME/llama.cpp}/build/bin/llama-gguf-split"
+        if [[ ! -x "$_split_bin" ]]; then
+            echo "ERROR: falta llama-gguf-split para unir los shards ($_split_bin)" >&2
+            echo "       compila llama.cpp, o baja el GGUF sin partir." >&2
+            return 1
+        fi
+        local merged="$dest/${repo##*/}-merged.gguf"
+        echo "[gguffer] uno los ${#shards[@]} shards en $merged..." >&2
+        if ! "$_split_bin" --merge "$dest/${shards[0]}" "$merged" >&2; then
+            echo "ERROR: no se pudieron unir los shards" >&2
+            return 1
+        fi
+        echo "$merged"
+        return 0
+    fi
+
+    echo "$dest/$fichero"
+    return 0
+}
+
+# _gguffer_bloques_sin_imatrix <gguf> <imatrix> <ggufcheck>
+#
+# Que bloques del GGUF NO aparecen en el imatrix. La respuesta es exacta y
+# no hay que adivinar nada: el imatrix se indexa por nombre de tensor, y un
+# bloque entero aparece en el o no aparece.
+#
+# Por que importa: el imatrix se calcula sobre el modelo base (los bloques
+# 0..63 del Qwen3.8) y el GGUF lleva la cabeza MTP como un bloque MAS. Ese
+# bloque no esta en el imatrix, y con un quant very-low-bit el cuantizador
+# aborta:
+#     "Missing importance matrix for tensor blk.64.attn_k.weight"
+# La salida es dejar ese bloque en un quant que NO exija imatrix (Q4_0), que
+# es lo que hizo bartowski con su IQ3_XS del Qwen3.8.
+#
+# OJO: no se comparan TENSOR a tensor, sino BLOQUE a bloque. Las normas
+# (input_layernorm, ssm_alpha...) no estan en ningun imatrix porque no se
+# cuantizan, asi que un bloque "incompleto" no significa nada. Lo que
+# significa algo es un bloque que no aparece ENTERO.
+_gguffer_bloques_sin_imatrix() {
+    local gguf="$1" imatrix="$2" ggufcheck="$3"
+    local -A bloques_gguf=() bloques_imx=()
+    local n b
+
+    while IFS= read -r n; do
+        [[ "$n" == blk.*.* ]] || continue
+        b="${n#blk.}"; b="${b%%.*}"
+        [[ "$b" =~ ^[0-9]+$ ]] || continue
+        bloques_gguf["$b"]=1
+    done < <("$ggufcheck" "$gguf" --nombres 2>/dev/null)
+
+    while IFS= read -r n; do
+        # el imatrix guarda "<tensor>.in_sum2" y "<tensor>.counts"
+        n="${n%.in_sum2}"; n="${n%.counts}"
+        [[ "$n" == blk.*.* ]] || continue
+        b="${n#blk.}"; b="${b%%.*}"
+        [[ "$b" =~ ^[0-9]+$ ]] || continue
+        bloques_imx["$b"]=1
+    done < <("$ggufcheck" "$imatrix" --nombres 2>/dev/null)
+
+    local -a faltan=()
+    for b in "${!bloques_gguf[@]}"; do
+        [[ -n "${bloques_imx[$b]:-}" ]] || faltan+=("$b")
+    done
+    ((${#faltan[@]} > 0)) || return 0
+    printf '%s\n' "${faltan[@]}" | sort -n
+    return 0
+}
+
+# _gguffer_escribe_fuente <gguf> <nombre> <repo_base> <imatrix> <imatrix_repo>
+#                         <imatrix_file> <bloque_mtp> <intermedio>
+#
+# Escribe <gguf>.fuente.json al lado del GGUF: el registro de COMO se hizo
+# esa cuantizacion.
+#
+# Sin esto, un GGUF es un fichero opaco: no se sabe de que modelo salio, con
+# que importance matrix, ni si la cabeza MTP quedo en un quant aparte. Y eso
+# es justo lo que hay que contar en el model card de HuggingFace, para que
+# quien lo baja sepa lo que tiene entre manos.
+#
+# El fichero va en JSON plano (python3 lo lee sin dependencias) y lo escribe
+# el shell: los valores son repo, quant, nombres de fichero y numeros, y no
+# llevan comillas ni saltos de linea. Por si acaso, se escapan.
+# -----------------------------------------------------------------------------
+_gguffer_esc() {
+    local s="${1:-}"
+    s="${s//\\/\\\\}"
+    s="${s//\"/\\\"}"
+    printf '%s' "$s"
+}
+
+_gguffer_escribe_fuente() {
+    local gguf="$1" nombre="$2" repo_base="$3" imatrix="$4"
+    local imatrix_repo="$5" imatrix_file="$6" bloque_mtp="$7" intermedio="$8"
+    local _ggufcheck
+    _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
+
+    local dest="${gguf}.fuente.json"
+    local meta="" base_model="" base_name="" quant="" arch="" block_count=""
+    if [[ -f "$gguf" ]]; then
+        meta="$(python3 "$_ggufcheck" "$gguf" --meta 2>/dev/null || true)"
+        base_model="$(printf '%s\n' "$meta" | sed -n 's/^base_model=//p' | head -1)"
+        base_name="$(printf '%s\n' "$meta" | sed -n 's/^base_model_name=//p' | head -1)"
+        quant="$(printf '%s\n' "$meta" | sed -n 's/^file_type=//p' | head -1)"
+        arch="$(printf '%s\n' "$meta" | sed -n 's/^arch=//p' | head -1)"
+        block_count="$(printf '%s\n' "$meta" | sed -n 's/^block_count=//p' | head -1)"
+    fi
+    # El nombre del quant tambien sale del nombre del fichero: "x.Q2_K.gguf".
+    [[ -n "$quant" ]] || quant="${nombre##*.}"
+
+    local imx_sha=""
+    [[ -n "$imatrix" && -f "$imatrix" ]] && imx_sha="$(sha256sum "$imatrix" 2>/dev/null | cut -d' ' -f1)"
+
+    local mtp_json="null"
+    if [[ -n "$bloque_mtp" ]]; then
+        mtp_json="{\"bloque\": ${bloque_mtp}, \"quant\": \"${MTP_QUANT:-Q4_0}\", \"nota\": \"la cabeza MTP no la cubre el imatrix (se calcula sobre el modelo base), asi que queda en este quant\"}"
+    fi
+
+    local imx_json="null"
+    if [[ -n "$imatrix" ]]; then
+        imx_json="{\"fichero\": \"$(basename "$imatrix")\""
+        [[ -n "$imatrix_repo" ]] && imx_json+=", \"repo\": \"$(_gguffer_esc "$imatrix_repo")\""
+        [[ -n "$imx_sha" ]] && imx_json+=", \"sha256\": \"$imx_sha\""
+        imx_json+="}"
+    fi
+
+    {
+        printf '{\n'
+        printf '  "gguf": "%s",\n' "$(_gguffer_esc "$nombre.gguf")"
+        printf '  "quant": "%s",\n' "$(_gguffer_esc "$quant")"
+        printf '  "fuente_repo": "%s",\n' "$(_gguffer_esc "$repo_base")"
+        printf '  "base_model": "%s",\n' "$(_gguffer_esc "$base_model")"
+        printf '  "base_model_name": "%s",\n' "$(_gguffer_esc "$base_name")"
+        printf '  "arch": "%s",\n' "$(_gguffer_esc "$arch")"
+        printf '  "block_count": "%s",\n' "$(_gguffer_esc "$block_count")"
+        printf '  "intermedio": "%s",\n' "$(_gguffer_esc "$intermedio")"
+        printf '  "imatrix": %s,\n' "$imx_json"
+        printf '  "mtp": %s,\n' "$mtp_json"
+        printf '  "herramienta": "ropero gguffer (llama.cpp llama-quantize)",\n'
+        printf '  "fecha": "%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        printf '}\n'
+    } > "$dest" 2>/dev/null || { rm -f "$dest"; return 1; }
+
+    echo "[gguffer] procedencia: $dest"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_arreglar_tokenizer <dir>
+#
+# Parchea el tokenizer_config.json de un clon de pesos para que lo entienda
+# un transformers v4.
+#
+# Por que: hay repos guardados con transformers v5, cuyo tokenizer_class es
+# "TokenizersBackend". La v4 no tiene esa clase y la conversion del GGUF
+# muere con "ValueError: Tokenizer class TokenizersBackend does not exist or
+# is not currently imported". El tokenizer.json es un fast tokenizer estandar,
+# asi que con poner "PreTrainedTokenizerFast" (que si conoce la v4) vale.
+#
+# Se toca el CLON (una copia local), no el repo de HuggingFace, y se guarda
+# un .bak por si acaso.
+# -----------------------------------------------------------------------------
+_gguffer_arreglar_tokenizer() {
+    # OJO: "local dir="$1" cfg="$dir/.."" NO vale: en bash las expansiones de
+    # una misma declaracion local se hacen ANTES de asignar, y $dir sale
+    # vacio. Por eso van en dos lineas.
+    local dir="$1"
+    local cfg="$dir/tokenizer_config.json"
+    [[ -f "$cfg" ]] || return 1
+    grep -q '"tokenizer_class"' "$cfg" || return 1
+    [[ -f "$cfg.bak" ]] || cp "$cfg" "$cfg.bak"
+    python3 - "$cfg" <<'PY'
+import json, sys
+ruta = sys.argv[1]
+try:
+    with open(ruta, encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    sys.exit(1)
+viejo = d.get("tokenizer_class")
+if viejo == "TokenizersBackend":
+    d["tokenizer_class"] = "PreTrainedTokenizerFast"
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+# Otra clase desconocida: si el repo trae tokenizer.json, el fast generico
+# tambien vale.
+import os
+if os.path.exists(os.path.join(os.path.dirname(ruta), "tokenizer.json")):
+    d["tokenizer_class"] = "PreTrainedTokenizerFast"
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# _gguffer_espacio <dir>
+#
+# Bytes libres en el sistema de ficheros que contiene <dir>. Se mide con df
+# sobre el DIRECTORIO (no sobre la raiz): si el trabajo esta en otro disco,
+# el espacio es el de ese disco.
+# -----------------------------------------------------------------------------
+_gguffer_espacio() {
+    local dir="$1"
+    df -PB1 "$dir" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_necesita_espacio <work> <out_f16>
+#
+# Cuanto hace falta para convertir, con el tamano REAL de los pesos.
+#
+# El GGUF intermedio es aproximadamente del tamano de los safetensors: si
+# los pesos son BF16 o F16, el GGUF es igual de grande; si son F32, es la
+# mitad. Sin mirar los pesos no se puede afinar, asi que se toma el peor
+# caso (el GGUF tan grande como los pesos) y se le anade un margen.
+#
+# Se anade el margen porque el GGUF lleva la metadata y los tensores con
+# padding: un 5 % de mas nunca viene mal.
+# -----------------------------------------------------------------------------
+_gguffer_necesita_espacio() {
+    local work="$1" out_f16="$2" bytes=0 tam=0
+    if [[ -d "$work" ]]; then
+        tam="$(du -sb "$work" 2>/dev/null | cut -f1)"
+        bytes="${tam:-0}"
+    fi
+    # el destino puede estar en otro disco
+    local dest_dir
+    dest_dir="$(dirname "$out_f16")"
+    local libre
+    libre="$(_gguffer_espacio "$dest_dir")"
+    [[ -n "$libre" ]] || libre=0
+    # el margen: 5 % de los pesos, y 512 MiB de suelo (la metadata, el log)
+    local margen=$(( bytes / 20 + 536870912 ))
+    printf '%s %s' "$libre" "$margen"
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_diagnostico <modelo_dir> <out_f16> <imatrix> <imatrix_repo>
+#                      <imatrix_file> <cuant>
+#
+# El informe de por que NO se esta cuantizando, SIN cuantizar nada.
+#
+# Esto es lo que hace falta cuando la cuantizacion falla a las tres de la
+# madrugada: en vez de adivinar, el gguffer dice cuanto espacio hay, cuanto
+# hace falta, cual es el bloque MTP, si el imatrix lo cubre, y el argv
+# EXACTO que le pasaria al cuantizador.
+# -----------------------------------------------------------------------------
+_gguffer_diagnostico() {
+    local dir="$1" out_f16="$2" imatrix="$3" imatrix_repo="$4" imatrix_file="$5" quant="$6" origen_gguf="${7:-}"
+    local _ggufcheck
+    _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
+    local _libre _margen _pesos _nextn_bloque _cubre
+    _libre="$(_gguffer_espacio "$dir")"
+    _pesos="$(du -sb "$dir" 2>/dev/null | cut -f1)"
+    _margen=$(( ${_pesos:-0} / 20 + 536870912 ))
+
+    echo "── DIAGNOSTICO ──────────────────────────────────────────────"
+    if [[ -n "$origen_gguf" ]]; then
+        # No hay pesos clonados: el GGUF ya venia hecho. Lo que hay que
+        # mirar es que el fichero esta y cuanto ocupa.
+        echo "  GGUF de entrada:  $origen_gguf"
+        echo "  tamano:           $(numfmt --to=iec-i --suffix=B "$(stat -c %s "$origen_gguf" 2>/dev/null || echo 0)" 2>/dev/null || echo "?")"
+        echo "  (no hay pesos que clonar: no se convierte nada)"
+    else
+        echo "  pesos clonados:   $dir"
+        echo "  tamano:           $(numfmt --to=iec-i --suffix=B "${_pesos:-0}" 2>/dev/null || echo "${_pesos:-0} B")"
+    fi
+    echo "  espacio libre:    $(numfmt --to=iec-i --suffix=B "${_libre:-0}" 2>/dev/null || echo "${_libre:-0} B")"
+    echo "  espacio a porner: $(numfmt --to=iec-i --suffix=B "$_margen" 2>/dev/null || echo "$_margen B")  (GGUF intermedio + margen)"
+    if [[ -n "${_libre:-}" && "${_libre:-0}" -lt "$_margen" ]]; then
+        echo "  ==> NO CABE. Borra el clon o usa otro disco: GGUF_WORK_DIR / GGUF_DIR."
+    fi
+    echo ""
+    echo "  GGUF intermedio:  $out_f16"
+    if [[ -f "$out_f16" ]]; then
+        echo "    ya existe (se reutiliza)"
+        _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
+        echo "    bloque MTP:      ${_nextn_bloque:-ninguno}"
+        echo "    file_type:       $(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1)"
+    else
+        echo "    NO existe: hay que convertir antes"
+        _nextn_bloque=""
+    fi
+    echo ""
+    echo "  imatrix:          ${imatrix:-NINGUNO}"
+    if [[ -n "$imatrix" ]]; then
+        [[ -f "$imatrix" ]] && echo "    fichero: existe ($(numfmt --to=iec-i --suffix=B "$(stat -c %s "$imatrix" 2>/dev/null)" 2>/dev/null))" \
+                           || echo "    fichero: NO EXISTE"
+        [[ -n "$imatrix_repo" ]] && echo "    repo:     $imatrix_repo"
+        [[ -n "$imatrix_file" ]] && echo "    fichero:  $imatrix_file"
+        if [[ -n "$_nextn_bloque" ]]; then
+            _cubre="no"
+            _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null && _cubre="si"
+            echo "    cubre el bloque MTP ($_nextn_bloque): $_cubre"
+            if [[ "$_cubre" == "no" ]]; then
+                echo "    => se anadira --tensor-type "blk\.$_nextn_bloque\..*=${MTP_QUANT:-Q4_0}""
+            fi
+        fi
+    fi
+    echo ""
+    echo "  quant pedido:     ${quant:-?}"
+    echo "  argv del cuantizador (lo que se ejecutaria):"
+    local _args=(--imatrix "$imatrix")
+    [[ -n "$_nextn_bloque" ]] && ! _gguffer_imatrix_cubre_bloque "$imatrix" "$_nextn_bloque" "$_ggufcheck" 2>/dev/null \
+        && _args+=(--tensor-type "blk\.${_nextn_bloque}\..*=${MTP_QUANT:-Q4_0}")
+    echo "    llama-quantize ${_args[*]} <f16> <salida> $quant"
+    echo "─────────────────────────────────────────────────────────────"
+}
+
 cmd_gguffer() {
-    local path="" repo="" quant="" list_only=0 download_dir=""
+    local path="" repo="" out_name="" imatrix="" from_subdir="" include=""
+    local gguf_origen="" gguf_file=""
+    local -a quants=()
+    local imatrix_repo="" imatrix_file=""
+    local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0 diagnostico=0
+    local inter="f16"
+    ROPERO_GGUF_OUT_DIR=""; ROPERO_GGUF_OUT_FILE=""; ROPERO_GGUF_OUT_PRINCIPAL=""
+    ROPERO_GGUF_OUT_PRINCIPAL_DIR=""
+
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --path) [[ $# -ge 2 ]] || { echo "ERROR: --path requiere un directorio" >&2; return 2; }; path="$2"; shift 2 ;;
-            --path=*) path="${1#--path=}"; shift ;;
-            --repo) [[ $# -ge 2 ]] || { echo "ERROR: --repo requiere un repo (owner/name)" >&2; return 2; }; repo="$2"; shift 2 ;;
-            --repo=*) repo="${1#--repo=}"; shift ;;
+            --gguf)        [[ $# -ge 2 ]] || { echo "ERROR: --gguf requiere un fichero o un repo" >&2; return 2; }; gguf_origen="$2"; shift 2 ;;
+            --gguf=*)      gguf_origen="${1#--gguf=}"; shift ;;
+            --gguf-file)   [[ $# -ge 2 ]] || { echo "ERROR: --gguf-file requiere un nombre" >&2; return 2; }; gguf_file="$2"; shift 2 ;;
+            --gguf-file=*) gguf_file="${1#--gguf-file=}"; shift ;;
+            --path)        [[ $# -ge 2 ]] || { echo "ERROR: --path requiere un directorio" >&2; return 2; }; path="$2"; shift 2 ;;
+            --path=*)      path="${1#--path=}"; shift ;;
+            --repo)        [[ $# -ge 2 ]] || { echo "ERROR: --repo requiere un repo (owner/name)" >&2; return 2; }; repo="$2"; shift 2 ;;
+            --repo=*)      repo="${1#--repo=}"; shift ;;
             --quant)
                 if [[ $# -eq 1 ]]; then list_only=1; shift
-                else quant="$2"; shift 2; fi ;;
-            --quant=*) quant="${1#--quant=}"; shift ;;
-            -h|--help) printf 'USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant [TIPO]]
-'; return 0 ;;
+                else
+                    # Admite varios: "--quant IQ2_M --quant IQ3_XS" o
+                    # "--quant IQ2_M,IQ3_XS". Lo caro es bajar y convertir los
+                    # pesos (40-60 GB, una hora); cuantizar es solo CPU, asi
+                    # que varios quants en una tirada reutilizan el F16.
+                    IFS=',' read -r -a _qs <<< "$2"
+                    for _q in "${_qs[@]}"; do
+                        [[ -n "$_q" ]] && quants+=("$_q")
+                    done
+                    shift 2; fi ;;
+            --quant=*)
+                IFS=',' read -r -a _qs <<< "${1#--quant=}"
+                for _q in "${_qs[@]}"; do
+                    [[ -n "$_q" ]] && quants+=("$_q")
+                done
+                shift ;;
+            --imatrix)     [[ $# -ge 2 ]] || { echo "ERROR: --imatrix requiere un fichero" >&2; return 2; }; imatrix="$2"; shift 2 ;;
+            --imatrix=*)   imatrix="${1#--imatrix=}"; shift ;;
+            --imatrix-repo)  [[ $# -ge 2 ]] || { echo "ERROR: --imatrix-repo requiere un repo (owner/name)" >&2; return 2; }; imatrix_repo="$2"; shift 2 ;;
+            --imatrix-repo=*) imatrix_repo="${1#--imatrix-repo=}"; shift ;;
+            --imatrix-file)  [[ $# -ge 2 ]] || { echo "ERROR: --imatrix-file requiere un fichero" >&2; return 2; }; imatrix_file="$2"; shift 2 ;;
+            --imatrix-file=*) imatrix_file="${1#--imatrix-file=}"; shift ;;
+            --out)         [[ $# -ge 2 ]] || { echo "ERROR: --out requiere un nombre o una ruta" >&2; return 2; }; _gguffer_parse_out "$2" || return 2; shift 2 ;;
+            --out=*)       _gguffer_parse_out "${1#--out=}" || return 2; shift ;;
+            --out-principal)  [[ $# -ge 2 ]] || { echo "ERROR: --out-principal requiere una ruta" >&2; return 2; }; _gguffer_parse_out_principal "$2" || return 2; shift 2 ;;
+            --out-principal=*) _gguffer_parse_out_principal "${1#--out-principal=}" || return 2; shift ;;
+            --from-subdir) [[ $# -ge 2 ]] || { echo "ERROR: --from-subdir requiere un directorio" >&2; return 2; }; from_subdir="$2"; shift 2 ;;
+            --from-subdir=*) from_subdir="${1#--from-subdir=}"; shift ;;
+            --include)     [[ $# -ge 2 ]] || { echo "ERROR: --include requiere un patrón" >&2; return 2; }; include="$2"; shift 2 ;;
+            --include=*)   include="${1#--include=}"; shift ;;
+            --intermedio)    [[ $# -ge 2 ]] || { echo "ERROR: --intermedio requiere f16 o bf16" >&2; return 2; }; inter="$2"; shift 2 ;;
+            --intermedio=*)  inter="${1#--intermedio=}"; shift ;;
+            --keep-source)    keep_source=1; shift ;;
+            --keep-intermedio) keep_inter=1; shift ;;
+            --force)       force=1; shift ;;
+            --list-quants) list_only=1; shift ;;
+            --no-mtp)      no_mtp=1; shift ;;
+            --diagnostico)  diagnostico=1; shift ;;
+            -h|--help)     _ropero_command_help gguffer; return 0 ;;
             *) echo "ERROR: argumento desconocido: $1" >&2; return 2 ;;
         esac
     done
 
-    if [[ -z "$path" && -z "$repo" ]]; then
-        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> [--quant [TIPO]]" >&2
+    # ── ¿de donde sale el motor? ────────────────────────────────────────────
+    local _llama_dir="${LLAMA_DIR:-$HOME/llama.cpp}"
+    local _convert="$_llama_dir/convert_hf_to_gguf.py"
+    local _quantize
+    _quantize="$(command -v llama-quantize 2>/dev/null || echo "$_llama_dir/build/bin/llama-quantize")"
+    local _ggufcheck
+    _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
+    local _libggml
+    for c in "$_llama_dir/build/bin/libggml.so" "$_llama_dir/build/bin/libggml.dylib" "$_llama_dir/build/lib/libggml.so"; do
+        [[ -f "$c" ]] && { _libggml="$c"; break; }
+    done
+    local _gguf_split
+    for c in "$(command -v llama-gguf-split 2>/dev/null || true)" "$_llama_dir/build/bin/llama-gguf-split"; do
+        [[ -n "$c" && -x "$c" ]] && { _gguf_split="$c"; break; }
+    done
+
+    if (( list_only == 1 )); then
+        echo "Quants disponibles (motor: $_quantize):"
+        "$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" | sed 's/^/  /'
+        return 0
+    fi
+
+    if [[ -z "$path" && -z "$repo" && -z "$gguf_origen" ]]; then
+        echo "USO: ropero gguffer --path <dir> | --repo <owner/name> | --gguf <fichero|owner/repo> [--quant TIPO]" >&2
         return 2
     fi
     if [[ -n "$path" && -n "$repo" ]]; then
         echo "ERROR: usa --path O --repo, no ambos" >&2
         return 2
     fi
+    if [[ -n "$repo" && "$repo" != */* ]]; then
+        echo "ERROR: --repo debe ser owner/name (no '$repo')" >&2
+        return 2
+    fi
 
-    local _llama_dir="${LLAMA_DIR:-$HOME/llama.cpp}"
-    local _convert="$_llama_dir/convert_hf_to_gguf.py"
-    local _quantize
-    _quantize="$(command -v llama-quantize 2>/dev/null || echo "$_llama_dir/build/bin/llama-quantize")"
+    # ── los quants del motor: numero y nombre ───────────────────────────────
+    # El numero es el GGML_TYPE, que es lo que lleva el GGUF en
+    # general.file_type: con eso se puede saber si un GGUF ya esta en el
+    # quant pedido (y saltarse la cuantizacion).
+    local quants_txt quants_num
+    quants_txt="$("$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" || true)"
+    if [[ -z "$quants_txt" ]]; then
+        echo "ERROR: no se puede leer la lista de quants de $_quantize" >&2
+        return 1
+    fi
+    # "    19  or  IQ2_XXS : ..."  ->  "19=IQ2_XXS"
+    quants_num="$(printf '%s\n' "$quants_txt" | sed -nE 's/^[[:space:]]*([0-9]+)[[:space:]]+or[[:space:]]+([A-Z0-9_]+).*/\1=\2/p' | tr '\n' ' ')"
 
-    if (( list_only == 1 )); then
-        echo "Quants disponibles:"
-        "$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" | sed 's/^/  /'
+    # ── validar el quant ANTES de descargar 60 GB ───────────────────────────
+    local -a qnums=()
+    if (( ${#quants[@]} > 0 )); then
+        local q qnum
+        for q in "${quants[@]}"; do
+            qnum="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "=${q}$" | head -1 | cut -d= -f1)"
+            if [[ -z "$qnum" ]]; then
+                echo "ERROR: quant no valido: $q" >&2
+                echo "Usa 'ropero gguffer --list-quants' para ver la lista." >&2
+                return 1
+            fi
+            qnums+=("$qnum")
+        done
+        # Con varios quants, --out no puede ser la ruta exacta de un fichero:
+        # cada quant necesita la suya.
+        if (( ${#quants[@]} > 1 )) && [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            echo "ERROR: con varios quants, --out debe ser un nombre o un directorio" >&2
+            echo "       (la ruta exacta es de un solo fichero)" >&2
+            return 2
+        fi
+    fi
+
+    # ── donde vive cada cosa ───────────────────────────────────────────────
+    local work_root="${GGUF_WORK_DIR:-$HOME/.cache/ropero/gguffer}"
+    local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
+    # Si --out trae un directorio, el GGUF va ahi. Si trae la ruta exacta del
+    # fichero, el directorio es el de esa ruta. El launcher busca cada modelo
+    # en $GGUF_DIR/<carpeta_del_modelo>/, asi que esto es lo que hace que el
+    # GGUF fabricationado caiga donde el TOML lo va a buscar.
+    # Con --out-principal, y sin --out, el directorio es el del principal:
+    # asi el GGUF intermedio se queda en la carpeta del modelo y no suelta en
+    # la raiz del GGUF_DIR.
+    if [[ -n "$ROPERO_GGUF_OUT_DIR" ]]; then
+        out_dir="$ROPERO_GGUF_OUT_DIR"
+    elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+        out_dir="$(dirname "$ROPERO_GGUF_OUT_FILE")"
+    elif [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
+        out_dir="$(dirname "$ROPERO_GGUF_OUT_PRINCIPAL")"
+    elif [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL_DIR" ]]; then
+        # el principal va a una CARPETA: el nombre lo pone el gguffer
+        out_dir="$ROPERO_GGUF_OUT_PRINCIPAL_DIR"
+    fi
+    mkdir -p "$out_dir"
+
+    local work="" source_dir="" nombre="" hf_cache="" _gguf_entrada=""
+    local _gguf_local=0
+    # El work se puede borrar SOLO si es del gguffer (lo ha descargado el).
+    # Con --gguf de un fichero local, el work es la carpeta del usuario.
+    local _puede_borrar_work=1
+    if [[ -n "$gguf_origen" ]]; then
+        # El GGUF ya hecho (local o de un repo de HF). No hay pesos que
+        # clonar: el work es la carpeta donde se deja el GGUF.
+        if [[ "$gguf_origen" == */* && ! -f "$gguf_origen" && "$gguf_origen" != *:* ]]; then
+            work="$work_root/gguf_${gguf_origen//\//__}"
+        else
+            work="$work_root/gguf_$(printf '%s' "$gguf_origen" | tr -c 'a-zA-Z0-9._-' '_')"
+        fi
+        # Si el GGUF es local, no hay nada que descargar: el work es su
+        # carpeta, que es donde se mira si hace falta.
+        if [[ -f "$gguf_origen" ]]; then
+            work="$(dirname "$gguf_origen")"
+            _gguf_local=1
+            _puede_borrar_work=0
+        fi
+        source_dir="$work"
+        nombre="${gguf_origen##*/}"
+        nombre="${nombre%.gguf}"
+    elif [[ -n "$repo" ]]; then
+        work="$work_root/${repo//\//__}"
+        source_dir="$work"
+        nombre="${repo##*/}"
+        hf_cache="${HF_HOME:-$HOME/.cache/huggingface}/hub/models--${repo//\//--}"
+    else
+        work="$path"
+        source_dir="$path"
+        nombre="$(basename "$path")"
+    fi
+    [[ -n "$out_name" ]] && nombre="$out_name"
+    local sentinel="$work/.gguffer-complete"
+
+    # ── el imatrix: si viene de un repo, se baja aqui ───────────────────────
+    # El imatrix es un fichero aparte del modelo (unos 200 MB) y lo publica
+    # otra gente. Antes habia que bajarlo a mano con hf y pasarle la ruta;
+    # con --imatrix-repo/--imatrix-file se baja solo y se cachea, asi que el
+    # gguffer se encarga de todo el proceso.
+    if [[ -n "$imatrix_repo" || -n "$imatrix_file" ]]; then
+        [[ -n "$imatrix_repo" && -n "$imatrix_file" ]] || {
+            echo "ERROR: --imatrix-repo y --imatrix-file van juntos" >&2; return 2; }
+        if ! command -v hf >/dev/null 2>&1; then
+            echo "ERROR: falta 'hf' (huggingface_hub) para bajar el imatrix" >&2
+            return 1
+        fi
+        # El cache va por repo de imatrix, no por repo de pesos: el mismo
+        # imatrix sirve para cualquier quant del mismo modelo base.
+        local im_dir="$work_root/imatrix/${imatrix_repo//\//__}"
+        # El fichero puede venir con subdirectorio ("imatrix/muse-glimmer.imatrix.gguf"):
+        # hf lo deja en <dir>/<subdir>/<fichero>.
+        local im_dest="$im_dir/$imatrix_file"
+        if [[ -f "$im_dest" ]]; then
+            echo "[gguffer] reutilizo el imatrix: $im_dest"
+            imatrix="$im_dest"
+        else
+            echo "[gguffer] bajo el imatrix de $imatrix_repo/$imatrix_file..."
+            mkdir -p "$im_dir"
+            if ! hf download "$imatrix_repo" "$imatrix_file" --local-dir "$im_dir"; then
+                echo "ERROR: no se pudo bajar el imatrix de $imatrix_repo/$imatrix_file" >&2
+                return 1
+            fi
+            if [[ ! -f "$im_dest" ]]; then
+                echo "ERROR: el imatrix no esta en $im_dest" >&2
+                echo "       revisa el nombre del fichero en $imatrix_repo" >&2
+                return 1
+            fi
+            imatrix="$im_dest"
+        fi
+    fi
+    if [[ -n "$imatrix" && ! -f "$imatrix" ]]; then
+        echo "ERROR: el imatrix no existe: $imatrix" >&2
+        return 1
+    fi
+
+    # ── --force: limpiarlo todo y empezar de cero ───────────────────────────
+    if (( force == 1 )); then
+        echo "[gguffer] --force: limpio lo cacheado de ${repo:-$path}"
+        [[ -n "$repo" ]] && rm -rf "$hf_cache"
+        # Con --gguf de un fichero local, el work es la CARPETA DEL
+        # USUARIO: no se toca. Lo que el usuario ha traido no se borra.
+        if (( _puede_borrar_work == 1 )); then
+            rm -rf "$work"
+        else
+            echo "           (el GGUF de entrada es tuyo: no lo borro)"
+        fi
+        if [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            [[ "$ROPERO_GGUF_OUT_FILE" == "$_gguf_entrada" ]] || rm -f "$ROPERO_GGUF_OUT_FILE"
+        else
+            for _f in "$out_dir/${nombre}"*.gguf; do
+                [[ -e "$_f" ]] || continue
+                # El GGUF de entrada es del usuario: jamas se borra.
+                [[ "$_f" == "$_gguf_entrada" ]] && continue
+                rm -f "$_f"
+            done
+        fi
+    fi
+
+    # ── FASE 1: la descarga ─────────────────────────────────────────────────
+    if [[ -n "$gguf_origen" ]]; then
+        # Ya hay un GGUF: se baja (si viene de un repo), se unen los shards
+        # si viene partido, y no se convierte NADA. El conversor de pesos
+        # es justo lo que falla con los modelos multimodales con cabeza MTP.
+        local _preparado
+        _preparado="$(_gguffer_prepara_gguf "$gguf_origen" "$gguf_file" "$work")" || return 1
+        if [[ ! -f "$_preparado" ]]; then
+            echo "ERROR: no se pudo preparar el GGUF de $gguf_origen" >&2
+            return 1
+        fi
+        echo "[gguffer] GGUF de entrada: $_preparado"
+        _gguf_entrada="$_preparado"
+        # El nombre del fichero final: el del repo sin el sufijo "-GGUF"
+        # (que es como se llaman los repos de cuantizaciones), para que el
+        # GGUF no se llame "Qwen3.8-27B-GGUF-MXFP4.gguf".
+        if [[ -n "$gguf_file" ]]; then
+            nombre="${gguf_file##*/}"; nombre="${nombre%.gguf}"
+        fi
+        nombre="${nombre%-GGUF}"
+        # Sin el sufijo del shard ("-00001-of-00002") ni el del tipo
+        # ("-bf16"): el nombre es el del MODELO, no el del fichero de
+        # entrada. El GGUF final se llama "Qwen3.8-27B-MXFP4.gguf".
+        nombre="$(printf '%s' "$nombre" | sed -E 's/-[0-9]{5}-of-[0-9]+$//; s/-(bf16|BF16|f16|F16)$//')"
+    elif [[ -n "$repo" ]]; then
+        if [[ -f "$sentinel" ]]; then
+            echo "[gguffer] reutilizo el clon de $repo en $work"
+        else
+            if ! command -v hf >/dev/null 2>&1; then
+                echo "ERROR: falta 'hf' (huggingface_hub) para descargar" >&2
+                return 1
+            fi
+            mkdir -p "$work"
+            echo "[gguffer] descargo $repo en $work..."
+            local hf_args=(download "$repo" --local-dir "$work")
+            [[ -n "$include" ]] && hf_args+=(--include "$include")
+            if ! hf "${hf_args[@]}"; then
+                # Si la descarga falla no queda nada utilizable: se limpia
+                # el clon a medias y la cache de HF, que son justo lo que
+                # dejaria a medias occupying disco.
+                echo "ERROR: fallo la descarga de $repo" >&2
+                rm -rf "$work"
+                [[ -n "$hf_cache" ]] && rm -rf "$hf_cache"
+                echo "       (he limpiado el clon parcial y la cache de HF)" >&2
+                return 1
+            fi
+            touch "$sentinel"
+        fi
+    fi
+
+    if [[ ! -d "$source_dir" ]]; then
+        echo "ERROR: directorio no encontrado: $source_dir" >&2
+        return 1
+    fi
+
+    # Los pesos pueden venir ya cuantizados (el gpt-oss viene en MXFP4).
+    # Cuantizar encima de eso es dequantizar y re-cuantizar: se pierde
+    # calidad sin ganar nada. Si el repo trae 'original/', ahi estan los
+    # pesos sin quantizar.
+    if [[ -n "$from_subdir" ]]; then
+        source_dir="$work/$from_subdir"
+        [[ -d "$source_dir" ]] || { echo "ERROR: no existe $source_dir" >&2; return 1; }
+    fi
+
+    # ── FASE 2: conversion a GGUF ───────────────────────────────────────────
+    local inter_up="${inter^^}"
+    [[ "$inter_up" == "F16" || "$inter_up" == "BF16" ]] || { echo "ERROR: --intermedio solo admite f16 o bf16" >&2; return 2; }
+    # El intermedio se reutiliza SEA CUAL SEA el que haya (F16 o BF16): si
+    # te has quedado con uno del paso anterior, no se vuelve a convertir.
+    # Importa porque el nombre depende de --intermedio y cambiar la flag
+    # entre pasos dejaba el intermedio viejo huérfano.
+    local out_f16="" _cand
+    for _cand in "$out_dir/${nombre}-F16.gguf" "$out_dir/${nombre}-BF16.gguf"; do
+        if [[ -f "$_cand" ]]; then out_f16="$_cand"; break; fi
+    done
+    [[ -z "$out_f16" ]] && out_f16="$out_dir/${nombre}-${inter_up}.gguf"
+    # Con --gguf el intermedio es el GGUF que trajimos, no uno del out_dir:
+    # gana el que ya esta.
+    [[ -n "$_gguf_entrada" ]] && out_f16="$_gguf_entrada"
+    # Las rutas finales, una por quant. Con varios quants en una tirada cada
+    # uno tiene la suya; con uno solo, --out puede fijar la ruta exacta (por
+    # ejemplo, el nombre que espera el TOML, que no siempre es
+    # <repo>-<quant>.gguf).
+    local -a out_paths=()
+    # El nombre base del fichero final: el del repo, o el que se pida con
+    # --out <nombre> (que ya ha sustituido a $nombre mas arriba).
+    local nombre_base="$nombre"
+    if (( ${#quants[@]} == 0 )); then
+        # Sin quant, la salida es el intermedio: se convierte directamente
+        # ahi, en vez de convertir a un F16 aparte y luego renombrar.
+        if [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+            out_f16="$ROPERO_GGUF_OUT_FILE"
+            out_paths=("$ROPERO_GGUF_OUT_FILE")
+        else
+            out_paths=("$out_f16")
+        fi
+    else
+        local _qp _qi2=0
+        for _qp in "${quants[@]}"; do
+            if (( _qi2 == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
+                # El primer quant de la tirada va exactamente ahi.
+                out_paths+=("$ROPERO_GGUF_OUT_PRINCIPAL")
+            elif (( _qi2 == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL_DIR" ]]; then
+                # El primero va a una CARPETA (el TOML pedia otro quant):
+                # el nombre lo pone el gguffer, no se falsea el del TOML.
+                # OJO: se usa el directorio DEL PRINCIPAL, no $out_dir (que
+                # es el de los secundarios, que puede ser otro).
+                out_paths+=("$ROPERO_GGUF_OUT_PRINCIPAL_DIR/${nombre_base}-${_qp}.gguf")
+            elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+                out_paths+=("$ROPERO_GGUF_OUT_FILE")
+            else
+                out_paths+=("$out_dir/${nombre_base}-${_qp}.gguf")
+            fi
+            _qi2=$((_qi2+1))
+        done
+    fi
+
+    # El intermedio y el final pueden ser el mismo fichero (--quant F16), y
+    # en ese caso el "ya existe" no aplica: es el intermedio del que
+    # speak, no un resultado de una corrida anterior.
+    # Con VARIOS quants, el "ya existe" se comprueba uno por uno dentro del
+    # bucle de cuantizacion (los que faltan se hacen, los que estan se
+    # respetan). Aqui solo se corta antes de descargar 60 GB si NO falta
+    # ninguno.
+    if (( ${#quants[@]} > 0 )); then
+        local _falta=0 _hay_otro=0 _op
+        for _op in "${out_paths[@]}"; do
+            # El F16 como resultado (--quant F16) lo gestiona el flujo normal.
+            [[ "$_op" == "$out_f16" ]] && continue
+            _hay_otro=1
+            [[ -f "$_op" ]] || _falta=1
+        done
+        # OJO: $force -eq 0 va dentro de [[ ]]. Fuera, bash lo parsea como
+        # "ejecutar el comando 0" (por el &&) y el if NUNCA se cumple.
+        if (( _falta == 0 && _hay_otro == 1 )) && [[ $force -eq 0 && -z "$path" ]]; then
+            echo "[gguffer] ya existen todos los quants pedidos:"
+            for _op in "${out_paths[@]}"; do echo "           $_op"; done
+            echo "           (usa --force para rehacerlos)"
+            return 0
+        fi
+    elif [[ -f "$out_f16" && $force -eq 0 && -z "$path" && "${out_paths[0]}" != "$out_f16" ]]; then
+        echo "[gguffer] ya existe: ${out_paths[0]} (usa --force para rehacerlo)"
         return 0
     fi
 
-    # Si --repo, descargar primero
-    if [[ -n "$repo" ]]; then
-        if ! command -v hf >/dev/null 2>&1; then
-            echo "ERROR: falta 'hf' (huggingface_hub) para descargar" >&2
-            return 1
-        fi
-        download_dir="$(mktemp -d "${TMPDIR:-/tmp}/ropero-gguffer.XXXXXX")"
-        echo "Descargando $repo en $download_dir..."
-        if ! hf download "$repo" --local-dir "$download_dir"; then
-            echo "ERROR: falló la descarga" >&2
-            rm -rf "$download_dir"
-            return 1
-        fi
-        path="$download_dir"
-    fi
-
-    if [[ ! -d "$path" ]]; then
-        echo "ERROR: directorio no encontrado: $path" >&2
-        [[ -n "$download_dir" ]] && rm -rf "$download_dir"
-        return 1
-    fi
-
-    # Validar quant si se pasó
-    if [[ -n "$quant" ]]; then
-        if ! "$_quantize" --help 2>&1 | grep -qiE "or  ${quant}([^A-Za-z0-9_]|$)"; then
-            echo "ERROR: quant no válido: $quant" >&2
-            echo "Usa 'ropero gguffer --path <dir> --quant' para ver la lista." >&2
-            [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+    # ── EL ESPACIO, ANTES DE CONVERTIR ─────────────────────────────────────
+    # Convertir un modelo de 27B escribe un GGUF de tensores de pesos de
+    # decenas de GB. Si el disco se llena a mitad, el conversor muere con un
+    # error que no dice "te has quedado sin disco", y el trabajo de la noche
+    # se pierde. Se comprueba ANTES.
+    if [[ ! -f "$out_f16" && -n "$repo" ]]; then
+        local _libre _margen
+        read -r _libre _margen <<< "$(_gguffer_necesita_espacio "$work" "$out_f16")"
+        if [[ -n "${_libre:-}" && "${_libre:-0}" -lt "${_margen:-0}" ]]; then
+            echo "ERROR: no hay espacio para convertir." >&2
+            echo "       libre:  $(numfmt --to=iec-i --suffix=B "${_libre:-0}" 2>/dev/null)" >&2
+            echo "       hace falta: $(numfmt --to=iec-i --suffix=B "${_margen:-0}" 2>/dev/null) (el GGUF intermedio + margen)" >&2
+            echo "       El GGUF intermedio es del tamano de los pesos (o la mitad si son F32)." >&2
+            echo "       Libera espacio, o pon GGUF_WORK_DIR y GGUF_DIR en otro disco." >&2
             return 1
         fi
     fi
 
-    local name; name="$(basename "$path")"
-    local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
-    mkdir -p "$out_dir"
-    local out="$out_dir/${name}.gguf"
-
-    echo "Convirtiendo $path -> $out (F16)..."
-    if ! python3 "$_convert" "$path" --outfile "$out" --outtype f16; then
-        echo "ERROR: falló la conversión" >&2
-        [[ -n "$download_dir" ]] && rm -rf "$download_dir"
-        return 1
-    fi
-
-    if [[ -n "$quant" && "$quant" != "F16" && "$quant" != "F32" && "$quant" != "BF16" ]]; then
-        local qout="${out%.gguf}-${quant}.gguf"
-        echo "Cuantizando a $quant -> $qout..."
-        if ! "$_quantize" "$out" "$qout" "$quant"; then
-            echo "ERROR: falló la cuantización" >&2
-            [[ -n "$download_dir" ]] && rm -rf "$download_dir"
+    if [[ ! -f "$out_f16" ]]; then
+        # --no-mtp solo si el conversor lo entiende: no todas las versiones
+        # de llama.cpp lo tienen, y pasar un flag que no existe hace que el
+        # conversor falle con "unrecognized arguments".
+        local conv_args=("$source_dir" --outfile "$out_f16" --outtype "$inter")
+        if (( no_mtp == 1 )); then
+            if grep -qE "no-mtp|no_nextn" "$_convert" 2>/dev/null; then
+                conv_args+=(--no-mtp)
+            else
+                echo "[gguffer] aviso: este conversor no sabe excluir la MTP (--no-mtp); sigo sin el"
+            fi
+        fi
+        echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
+        local conv_log="${TMPDIR:-/tmp}/gguffer-conv.$$.log"
+        local conv_ok=0
+        if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
+            conv_ok=1
+        elif grep -q "Tokenizer class .* does not exist" "$conv_log" 2>/dev/null \
+             && _gguffer_arreglar_tokenizer "$source_dir"; then
+            # Algunos repos se han guardado con transformers v5, cuyo
+            # tokenizer_class es "TokenizersBackend". Con transformers v4 esa
+            # clase no existe y la conversion muere con "Tokenizer class
+            # TokenizersBackend does not exist". El tokenizer.json es un fast
+            # tokenizer estandar, asi que basta con poner la clase que si
+            # conoce la v4, y reintentar.
+            echo "[gguffer] el tokenizer del repo usa una clase que tu transformers no conoce."
+            echo "           (TokenizersBackend es de transformers v5)"
+            echo "           Lo cambio a PreTrainedTokenizerFast y reintento..."
+            if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
+                conv_ok=1
+            fi
+        elif grep -q -- "--mtp / --no-nextn are not supported" "$conv_log" 2>/dev/null \
+             && [[ " ${conv_args[*]} " == *" --no-mtp "* ]]; then
+            # El conversor acepta --no-mtp, pero no para ESTA arquitectura.
+            # Y no hace falta: si la arch no tiene el mixin de MTP
+            # (conversion/nemotron.py no lo tiene, conversion/qwen.py si), el
+            # conversor ya deja fuera la capa nextn. El GGUF sale con 52
+            # bloques y SIN la metadata nextn_predict_layers, que es
+            # justamente lo que hace que el server lo cargue bien.
+            echo "[gguffer] aviso: esta arquitectura no admite --no-mtp."
+            echo "           Reintento sin el: el conversor ya deja fuera la MTP."
+            local _i
+            for _i in "${!conv_args[@]}"; do
+                [[ "${conv_args[$_i]}" == "--no-mtp" ]] && unset 'conv_args[_i]'
+            done
+            if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
+                conv_ok=1
+            fi
+        fi
+        if (( conv_ok == 0 )); then
+            tail -20 "$conv_log" >&2
+            rm -f "$out_f16"
+            echo "ERROR: fallo la conversion a GGUF" >&2
+            # Por que fallo, que el log del conversor no lo dice claro.
+            if grep -qiE "no space left|disk quota|write error" "$conv_log" 2>/dev/null; then
+                echo "       ==> se ha quedado SIN ESPACIO en disco." >&2
+                echo "       El GGUF intermedio necesita tanto como los pesos (o la mitad si son F32)." >&2
+            elif grep -qiE "MemoryError|OutOfMemory|Cannot allocate memory|Killed" "$conv_log" 2>/dev/null; then
+                echo "       ==> se ha quedado SIN MEMORIA (el conversor se ha comido la RAM)." >&2
+            elif grep -qiE "does not exist|not found|No such file" "$conv_log" 2>/dev/null; then
+                echo "       ==> faltan ficheros en el clon: la descarga esta incompleta." >&2
+                echo "       borra $work y vuelve a lanzar, o baja el repo a mano." >&2
+            fi
+            if (( keep_source == 1 )); then
+                echo "       conservo los pesos en: $work (--keep-source)" >&2
+                echo "       reintenta solo la conversion:" >&2
+                echo "         python3 $_convert ${conv_args[*]}" >&2
+            else
+                # Sin --keep-source, los pesos se borran: 60 GB que se quedan
+                # ahi para siempre y un trabajo de noche que se llena el disco
+                # es peor que volver a bajar. Se avisa de como pedirlos otra
+                # vez, porque el repo es publico.
+                if (( _puede_borrar_work == 1 )); then
+                    echo "       borro los pesos (60 GB) para no dejar el disco lleno." >&2
+                    echo "       no se guardan porque no se paso --keep-source." >&2
+                    rm -rf "$work"
+                else
+                    # El GGUF de entrada es un fichero del usuario, en su
+                    # carpeta: eso no se borra, ni con --force ni al fallar.
+                    echo "       el GGUF de entrada es tuyo: no lo borro." >&2
+                fi
+            fi
             return 1
         fi
-        rm -f "$out"
-        out="$qout"
+    else
+        echo "[gguffer] reutilizo el GGUF intermedio: $out_f16"
     fi
 
-    # Limpiar safetensors
-    rm -rf "$path"
+    # ── EL DIAGNOSTICO: POR QUE NO SE CUANTIZA ─────────────────────────────
+    # Con --diagnostico no se cuantiza: se imprime el informe y se sale. Es
+    # lo que hay que mirar cuando la cuantizacion falla a las tres de la
+    # madrugada, en vez de adivinar.
+    if (( diagnostico == 1 )); then
+        _gguffer_diagnostico "$source_dir" "$out_f16" "$imatrix" "$imatrix_repo" \
+                            "$imatrix_file" "${quants[0]:-}" "$_gguf_entrada"
+        return 0
+    fi
 
-    echo "GGUF creado: $out"
+    # ── FASE 3: la cuantizacion ────────────────────────────────────────────
+    # El file_type del GGUF dice en que quant estan los pesos. Si ya estan
+    # cuantizados (el gpt-oss viene en MXFP4), cuantizar encima es
+    # dequantizar y re-cuantizar: se pierde calidad sin ganar nada. Por eso
+    # se mira ANTES, con el dato real y no con una suposicion.
+    local file_type
+    file_type="$(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1 | tr -dc '0-9')"
+    # El nombre del tipo predominante: el numero solo no vale (el 30 es BF16
+    # y IQ4_XS a la vez), asi que se busca en la lista del motor.
+    local tipo_nombre=""
+    [[ -n "$file_type" ]] && tipo_nombre="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "^${file_type}=" | head -1 | cut -d= -f2)"
+
+    # ── la cabeza MTP y el imatrix ─────────────────────────────────────────
+    # El imatrix se calcula sobre el modelo base, pero el GGUF lleva la MTP
+    # como un bloque MAS (el siguiente al ultimo). Ese bloque no esta en el
+    # imatrix, y con un quant very-low-bit el cuantizador aborta:
+    #   "Missing importance matrix for tensor blk.64.attn_k.weight".
+    # La salida es dejar ese bloque en un quant que NO exija imatrix (Q4_0),
+    # que es lo que hizo bartowski con su IQ2_M del Qwen3.8. Es lo mismo para
+    # todos los quants de la tirada, asi que se calcula UNA vez.
+    local _nextn_bloque="" _qargs_comunes=()
+    [[ -n "$imatrix" ]] && _qargs_comunes+=(--imatrix "$imatrix")
+    if [[ -n "$imatrix" && ${#quants[@]} -gt 0 ]]; then
+        # Que bloques del GGUF no estan en el imatrix. Se comparan BLOQUE a
+        # BLOQUE (no tensor a tensor: las normas no estan en ningun imatrix
+        # porque no se cuantizan, y eso no significa nada).
+        # El bloque de la MTP se localiza por DOS vias, y se usan las dos:
+        #
+        #  a) POR LA METADATA (block_count - nextn_predict_layers). Es lo que
+        #     dice el GGUF. Funciona siempre que el conversor haya escrito
+        #     la metadata.
+        #  b) POR COMPARACION con el imatrix: los bloques que el GGUF tiene y
+        #     el imatrix no. Funciona siempre que la metadata falte, que es
+        #     justo lo que pasaba (el conversor de la MTP no la escribia y
+        #     el bloque se quedaba sin cubrir).
+        #
+        # Se cogen los dos y se unen: si los dos coinciden, se aplica una
+        # sola vez (que es lo normal).
+        local -a _sin_imx=()
+        local _b
+        while read -r _b; do
+            [[ -n "$_b" ]] || continue
+            _sin_imx+=("$_b")
+        done < <(_gguffer_bloques_sin_imatrix "$out_f16" "$imatrix" "$_ggufcheck" 2>/dev/null || true)
+        _nextn_bloque="$(_gguffer_bloque_nextn "$out_f16" "$_ggufcheck" 2>/dev/null || true)"
+        if [[ -n "$_nextn_bloque" ]]; then
+            local _ya=0
+            for _b in "${_sin_imx[@]}"; do [[ "$_b" == "$_nextn_bloque" ]] && _ya=1; done
+            (( _ya )) || _sin_imx+=("$_nextn_bloque")
+        fi
+        if ((${#_sin_imx[@]} > 0)); then
+            local _lista
+            _lista="$(printf '%s ' "${_sin_imx[@]}")"
+            if ((${#_sin_imx[@]} == 1)); then
+                echo "[gguffer] aviso: el imatrix no cubre el bloque ${_sin_imx[0]} (la cabeza MTP)."
+            else
+                echo "[gguffer] aviso: el imatrix no cubre los bloques ${_lista% } (la cabeza MTP)."
+            fi
+            echo "           Lo(s) cuantizo en ${MTP_QUANT:-Q4_0}, que no exige imatrix."
+            for _b in "${_sin_imx[@]}"; do
+                _qargs_comunes+=(--tensor-type "blk\.${_b}\..*=${MTP_QUANT:-Q4_0}")
+            done
+        fi
+    fi
+
+    # ── el bucle de quants ─────────────────────────────────────────────────
+    # Bajar y convertir los pesos es lo caro (40-60 GB y una hora). Cuantizar
+    # es solo CPU. Por eso se pueden pedir VARIOS quants en una tirada: el
+    # F16 se convierte una vez y se reutiliza para todos.
+    local -a out_finals=()
+    local qi quant_i qnum_i
+    for qi in "${!quants[@]}"; do
+        quant_i="${quants[$qi]}"
+        qnum_i="${qnums[$qi]}"
+        local out_q="${out_paths[$qi]}"
+        out_finals+=("$out_q")
+
+        if [[ -n "$tipo_nombre" && "$tipo_nombre" != "$qnum_i" &&
+              "$tipo_nombre" != "F16" && "$tipo_nombre" != "BF16" && "$tipo_nombre" != "F32" ]]; then
+            echo "[gguffer] aviso: los pesos del repo ya venian en el quant $tipo_nombre ($file_type)."
+            echo "           Cuantizar a $quant_i encima es dequantizar y re-cuantizar:"
+            echo "           se pierde calidad sin ganar nada."
+            if [[ -d "$work/original" ]]; then
+                echo "           Usa --from-subdir original para cuantizar de los pesos SIN quantizar."
+            fi
+        fi
+
+        if [[ -n "$file_type" && "$file_type" == "$qnum_i" ]]; then
+            # El GGUF ya esta en ese quant (el caso del gpt-oss, que se
+            # convierte a MXFP4 sin cuantizar). Cuantizar encima seria
+            # dequantizar y re-cuantizar: se pierde calidad sin ganar nada.
+            echo "[gguffer] el GGUF ya esta en $quant_i (file_type=$file_type): no cuantizo otra vez"
+            if [[ "$out_q" != "$out_f16" ]]; then
+                rm -f "$out_q"
+                mv "$out_f16" "$out_q"
+            fi
+            continue
+        fi
+
+        # El que ya existe de una corrida anterior: no se rehace.
+        if [[ -f "$out_q" && $force -eq 0 && -z "$path" ]]; then
+            echo "[gguffer] ya existe: $out_q (usa --force para rehacerlo)"
+            continue
+        fi
+
+        echo "[gguffer] cuantizo a $quant_i -> $out_q..."
+        # La carpeta del destino puede no existir (con --out-principal es
+        # distinta de la del resto de quants).
+        mkdir -p "$(dirname "$out_q")" 2>/dev/null || true
+        # OJO: llama-quantize solo parsea las opciones mientras el argumento
+        # empiece por "--", y para en el primero que no. Las flags van ANTES
+        # de los posicionales: si van detras, "--imatrix" se come el parseo
+        # del numero de hilos y el cuantizador muere con
+        # "invalid nthread '--imatrix'".
+        local qargs=("${_qargs_comunes[@]}")
+        qargs+=("$out_f16" "$out_q" "$quant_i")
+        # La salida del cuantizador se guarda: si falla, su ultimo error dice
+        # por que (el mensaje del gguffer solo no alcanza).
+        local _gguffer_qlog="${TMPDIR:-/tmp}/gguffer-quant.$$.log"
+        if ! "$_quantize" "${qargs[@]}" >"$_gguffer_qlog" 2>&1; then
+            tail -20 "$_gguffer_qlog" >&2
+            # Aqui NO se borra nada: el clon de los safetensors y el GGUF
+            # intermedio se quedan, y se dice como reintentar solo la
+            # cuantizacion (que es la parte cara).
+            rm -f "$out_q"
+            echo "ERROR: fallo la cuantizacion a $quant_i" >&2
+            if (( keep_source == 1 )); then
+                echo "       conservo los pesos en: $work (--keep-source)" >&2
+                echo "       conservo el GGUF intermedio en: $out_f16" >&2
+                echo "       reintenta solo la cuantizacion:" >&2
+                echo "         $_quantize ${qargs[*]}" >&2
+            else
+                # Sin --keep-source, los pesos se borran. Un trabajo de noche
+                # que falla many veces seguidas no puede dejar 60 GB por cada
+                # intento: el disco se llena y luego falla TODO, incluso lo
+                # que ya estaba bien.
+                if (( _puede_borrar_work == 1 )); then
+                    echo "       borro los pesos (60 GB) para no dejar el disco lleno." >&2
+                    echo "       no se guardan porque no se paso --keep-source." >&2
+                    rm -rf "$work"
+                else
+                    # El GGUF de entrada es un fichero del usuario, en su
+                    # carpeta: eso no se borra, ni con --force ni al fallar.
+                    echo "       el GGUF de entrada es tuyo: no lo borro." >&2
+                fi
+            fi
+            # El error mas comun: el imatrix no cubre un tensor. Se dice cual,
+            # porque el mensaje del cuantizador ("Missing importance matrix
+            # for tensor blk.64.attn_k.weight") no dice de donde sale.
+            if grep -q "Missing importance matrix for tensor" "$_gguffer_qlog" 2>/dev/null; then
+                local _t_missing
+                _t_missing="$(sed -n 's/.*Missing importance matrix for tensor \([^ ]*\).*/\1/p' "$_gguffer_qlog" | head -1)"
+                echo "       el imatrix no cubre el tensor: ${_t_missing:-?}" >&2
+                if [[ -n "$_nextn_bloque" && "${_t_missing:-}" == blk."$_nextn_bloque".* ]]; then
+                    echo "       es el bloque $_nextn_bloque, el de la cabeza MTP." >&2
+                    echo "       El imatrix se calcula sobre el modelo base, que no la tiene." >&2
+                    echo "       Opciones: dejar ese bloque en ${MTP_QUANT:-Q4_0} (--tensor-type)," >&2
+                    echo "       o convertir sin MTP (--no-mtp) y renombrar el GGUF." >&2
+                fi
+            fi
+            return 1
+        fi
+        # El intermedio se borra al FINAL de todos los quants, no aqui: con
+        # varios quants en una tirada, el siguiente lo necesita.
+    done
+
+    # ── FASE 4: verificar los GGUFs ─────────────────────────────────────────
+    # Solo si el GGUF esta bien se borran los safetensors: si esta
+    # corrupto, tenerlos vale mas que 60 GB de disco.
+    local out_final verif_ok _q
+    for _q in "${out_finals[@]}"; do
+        out_final="$_q"
+        verif_ok=0
+        if [[ -n "$_gguf_split" ]]; then
+            if "$_gguf_split" --dry-run "$out_final" "$out_dir/.gguffer-verif" >/dev/null 2>&1; then
+                verif_ok=1
+            fi
+        fi
+        if (( verif_ok == 0 )); then
+            local chk_args=("$out_final")
+            [[ -n "$_libggml" ]] && chk_args+=(--lib "$_libggml")
+            if python3 "$_ggufcheck" "${chk_args[@]}"; then
+                verif_ok=1
+            fi
+        fi
+        if (( verif_ok == 0 )); then
+            echo "ERROR: el GGUF no supera la verificacion: $out_final" >&2
+            echo "       NO borro los pesos: estan en $work" >&2
+            echo "       (usa --force para rehacerlo todo desde cero)" >&2
+            return 1
+        fi
+    done
+
+    # ── FASE 5: limpiar ─────────────────────────────────────────────────────
+    if [[ -n "$repo" && $keep_source -eq 0 ]]; then
+        echo "[gguffer] el GGUF esta bien: borro el clon de los safetensors ($work)"
+        rm -rf "$work"
+    elif [[ -n "$repo" ]]; then
+        echo "[gguffer] el GGUF esta bien; conservo los safetensors en $work (--keep-source)"
+    fi
+    rm -f "$out_dir/.gguffer-verif"
+    # El intermedio se borra DESPUES de todos los quants (si no, el segundo
+    # cuant se queda sin su F16). Pero si el F16 es el resultado (--quant F16),
+    # no se toca: es el fichero final.
+    if (( keep_inter == 0 )) && (( ${#quants[@]} > 0 )); then
+        local _op _es_resultado=0
+        for _op in "${out_finals[@]}"; do
+            [[ "$_op" == "$out_f16" ]] && _es_resultado=1
+        done
+        # El GGUF de entrada lo ha traido el usuario: no se borra jamas.
+        if [[ "$out_f16" == "$_gguf_entrada" ]]; then
+            echo "[gguffer] el GGUF de entrada se queda donde esta (es tuyo)"
+        else
+            (( _es_resultado == 0 )) && rm -f "$out_f16"
+        fi
+    fi
+
+    # ── FASE 6: la procedencia ─────────────────────────────────────────────
+    # Un GGUF sin saber COMO se hizo no se puede publicar con verguenza: de
+    # donde salio el modelo, con que quant, con que importance matrix, y si
+    # la cabeza MTP quedo en un quant aparte. Eso es lo que va al model card.
+    local _q _qname
+    for _q in "${out_finals[@]}"; do
+        out_final="$_q"
+        _qname="$(basename "$out_final" .gguf)"
+        _gguffer_escribe_fuente "$out_final" "$_qname" "$repo" "$imatrix" \
+            "$imatrix_repo" "$imatrix_file" "$_nextn_bloque" "$inter_up"
+    done
+
+    local _sz
+    for _q in "${out_finals[@]}"; do
+        out_final="$_q"
+        _sz="$(du -h "$out_final" 2>/dev/null | cut -f1)"
+        echo "[gguffer] GGUF listo: $out_final (${_sz:-?})"
+    done
+    if (( ${#quants[@]} == 0 )); then
+        echo "[gguffer] AVISO: NO he cuantizado nada: el GGUF se ha quedado en $inter_up."
+        echo "           Para cuantizarlo (reutilizando este mismo intermedio, sin volver"
+        echo "           a descargar los pesos):"
+        echo "             ropero gguffer --repo ${repo:-(<repo>)} --quant <QUANT>"
+    fi
     return 0
 }
-
 
 main() {
     local subcmd="${1:-}"
@@ -3797,10 +5652,33 @@ main() {
             cmd_status "$@"
             exit $?
             ;;
+        levels)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help levels; exit 0; fi
+            cmd_levels "$@"
+            exit $?
+            ;;
+        path)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help path; exit 0; fi
+            cmd_path "$@"
+            exit $?
+            ;;
+        args)
+            shift
+            cmd_args "$@"
+            exit $?
+            ;;
         stop)
             shift
             if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help stop; exit 0; fi
             cmd_stop "$@"
+            exit $?
+            ;;
+        use)
+            shift
+            if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then _ropero_command_help use; exit 0; fi
+            cmd_use "$@"
             exit $?
             ;;
     *)

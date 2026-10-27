@@ -1,40 +1,37 @@
 # =============================================================================
-# qwen3-coder-next — Qwen3 Coder Next (UD-IQ2_M, unsloth)
+# agents-tiny — Agents-A1-4B (denso, 32 capas) - el modelo pequeño del mismo grupo
 # =============================================================================
 
 [model]
-name    = "qwen_next"
+name    = "agenta-tiny"
 engine  = "llama-server"
-context = 32768
+context = 262144
 
 [files]
-gguf = "Qwen3-Coder-Next-UD-Q2_K_XL.gguf"
+gguf   = "Agents-A1-4B-Q8_0.gguf"
 
 [download]
-repo = "unsloth/Qwen3-Coder-Next-GGUF"
-file = "Qwen3-Coder-Next-UD-Q2_K_XL.gguf"
-size = "26.8 GB"
+repo = "InternScience/Agents-A1-4B-Q8_0-GGUF"
+file = "Agents-A1-4B-Q8_0.gguf"
+size = "4.48 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
-    "--jinja",
-    "--temp", "1.0",
-    "--top-p", "0.95",
-    "--top-k", "40",
-    "--min-p", "0.01",
-    "--repeat-penalty", "1.0",
+    "--n-gpu-layers", "32",
     "--cache-type-k", "q8_0",
     "--cache-type-v", "q8_0",
-    "--kv-unified",
+    "--temp", "0.85",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.1",
+    "--repeat-penalty", "1.0",
+    "--reasoning-format", "auto",
     "--n-predict", "8192",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
 ]
 
 [args.level.low]

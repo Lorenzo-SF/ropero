@@ -1,54 +1,35 @@
 # =============================================================================
-# 🔥 FIRED — fable (Fable-Coder-35B-A3B)
-# =============================================================================
-#
-# Retirado: fuera del scope base. Recuperable con
-#   mv models/llama/fired/fable.toml models/llama/
-# y descargando el GGUF.
-#
-# Fable-Coder-35B-A3B — Config optimizada para RTX 5080 (16GB VRAM, 32GB RAM)
-#   - MoE 35B totales / 3B activos por token
-#   - Fine-tune Opus-4.7 reasoning + Opus-4.8 tool use sobre Qwen3.6-35B-A3B
-#   - MBPP 78.2% (+5.2 sobre base), SWE-Bench 73.4%, Terminal-Bench 51.5%
-#   - Hybrid: 48 layers (3 Gated DeltaNet + 1 Gated Attention, repetido)
-#   - MTP heads integrados (Qwen3.6 los trae)
-#
-# Resultado esperado en RTX 5080:
-#   - Prompt eval: 250-400 t/s
-#   - Gen 8k ctx:  35-50 t/s
-#   - Gen 32k ctx: 18-25 t/s
-#   - Gen 131k ctx: 8-12 t/s (KV cache limita)
-#
-# ── Tuning por VRAM disponible ─────────────────────────────────────────────
-# -cmoe 999 = TODOS los expertos a CPU (max VRAM libre para KV, gen más lento)
-# -cmoe  48 = mitad y mitad (balance)
-# -cmoe  20 = solo 20 layers con expertos en CPU
-#
-# Con 16GB VRAM lo óptimo suele ser 35-48: attention+embeddings en GPU,
-# expertos en CPU, gen un poco más lento pero context largo usable.
-#
-# El override del contexto es el canónico ROPERO_FABLE_CTX.
+# fable (Fable-Coder-35B-A3B)
 # =============================================================================
 
 [model]
 name    = "fable"
 engine  = "llama-server"
-context = 131072
+context = 262144
 
 [files]
-gguf = "fable-coder-35B-A3B-Q4_K_M.gguf"
+gguf   = "fable-coder-35B-A3B.Q2_K.gguf"
 
 [download]
-repo = "Achilles1089/fable-coder-35B-A3B-GGUF"
-file = "fable-coder-35B-A3B-Q4_K_M.gguf"
-size = "21.7 GB"
+repo = "mradermacher/fable-coder-35B-A3B-GGUF"
+file = "fable-coder-35B-A3B.Q2_K.gguf"
+size = "13.25 GB"
+
+[levels]
+# El fable razona por DEFECTO: su chat template abre <think> si no le dicen
+# lo contrario. Un coder agentic que razona antes de cada tool call es lo
+# que se enrollaba en el bucle de "Skill vault-index" 40 veces seguidas.
+#
+# Por defecto va APAGADO (lo dice el [args].base de abajo), y se activa con
+# "ropero fable --think". No hay "default" a proposito: sin nivel, el base
+# manda y el thinking esta off.
+list = ["think"]
 
 [args]
 base = [
     # ---- GPU offload ----
-    "--n-gpu-layers", "999",                            # todos los layers "GPU-eligible"
-    "--n-cpu-moe", "${env:ROPERO_FABLE_N_CPU_MOE:-30}",  # expertos MoE en CPU (ajustable)
-    "--no-kv-offload",                                  # KV cache en GPU (default on)
+    "--n-gpu-layers", "42",                            # todos los layers "GPU-eligible"
+    "--n-cpu-moe", "${env:ROPERO_FABLE_N_CPU_MOE:-2}",   # experts de las 2 primeras capas a la CPU
 
     # ---- Atención ----
     # -fa on se pone globalmente en ropero entry; no duplicar
@@ -56,17 +37,10 @@ base = [
 
     # ---- KV cache ----
     "--cache-type-k", "q4_0",                           # q4_0 en K para liberar VRAM
-    "--cache-type-v", "q8_0",                           # nunca q4_0 en V, degrada tool use
+    "--cache-type-v", "q4_0",                           # nunca q4_0 en V, degrada tool use
     "--cache-prompt",
     "--cache-reuse", "512",                             # reusa bloques KV en prompts similares
-    "--kv-unified",                                     # single user, unified buffer
     "--context-shift",                                  # rolling context en sesiones largas
-
-    # ---- Speculative decoding (MTP del propio modelo) ----
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "5",                          # hasta 5 tokens drfteados por ronda
-    "--spec-draft-n-min", "1",                          # no malgastes en rounds de 0 drafts
-    "--spec-draft-backend-sampling",                    # offload sampling a backend
 
     # ---- Batching / threads ----
     "--batch-size", "4096",
@@ -78,8 +52,7 @@ base = [
 
     # ---- Modelo / carga ----
     "--jinja",                                          # chat template Qwen3.6
-    "--chat-template-kwargs", '{"enable_thinking": false}',  # coder = directo, sin thinking
-    "--reasoning-format", "deepseek",                   # limpia tags thinking del output
+    "--reasoning", "off",                   # limpia tags thinking del output
 
     # ---- Sampling (canónico Qwen3.6 coder) ----
     "--temp", "0.6",
@@ -88,6 +61,33 @@ base = [
     "--min-p", "0.05",
     "--repeat-penalty", "1.0",                          # sin penalty (Qwen3.6 OK)
     "--repeat-last-n", "64",
+    # ---- DRY: Don't Repeat Yourself ----
+    # El fable se enrollaba en el bucle de las tool calls: emitia la MISMA
+    # llamada ("Skill vault-index") 40 veces seguidas, y opencode abortaba
+    # con "MAXIMUM STEPS REACHED". En el log del server se veia:
+    #   sampler chain: logits -> ?penalties -> ?dry -> ... -> top_k -> ... -> min_p -> ?xtc -> temp-ext -> dist
+    # El "?" delante de dry y de penalties = DESACTIVADOS. Sin nada que
+    # penalice la repeticion, el sampler hace justo lo que le piden: repetir
+    # el token mas probable. Y con un Q2_K (2,98 BPW) ese token es siempre
+    # el mismo.
+    #
+    # El DRY penaliza la repeticion de secuencias (y los sequence breakers
+    # cortan la penalizacion en los sitios donde repetir es NORMAL: saltos de
+    # linea, ":", "}", cierre de bloque de codigo...). Esta es la MISMA
+    # receta que ya llevan el qwopus y el ornith, que son del mismo arch
+    # (qwen35moe) y del mismo tipo de modelo.
+    #
+    # OJO: OpenCode manda temperature/top_p/top_k/min_p en cada peticion, pero
+    # NO manda repeat_penalty, ni frequency_penalty, ni presence_penalty, ni
+    # dry_multiplier. Por eso estos valores del launcher se aplican de
+    # verdad (el server los usa como default y solo los pisa si vienen en el
+    # body: tools/server/server-schema.cpp, "has_value").
+    "--dry-multiplier", "0.8",
+    "--dry-base", "1.75",
+    "--dry-allowed-length", "5",
+    "--dry-penalty-last-n", "1024",
+    "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
+    "--samplers", "min_p;top_k;top_p;temp;dry",
     "--seed", "-1",
 
     # ---- Generación ----
@@ -95,7 +95,20 @@ base = [
     "--keep", "1024",                                   # preserva system+tools al hacer context-shift
 
     # ---- Misc ----
-    "--load-mode", "none",                              # mmap off (con mlock o manual swap)
+    "--load-mode", "auto",                              # mmap off (con mlock o manual swap)
     "--metrics",                                        # /metrics endpoint
     "--perf",                                           # libllama perf timings
 ]
+
+# El thinking, a pedido: "ropero fable --think".
+#
+# El base lleva "enable_thinking": false y este nivel lleva true. Los dos
+# van en el argv, en este orden (base, luego nivel), y el ultimo gana: el
+# server se queda con la kwargs del nivel. En el arg.cpp de llama.cpp el
+# --chat-template-kwargs se procesa en orden y cada uno pisa al anterior.
+#
+# OJO: esto NO es lo mismo que el nivel "high" del qwopus. Ahi el nivel
+# cambia el effort del razonamiento; aqui no hay effort (el fable no lo
+# trae), solo se enciende o se apaga.
+[args.level.think]
+base = ["--chat-template-kwargs", '{"enable_thinking": true}']

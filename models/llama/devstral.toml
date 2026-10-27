@@ -1,0 +1,35 @@
+# =============================================================================
+# devstral (Devstral Small 2 24B Instruct)
+# =============================================================================
+
+[model]
+name    = "devstral"
+engine  = "llama-server"
+context = 131072
+
+[files]
+gguf   = "Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf"
+
+[download]
+repo = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
+file = "Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf"
+size = "11.47 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "41",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--chat-template-kwargs", '{"enable_thinking": false}',
+    "--reasoning-format", "deepseek",
+    "--temp", "0.6",
+    "--top-k", "20",
+    "--top-p", "0.95",
+    "--min-p", "0.05",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--n-predict", "4096",
+    "--keep", "1024",
+
+
+]

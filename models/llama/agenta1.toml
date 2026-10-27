@@ -1,47 +1,41 @@
+# =============================================================================
+# agenta1 — Agents-A1-35B-A3B (MoE híbrido 256 expertos, 8 activos)
+# =============================================================================
 [model]
 name    = "agenta1"
 engine  = "llama-server"
-context = 131072
+context = 262144
 
 [files]
-gguf   = "Agents-A1-35B-A3B-MXFP4_MOE_Q8_0-Imatrix.gguf"
+gguf   = "Agents-A1-IQ2_M.gguf"
 
 [download]
-repo = "jashepp/Agents-A1-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF"
-file = "Agents-A1-35B-A3B-MXFP4_MOE_Q8_0-Imatrix.gguf"
-size = "21.167 GB"
+repo = "KikoCis/Agents-A1-IQ2_M-GGUF"
+file = "Agents-A1-IQ2_M.gguf"
+size = "11.66 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "-1",
-    "--jinja",
+    "--n-gpu-layers", "41",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.55",
     "--top-p", "0.90",
     "--top-k", "15",
     "--min-p", "0.15",
     "--repeat-penalty", "1.08",
-    "--presence-penalty", "0.00",
     "--dry-multiplier", "0.8",
     "--dry-base", "1.75",
     "--dry-allowed-length", "5",
     "--dry-penalty-last-n", "1024",
     "--dry-sequence-breaker", '["\n", ":", " ", "\t", "\"", ","]',
     "--samplers", "min_p;top_k;top_p;temp;dry",
-    "--reasoning", "on",
     "--reasoning-budget", "4096",
-    "--chat-template-kwargs", '{"enable_thinking": true}',
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "--kv-unified",
     "--n-predict", "8192",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-    "--load-mode", "none",
 ]
 
 [args.level.low]

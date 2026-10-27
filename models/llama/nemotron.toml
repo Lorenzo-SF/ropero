@@ -1,0 +1,53 @@
+# =============================================================================
+# nemotron — NVIDIA-Nemotron-3.5-Lightning-30B-A3B (MoE híbrido Mamba)
+# =============================================================================
+
+[model]
+name    = "nemotron"
+engine  = "llama-server"
+# context = 5242887
+context = 266144
+# context = 131072
+
+[files]
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+
+[download]
+repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+size = "19.76 GB"
+
+[levels]
+list = ["think"]
+
+[flags]
+list = ["mtp"]
+
+[args]
+base = [
+    "--n-gpu-layers", "54",                            # todos los layers GPU-eligible
+    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-23}",   # experts de las 18 primeras capas a la CPU
+    "--cache-type-k", "q4_0",                          # agresivo (mamba SSM no usa esto, attn sí)
+    "--cache-type-v", "q4_0",
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "0",                                    # desactivado (solo top-p)
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",                         # sin penalty
+    "--repeat-last-n", "64",
+    "--n-predict", "8192",                             # reasoning puede requerir más
+    "--keep", "1024",
+
+]
+
+[args.level.think]
+base = ["--chat-template-kwargs", '{"enable_thinking": true}']
+
+[args.flag.mtp]
+base = [
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "3",
+    "--spec-draft-type-k", "q4_0",
+    "--spec-draft-type-v", "q4_0"
+]
+

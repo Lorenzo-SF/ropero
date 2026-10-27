@@ -1,0 +1,34 @@
+# =============================================================================
+# muse (Muse-Glimmer-30B)
+# =============================================================================
+
+[model]
+name    = "muse"
+engine  = "llama-server"
+context = 131072
+
+[files]
+gguf   = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
+
+[download]
+repo = "unsloth/Muse-Glimmer-30B-GGUF"
+file = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
+size = "13.36 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "53",                            # ~22 de 52 layers en GPU; resto CPU
+    "--swa-full",                                      # CRÍTICO: sliding window pattern [L,L,L,G]
+    "--rope-freq-base", "500000",                      # θ=500k del repo
+    "--cache-type-k", "q4_0",                          # agresivo (SWA usa ventanas pequeñas)
+    "--cache-type-v", "q4_0",
+    "--reasoning-format", "deepseek",                  # limpia tags <think> del output
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "64",
+    "--min-p", "0.00",
+    "--repeat-penalty", "1.0",                         # sin penalty (canónico)
+    "--repeat-last-n", "64",
+    "--n-predict", "4096",
+    "--keep", "1024",
+]

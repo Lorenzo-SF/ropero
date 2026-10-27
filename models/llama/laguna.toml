@@ -1,0 +1,44 @@
+# =============================================================================
+# laguna — Laguna XS 2.1 (poolside, MoE 33B totales / 3B activos)
+# =============================================================================
+
+[model]
+name    = "laguna"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf = "Laguna-XS-2.1-APEX-I-Mini.gguf"
+
+[download]
+repo = "mudler/Laguna-XS-2.1-APEX-GGUF"
+file = "Laguna-XS-2.1-APEX-I-Mini.gguf"
+size = "12.83 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "41",
+    "--n-cpu-moe", "${env:ROPERO_LAGUNA_N_CPU_MOE:-7}",   # experts de las 4 primeras capas a la CPU
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+    "--temp", "1.0",
+    "--top-k", "20",
+    "--top-p", "1.0",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--n-predict", "4096",
+    "--keep", "1024",
+    "--reasoning-format", "deepseek",
+]
+
+[levels]
+list    = ["thinking", "no-thinking"]
+default = "thinking"
+
+[args.level.thinking]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.no-thinking]
+chat_template_kwargs = { enable_thinking = false }
+

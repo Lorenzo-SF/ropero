@@ -1,5 +1,5 @@
 # =============================================================================
-# gptoss — gpt-oss-20b (UD-Q8_K_XL) con razonamiento por nivel
+# gptoss — gpt-oss-20b (MXFP4) con razonamiento por nivel
 # =============================================================================
 
 [model]
@@ -13,7 +13,7 @@ gguf = "openai_gpt-oss-20b-MXFP4.gguf"
 [download]
 repo = "bartowski/openai_gpt-oss-20b-GGUF-MXFP4-Experimental"
 file = "openai_gpt-oss-20b-MXFP4.gguf"
-size = "13.2 GB"
+size = "12.11 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -25,54 +25,27 @@ designer = "medium"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
+    "--n-gpu-layers", "25",
     "--temp", "1.0",
     "--min-p", "0.0",
     "--top-p", "1.0",
-    "--top-k", "0",
+    "--top-k", "${env:ROPERO_GPTOSS_TOPK:-40}",
     "--threads", "12",
     "--threads-batch", "24",
     "--reasoning-format", "auto",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--chat-template-kwargs", '{"reasoning_effort": "${env:ROPERO_GPTOSS_REASONING:-medium}"}',
-    "--cache-type-k", "${env:ROPERO_GPTOSS_KV:-f16}",
-    "--cache-type-v", "${env:ROPERO_GPTOSS_KV:-f16}",
-    "--jinja",
-    "--kv-unified",
-    "--kv-offload",
-    "--load-mode", "auto",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
 ]
+
 
 [args.level.low]
-reasoning_effort = "low"
-base = [
-    "--spec-type", "ngram-simple",
-    "--spec-ngram-simple-size-n", "6",
-    "--spec-ngram-simple-size-m", "16",
-    "--spec-draft-n-min", "1",
-    "--spec-draft-n-max", "2",
-]
+chat_template_kwargs = { enable_thinking = false }
 
 [args.level.medium]
-reasoning_effort = "medium"
-base = [
-    "--spec-type", "ngram-simple",
-    "--spec-ngram-simple-size-n", "12",
-    "--spec-ngram-simple-size-m", "48",
-    "--spec-draft-n-min", "1",
-    "--spec-draft-n-max", "3",
-]
+chat_template_kwargs = { enable_thinking = true }
 
 [args.level.high]
-reasoning_effort = "high"
-base = [
-    "--spec-type", "ngram-simple",
-    "--spec-ngram-simple-size-n", "8",
-    "--spec-ngram-simple-size-m", "32",
-    "--spec-draft-n-min", "1",
-    "--spec-draft-n-max", "4",
-]
+chat_template_kwargs = { enable_thinking = true }

@@ -1,5 +1,5 @@
 # =============================================================================
-# qwopus-3.6-coder — Qwopus3.6 35B-A3B Coder (MXFP4 MOE Hybrid Imatrix)
+# qwopus — Qwopus3.6-35B-A3B-Coder (MoE híbrido, como el Agents-A1)
 # =============================================================================
 
 [model]
@@ -8,29 +8,22 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf          = "Qwopus3.6-35B-A3B-Coder-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-chat_template = "chat_template.jinja"
+gguf   = "Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf"
 
 [download]
-repo = "jashepp/Qwopus3.6-35B-A3B-Coder-MXFP4_MOE_Hybrid-Imatrix-GGUF"
-file = "Qwopus3.6-35B-A3B-Coder-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-size = "20.7 GB"
-
-[download.aux.chat_template]
-file = "chat_template.jinja"
-name = "chat_template.jinja"
-size = "0.01 GB"
+repo = "xero0000/Qwopus3.6-35B-A3B-Coder-vram13-GGUF"
+file = "Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf"
+size = "13.53 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
-    "--jinja",
-    "--chat-template-file", "${chat_template}",
-    "--n-cpu-moe", "20",
+    "--n-gpu-layers", "42",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.60",
     "--top-k", "40",
     "--top-p", "0.95",
@@ -41,23 +34,15 @@ base = [
     "--dry-penalty-last-n", "1024",
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
     "--samplers", "min_p;top_k;top_p;temp;dry",
-    "--reasoning", "off",
-    "--chat-template-kwargs", '{"enable_thinking": true}',
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "--kv-unified",
     "--n-predict", "8192",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-    "--load-mode", "none",
 ]
 
 [args.level.low]
 chat_template_kwargs = { enable_thinking = false }
 
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = true }
+chat_template_kwargs = { enable_thinking = false }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
+

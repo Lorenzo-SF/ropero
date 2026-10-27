@@ -1,5 +1,5 @@
 # =============================================================================
-# ornith-1.5 — Ornith 1.5 35B-A3B (MXFP4 MOE Hybrid Imatrix)
+# ornith — Ornith-1.5-35B-A3B (MoE híbrido, como el Agents-A1)
 # =============================================================================
 
 [model]
@@ -8,58 +8,35 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf          = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-chat_template = "chat_template.jinja"
+gguf   = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
 
 [download]
-repo = "jashepp/Ornith-1.5-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF"
-file = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-size = "20.7 GB"
-
-[download.aux.chat_template]
-file = "chat_template.jinja"
-name = "chat_template.jinja"
-size = "0.01 GB"
+repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
+file = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
+size = "12.54 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "99",
-    "--jinja",
-    "--chat-template-file", "${chat_template}",
-
-    "--n-cpu-moe", "18",
-
+    "--n-gpu-layers", "42",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.60",
     "--top-k", "35",
     "--top-p", "0.93",
     "--min-p", "0.10",
     "--top-n-sigma", "0.60",
-
     "--dry-multiplier", "0.8",
     "--dry-base", "1.75",
     "--dry-allowed-length", "3",
     "--dry-penalty-last-n", "1024",
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
-
     "--samplers", "top_k;top_p;min_p;dry;temp;top_n_sigma",
-
-    "--reasoning", "on",
     "--reasoning-budget", "32768",
-    "--chat-template-kwargs", '{"enable_thinking": true}',
-
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
-    "--kv-unified",
-
     "--n-predict", "8192",
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-    "--load-mode", "none",
 ]
 
 [args.level.low]
@@ -70,3 +47,4 @@ chat_template_kwargs = { enable_thinking = true }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }
+
