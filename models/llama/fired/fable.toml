@@ -36,8 +36,8 @@ base = [
     # --swa-full NO aplicar — Fable no tiene SWA
 
     # ---- KV cache ----
-    "--cache-type-k", "turbo3",                           # q4_0 en K para liberar VRAM
-    "--cache-type-v", "turbo3",                           # nunca q4_0 en V, degrada tool use
+    "--cache-type-k", "q4_0",                           # q4_0 en K para liberar VRAM
+    "--cache-type-v", "q4_0",                           # nunca q4_0 en V, degrada tool use
     "--cache-prompt",
     "--cache-reuse", "512",                             # reusa bloques KV en prompts similares
     "--context-shift",                                  # rolling context en sesiones largas
@@ -95,7 +95,7 @@ base = [
     "--keep", "1024",                                   # preserva system+tools al hacer context-shift
 
     # ---- Misc ----
-    "--load-mode", "none",                              # mmap off (con mlock o manual swap)
+    "--load-mode", "auto",                              # mmap off (con mlock o manual swap)
     "--metrics",                                        # /metrics endpoint
     "--perf",                                           # libllama perf timings
 ]

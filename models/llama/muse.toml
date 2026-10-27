@@ -17,46 +17,18 @@ size = "13.36 GB"
 
 [args]
 base = [
-    # ---- GPU offload (modelo denso 30B, 16GB VRAM justos) ----
     "--n-gpu-layers", "53",                            # ~22 de 52 layers en GPU; resto CPU
-
-    # ---- Atención ----
-    # -fa on lo pone ropero entry globalmente; no duplicar
     "--swa-full",                                      # CRÍTICO: sliding window pattern [L,L,L,G]
-
-    # ---- Positional encoding ----
     "--rope-freq-base", "500000",                      # θ=500k del repo
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",                          # agresivo (SWA usa ventanas pequeñas)
-    "--cache-type-v", "turbo3",
-    "--cache-prompt",
-    "--context-shift",
-
-    # ---- Modelo / carga ----
-    "--jinja",                                         # chat template Muse (jinja)
+    "--cache-type-k", "q4_0",                          # agresivo (SWA usa ventanas pequeñas)
+    "--cache-type-v", "q4_0",
     "--reasoning-format", "deepseek",                  # limpia tags <think> del output
-    # Reasoning_strength se pasa en el SYSTEM PROMPT del request,
-    # NO como chat-template-kwargs (Muse usa system prompt nativo).
-    "--load-mode", "none",                             # mmap off
-
-    # ---- Sampling (canónico Meta Muse) ----
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "64",
     "--min-p", "0.00",
     "--repeat-penalty", "1.0",                         # sin penalty (canónico)
     "--repeat-last-n", "64",
-
-    # ---- Batching / threads ----
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-
-    # ---- Generación ----
     "--n-predict", "4096",
     "--keep", "1024",
-
-    # ---- Misc ----
-    # --log-verbosity lo pone ropero entry (default 4)
 ]

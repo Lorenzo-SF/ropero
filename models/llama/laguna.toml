@@ -17,49 +17,22 @@ size = "12.83 GB"
 
 [args]
 base = [
-    # ---- GPU offload: las 40 capas del GGUF, enteras ----
     "--n-gpu-layers", "41",
     "--n-cpu-moe", "${env:ROPERO_LAGUNA_N_CPU_MOE:-7}",   # experts de las 4 primeras capas a la CPU
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-    "--cache-prompt",
-    "--context-shift",
-
-    # ---- Sampling (el canonico de poolside para sus benchmarks) ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "1.0",
     "--top-k", "20",
     "--top-p", "1.0",
     "--min-p", "0.0",
     "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
-    "--seed", "-1",
-
-    # ---- Batching / threads ----
-    "--batch-size", "4096",
-    "--ubatch-size", "256",
-    "--parallel", "1",
-    "--threads", "12",
-    "--threads-batch", "16",
-    "--poll", "30",
-
-    # ---- Generacion ----
     "--n-predict", "4096",
     "--keep", "1024",
-
-    # ---- Modelo / carga ----
-    "--jinja",
     "--reasoning-format", "deepseek",
-    "--load-mode", "none",
-    "--metrics",
-    "--perf",
 ]
 
 [levels]
-# El Laguna no tiene niveles de razonamiento: el thinking se enciende o se
-# apaga. Se deja la lista vacia a proposito, para que el menu de niveles no
-# prometa algo que el modelo no tiene.
 list    = ["thinking", "no-thinking"]
 default = "thinking"
 

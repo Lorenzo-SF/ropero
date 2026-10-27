@@ -110,8 +110,8 @@ base = [
     "--repeat-penalty", "1.0",
 
     # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",                 # compute buffer ~0,9 GB
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",                 # compute buffer ~0,9 GB
 
     "--n-predict", "16384",
     # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----

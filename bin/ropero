@@ -2023,12 +2023,23 @@ start_model() {
                 --api-key "$LLAMA_API_KEY"
                 --alias "$model"
                 --ctx-size "$ctx_size"
-                --threads 12
-                --threads-batch 24
-                --flash-attn on
+                --threads 10
+                --threads-batch 20
+                -fa on
                 --jinja
-                --log-verbosity 4
+                --log-verbosity 3
                 --parallel 1
+                --cache-prompt
+                --cache-reuse 512
+                --context-shift
+                --batch-size 2048
+                --ubatch-size 512
+                --poll 30
+                --load-mode none
+                --metrics
+                --perf
+                --seed -1
+                --kv-offload
                 --kv-unified                     # global: el KV unificado lo
                                                 # necesitan todos (y lo pidia
                                                 # 14 de 15 TOMLs, duplicado)
@@ -2884,8 +2895,8 @@ ropero_install_llama() {
         ropero_warn "$LLAMA_DIR existe pero no es un clon de git; lo sustituyo"
         rm -rf "$LLAMA_DIR"
     fi
-    # if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
-    if ! git clone -q git@github.com:AtomicBot-ai/atomic-llama-cpp-turboquant.git "$LLAMA_DIR"; then
+    if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+    # if ! git clone -q git@github.com:AtomicBot-ai/atomic-llama-cpp-turboquant.git "$LLAMA_DIR"; then
         ropero_err "clone de llama.cpp falló"
         return 0
     fi

@@ -17,18 +17,10 @@ size = "12.85 GB"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "49",
     "--n-cpu-moe", "${env:ROPERO_QWENCODER_N_CPU_MOE:-22}",   # experts de las 22 primeras capas a la CPU
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
-
-    # ---- KV cache ----
     "--cache-type-k", "q4_0",
     "--cache-type-v", "q4_0",
-
-    # ---- Sampling del Qwen3-Coder ----
     "--temp", "0.7",
     "--top-p", "0.8",
     "--top-k", "20",
@@ -37,13 +29,6 @@ base = [
     "--repeat-last-n", "64",
     "--reasoning-format", "deepseek",
     "--keep", "1024",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "512",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 

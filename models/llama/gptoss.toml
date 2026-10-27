@@ -33,18 +33,11 @@ base = [
     "--threads", "12",
     "--threads-batch", "24",
     "--reasoning-format", "auto",
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--cache-prompt",
-    "--context-shift",
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-    "--jinja",
-    "--kv-offload",
-    "--load-mode", "auto",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
 ]
 
 

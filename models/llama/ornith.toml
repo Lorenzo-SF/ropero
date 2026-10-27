@@ -21,17 +21,9 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "42",
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-
-    # ---- Sampling del Ornith ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.60",
     "--top-k", "35",
     "--top-p", "0.93",
@@ -44,14 +36,7 @@ base = [
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
     "--samplers", "top_k;top_p;min_p;dry;temp;top_n_sigma",
     "--reasoning-budget", "32768",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]

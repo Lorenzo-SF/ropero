@@ -17,45 +17,19 @@ size = "13.21 GB"
 
 [args]
 base = [
-    # ---- GPU offload: las 40 capas, el numero real del GGUF ----
-    # (block_count = 40 leido de la cabecera del GGUF, no de un README)
     "--n-gpu-layers", "41",
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",                          # agresivo (10 capas de atencion)
-    "--cache-type-v", "turbo3",
-    "--cache-prompt",
-    "--context-shift",
-
-    # ---- Positional encoding ----
+    "--cache-type-k", "q4_0",                          # agresivo (10 capas de atencion)
+    "--cache-type-v", "q4_0",
     "--rope-freq-base", "10000000",                    # theta del repo
-
-    # ---- Sampling ----
     "--temp", "1.0",                                   # canonico del repo
     "--top-p", "0.95",
     "--top-k", "20",
     "--min-p", "0.0",
     "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
-
-    # ---- Batching / threads ----
-    "--batch-size", "4096",
-    "--ubatch-size", "256",                            # el compute buffer escala con esto
-    "--parallel", "1",
-    "--threads", "12",
-    "--threads-batch", "16",
-    "--poll", "30",
-
-    # ---- Generacion ----
     "--n-predict", "4096",
     "--keep", "1024",
-
-    # ---- Modelo / carga ----
-    "--jinja",                                         # chat template del modelo
     "--reasoning-format", "deepseek",                  # limpia tags <think>
-    "--load-mode", "none",                             # mmap off
-    "--metrics",
-    "--perf",
 ]
 
 [levels]

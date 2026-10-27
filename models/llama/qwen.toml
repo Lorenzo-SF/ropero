@@ -5,15 +5,15 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 163840
+context = 131072
 
 [files]
 gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-IQ2_M.gguf"
-size = "12.80 GB"
+file = "Qwen3.8-27B-UD-IQ3_S.gguf"
+size = "11.20 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
@@ -24,27 +24,18 @@ list = ["mtp"]
 
 [args]
 base = [
-    "--n-gpu-layers", "66",
-
-    "--cache-type-k", "turbo3",              # el kernel de FA no tiene q4_0+turbo3
-    "--cache-type-v", "turbo3",              # (fattn.cu:2935 -> GGML_ABORT)
-
+    "--n-gpu-layers", "-1",
+    "--cache-type-k", "q4_0",              # el kernel de FA no tiene q4_0+q4_0
+    "--cache-type-v", "q4_0",              # (fattn.cu:2935 -> GGML_ABORT)
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
     "--min-p", "0.0",
     "--repeat-penalty", "1.0",
-
-    "--batch-size", "512",
-    "--ubatch-size", "256",         
-
     "--n-predict", "16384",
-
     "--reasoning-preserve",
     "--reasoning-budget", "12288",    
     "--checkpoint-min-step","256",
-
-    "--load-mode", "mlock",
 ]
 
 [args.level.low]
@@ -63,8 +54,8 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 base = [
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "turbo3",
-    "--spec-draft-type-v", "turbo3",
+    "--spec-draft-type-k", "q4_0",
+    "--spec-draft-type-v", "q4_0",
     "--no-spec-draft-backend-sampling",
 ]
 

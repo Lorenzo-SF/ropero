@@ -94,5 +94,5 @@ base = [
                                    # para salidas masivas
     "--keep", "1024",
 
-    "--load-mode", "none",
+    "--load-mode", "auto",
 ]
