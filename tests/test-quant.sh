@@ -238,30 +238,43 @@ check "6j. sube el imatrix de ESTA cuantizacion" \
 check "6k. y NO sube el de otro modelo" \
       "$(cond '! grep -q "otro-imatrix.gguf" "$FAKE_LOG"')" "$(cat "$FAKE_LOG")"
 
-# ══ 7. los niveles de razonamiento del fable y del nemotron ═══════════════
-for m in fable nemotron; do
-    out="$(cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name "$m" 2>&1)"; rc=$?
-    check "7a-$m. los args se montan"        "$(cond '[ $rc -eq 0 ]')" "$out"
-    check "7b-$m. declara el nivel think" \
-          "$(cond 'cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name "$m" --level think >/dev/null 2>&1')" "$out"
-    # El interruptor: el motor deprecó el kwarg "enable_thinking" a favor de
-    # "--reasoning on/off" (que es lo que pone enable_thinking en el
-    # template). Se acepta cualquiera de los dos mecanismos.
-    # Los args se imprimen UNO POR LINEA, asi que hay que normalizarlos a una
-    # sola linea antes de buscar el interruptor.
-    flat="$(printf %s "$out" | tr '\n' ' ')"
-    check "7c-$m. sin nivel, el thinking esta apagado" \
-          "$(cond 'printf %s "$flat" | grep -qE "enable_thinking\"?: false|--reasoning (off)"')" "$out"
-    out2="$(cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name "$m" --level think 2>&1)"
-    flat2="$(printf %s "$out2" | tr '\n' ' ')"
-    check "7d-$m. con think, el thinking se enciende" \
-          "$(cond 'printf %s "$flat2" | grep -qE "enable_thinking\"?: true|--reasoning (on)"')" "$out2"
-    check "7e-$m. con think, el false va ANTES que el true (gana el ultimo)" \
-          "$(cond 'printf %s "$flat2" | grep -oE "enable_thinking\"?: (true|false)|--reasoning (on|off)" | head -1 | grep -qE "false|off"')" "$out2"
-done
+# ══ 7. los niveles de razonamiento del fable ═════════════════════════════
+# El fable tiene el interruptor: sin nivel, el thinking esta apagado; con
+# el nivel "think", se enciende.
+#
+# El interruptor se puede poner de dos maneras: el kwarg "enable_thinking"
+# (el que el motor ya depreca) o "--reasoning on/off" (que es lo que el
+# motor pone en el template). Se acepta cualquiera de los dos.
+m="fable"
+out="$(cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name "$m" 2>&1)"; rc=$?
+check "7a-$m. los args se montan"        "$(cond '[ $rc -eq 0 ]')" "$out"
+check "7b-$m. declara el nivel think" \
+      "$(cond 'cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name "$m" --level think >/dev/null 2>&1')" "$out"
+# Los args se imprimen UNO POR LINEA, asi que hay que normalizarlos a una
+# sola linea antes de buscar el interruptor.
+flat="$(printf %s "$out" | tr '\n' ' ')"
+check "7c-$m. sin nivel, el thinking esta apagado" \
+      "$(cond 'printf %s "$flat" | grep -qE "enable_thinking\"?: false|--reasoning (off)"')" "$out"
+out2="$(cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name "$m" --level think 2>&1)"
+flat2="$(printf %s "$out2" | tr '\n' ' ')"
+check "7d-$m. con think, el thinking se enciende" \
+      "$(cond 'printf %s "$flat2" | grep -qE "enable_thinking\"?: true|--reasoning (on)"')" "$out2"
+check "7e-$m. con think, el false va ANTES que el true (gana el ultimo)" \
+      "$(cond 'printf %s "$flat2" | grep -oE "enable_thinking\"?: (true|false)|--reasoning (on|off)" | head -1 | grep -qE "false|off"')" "$out2"
+
+# El nemotron razona SIEMPRE (no tiene interruptor): su template pone
+# "enable_thinking if enable_thinking is defined else True" y el TOML lo
+# deja en true. No hay nivel "think" que lo encienda o lo apague.
+outn="$(cd "$REPO" && "$PYTHON_BIN" bin/_modelconf.py args --root models --name nemotron 2>&1)"; rcn=$?
+flatn="$(printf %s "$outn" | tr '\n' ' ')"
+check "7f-nemotron. los args se montan" "$(cond '[ $rcn -eq 0 ]')" "$outn"
+check "7g-nemotron. razona por defecto (thinking en true)" \
+      "$(cond 'printf %s "$flatn" | grep -qE "enable_thinking\"?: true|--reasoning (on)"')" "$outn"
+check "7h-nemotron. NO tiene el interruptor apagado" \
+      "$(cond '! printf %s "$flatn" | grep -qE "enable_thinking\"?: false|--reasoning (off)"')" "$outn"
 
 # el nivel think solo existe en estos dos: el gptoss no lo acepta
-check "7f. el gptoss no acepta el nivel think" \
+check "7i. el gptoss no acepta el nivel think" \
       "$(cond 'cd "$REPO" && ! "$PYTHON_BIN" bin/_modelconf.py args --root models --name gptoss --level think >/dev/null 2>&1')"
 
 # ── resumen ────────────────────────────────────────────────────────────────
