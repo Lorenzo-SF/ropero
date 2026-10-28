@@ -53,6 +53,12 @@ base = [
     # ---- Modelo / carga ----
     "--jinja",                                          # chat template Qwen3.6
     "--reasoning", "off",                   # limpia tags thinking del output
+    # OJO: "--reasoning off" NO apaga el thinking: dice como se parsea la
+    # salida, no si el modelo razona. El que lo apaga de verdad es el
+    # chat template: su default es "enable_thinking if enable_thinking is
+    # defined else True", o sea que sin esto el fable razona siempre. El
+    # nivel "think" pone el true despues (gana el ultimo) y lo enciende.
+    "--chat-template-kwargs", '{"enable_thinking": false}',  # OFF por defecto
 
     # ---- Sampling (canónico Qwen3.6 coder) ----
     "--temp", "0.6",

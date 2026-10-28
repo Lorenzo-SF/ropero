@@ -10,13 +10,48 @@ context = 266144
 # context = 131072
 
 [files]
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-F16.gguf"
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 
-[download]
-repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-F16.gguf"
-size = "19.76 GB"
-
+# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
+#
+# Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
+# sus claves son las mismas que acepta "ropero gguffer". El que la ejecuta
+# es el gguffer de verdad, asi que "ropero install models nemotron" y el
+# comando de abajo hacen EXACTAMENTE lo mismo.
+#
+#   ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 \
+#       --quant "NVFP4" \
+#       --imatrix-repo bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF \
+#       --imatrix-file NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf \
+#       --out "$HOME/models/gguf/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf" \
+#       --keep-source
+#       --quant NVFP4 \
+#       --imatrix-repo bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF \
+#       --imatrix-file NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf \
+#       --keep-source
+#
+# LOS PESOS VIENEN DEL BF16, NO DEL NVFP4: el repo "...-NVFP4" ya viene
+# cuantizado (trae hf_quant_config.json), y cuantizar encima de eso el
+# motor lo rechaza:
+#     llama_model_quantize: failed to quantize:
+#     requantizing from type nvfp4 is disabled
+# El gguffer lo comprueba ANTES de bajar los 65 GB y avisa.
+#
+# EL GGUF VA SIN LA CABEZA MTP (52 bloques, nextn_predict_layers=0). El
+# checkpoint BF16 trae 270 tensores "mtp.*", pero el conversor de esta
+# arquitectura los deja fuera (no tiene export de MTP). Un GGUF con la MTP
+# EMBEBIDA (53 bloques) NO CARGA con este motor:
+#     done_getting_tensors: wrong number of tensors; expected 417, got 408
+# (el atomic no lee la metadata "nextn_predict_layers", asi que cuenta 53
+# capas y se queda sin usar 9 tensores del bloque 52).
+[build]
+repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+quant        = "NVFP4"
+imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "65.8 GB"
 [levels]
 list = ["think"]
 
@@ -25,17 +60,18 @@ list = ["mtp"]
 
 [args]
 base = [
-    "--n-gpu-layers", "54",                            
-    "--n-cpu-moe", "15",   
-    "--cache-type-k", "turbo3",                          
+    "--chat-template-kwargs", '{"enable_thinking": false}',  # OFF por defecto
+    "--n-gpu-layers", "54",
+    "--n-cpu-moe", "15",
+    "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "1.0",
     "--top-p", "0.95",
-    "--top-k", "0",                                    
+    "--top-k", "0",
     "--min-p", "0.0",
-    "--repeat-penalty", "1.0",                         
+    "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
-    "--n-predict", "8192",                             
+    "--n-predict", "8192",
     "--keep", "1024",
 
 ]
@@ -44,10 +80,15 @@ base = [
 base = ["--chat-template-kwargs", '{"enable_thinking": true}']
 
 [args.flag.mtp]
+# OJO: este GGUF NO trae la cabeza MTP (52 bloques, nextn=0), y esta arch
+# (nemotron_h_moe) no la lee aunque el GGUF la trajera. Con "--flag mtp" el
+# server pide un contexto MTP y aborta:
+#     "context type MTP requested but model doesn't contain MTP layers"
+# La MTP de este modelo va aparte (el fichero "mtp-*.gguf" de tngtech), como
+# modelo de draft, no embebida.
 base = [
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "3",
     "--spec-draft-type-k", "turbo3",
     "--spec-draft-type-v", "turbo3"
 ]
-

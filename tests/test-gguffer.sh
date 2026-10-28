@@ -282,13 +282,29 @@ chmod +x "$BIN_DIR/hf"
 # va partido en shards). Con este curl se falsea SOLO esa llamada.
 cat >"$BIN_DIR/curl" <<'EOF'
 #!/usr/bin/env bash
-# Si la URL es la API de un modelo, se devuelve la lista de ficheros.
+# Un curl fake: la API de HuggingFace con la lista de ficheros de un repo.
+#
+# Honra el "-o FICHERO" como el curl de verdad: si no, el codigo que
+# comprueba un JSON ("_gguffer_es_json") receberia un fichero vacio y
+# pensaria que el repo no existe.
+_out=""
+_prev=""
+for a in "$@"; do
+    [[ "$_prev" == "-o" ]] && _out="$a"
+    _prev="$a"
+done
+_emit() { # _emit <contenido>
+    if [[ -n "$_out" ]]; then
+        printf '%s\n' "$1" > "$_out"
+    else
+        printf '%s\n' "$1"
+    fi
+}
 for a in "$@"; do
     case "$a" in
         https://huggingface.co/api/models/*)
             repo="${a##*/}"
-            cat <<JSON
-{"siblings":[
+            _emit '{"siblings":[
  {"rfilename":"README.md"},
  {"rfilename":"Qwen3.8-27B-imatrix.gguf"},
  {"rfilename":"mmproj-Qwen3.8-27B-bf16.gguf"},
@@ -296,9 +312,44 @@ for a in "$@"; do
  {"rfilename":"Qwen3.8-27B-Q8_0.gguf"},
  {"rfilename":"Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf"},
  {"rfilename":"Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00002-of-00002.gguf"}
-]}
-JSON
+]}'
             exit 0 ;;
+        # El filtro base_model: de la API (los quants ya publicados).
+        "https://huggingface.co/api/models?filter=base_model:"*)
+            _emit '[{"id":"bartowski/Qwen3.8-27B-GGUF","tags":["gguf","base_model:Qwen/Qwen3.8-27B"]}]'
+            exit 0 ;;
+        # El config.json de un repo. FAKE_QUANT_CONFIG=1 lo hace declara
+        # cuantizado (que es como se detecta un checkpoint ya cuantizado).
+        # Solo existe para los repos "owner/...": para el resto, 404, como
+        # en la vida real (un repo que no existe NO tiene config.json).
+        https://huggingface.co/*/raw/main/config.json)
+            case "$a" in
+                https://huggingface.co/owner/*) ;;
+                *) exit 22 ;;
+            esac
+            # FAKE_QUANT_CONFIG=1 declara cuantizado SOLO el repo con
+            # sufijo de quant: el hermano sin cuantizar tiene que existir
+            # y estar limpio, que es justo lo que se busca.
+            # El repo se saca de la URL: "owner/modelo-NVFP4/raw/main/config.json".
+            _repo="${a#https://huggingface.co/}"; _repo="${_repo%%/raw/*}"
+            if [[ "${FAKE_QUANT_CONFIG:-0}" == "1" && "$_repo" == *-NVFP4 ]]; then
+                _emit '{"model_type":"qwen3","quantization_config":{"quant_method":"modelopt"}}'
+            else
+                _emit '{"model_type":"qwen3"}'
+            fi
+            exit 0 ;;
+        # El hf_quant_config.json: si existe, el checkpoint ya viene cuantizado.
+        https://huggingface.co/*/raw/main/hf_quant_config.json)
+            case "$a" in
+                https://huggingface.co/owner/*) ;;
+                *) exit 22 ;;
+            esac
+            _repo="${a#https://huggingface.co/}"; _repo="${_repo%%/raw/*}"
+            if [[ "${FAKE_QUANT_CONFIG:-0}" == "1" && "$_repo" == *-NVFP4 ]]; then
+                _emit '{"quantization":{"quant_algo":"W4A16_NVFP4"}}'
+                exit 0
+            fi
+            exit 22 ;;
     esac
 done
 exec /usr/bin/curl "$@"
@@ -346,6 +397,7 @@ gguffer() {
         FAKE_QUANTIZE_LOG="${FAKE_QUANTIZE_LOG:-}" \
         FAKE_QUANTIZE_MSG="${FAKE_QUANTIZE_MSG:-}" \
         FAKE_CONVERT_COUNT="${FAKE_CONVERT_COUNT:-}" \
+        FAKE_QUANT_CONFIG="${FAKE_QUANT_CONFIG:-}" \
         bash "$REPO/bin/ropero" gguffer "$@"
 }
 
@@ -999,6 +1051,78 @@ check "27c. el GGUF final tiene el nombre del MODELO (sin shards ni bf16)" \
       "$(cond '[ -f "$GGUF_OUT/Qwen3.8-27B-IQ2_M.gguf" ]')" "$(ls -A "$GGUF_OUT")"
 check "27d. no baja el imatrix ni el mmproj" \
       "$(cond '! printf %s "$out" | grep -q "imatrix.gguf"')" "$out"
+
+# ══ 28. EL REPO YA VIENE CUANTIZADO: se avisa ANTES de bajar ═════════════
+# El fallo que duele: un repo de NVIDIA que ya viene cuantizado (trae
+# hf_quant_config.json). El gguffer antes se bajaba 60 GB, los convertia, y
+# solo al cuantizar el motor decia "requantizing from type nvfp4 is
+# disabled", sin decir de donde venia el problema.
+#
+# Ahora se comprueba ANTES de descargar, y se dice cual es el repo hermano
+# sin cuantizar que hay que usar en su lugar.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+out="$(FAKE_QUANT_CONFIG=1 gguffer --repo owner/modelo-NVFP4 --quant IQ3_XS 2>&1)"; rc=$?
+check "28a. repo cuantizado -> error"      "$(cond '[ $rc -ne 0 ]')" "rc=$rc"
+check "28b. repo cuantizado -> lo dice"    "$(cond 'printf %s "$out" | grep -q "YA VIENE CUANTIZADO"')" "$out"
+check "28c. repo cuantizado -> NO descarga" "$(cond '[ ! -d "$WORK_ROOT/owner__modelo-NVFP4" ]')" "se bajó el clon"
+check "28d. repo cuantizado -> dice requantizing" \
+      "$(cond 'printf %s "$out" | grep -q "requantizing from type"')" "$out"
+# El hermano sin cuantizar: el mismo nombre sin el sufijo del quant.
+check "28e. propone el repo hermano sin cuantizar" \
+      "$(cond 'printf %s "$out" | grep -q "ropero gguffer --repo owner/modelo-BF16"')" "$out"
+
+# Y con un repo que NO viene cuantizado: el preflight no dice nada y se
+# sigue el camino normal.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
+check "28f. repo normal -> no avisa"       "$(cond '! printf %s "$out" | grep -q "YA VIENE CUANTIZADO"')" "$out"
+check "28g. repo normal -> cuantiza"       "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+
+# Y con un repo que NO viene cuantizado: el preflight no dice nada y se
+# sigue el camino normal.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/repo --quant IQ3_XS 2>&1)"; rc=$?
+check "28f. repo normal -> no avisa"       "$(cond '! printf %s "$out" | grep -q "YA VIENE CUANTIZADO"')" "$out"
+check "28g. repo normal -> cuantiza"       "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+
+# ══ 29. --list-quants CON UN REPO: tambien los de ESE modelo ════════════
+# Los quants que el motor soporta son una cosa; los que hay hechas de este
+# modelo, otra. Lo que decide si compensa fabricar es la segunda.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+out="$(gguffer --repo owner/Qwen3.8-27B --list-quants 2>&1)"; rc=$?
+check "29a. list-quants -> ok"             "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "29b. list-quants -> los del motor"  "$(cond 'printf %s "$out" | grep -q "IQ2_XXS"')" "$out"
+check "29c. list-quants -> los del modelo" "$(cond 'printf %s "$out" | grep -q "IQ2_M"')" "$out"
+check "29d. list-quants -> dice de que repo" \
+      "$(cond 'printf %s "$out" | grep -q "owner/Qwen3.8-27B"')" "$out"
+
+# ══ 30. SI EL --out YA EXISTE, NO SE HACE NADA ════════════════════════════
+# Rehacer un GGUF que ya esta es tirar una hora y 60 GB para nada, y
+# encima pisa el fichero. El check va ANTES de descargar: si el destino
+# ya esta, el gguffer dice que no hace nada y sale.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+# Con la ruta exacta del fichero, que es como lo llama el TOML.
+mkdir -p "$GGUF_OUT/qwen"
+echo "GGUF FALSO" > "$GGUF_OUT/qwen/repo-IQ3_XS.gguf"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out "$GGUF_OUT/qwen/repo-IQ3_XS.gguf" 2>&1)"; rc=$?
+check "30a. ya existe -> sale bien"        "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "30b. ya existe -> lo dice"          "$(cond 'printf %s "$out" | grep -q "ya existe"')" "$out"
+check "30c. ya existe -> no hace nada"     "$(cond 'printf %s "$out" | grep -q "no se hace nada"')" "$out"
+check "30d. ya existe -> NO descarga"      "$(cond '! printf %s "$out" | grep -q "descargo owner/repo"')" "se bajó el clon"
+check "30e. ya existe -> NO lo toca"       "$(cond '[ "$(cat "$GGUF_OUT/qwen/repo-IQ3_XS.gguf")" = "GGUF FALSO" ]')" "el fichero se.overescribió"
+# Con --force, si se rehace.
+rm -rf "$WORK_ROOT/owner__repo"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out "$GGUF_OUT/qwen/repo-IQ3_XS.gguf" --force 2>&1)"; rc=$?
+check "30f. con --force, se rehace"         "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "30g. con --force, descarga"          "$(cond 'printf %s "$out" | grep -q "descargo owner/repo"')" "no se bajó el clon"
+# Con un nombre (no ruta exacta), tambien avisa.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+# Con --out <nombre>, el fichero final es "<nombre>-<quant>.gguf" (el
+# nombre es la BASE, no el nombre final).
+echo "GGUF FALSO" > "$GGUF_OUT/repo-IQ3_XS-IQ3_XS.gguf"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out repo-IQ3_XS 2>&1)"; rc=$?
+check "30h. con --out <nombre>, ya existe"  "$(cond 'printf %s "$out" | grep -q "ya existe"')" "$out"
+check "30i. y no hace nada"                 "$(cond '! printf %s "$out" | grep -q "descargo owner/repo"')" "se bajó el clon"
 
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"

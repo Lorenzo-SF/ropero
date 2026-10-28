@@ -8,13 +8,50 @@ engine  = "llama-server"
 context = 163840
 
 [files]
-gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
+gguf = "Qwen3.8-27B-NVFP4.gguf"
 
-[download]
-repo = "bartowski/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-UD-IQ3_S.gguf"
-size = "16.20 GB"
-
+# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
+#
+# Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
+# sus claves son las mismas que acepta "ropero gguffer". El que la ejecuta
+# es el gguffer de verdad, asi que "ropero install models qwen" y el
+# comando de abajo hacen EXACTAMENTE lo mismo.
+#
+#   ropero gguffer --repo Qwen/Qwen3.8-27B \
+#       --quant "NVFP4" \
+#       --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
+#       --imatrix-file Qwen3.8-27B-imatrix.gguf \
+#       --out "$HOME/models/gguf/qwen/Qwen3.8-27B-NVFP4.gguf" \
+#       --keep-source
+#       --quant IQ3_S \
+#       --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
+#       --imatrix-file Qwen3.8-27B-imatrix.gguf \
+#       --keep-source
+#
+# POR QUE FABRICARLO Y NO BAJAR EL DE BARTOWSKI: el IQ3_S no esta publicado
+# para este modelo en bartowski (alli van del IQ2_XXS al Q3_K_XL). Unsloth
+# publica una variante "UD" (dynamic) del IQ3_S, que es un reparto de bits
+# por tensor; el [build] de aqui es el IQ3_S plano.
+#
+# LA CABEZA MTP SE QUEDA (no se pone --no-mtp): los args de abajo usan
+# "--spec-type draft-mtp", y eso es un tipo de CONTEXTO: el server comprueba
+# que el modelo traiga la capa MTP y, si no la trae, no arranca:
+#     "context type MTP requested but model doesn't contain MTP layers"
+# En este modelo la MTP SI se puede tener (a diferencia del nemotron, que no
+# la soporta: su arch no lee la metadata "nextn_predict_layers" y el server
+# aborta con "expected 417, got 408"). Aqui la arch qwen35 si la lee, asi
+# que el GGUF fabricated lleva la MTP (bloque 64) y el draft funciona.
+#
+# El imatrix publico no cubre el bloque de la MTP (blk.64), asi que ese
+# bloque sale en Q4_0: el gguffer lo resuelve solo con el "--tensor-type".
+[build]
+repo         = "Qwen/Qwen3.8-27B"
+quant        = "NVFP4"
+imatrix_repo = "bartowski/Qwen3.8-27B-GGUF"
+imatrix_file = "Qwen3.8-27B-imatrix.gguf"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "55.6 GB"
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
 default = "low"
@@ -22,8 +59,8 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "66",
-    "--cache-type-k", "turbo3",              
-    "--cache-type-v", "turbo3",             
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
@@ -31,7 +68,7 @@ base = [
     "--repeat-penalty", "1.0",
     "--n-predict", "16384",
     "--reasoning-preserve",
-    "--reasoning-budget", "12288",    
+    "--reasoning-budget", "12288",
     "--checkpoint-min-step","256",
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "2",
@@ -51,5 +88,3 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
 [args.level.xhigh]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
-
-

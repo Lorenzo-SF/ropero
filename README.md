@@ -260,27 +260,117 @@ coincide con lo que el `.toml` espera (`Qwen3.8-27B-IQ2_M.gguf`, con punto y
 todo). Con la ruta exacta el fichero sale directamente donde el modelo lo va a
 buscar, sin renombrar nada a mano.
 
-Una cuantización por modelo, con los quant que salen de la VRAM de la
+#### El preflight: los fallos que se saben ANTES de bajar 60 GB
+
+Bajar los pesos es la parte cara e irreversible (una hora y 60 GB). Hay fallos
+que se pueden ver sin bajar nada, y el gguffer los mira antes:
+
+```console
+$ ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 --quant NVFP4
+ERROR: el repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 YA VIENE CUANTIZADO
+       (el repo declara hf_quant_config.json (checkpoint ya cuantizado)).
+       Cuantizar encima de eso es dequantizar y re-cuantizar:
+       se pierde calidad sin ganar nada, y el motor lo rechaza:
+         llama_model_quantize: failed to quantize:
+         requantizing from type nvfp4 is disabled
+       Usa el repo SIN cuantizar:
+         ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 --quant <QUANT> ...
+```
+
+Los checkpoints de NVIDIA (`-NVFP4`, `-FP8`) y los de modelopt vienen ya
+cuantizados: se detecta por su `hf_quant_config.json` o por el
+`quantization_config` de su `config.json`. Sin este preflight, el error
+salía **después** de bajar 60 GB, convertirlos y empezar a cuantizar, y el
+mensaje del motor no decía de dónde venía el problema.
+
+#### `--list-quants` con un repo: los quants que YA están publicados
+
+```console
+$ ropero gguffer --repo Qwen/Qwen3-30B-A3B --list-quants
+Quants disponibles (motor: .../llama-quantize):
+  16  or  IQ2_XXS :  2.06 bpw quantization
+  ...
+
+Quants ya publicados para Qwen/Qwen3-30B-A3B:
+  Q4_K_M         Qwen/Qwen3-30B-A3B-GGUF
+  IQ2_XXS        unsloth/Qwen3-30B-A3B-GGUF
+  IQ4_XS         unsloth/Qwen3-30B-A3B-GGUF
+  ...
+```
+
+Los quants que el motor soporta son una cosa, y los que hay **hechas de este
+modelo** otra. Lo que decide si compensa fabricar es la segunda: un quant que
+ya está publicado se baja en cinco minutos; uno que no está, es el hueco que
+justifica una noche de cuantización.
+
+#### Fabricar un modelo del roster: la sección `[build]`
+
+Un modelo no siempre se descarga. Cuando su `.toml` declara una sección
+`[build]`, el GGUF **se fabrica**: `ropero install models <modelo>` baja los
+pesos, los convierte y los cuantiza, con el gguffer. Las claves de `[build]`
+son las mismas que acepta `ropero gguffer`, así que la receta del TOML y el
+comando a mano son exactamente lo mismo:
+
+```toml
+[build]
+repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+quant        = "MXFP4_MOE"
+imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
+keep_source  = true
+size         = "65.8 GB"      # INFO: los pesos que se bajan
+```
+
+Es la forma de registrar un modelo cuyo quant **nadie ha hecho**: el
+`MXFP4_MOE` de un MoE de 30B son 4 bits en los expertos, y eso es lo que
+hace que entre en 16 GB de VRAM. Al ser la misma implementación, no hay dos
+caminos que puedan divergir: lo que se ejecuta es el gguffer de verdad.
+
+El GGUF sale con el nombre de `[files] gguf`, en la carpeta del modelo, que
+es donde el lanzador va a buscarlo. El `size` es el de los **pesos** que se
+bajan (el GGUF final todavía no existe, y poner su tamaño sería inventarse
+una cifra).
+
+Si el `[build]` tiene una clave que el gguffer no entiende (un `imatrix_repos`
+en vez de `imatrix_repo`), se **avisa al cargar el TOML**: un error de
+escritura así fabricaría el GGUF sin importance matrix, y el fallo saldría 40
+minutos después, cuando el cuantizador dijera que falta la matriz.
+
+Un modelo que se fabrica **no necesita `[download]`**: no hay de dónde bajar
+el GGUF principal (es justo lo que se fabrica). La `[download]` sigue
+sirviendo para los ficheros auxiliares (MTP, mmproj), que sí se descargan.
+
+Y si el GGUF **ya está en su sitio**, el gguffer no hace nada:
+
+```console
+$ ropero gguffer --repo Qwen/Qwen3.8-27B --quant NVFP4 --out ~/models/gguf/qwen/Qwen3.8-27B-NVFP4.gguf
+[gguffer] ya existe: /home/tu/models/gguf/qwen/Qwen3.8-27B-NVFP4.gguf
+           no se hace nada (usa --force para rehacerlo)
+```
+
+El check va **antes de descargar**, no después de convertir: la descarga son
+60 GB y una hora, y tirarla para acabar con un fichero que ya estaba es
+justo lo que no hay que hacer. Con `--force` se rehace (y se pisa).
+
+
 máquina (15.300 MiB) y de la calidad por byte. La última columna es la ruta
 completa que espera el `.toml` de cada modelo:
 
-| Modelo        | Repo de los pesos (sin cuantizar)                   | Quant     | Dónde acaba                                                                |
-| ------------- | --------------------------------------------------- | --------- | -------------------------------------------------------------------------- |
-| `qwen`        | `Qwen/Qwen3.8-27B`                                  | `IQ2_M`   | `$GGUF_DIR/qwen/Qwen3.8-27B-IQ2_M.gguf`                                    |
-| `qwen36`      | `Qwen/Qwen3.6-35B-A3B`                              | `IQ3_XXS` | `$GGUF_DIR/qwen36/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf`                         |
-| `qwencoder`   | `Qwen/Qwen3-Coder-30B-A3B-Instruct`                 | `IQ3_XXS` | `$GGUF_DIR/qwencoder/Qwen3-Coder-30B-A3B-Instruct-UD-IQ3_XXS.gguf`         |
-| `ornith`      | `ornith-ai/Ornith-1.5-35B-A3B`                      | `IQ2_M`   | `$GGUF_DIR/ornith/Ornith-1.5-35B-A3B-IQ2_M.gguf`                           |
-| `nemotron`    | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `IQ3_XXS` | `$GGUF_DIR/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf` |
-| `laguna`      | `poolside/Laguna-XS-2.1`                            | `IQ3_M`   | `$GGUF_DIR/laguna/Laguna-XS-2.1-APEX-I-Mini.gguf`                          |
-| `gemma`       | `google/gemma-4-26B-A4B-it`                         | `IQ3_M`   | `$GGUF_DIR/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf`                     |
-| `fable`       | `Achilles1089/fable-coder-35B-A3B`                  | `Q2_K`    | `$GGUF_DIR/fable/fable-coder-35B-A3B.Q2_K.gguf`                            |
-| `qwopus`      | `Jackrong/Qwopus3.6-35B-A3B-Coder`                  | `Q2_K`    | `$GGUF_DIR/qwopus/Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf`           |
-| `agenta1`     | `InternScience/Agents-A1`                           | `IQ2_M`   | `$GGUF_DIR/agenta1/Agents-A1-IQ2_M.gguf`                                   |
-| `muse`        | `meta-models/Muse-Glimmer-30B`                      | `Q3_K_XL` | `$GGUF_DIR/muse/Muse-Glimmer-30B-UD-Q3_K_XL.gguf`                          |
-| `devstral`    | `mistralai/Devstral-Small-2-24B-Instruct-2512`      | `Q3_K_M`  | `$GGUF_DIR/devstral/Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf`        |
-| `agenta-tiny` | `InternScience/Agents-A1-4B`                        | `Q8_0`    | `$GGUF_DIR/agenta-tiny/Agents-A1-4B-Q8_0.gguf`                             |
-| `gptoss`      | `openai/gpt-oss-20b`                                | `MXFP4`   | `$GGUF_DIR/gptoss/openai_gpt-oss-20b-MXFP4.gguf`                           |
-
+| Modelo | Repo de los pesos (sin cuantizar) | Quant | Dónde acaba |
+|---|---|---|---|
+| `qwen` | `Qwen/Qwen3.8-27B` | `NVFP4` | `$GGUF_DIR/qwen/Qwen3.8-27B-NVFP4.gguf` |
+| `qwen3` | `Qwen/Qwen3-30B-A3B` | `NVFP4` | `$GGUF_DIR/qwen3/Qwen3-30B-A3B-NVFP4.gguf` |
+| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ4_NL` | `$GGUF_DIR/qwencoder/Qwen3-Coder-30B-A3B-Instruct-IQ4_NL.gguf` |
+| `granite` | `ibm-granite/granite-4.0-h-small` | `IQ4_NL` | `$GGUF_DIR/granite/granite-4.0-h-small-IQ4_NL.gguf` |
+| `nemotron` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `NVFP4` | `$GGUF_DIR/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf` |
+| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `NVFP4` | `$GGUF_DIR/ornith/Ornith-1.5-35B-A3B-NVFP4.gguf` |
+| `muse` | `meta-models/Muse-Glimmer-30B` | `IQ4_NL` | `$GGUF_DIR/muse/Muse-Glimmer-30B-UD-IQ4_NL.gguf` |
+| `laguna` | `mudler/Laguna-XS-2.1-APEX-GGUF` | `(se descarga)` | `$GGUF_DIR/laguna/Laguna-XS-2.1-APEX-I-Mini.gguf` |
+| `gemma` | `bartowski/google_gemma-4-26B-A4B-it-GGUF` | `(se descarga)` | `$GGUF_DIR/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf` |
+| `gptoss` | `unsloth/gpt-oss-20b-GGUF` | `(se descarga)` | `$GGUF_DIR/gptoss/gpt-oss-20b-UD-Q8_K_XL.gguf` |
+| `agenta1` | `KikoCis/Agents-A1-IQ2_M-GGUF` | `(se descarga)` | `$GGUF_DIR/agenta1/Agents-A1-IQ2_M.gguf` |
+| `devstral` | `unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF` | `(se descarga)` | `$GGUF_DIR/devstral/Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf` |
+| `agenta-tiny` | `InternScience/Agents-A1-4B-Q8_0-GGUF` | `(se descarga)` | `$GGUF_DIR/agenta-tiny/Agents-A1-4B-Q8_0.gguf` |
 Los repos son de los pesos **sin cuantizar** (el `base_model` de cada GGUF
 publicado). Con `--from-subdir original` se cuantiza de la copia en BF16
 que traen algunos repos, que es lo correcto cuando los pesos de arriba ya
@@ -343,8 +433,8 @@ Activos:
 >
 > ```console
 > $ ropero list
->   qwen         slot :9999 / :9998    ctx=163840     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-IQ2_M.gguf
->   nemotron     slot :9999 / :9998    ctx=1048576    ngl=52 cpu-moe=18          q4_0    engine=llama-server   gguf=NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf
+>   qwen         slot :9999 / :9998    ctx=163840     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-NVFP4.gguf
+>   nemotron     slot :9999 / :9998    ctx=266144     ngl=54 cpu-moe=15          turbo3   engine=llama-server   gguf=NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf
 > ```
 >
 > No hay una tabla de VRAM aquí a propósito: el margen libre depende del tipo
@@ -370,12 +460,12 @@ PCIe una vez por cada capa en CPU.
 
 Los que pagan offload:
 
-- **`nemotron`**: sus pesos (19.76 GB) no caben de ninguna manera en 16 GB,
-  ni con la cuantización más pequeña que existe. Va con `--n-cpu-moe 18`:
-  el 88 % de sus pesos son los expertos routed, y con 18 de sus 23 capas de
-  experts en la CPU el ctx nativo de **1.000.000** de tokens cabe con 291 MiB
-  de margen. Su KV es diminuto (solo 6 de sus 52 capas son de atención; las
-  otras 46 son Mamba-2, con estado recurrente).
+- **`nemotron`**: sus pesos (18.49 GB en NVFP4) no caben de ninguna manera en
+  16 GB, ni con la cuantización más pequeña que existe. Va con `--n-cpu-moe 15`:
+  el 87 % de sus pesos son los expertos routed, y mandando a la CPU los experts
+  de 15 de sus 23 capas de experts el ctx entra. Su KV es diminuto (solo 6 de
+  sus 52 capas son de atención; las otras 46 son Mamba-2, con estado
+  recurrente). El margen real se lee del log del server, no de aquí.
 - **`qwencoder`**: 48 capas de atención completa, su KV son 6.75 GB a 262144.
   Con `--n-cpu-moe 22` entra. Es el que peor sale en decode del roster.
 - **`devstral`** y **`qwen`**: son densos, así que no hay experts que mandar
@@ -612,8 +702,8 @@ En llama.cpp el flag manda a la CPU los tensores `ffn_*_exps` de los bloques
 del **buffer type del tensor**, no del device de la capa. Por eso el KV (que
 se asigna en el backend de la capa) se queda en la GPU.
 
-En el roster activo lo usan cuatro modelos: `nemotron` (18), `qwencoder` (22),
-`laguna` (4) y `fable` (2). Los demás entran enteros.
+En el roster activo lo usan cinco modelos: `nemotron` (15), `qwen3` (22),
+`qwencoder` (22), `granite` (20) y `laguna` (7). Los demás entran enteros.
 
 ### El `--n-cpu-moe` y el ctx nativo
 
@@ -623,9 +713,68 @@ El `ctx_train` de cada modelo sale de su propio GGUF, y ese es el ctx que
 llevan los TOMLs.
 
 El nemotron es el caso extremo: su ctx train es de **1.000.000** de tokens
-(su rope no lleva scaling), y entra con 291 MiB de margen porque su KV es
-ridículamente pequeño (solo 6 de sus 52 capas son de atención; las otras 46
-son Mamba-2, con estado recurrente).
+(su rope no lleva scaling), y entra porque su KV es ridículamente pequeño
+(solo 6 de sus 52 capas son de atención; las otras 46 son Mamba-2, con estado
+recurrente). El TOML le pide 266.144, que es lo que entra en la VRAM con el
+offload que lleva.
+
+### La cabeza MTP: el nemotron que NO arranca
+
+Un GGUF puede llevar **la cabeza MTP (Multi-Token Prediction) embebida**: un
+bloque extra al final, con su propia metadata `nextn_predict_layers = 1`. Es
+lo que permite el speculative decoding.
+
+**Ese fichero no arranca con este motor**, y el error no dice nada del
+MTP:
+
+```
+done_getting_tensors: wrong number of tensors; expected 417, got 408
+```
+
+El motivo (medido sobre el GGUF, no supuesto): este motor **no lee** la
+metadata `nextn_predict_layers` —la clave existe en `llama-arch.cpp`, pero
+nadie la consume—, así que `n_layer_nextn` se queda en 0 y cuenta 53 capas
+en vez de 52. El bloque de la MTP (`blk.52`) aporta 16 tensores de los que
+solo crea 7, y los 9 restantes se quedan sin usar. De ahí el 417 contra 408.
+
+Los 9 que sobran son los de atención y los de proyección de la MTP:
+
+```
+blk.52.attn_k|attn_q|attn_v|attn_output.weight
+blk.52.nextn.eh_proj|enorm|hnorm|shared_head_norm.weight
+blk.52.post_attention_norm.weight
+```
+
+Un GGUF **sin** MTP (52 bloques, `nextn_predict_layers = 0`) carga limpio.
+
+Y el GGUF que fabrica el `[build]` del nemotron **no lleva la MTP embebida**,
+aunque su nombre de fichero diga `-MTP`: el conversor de esta arquitectura
+descarta los 270 tensores `mtp.*` del checkpoint BF16 (no tiene export de
+MTP), así que el fichero sale con 52 bloques y `nextn_predict_layers = 0`.
+El nombre lo decide el TOML; lo que carga es lo que dice el bloque de
+atención.
+
+Ojo con esto al elegir fichero, porque el repo de un modelo puede publicar
+las dos variantes:
+
+| Repo | MTP | Arranca |
+|---|---|---|
+| `unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF` | embebida (53 bloques) | **no** |
+| `vcruz305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF` | no (52 bloques) | sí |
+| `tngtech/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-GGUF` | suelta, en `mtp-*.gguf` | sí |
+
+Para comprobarlo sin arrancar nada:
+
+```console
+$ python3 bin/_ggufcheck.py RUTA/FICHERO.gguf --meta
+arch=nemotron_h_moe
+block_count=52
+nextn_predict_layers=0
+bloque_mtp=
+```
+
+`bloque_mtp=52` con `nextn_predict_layers=1` significa MTP embebida: ese
+fichero no arranca.
 
 ---
 

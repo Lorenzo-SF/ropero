@@ -8,12 +8,16 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf   = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
+gguf = "Ornith-1.5-35B-A3B-NVFP4.gguf"
 
-[download]
-repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
-file = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
-size = "12.54 GB"
+[build]
+repo         = "ornith-ai/Ornith-1.5-35B-A3B"
+quant        = "NVFP4"
+imatrix_repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
+imatrix_file = "Ornith-1.5-35B-A3B-imatrix.gguf"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "71.9 GB"
 
 [levels]
 list    = ["low", "medium", "high"]

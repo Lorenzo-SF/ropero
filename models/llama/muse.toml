@@ -8,12 +8,16 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf   = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
+gguf = "Muse-Glimmer-30B-UD-IQ4_NL.gguf"
 
-[download]
-repo = "unsloth/Muse-Glimmer-30B-GGUF"
-file = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
-size = "13.36 GB"
+[build]
+repo         = "meta-models/Muse-Glimmer-30B"
+quant        = "IQ4_NL"
+imatrix_repo = "AtomicChat/Muse-Glimmer-30B-GGUF"
+imatrix_file = "imatrix/muse-glimmer.imatrix.gguf"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "59.6 GB"
 
 [args]
 base = [

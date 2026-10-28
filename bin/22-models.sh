@@ -250,6 +250,7 @@ ropero_models_load() {
         MODEL_REPO MODEL_FILE MODEL_DEST MODEL_SIZE MODEL_EXCLUDES MODEL_DL
         MODEL_AUX_MTP MODEL_AUX_MMPROJ MODEL_AUX_CHAT_TEMPLATE MODEL_TOML MODEL_MANUAL
         MODEL_MIN_RAM_GB MODEL_RAM_FRACTION MODEL_KV_KIB_PER_TOKEN
+        MODEL_BUILD MODEL_BUILD_B64
         ROPERO_RETIRED ROPERO_RETIRED_PATH ROPERO_RETIRED_NAME ROPERO_RETIRED_GGUF
     )
     local _t
@@ -300,7 +301,7 @@ ropero_models_load() {
     local name engine alias origin engine_dir ctx port fmt path gguf mtp mmproj
     local repo file dest size excludes levels level_default flags options aliases
     local aux_mtp aux_mmproj aux_chat_template args_b64 opts_b64 limits_b64 manual toml_path
-    local key a_key a_name a_level pair
+    local key a_key a_name a_level pair build_b64
     while IFS=$'\x1f' read -r -a fields; do
         [[ "${fields[0]:-}" == "ROPERO_MC_DUMP_VERSION=1" ]] && continue
         (( ${#fields[@]} >= 29 )) || continue
@@ -315,6 +316,7 @@ ropero_models_load() {
         args_b64="${fields[24]}";     opts_b64="${fields[25]}";   limits_b64="${fields[26]}"
         manual="${fields[27]}";       toml_path="${fields[28]}"
         aux_chat_template="${fields[29]:-}"
+        build_b64="${fields[30]:-}"
 
         # La key de los arrays normaliza los guiones a guiones bajos: es lo que
         # permite que `ropero agents-a1-4b` y `ropero agents_a1_4b` sean el
@@ -368,6 +370,9 @@ ropero_models_load() {
         # Descarga manual: el modelo existe pero `ropero install models` no lo
         # ofrece (checkpoints de más de 100 GB). Es un dato del TOML.
         MODEL_MANUAL["$key"]="$manual"
+        # Cómo se fabrica el GGUF: la spec de [build] en base64. Vacío = el
+        # modelo se DESCARGA de [download]; con contenido = se FABRICA.
+        MODEL_BUILD_B64["$key"]="$build_b64"
 
         # ── Límites declarados ────────────────────────────────────────────
         # [limits] del TOML: datos, no lógica. El guard los aplica el CLI.
@@ -493,6 +498,83 @@ ropero_model_ctx() {
     key="${key//-/_}"
     env_name="ROPERO_$(printf '%s' "$key" | tr '.-' '__' | tr '[:lower:]' '[:upper:]')_CTX"
     printf '%s' "${!env_name:-$ctx}"
+}
+
+# -----------------------------------------------------------------------------
+# ropero_model_build_argv <modelo> [destino]
+#
+# Imprime, UNA POR LÍNEA, el argv con el que se fabrica el GGUF de un modelo.
+#
+# El argv lo construye _modelconf.py (subcomando "build"), no el shell: así
+# los parámetros de [build] se traducen a flags del gguffer en UN solo sitio.
+# Si lo hiciera el shell, la traducción estaría partida en dos y se
+# desincronizaría (que es como la spec de [args] acabó con dos formatos).
+#
+# "destino" es la ruta EXACTA del GGUF final. La pone quien fabrica (la
+# instalación), no el TOML: el destino depende de dónde vive el modelo, y
+# meterlo en el TOML lo duplicaría.
+#
+# Si el modelo NO tiene [build], no imprime nada y devuelve 1: ese modelo se
+# descarga, no se fabrica.
+# -----------------------------------------------------------------------------
+ropero_model_build_argv() {
+    local name="${1:-}" destino="${2:-}"
+    local key="${name//-/_}"
+    local b64="${MODEL_BUILD_B64[$key]:-}"
+    [[ -n "$b64" ]] || return 1
+
+    local conf py
+    conf=$(ropero_modelconf_path) || { ropero_err "falta el cargador de modelos"; return 1; }
+    py=$(ropero_python_resolve) || { ropero_err "hace falta python3 (>= 3.8)"; return 1; }
+
+    local -a pyargs=()
+    [[ -n "$destino" ]] && pyargs+=(--out "$destino")
+    "$py" "$conf" build --root "$MODELS_DIR" --name "$name" "${pyargs[@]}"
+}
+
+# -----------------------------------------------------------------------------
+# ropero_model_is_build <modelo> → 0 si el modelo se FABRICA (tiene [build]).
+#
+# Un modelo se fabrica si su TOML declara [build]. Si no, se descarga de
+# [download] como siempre.
+# -----------------------------------------------------------------------------
+ropero_model_is_build() {
+    local key="${1:-}"
+    key="${key//-/_}"
+    [[ -n "${MODEL_BUILD_B64[$key]:-}" ]]
+}
+
+# -----------------------------------------------------------------------------
+# ropero_model_build_size <modelo> → el tamaño que se muestra al fabricar.
+#
+# En una entrada de descarga, el tamaño es el del fichero que se baja. En una
+# de FABRICACION lo que se baja son los PESOS (60 GB de BF16), no el GGUF
+# final: el GGUF todavía no existe, y poner su tamaño sería inventarse una
+# cifra. Por eso el tamaño va en [build].size, declarado por el TOML.
+#
+# Si el TOML no lo declara, se cae al [download].size (que es el del GGUF
+# publicado): mejor una cifra aproximada que un "?".
+# -----------------------------------------------------------------------------
+ropero_model_build_size() {
+    local key="${1:-}"
+    key="${key//-/_}"
+    local conf py
+    conf=$(ropero_modelconf_path) || return 1
+    py=$(ropero_python_resolve) || return 1
+    local size
+    size="$("$py" "$conf" build --root "$MODELS_DIR" --name "${MODEL_ALIAS[$key]:-$key}" \
+            --format json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+s = d.get("size")
+if s:
+    print(s)
+' 2>/dev/null)"
+    [[ -n "$size" ]] && { printf '%s' "$size"; return 0; }
+    printf '%s' "${MODEL_SIZE[$key]:-?}"
 }
 
 # -----------------------------------------------------------------------------
