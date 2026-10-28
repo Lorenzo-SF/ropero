@@ -63,7 +63,7 @@ base = [
     # ---- Modelo / carga ----
     "--jinja",                                        # chat template Qwen3 coder
     "--reasoning-format", "deepseek",                  # limpia tags <think> (no genera, pero por si)
-    "--load-mode", "none",
+    "--load-mode", "auto",
 
     # ---- Sampling (canónico Qwen3 coder) ----
     "--temp", "0.7",

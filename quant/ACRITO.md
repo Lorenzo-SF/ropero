@@ -25,19 +25,25 @@ gguffer de verdad: **la receta del TOML y el comando a mano son lo mismo**.
 El GGUF sale con el nombre de `[files] gguf`, en la carpeta del modelo, que es
 donde el lanzador va a buscarlo.
 
-Los cinco modelos que se fabrican así (y sus comandos equivalentes):
+Los siete modelos que se fabrican así (y sus comandos equivalentes):
 
 | Modelo | Pesos | Quant | Imatrix |
 |---|---|---|---|
-| `nemotron` | `nvidia/...-BF16` | `MXFP4_MOE` | `bartowski/...-GGUF` |
-| `granite` | `ibm-granite/granite-4.0-h-small` | `MXFP4_MOE` | `unsloth/granite-4.0-h-small-GGUF` |
-| `qwen3` | `Qwen/Qwen3-30B-A3B` | `MXFP4_MOE` | `bartowski/Qwen_Qwen3-30B-A3B-GGUF` |
-| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ4_XS` | `n19875624/...-code-imatrix-GGUF` |
-| `qwen` | `Qwen/Qwen3.8-27B` | `IQ4_XS` | `bartowski/Qwen3.8-27B-GGUF` |
+| `qwen` | `Qwen/Qwen3.8-27B` | `NVFP4` | `bartowski/Qwen3.8-27B-GGUF` |
+| `qwen3` | `Qwen/Qwen3-30B-A3B` | `NVFP4` | `bartowski/Qwen_Qwen3-30B-A3B-GGUF` |
+| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ4_NL` | `n19875624/...-code-imatrix-GGUF` |
+| `granite` | `ibm-granite/granite-4.0-h-small` | `IQ4_NL` | `unsloth/granite-4.0-h-small-GGUF` |
+| `nemotron` | `nvidia/...-BF16` | `NVFP4` | `bartowski/...-GGUF` |
+| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `NVFP4` | `bartowski/Ornith-1.5-35B-A3B-GGUF` |
+| `muse` | `meta-models/Muse-Glimmer-30B` | `IQ4_NL` | `AtomicChat/Muse-Glimmer-30B-GGUF` |
 
 El `size` es el de los **pesos** que se bajan, no el del GGUF final (que
 todavía no existe): es lo que ve el usuario cuando se le pregunta si fabricar
 esto.
+
+Y si el GGUF **ya está en su sitio**, el gguffer no hace nada (ni baja los
+pesos ni convierte ni cuantiza). El check va antes de la descarga, que es
+la parte cara: 60 GB y una hora. Con `--force` se rehace.
 
 ### Los quants que ya están publicados
 

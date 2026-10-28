@@ -20,17 +20,9 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "41",
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-
-    # ---- Sampling (el del propio Agents-A1) ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.55",
     "--top-p", "0.90",
     "--top-k", "15",
@@ -43,14 +35,7 @@ base = [
     "--dry-sequence-breaker", '["\n", ":", " ", "\t", "\"", ","]',
     "--samplers", "min_p;top_k;top_p;temp;dry",
     "--reasoning-budget", "4096",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]

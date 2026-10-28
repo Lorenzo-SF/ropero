@@ -45,13 +45,13 @@ curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" \
 
 ### Opciones del instalador
 
-| Flag | Qué hace | Por defecto |
-|---|---|---|
-| `--prefix <dir>` | dónde se instala ropero | `~/.local/share/ropero` |
-| `--bin-dir <dir>` | dónde se crea el symlink | `~/.local/bin` |
-| `--version <ref>` | versión a instalar (`main` o un tag) | `main` |
-| `--force` | reinstala aunque ya exista | — |
-| `--no-link` | no crea el symlink | — |
+| Flag              | Qué hace                             | Por defecto             |
+| ----------------- | ------------------------------------ | ----------------------- |
+| `--prefix <dir>`  | dónde se instala ropero              | `~/.local/share/ropero` |
+| `--bin-dir <dir>` | dónde se crea el symlink             | `~/.local/bin`          |
+| `--version <ref>` | versión a instalar (`main` o un tag) | `main`                  |
+| `--force`         | reinstala aunque ya exista           | —                       |
+| `--no-link`       | no crea el symlink                   | —                       |
 
 Los equivalentes como variables de entorno son `ROPERO_PREFIX`,
 `ROPERO_BIN_DIR`, `ROPERO_VERSION`, `ROPERO_FORCE`, `ROPERO_NO_LINK` y
@@ -165,20 +165,20 @@ curl http://localhost:9999/v1/chat/completions \
 
 ## Comandos
 
-| Comando | Qué hace |
-|---|---|
-| `ropero <modelo>` | arranca el modelo |
-| `ropero list` | los modelos disponibles y los retirados |
-| `ropero status` | qué está corriendo, en qué puerto, con qué RAM |
-| `ropero levels <modelo>` | los niveles de razonamiento que **declara** ese modelo |
-| `ropero args <modelo> [nivel]` | el argv final que recibiría el server, **sin arrancar nada** |
-| `ropero stop <modelo>\|all` | para lo que esté corriendo |
-| `ropero use <modelo>` | asegura que **ese** modelo sea el que se sirve, y espera a que esté listo |
-| `ropero install [engines\|models\|link]` | instala engines, modelos o enlaces |
-| `ropero config [engine]` | la configuración actual |
-| `ropero check` | verifica la instalación (no modifica nada) |
-| `ropero template` | enseña la plantilla de un modelo |
-| `ropero gguffer` | fabrica un GGUF desde un repo de HuggingFace (descarga → convierte → cuantiza → verifica) |
+| Comando                                  | Qué hace                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `ropero <modelo>`                        | arranca el modelo                                                                         |
+| `ropero list`                            | los modelos disponibles y los retirados                                                   |
+| `ropero status`                          | qué está corriendo, en qué puerto, con qué RAM                                            |
+| `ropero levels <modelo>`                 | los niveles de razonamiento que **declara** ese modelo                                    |
+| `ropero args <modelo> [nivel]`           | el argv final que recibiría el server, **sin arrancar nada**                              |
+| `ropero stop <modelo>\|all`              | para lo que esté corriendo                                                                |
+| `ropero use <modelo>`                    | asegura que **ese** modelo sea el que se sirve, y espera a que esté listo                 |
+| `ropero install [engines\|models\|link]` | instala engines, modelos o enlaces                                                        |
+| `ropero config [engine]`                 | la configuración actual                                                                   |
+| `ropero check`                           | verifica la instalación (no modifica nada)                                                |
+| `ropero template`                        | enseña la plantilla de un modelo                                                          |
+| `ropero gguffer`                         | fabrica un GGUF desde un repo de HuggingFace (descarga → convierte → cuantiza → verifica) |
 
 `ropero install` sin destino pasa por los engines y luego por los modelos.
 
@@ -248,11 +248,11 @@ El lanzador busca cada modelo en `$GGUF_DIR/<carpeta>/<fichero>`, que es lo que
 dicen `[model] name` y `[files] gguf` de su `.toml`. `--out` acepta tres
 formas:
 
-| Qué le pasas | Dónde acaba |
-|---|---|
-| `--out mi-modelo` | `$GGUF_DIR/mi-modelo-<quant>.gguf` |
-| `--out ~/models/gguf/qwen` | ahí, con el nombre generado |
-| `--out ~/models/gguf/qwen/Qwen3.8-27B-IQ2_M.gguf` | exactamente ahí |
+| Qué le pasas                                      | Dónde acaba                        |
+| ------------------------------------------------- | ---------------------------------- |
+| `--out mi-modelo`                                 | `$GGUF_DIR/mi-modelo-<quant>.gguf` |
+| `--out ~/models/gguf/qwen`                        | ahí, con el nombre generado        |
+| `--out ~/models/gguf/qwen/Qwen3.8-27B-IQ2_M.gguf` | exactamente ahí                    |
 
 La tercera es la que interesa: **el nombre lo pone el TOML, no el quant**. El
 GGUF que fabrique el gguffer se llama `<repo>-<quant>.gguf`, y eso casi nunca
@@ -336,29 +336,41 @@ en vez de `imatrix_repo`), se **avisa al cargar el TOML**: un error de
 escritura así fabricaría el GGUF sin importance matrix, y el fallo saldría 40
 minutos después, cuando el cuantizador dijera que falta la matriz.
 
+Un modelo que se fabrica **no necesita `[download]`**: no hay de dónde bajar
+el GGUF principal (es justo lo que se fabrica). La `[download]` sigue
+sirviendo para los ficheros auxiliares (MTP, mmproj), que sí se descargan.
+
+Y si el GGUF **ya está en su sitio**, el gguffer no hace nada:
+
+```console
+$ ropero gguffer --repo Qwen/Qwen3.8-27B --quant NVFP4 --out ~/models/gguf/qwen/Qwen3.8-27B-NVFP4.gguf
+[gguffer] ya existe: /home/tu/models/gguf/qwen/Qwen3.8-27B-NVFP4.gguf
+           no se hace nada (usa --force para rehacerlo)
+```
+
+El check va **antes de descargar**, no después de convertir: la descarga son
+60 GB y una hora, y tirarla para acabar con un fichero que ya estaba es
+justo lo que no hay que hacer. Con `--force` se rehace (y se pisa).
+
 
 máquina (15.300 MiB) y de la calidad por byte. La última columna es la ruta
 completa que espera el `.toml` de cada modelo:
 
 | Modelo | Repo de los pesos (sin cuantizar) | Quant | Dónde acaba |
 |---|---|---|---|
-| `qwen` | `Qwen/Qwen3.8-27B` | `IQ4_XS` | `$GGUF_DIR/qwen/Qwen3.8-27B-IQ4_XS.gguf` |
-| `qwen3` | `Qwen/Qwen3-30B-A3B` | `MXFP4_MOE` | `$GGUF_DIR/qwen3/Qwen3-30B-A3B-MXFP4_MOE.gguf` |
-| `qwen36` | `Qwen/Qwen3.6-35B-A3B` | `IQ3_XXS` | `$GGUF_DIR/qwen36/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf` |
-| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ4_XS` | `$GGUF_DIR/qwencoder/Qwen3-Coder-30B-A3B-Instruct-IQ4_XS.gguf` |
-| `granite` | `ibm-granite/granite-4.0-h-small` | `MXFP4_MOE` | `$GGUF_DIR/granite/granite-4.0-h-small-MXFP4_MOE.gguf` |
-| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `IQ2_M` | `$GGUF_DIR/ornith/Ornith-1.5-35B-A3B-IQ2_M.gguf` |
-| `nemotron` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `MXFP4_MOE` | `$GGUF_DIR/nemotron/Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf` |
-| `laguna` | `poolside/Laguna-XS-2.1` | `IQ3_M` | `$GGUF_DIR/laguna/Laguna-XS-2.1-APEX-I-Mini.gguf` |
-| `gemma` | `google/gemma-4-26B-A4B-it` | `IQ3_M` | `$GGUF_DIR/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf` |
-| `fable` | `Achilles1089/fable-coder-35B-A3B` | `Q2_K` | `$GGUF_DIR/fable/fable-coder-35B-A3B.Q2_K.gguf` |
-| `qwopus` | `Jackrong/Qwopus3.6-35B-A3B-Coder` | `Q2_K` | `$GGUF_DIR/qwopus/Qwopus3.6-35B-A3B-Coder-vram13-q2ex-imat.gguf` |
-| `agenta1` | `InternScience/Agents-A1` | `IQ2_M` | `$GGUF_DIR/agenta1/Agents-A1-IQ2_M.gguf` |
-| `muse` | `meta-models/Muse-Glimmer-30B` | `Q3_K_XL` | `$GGUF_DIR/muse/Muse-Glimmer-30B-UD-Q3_K_XL.gguf` |
-| `devstral` | `mistralai/Devstral-Small-2-24B-Instruct-2512` | `Q3_K_M` | `$GGUF_DIR/devstral/Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf` |
-| `agenta-tiny` | `InternScience/Agents-A1-4B` | `Q8_0` | `$GGUF_DIR/agenta-tiny/Agents-A1-4B-Q8_0.gguf` |
-| `gptoss` | `openai/gpt-oss-20b` | `MXFP4` | `$GGUF_DIR/gptoss/openai_gpt-oss-20b-MXFP4.gguf` |
-
+| `qwen` | `Qwen/Qwen3.8-27B` | `NVFP4` | `$GGUF_DIR/qwen/Qwen3.8-27B-NVFP4.gguf` |
+| `qwen3` | `Qwen/Qwen3-30B-A3B` | `NVFP4` | `$GGUF_DIR/qwen3/Qwen3-30B-A3B-NVFP4.gguf` |
+| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ4_NL` | `$GGUF_DIR/qwencoder/Qwen3-Coder-30B-A3B-Instruct-IQ4_NL.gguf` |
+| `granite` | `ibm-granite/granite-4.0-h-small` | `IQ4_NL` | `$GGUF_DIR/granite/granite-4.0-h-small-IQ4_NL.gguf` |
+| `nemotron` | `nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16` | `NVFP4` | `$GGUF_DIR/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf` |
+| `ornith` | `ornith-ai/Ornith-1.5-35B-A3B` | `NVFP4` | `$GGUF_DIR/ornith/Ornith-1.5-35B-A3B-NVFP4.gguf` |
+| `muse` | `meta-models/Muse-Glimmer-30B` | `IQ4_NL` | `$GGUF_DIR/muse/Muse-Glimmer-30B-UD-IQ4_NL.gguf` |
+| `laguna` | `mudler/Laguna-XS-2.1-APEX-GGUF` | `(se descarga)` | `$GGUF_DIR/laguna/Laguna-XS-2.1-APEX-I-Mini.gguf` |
+| `gemma` | `bartowski/google_gemma-4-26B-A4B-it-GGUF` | `(se descarga)` | `$GGUF_DIR/gemma/google_gemma-4-26B-A4B-it-IQ3_M.gguf` |
+| `gptoss` | `unsloth/gpt-oss-20b-GGUF` | `(se descarga)` | `$GGUF_DIR/gptoss/gpt-oss-20b-UD-Q8_K_XL.gguf` |
+| `agenta1` | `KikoCis/Agents-A1-IQ2_M-GGUF` | `(se descarga)` | `$GGUF_DIR/agenta1/Agents-A1-IQ2_M.gguf` |
+| `devstral` | `unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF` | `(se descarga)` | `$GGUF_DIR/devstral/Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf` |
+| `agenta-tiny` | `InternScience/Agents-A1-4B-Q8_0-GGUF` | `(se descarga)` | `$GGUF_DIR/agenta-tiny/Agents-A1-4B-Q8_0.gguf` |
 Los repos son de los pesos **sin cuantizar** (el `base_model` de cada GGUF
 publicado). Con `--from-subdir original` se cuantiza de la copia en BF16
 que traen algunos repos, que es lo correcto cuando los pesos de arriba ya
@@ -377,13 +389,13 @@ llama-quantize --imatrix mi.imatrix entrada.gguf salida.gguf IQ2_M
 Lo que no se ve en el comando es lo que pasa **cuando algo falla**, que es
 lo que importa cuando estás descargando 60 GB:
 
-| Si falla | Qué pasa |
-|---|---|
-| la descarga | se borra el clon a medias **y** la caché de HF |
-| la conversión | se conservan los safetensors y se dice cómo reintentar solo la conversión |
-| la cuantización | se conservan los safetensors **y** el GGUF intermedio, y se dice cómo reintentar solo la cuantización |
-| la verificación del GGUF | no se borra nada |
-| nada (todo bien) | se borran los safetensors, porque el GGUF ya está validado |
+| Si falla                 | Qué pasa                                                                                              |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- |
+| la descarga              | se borra el clon a medias **y** la caché de HF                                                        |
+| la conversión            | se conservan los safetensors y se dice cómo reintentar solo la conversión                             |
+| la cuantización          | se conservan los safetensors **y** el GGUF intermedio, y se dice cómo reintentar solo la cuantización |
+| la verificación del GGUF | no se borra nada                                                                                      |
+| nada (todo bien)         | se borran los safetensors, porque el GGUF ya está validado                                            |
 
 `--force` borra lo cacheado de ese repo y lo rehace desde cero. El clon de
 los pesos vive en `~/.cache/ropero/gguffer/<owner>__<repo>` y se reutiliza
@@ -397,15 +409,15 @@ cuantizar está `original/` en el repo (`--from-subdir original`).
 
 ### Flags del lanzador
 
-| Flag | Qué hace |
-|---|---|
-| `--background` | arranca en segundo plano y sigue |
-| `--cpu` | fuerza CPU, sin GPU |
-| `--port N` | el puerto en el que escuchar |
-| `--force` | rotura el puerto si está ocupado |
-| `--low` / `--medium` / `--high` | nivel de razonamiento |
-| `--vision` | activa la torre de visión (si el modelo la tiene) |
-| `--n-cpu-moe N` | ajustes propios de un modelo |
+| Flag                            | Qué hace                                          |
+| ------------------------------- | ------------------------------------------------- |
+| `--background`                  | arranca en segundo plano y sigue                  |
+| `--cpu`                         | fuerza CPU, sin GPU                               |
+| `--port N`                      | el puerto en el que escuchar                      |
+| `--force`                       | rotura el puerto si está ocupado                  |
+| `--low` / `--medium` / `--high` | nivel de razonamiento                             |
+| `--vision`                      | activa la torre de visión (si el modelo la tiene) |
+| `--n-cpu-moe N`                 | ajustes propios de un modelo                      |
 
 El vocabulario es del modelo, no del CLI: si un modelo no declara `--vision`,
 `ropero <modelo> --vision` es un error de uso, no un flag ignorado.
@@ -421,8 +433,8 @@ Activos:
 >
 > ```console
 > $ ropero list
->   qwen         slot :9999 / :9998    ctx=163840     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-IQ4_XS.gguf
->   nemotron     slot :9999 / :9998    ctx=1048576    ngl=52 cpu-moe=12          q4_0    engine=llama-server   gguf=Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf
+>   qwen         slot :9999 / :9998    ctx=163840     ngl=66                     turbo3   engine=llama-server   gguf=Qwen3.8-27B-NVFP4.gguf
+>   nemotron     slot :9999 / :9998    ctx=266144     ngl=54 cpu-moe=15          turbo3   engine=llama-server   gguf=NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf
 > ```
 >
 > No hay una tabla de VRAM aquí a propósito: el margen libre depende del tipo
@@ -435,10 +447,10 @@ el offload justo para que quepa en los 15.300 MiB libres de la RTX 5080.
 
 Las dos vías de offload, y por qué se elige una u otra:
 
-| vía | qué manda a la CPU | qué NO toca | coste en decode |
-|---|---|---|---|
-| `--n-cpu-moe N` | los **experts** de las N primeras capas | la atención ni el KV | cada token cruza el PCIe |
-| `--n-gpu-layers N` | **capas enteras** (y su KV con ellas) | — | cada token cruza el PCIe N veces |
+| vía                | qué manda a la CPU                      | qué NO toca          | coste en decode                  |
+| ------------------ | --------------------------------------- | -------------------- | -------------------------------- |
+| `--n-cpu-moe N`    | los **experts** de las N primeras capas | la atención ni el KV | cada token cruza el PCIe         |
+| `--n-gpu-layers N` | **capas enteras** (y su KV con ellas)   | —                    | cada token cruza el PCIe N veces |
 
 `--n-cpu-moe` es la vía **barata** (solo MoE): la atención y el KV cache
 siguen enteros en la GPU, así que el modelo conserva su velocidad de
@@ -448,13 +460,12 @@ PCIe una vez por cada capa en CPU.
 
 Los que pagan offload:
 
-- **`nemotron`**: sus pesos (17.98 GB en MXFP4_MOE) no caben de ninguna manera en
-  16 GB, ni con la cuantización más pequeña que existe. Va con `--n-cpu-moe 12`:
+- **`nemotron`**: sus pesos (18.49 GB en NVFP4) no caben de ninguna manera en
+  16 GB, ni con la cuantización más pequeña que existe. Va con `--n-cpu-moe 15`:
   el 87 % de sus pesos son los expertos routed, y mandando a la CPU los experts
-  de 12 de sus 23 capas de experts el ctx nativo de **1.000.000** de tokens
-  entra. Su KV es diminuto (solo 6 de sus 52 capas son de atención; las
-  otras 46 son Mamba-2, con estado recurrente). El margen real se lee del log
-  del server, no de aquí.
+  de 15 de sus 23 capas de experts el ctx entra. Su KV es diminuto (solo 6 de
+  sus 52 capas son de atención; las otras 46 son Mamba-2, con estado
+  recurrente). El margen real se lee del log del server, no de aquí.
 - **`qwencoder`**: 48 capas de atención completa, su KV son 6.75 GB a 262144.
   Con `--n-cpu-moe 22` entra. Es el que peor sale en decode del roster.
 - **`devstral`** y **`qwen`**: son densos, así que no hay experts que mandar
@@ -495,16 +506,16 @@ Los alias son formas de llamar al mismo modelo con otro nivel de razonamiento:
 
 ### Overrides por entorno
 
-| Variable | Qué hace |
-|---|---|
-| `ROPERO_<MODELO>_CTX` | el contexto del modelo |
-| `ROPERO_<MODELO>_GGUF` | otra cuantización del mismo repo |
-| `ROPERO_<MODELO>_PORT` | el puerto del modelo |
-| `ROPERO_TEMP` | el `--temp` del muestreo, **sustituye** al del TOML |
-| `LLAMA_API_KEY` | la clave de la API (por defecto `sk-local-dev-key`) |
-| `HOST` | dónde escuchar (por defecto `0.0.0.0`) |
-| `GGUF_DIR` | dónde están los GGUF (por defecto `~/models/gguf`) |
-| `SAFETENSORS_DIR` | dónde están los checkpoints (por defecto `~/models/safetensors`) |
+| Variable               | Qué hace                                                         |
+| ---------------------- | ---------------------------------------------------------------- |
+| `ROPERO_<MODELO>_CTX`  | el contexto del modelo                                           |
+| `ROPERO_<MODELO>_GGUF` | otra cuantización del mismo repo                                 |
+| `ROPERO_<MODELO>_PORT` | el puerto del modelo                                             |
+| `ROPERO_TEMP`          | el `--temp` del muestreo, **sustituye** al del TOML              |
+| `LLAMA_API_KEY`        | la clave de la API (por defecto `sk-local-dev-key`)              |
+| `HOST`                 | dónde escuchar (por defecto `0.0.0.0`)                           |
+| `GGUF_DIR`             | dónde están los GGUF (por defecto `~/models/gguf`)               |
+| `SAFETENSORS_DIR`      | dónde están los checkpoints (por defecto `~/models/safetensors`) |
 
 `ROPERO_TEMP` es global a propósito: el bench tiene que medir a todos los
 modelos con el **mismo** temp, y cada TOML trae el suyo. Sustituye, no
@@ -595,12 +606,12 @@ KV = celdas * capas * bytes_por_capa
 pero hay que saber **cuántas capas** de cada tipo hay, y eso NO sale de una
 sola regla:
 
-| Tipo de modelo | Cuántas capas gastan KV | Dónde sale |
-|---|---|---|
-| Denso normal | todas | — |
-| Sliding window | 1 de cada N plenas; el resto, con ventana | `<arch>.sliding_window_pattern` (número o lista) |
-| Híbrido recurrente | 1 de cada 4 plenas | `<arch>.full_attention_interval = 4` |
-| Mamba (nemotron) | las de atención, y con `head_count_kv` por capa | lista por capa, 0 = capa mamba |
+| Tipo de modelo     | Cuántas capas gastan KV                         | Dónde sale                                       |
+| ------------------ | ----------------------------------------------- | ------------------------------------------------ |
+| Denso normal       | todas                                           | —                                                |
+| Sliding window     | 1 de cada N plenas; el resto, con ventana       | `<arch>.sliding_window_pattern` (número o lista) |
+| Híbrido recurrente | 1 de cada 4 plenas                              | `<arch>.full_attention_interval = 4`             |
+| Mamba (nemotron)   | las de atención, y con `head_count_kv` por capa | lista por capa, 0 = capa mamba                   |
 
 En `gemma4` además las capas sliding window tienen **otro `head_dim`** (256
 en vez de 512), así que el KV de ese grupo sale por la mitad.
@@ -616,13 +627,13 @@ llama_kv_cache: size = 1152.00 MiB ( 65536 cells, 16 layers, 1/1 seqs),
 **Calibrado contra los memory breakdown medidos el 2026-10-25** (RTX 5080
 Laptop, 15933 MiB), el error de la fórmula es del **0,00 %** en los 5 casos:
 
-| modelo | calculado | medido |
-|---|---|---|
-| gptoss (12 plenas + 12 SWA-128) | 1632.00 MiB | 1632.00 MiB |
-| gptoss (grupo SWA, 512 celdas) | 6.38 MiB | 6.38 MiB |
+| modelo                             | calculado   | medido      |
+| ---------------------------------- | ----------- | ----------- |
+| gptoss (12 plenas + 12 SWA-128)    | 1632.00 MiB | 1632.00 MiB |
+| gptoss (grupo SWA, 512 celdas)     | 6.38 MiB    | 6.38 MiB    |
 | qwen3.8-27B (16 de 64 de atención) | 1152.00 MiB | 1152.00 MiB |
-| agenta1 (10 de 40 de atención) | 720.00 MiB | 720.00 MiB |
-| agents-tiny (8 de 32 de atención) | 4352.00 MiB | 4352.00 MiB |
+| agenta1 (10 de 40 de atención)     | 720.00 MiB  | 720.00 MiB  |
+| agents-tiny (8 de 32 de atención)  | 4352.00 MiB | 4352.00 MiB |
 
 El MTP tiene su propio KV (en f16) y su propio compute buffer, aparte: medido
 256 MiB + 66 MiB para el draft context del qwen.
@@ -651,13 +662,13 @@ razonamiento ajustable", el candidato es **`qwen36`** (Qwen3.6-35B-A3B):
 
 Los runners-up, para cada perfil:
 
-| Modelo | Para qué | Lo bueno | Lo malo |
-|---|---|---|---|
-| `qwen36` | coder + analista, el más fuerte que entra | 73.4 % SWE-bench V, 3B activos, 262K | MoE: la calidad del MoE es menor que la de un denso del mismo tamaño |
-| `muse` | el más listo y con razonamiento fino | SWE-bench Pro **51.2 %** (el más alto de la tabla), IFBench 77.0, AIME 94.7, y **4 niveles** (low/medium/high/xhigh) vía system prompt | Es **denso** 30B: sin MTP va a 15-25 t/s |
-| `laguna` | agente con herramientas | thinking **por petición**, APEX (cuantización por capa, no plana) | 37.5 % TB 2.0; es denso en atención (su KV es 8× la de un MoE), así que paga `--n-cpu-moe 4` para el ctx nativo |
-| `qwen` | el denso de referencia | Qwen3.8-27B, IQ2_M | 61.7 % SWE-bench Pro |
-| `fable` | coder con el mejor tool-use | Opus-4.8 tool use, 51.5 % TB | Su GGUF trae la cabeza MTP y hay que quitarla |
+| Modelo   | Para qué                                  | Lo bueno                                                                                                                               | Lo malo                                                                                                         |
+| -------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `qwen36` | coder + analista, el más fuerte que entra | 73.4 % SWE-bench V, 3B activos, 262K                                                                                                   | MoE: la calidad del MoE es menor que la de un denso del mismo tamaño                                            |
+| `muse`   | el más listo y con razonamiento fino      | SWE-bench Pro **51.2 %** (el más alto de la tabla), IFBench 77.0, AIME 94.7, y **4 niveles** (low/medium/high/xhigh) vía system prompt | Es **denso** 30B: sin MTP va a 15-25 t/s                                                                        |
+| `laguna` | agente con herramientas                   | thinking **por petición**, APEX (cuantización por capa, no plana)                                                                      | 37.5 % TB 2.0; es denso en atención (su KV es 8× la de un MoE), así que paga `--n-cpu-moe 4` para el ctx nativo |
+| `qwen`   | el denso de referencia                    | Qwen3.8-27B, IQ2_M                                                                                                                     | 61.7 % SWE-bench Pro                                                                                            |
+| `fable`  | coder con el mejor tool-use               | Opus-4.8 tool use, 51.5 % TB                                                                                                           | Su GGUF trae la cabeza MTP y hay que quitarla                                                                   |
 
 **Muse Glimmer** (Meta, Apache 2.0) es probablemente el mejor "analista" del
 roster: gana en SWE-Bench Pro (51.2 vs 50.2), en IFBench (77.0 vs 70.8), en
@@ -691,8 +702,8 @@ En llama.cpp el flag manda a la CPU los tensores `ffn_*_exps` de los bloques
 del **buffer type del tensor**, no del device de la capa. Por eso el KV (que
 se asigna en el backend de la capa) se queda en la GPU.
 
-En el roster activo lo usan cuatro modelos: `nemotron` (12), `qwencoder` (22),
-`laguna` (4) y `fable` (2). Los demás entran enteros.
+En el roster activo lo usan cinco modelos: `nemotron` (15), `qwen3` (22),
+`qwencoder` (22), `granite` (20) y `laguna` (7). Los demás entran enteros.
 
 ### El `--n-cpu-moe` y el ctx nativo
 
@@ -704,7 +715,8 @@ llevan los TOMLs.
 El nemotron es el caso extremo: su ctx train es de **1.000.000** de tokens
 (su rope no lleva scaling), y entra porque su KV es ridículamente pequeño
 (solo 6 de sus 52 capas son de atención; las otras 46 son Mamba-2, con estado
-recurrente).
+recurrente). El TOML le pide 266.144, que es lo que entra en la VRAM con el
+offload que lleva.
 
 ### La cabeza MTP: el nemotron que NO arranca
 
@@ -735,6 +747,13 @@ blk.52.post_attention_norm.weight
 
 Un GGUF **sin** MTP (52 bloques, `nextn_predict_layers = 0`) carga limpio.
 
+Y el GGUF que fabrica el `[build]` del nemotron **no lleva la MTP embebida**,
+aunque su nombre de fichero diga `-MTP`: el conversor de esta arquitectura
+descarta los 270 tensores `mtp.*` del checkpoint BF16 (no tiene export de
+MTP), así que el fichero sale con 52 bloques y `nextn_predict_layers = 0`.
+El nombre lo decide el TOML; lo que carga es lo que dice el bloque de
+atención.
+
 Ojo con esto al elegir fichero, porque el repo de un modelo puede publicar
 las dos variantes:
 
@@ -757,18 +776,17 @@ bloque_mtp=
 `bloque_mtp=52` con `nextn_predict_layers=1` significa MTP embebida: ese
 fichero no arranca.
 
-
 ---
 
 ## Engines
 
-| Engine | Sistema | Qué necesita |
-|---|---|---|
-| `llama-server` (llama.cpp) | todos | GPU NVIDIA en Linux, Metal en macOS |
-| `airllm` | todos | mucha RAM: inferencia capa a capa |
-| `tensorrt-llm` | Linux NVIDIA | un `trtllm-serve` compatible |
-| `mlx_lm` | macOS Apple Silicon | `mlx-lm` |
-| `fastflowlm` | Linux con NPU AMD | `flm` |
+| Engine                     | Sistema             | Qué necesita                        |
+| -------------------------- | ------------------- | ----------------------------------- |
+| `llama-server` (llama.cpp) | todos               | GPU NVIDIA en Linux, Metal en macOS |
+| `airllm`                   | todos               | mucha RAM: inferencia capa a capa   |
+| `tensorrt-llm`             | Linux NVIDIA        | un `trtllm-serve` compatible        |
+| `mlx_lm`                   | macOS Apple Silicon | `mlx-lm`                            |
+| `fastflowlm`               | Linux con NPU AMD   | `flm`                               |
 
 `ropero install engines` instala sólo los que tu máquina soporta.
 
@@ -812,3 +830,43 @@ y el launcher se entero. Un modelo nuevo es un fichero nuevo.
 ## Licencia
 
 Ver el repositorio.
+cmake -B "$LLAMA_DIR/build" -S "$LLAMA_DIR" -G Ninja \
+ -DCMAKE_BUILD_TYPE=Release \
+ -DCUDA_TOOLKIT_ROOT_DIR="$cuda_path" \
+                -DCMAKE_CUDA_COMPILER="$cuda_path/bin/nvcc" \
+ -DCMAKE_CUDA_HOST_COMPILER="$host_cxx" \
+                -DCMAKE_CXX_COMPILER="$host_cxx" \
+ -DCMAKE_C_COMPILER="$host_cc" \
+ -DCMAKE_CXX_FLAGS="-march=native -O3 -ftree-vectorize" \
+ -DCMAKE_C_FLAGS="-march=native -O3 -ftree-vectorize" \
+ -DCMAKE_CUDA_FLAGS="--use_fast_math -O3 -lineinfo" \
+ -DCMAKE_CUDA_ARCHITECTURES="120-real" \
+ -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+ -DGGML_CUDA_MMQ_MXFP4=ON \
+ -DGGML_CUDA_MMQ_NVFP4=ON \
+ -DGGML_CUDA=ON \
+ -DGGML_CUDA_FA=ON \
+ -DGGML_CUDA_FA_ALL_QUANTS=ON \
+ -DGGML_CUDA_GRAPHS=ON \
+ -DGGML_CUDA_FORCE_MMQ=OFF \
+ -DGGML_CUDA_FORCE_CUBLAS=OFF \
+ -DGGML_CUDA_F16=OFF \
+ -DGGML_CUDA_COMPRESSION_MODE=speed \
+ -DGGML_RPC=ON \
+ -DGGML_OPENMP=ON \
+ -DGGML_NATIVE=ON \
+ -DGGML_AVX2=ON \
+ -DGGML_AVX512=ON \
+ -DGGML_AVX512_VBMI=ON \
+ -DGGML_AVX512_VNNI=ON \
+ -DGGML_AVX512_BF16=ON \
+ -DGGML_AVX512_FP16=ON \
+ -DGGML_FMA=ON \
+ -DLLAMA_OPENSSL=ON \
+ -DBUILD_SHARED_LIBS=OFF \
+ -DLLAMA_BUILD_SERVER=ON \
+ -DLLAMA_BUILD_TOOLS=ON \
+ -DLLAMA_BUILD_EXAMPLES=OFF \
+ -DLLAMA_BUILD_TESTS=OFF \
+ -DLLAMA_BUILD_UI=OFF \
+ -DLLAMA_BUILD_EXTRA=ON

@@ -19,11 +19,7 @@ size = "4.79 GB"
 
 [args]
 base = [
-    # -1 (no 999): con un numero fijo el fitter aborta ("n_gpu_layers already set
-# by user") y el modelo entero se va a la VRAM a pelo -> cudaMalloc failed.
     "--n-gpu-layers", "29",
-    "--threads", "12",
-    "--threads-batch", "24",
     "--temp", "${env:ROPERO_QWENVISION_TEMP:-0.2}",     # baja temperatura para análisis preciso
     "--top-p", "${env:ROPERO_QWENVISION_TOP_P:-0.9}",
     "--top-k", "${env:ROPERO_QWENVISION_TOP_K:-20}",
@@ -33,7 +29,5 @@ base = [
     "--n-predict", "4096",
     "--slot-prompt-similarity", "0.8",
     "--keep", "8192",
-    "--jinja",
-    "--load-mode", "none",
 ]
 

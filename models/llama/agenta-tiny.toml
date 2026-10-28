@@ -21,17 +21,9 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "32",
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q8_0 lo exige
-
-    # ---- KV cache ----
     "--cache-type-k", "q8_0",
     "--cache-type-v", "q8_0",
-
-    # ---- Sampling ----
     "--temp", "0.85",
     "--top-p", "0.95",
     "--top-k", "20",
@@ -39,14 +31,7 @@ base = [
     "--presence-penalty", "1.1",
     "--repeat-penalty", "1.0",
     "--reasoning-format", "auto",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]

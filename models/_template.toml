@@ -37,7 +37,7 @@
 #   mtp       Nombre final del fichero MTP (decoding especulativo). Opcional.
 #   mmproj    Nombre final del proyector de visión. Opcional.
 #
-# [download]  (obligatoria salvo que el modelo se fabrique)
+# [download]  (obligatoria salvo que el modelo se fabrique con [build])
 #   repo      Repositorio de HuggingFace, "owner/repo".
 #   file      Nombre exacto del fichero dentro del repo.
 #   name      Nombre final en disco. Si se omite, vale lo mismo que file.
@@ -71,10 +71,11 @@
 # todavia no existe): es lo que ve el usuario cuando se le pregunta si
 # fabricar esto.
 #
-# OJO: [download] sigue siendo obligatoria en un modelo que se fabrica (el
-# esquema la pide), pero ahi NO se descarga el GGUF principal: [download]
-# queda para los ficheros AUXILIARES (MTP, mmproj). El GGUF principal sale
-# de [build] y se guarda con el nombre de [files].gguf.
+# OJO: en un modelo que se fabrica, la [download] es OPCIONAL: no hay de
+# donde bajar el GGUF principal (es justo lo que se fabrica). Si el modelo
+# tiene ficheros AUXILIARES (MTP, mmproj), esos se siguen descargando con
+# [download.aux.*]. El GGUF principal sale de [build] y se guarda con el
+# nombre de [files].gguf.
 #
 # [download.aux.mtp] / [download.aux.mmproj]  (opcionales)
 #   file      Ruta del fichero dentro del repo. Puede llevar subdirectorio.

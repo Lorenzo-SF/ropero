@@ -16,7 +16,7 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
+gguf = "granite-4.0-h-small-IQ4_NL.gguf"
 
 # ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
 #
@@ -26,27 +26,20 @@ gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
 # comando de abajo hacen EXACTAMENTE lo mismo.
 #
 #   ropero gguffer --repo ibm-granite/granite-4.0-h-small \
-#       --quant MXFP4_MOE \
+#       --quant "IQ4_NL" \
 #       --imatrix-repo unsloth/granite-4.0-h-small-GGUF \
 #       --imatrix-file imatrix_unsloth.gguf_file \
+#       --out "$HOME/models/gguf/granite/granite-4.0-h-small-IQ4_NL.gguf" \
 #       --keep-source
-#
-# MXFP4_MOE es el quant que lleva los expertos routed (4 bits) y el resto en
-# Q8_0/F32. Los pesos del repo son BF16 (64 GB): el gguffer los baja, los
-# convierte a F16 y de ahi sale el MXFP4_MOE.
 [build]
 repo         = "ibm-granite/granite-4.0-h-small"
-quant        = "MXFP4_MOE"
+quant        = "IQ4_NL"
 imatrix_repo = "unsloth/granite-4.0-h-small-GGUF"
 imatrix_file = "imatrix_unsloth.gguf_file"
 keep_source  = true
 # Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "64.4 GB"
 
-[download]
-repo = "unsloth/granite-4.0-h-small-GGUF"
-file = "granite-4.0-h-small-MXFP4_MOE.gguf"
-size = "13.53 GB"
 
 [levels]
 list    = ["low", "medium", "high"]

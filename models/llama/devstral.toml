@@ -18,36 +18,18 @@ size = "11.47 GB"
 [args]
 base = [
     "--n-gpu-layers", "41",
-
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-    "--cache-prompt",
-    "--cache-reuse", "512",
-    "--context-shift",
-
-    "--batch-size", "4096",
-    "--ubatch-size", "1024",
-    "--parallel", "1",
-    "--threads", "12",
-    "--threads-batch", "16",
-    "--poll", "30",
-
-    "--jinja",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--chat-template-kwargs", '{"enable_thinking": false}',
     "--reasoning-format", "deepseek",
-
     "--temp", "0.6",
     "--top-k", "20",
     "--top-p", "0.95",
     "--min-p", "0.05",
     "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
-    "--seed", "-1",
-
     "--n-predict", "4096",
     "--keep", "1024",
 
-    "--load-mode", "none",
-    "--metrics",
-    "--perf",
+
 ]

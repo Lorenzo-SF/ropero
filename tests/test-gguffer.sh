@@ -1096,6 +1096,34 @@ check "29c. list-quants -> los del modelo" "$(cond 'printf %s "$out" | grep -q "
 check "29d. list-quants -> dice de que repo" \
       "$(cond 'printf %s "$out" | grep -q "owner/Qwen3.8-27B"')" "$out"
 
+# ══ 30. SI EL --out YA EXISTE, NO SE HACE NADA ════════════════════════════
+# Rehacer un GGUF que ya esta es tirar una hora y 60 GB para nada, y
+# encima pisa el fichero. El check va ANTES de descargar: si el destino
+# ya esta, el gguffer dice que no hace nada y sale.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+# Con la ruta exacta del fichero, que es como lo llama el TOML.
+mkdir -p "$GGUF_OUT/qwen"
+echo "GGUF FALSO" > "$GGUF_OUT/qwen/repo-IQ3_XS.gguf"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out "$GGUF_OUT/qwen/repo-IQ3_XS.gguf" 2>&1)"; rc=$?
+check "30a. ya existe -> sale bien"        "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "30b. ya existe -> lo dice"          "$(cond 'printf %s "$out" | grep -q "ya existe"')" "$out"
+check "30c. ya existe -> no hace nada"     "$(cond 'printf %s "$out" | grep -q "no se hace nada"')" "$out"
+check "30d. ya existe -> NO descarga"      "$(cond '! printf %s "$out" | grep -q "descargo owner/repo"')" "se bajó el clon"
+check "30e. ya existe -> NO lo toca"       "$(cond '[ "$(cat "$GGUF_OUT/qwen/repo-IQ3_XS.gguf")" = "GGUF FALSO" ]')" "el fichero se.overescribió"
+# Con --force, si se rehace.
+rm -rf "$WORK_ROOT/owner__repo"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out "$GGUF_OUT/qwen/repo-IQ3_XS.gguf" --force 2>&1)"; rc=$?
+check "30f. con --force, se rehace"         "$(cond '[ $rc -eq 0 ]')" "rc=$rc: $out"
+check "30g. con --force, descarga"          "$(cond 'printf %s "$out" | grep -q "descargo owner/repo"')" "no se bajó el clon"
+# Con un nombre (no ruta exacta), tambien avisa.
+rm -rf "${GGUF_OUT:?}"/* "$WORK_ROOT"/gguf_*; mkdir -p "$GGUF_OUT"
+# Con --out <nombre>, el fichero final es "<nombre>-<quant>.gguf" (el
+# nombre es la BASE, no el nombre final).
+echo "GGUF FALSO" > "$GGUF_OUT/repo-IQ3_XS-IQ3_XS.gguf"
+out="$(gguffer --repo owner/repo --quant IQ3_XS --out repo-IQ3_XS 2>&1)"; rc=$?
+check "30h. con --out <nombre>, ya existe"  "$(cond 'printf %s "$out" | grep -q "ya existe"')" "$out"
+check "30i. y no hace nada"                 "$(cond '! printf %s "$out" | grep -q "descargo owner/repo"')" "se bajó el clon"
+
 # ── resumen ────────────────────────────────────────────────────────────────
 printf '\n%s: %d correctos, %d fallos\n' "$(basename "$0")" "$PASS" "$FAIL"
 if (( FAIL > 0 )); then

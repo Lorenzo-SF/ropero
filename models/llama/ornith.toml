@@ -8,12 +8,16 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf   = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
+gguf = "Ornith-1.5-35B-A3B-NVFP4.gguf"
 
-[download]
-repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
-file = "Ornith-1.5-35B-A3B-IQ2_M.gguf"
-size = "12.54 GB"
+[build]
+repo         = "ornith-ai/Ornith-1.5-35B-A3B"
+quant        = "NVFP4"
+imatrix_repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
+imatrix_file = "Ornith-1.5-35B-A3B-imatrix.gguf"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "71.9 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -21,17 +25,9 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "42",
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-
-    # ---- Sampling del Ornith ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.60",
     "--top-k", "35",
     "--top-p", "0.93",
@@ -44,14 +40,7 @@ base = [
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
     "--samplers", "top_k;top_p;min_p;dry;temp;top_n_sigma",
     "--reasoning-budget", "32768",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]

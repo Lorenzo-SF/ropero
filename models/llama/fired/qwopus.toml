@@ -21,14 +21,9 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "42",
-
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
-
-    # ---- Sampling ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
     "--temp", "0.60",
     "--top-k", "40",
     "--top-p", "0.95",
@@ -39,14 +34,7 @@ base = [
     "--dry-penalty-last-n", "1024",
     "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
     "--samplers", "min_p;top_k;top_p;temp;dry",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 
 [args.level.low]

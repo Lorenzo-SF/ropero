@@ -5,10 +5,12 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-context = 524288
+# context = 5242887
+context = 266144
+# context = 131072
 
 [files]
-gguf = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 
 # ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
 #
@@ -18,7 +20,12 @@ gguf = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
 # comando de abajo hacen EXACTAMENTE lo mismo.
 #
 #   ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 \
-#       --quant MXFP4_MOE \
+#       --quant "NVFP4" \
+#       --imatrix-repo bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF \
+#       --imatrix-file NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf \
+#       --out "$HOME/models/gguf/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf" \
+#       --keep-source
+#       --quant NVFP4 \
 #       --imatrix-repo bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF \
 #       --imatrix-file NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf \
 #       --keep-source
@@ -39,76 +46,49 @@ gguf = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
 # capas y se queda sin usar 9 tensores del bloque 52).
 [build]
 repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
-quant        = "MXFP4_MOE"
+quant        = "NVFP4"
 imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
 imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
 keep_source  = true
 # Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "65.8 GB"
-
-[download]
-repo = "vcruz305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
-# OJO: este "size" es el del GGUF YA HECHO que hay en el repo (17.98 GB, medido
-# por HTTP), NO el de los pesos que se bajan al fabricar (65.8 GB de BF16).
-# Los pesos los baja el gguffer; este repo es la alternativa publicada, que se
-# puede bajar en 5 minutos en vez de fabricar en una hora.
-size = "17.98 GB"
-
 [levels]
-# El nemotron tambien razona por DEFECTO (su template: "enable_thinking if
-# enable_thinking is defined else True"). Por defecto va APAGADO, y se
-# enciende con "ropero nemotron --think".
-#
-# Sin "default" a proposito: sin nivel, el [args].base manda.
 list = ["think"]
+
+[flags]
+list = ["mtp"]
 
 [args]
 base = [
-    "--n-gpu-layers", "53",                            # todos los layers GPU-eligible
-    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-12}",   # experts de las 12 primeras capas a la CPU
-
-    # ---- Atención ----
-    # -fa on lo pone ropero entry globalmente
-    # NO --swa-full (Nemotron usa Mamba SSM, no SWA)
-	#"--fit off",
-    # ---- KV cache ----
-    "--cache-type-k", "turbo3",                          # agresivo (mamba SSM no usa esto, attn sí)
-    "--cache-type-v", "turbo3",
-    "--cache-prompt",
-    "--context-shift",
-
-    # ---- Modelo / carga ----
-    "--jinja",                                         # chat template NVIDIA Nemotron
-    "--reasoning-format", "deepseek",                  # limpia tags <think> del output
     "--chat-template-kwargs", '{"enable_thinking": false}',  # OFF por defecto
-    "--load-mode", "none",
-
-    # ---- Sampling (canónico NVIDIA) ----
+    "--n-gpu-layers", "54",
+    "--n-cpu-moe", "15",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--temp", "1.0",
     "--top-p", "0.95",
-    "--top-k", "0",                                    # desactivado (solo top-p)
+    "--top-k", "0",
     "--min-p", "0.0",
-    "--repeat-penalty", "1.0",                         # sin penalty
+    "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
-
-    # ---- Batching / threads ----
-    "--batch-size", "2048",                            # bajado de 4096 (libera compute buffers)
-    "--ubatch-size", "512",                            # bajado de 1024
-    "--parallel", "1",
-
-    # ---- Generación ----
-    "--n-predict", "8192",                             # reasoning puede requerir más
+    "--n-predict", "8192",
     "--keep", "1024",
 
-    # ---- Misc ----
-    # --log-verbosity lo pone ropero entry (default 4)
 ]
 
-# El thinking, a pedido: "ropero nemotron --think".
-#
-# El base lleva "enable_thinking": false y este nivel lleva true. Los dos
-# van en el argv (base, luego nivel) y el ultimo gana: el server se queda
-# con la kwargs del nivel.
 [args.level.think]
 base = ["--chat-template-kwargs", '{"enable_thinking": true}']
+
+[args.flag.mtp]
+# OJO: este GGUF NO trae la cabeza MTP (52 bloques, nextn=0), y esta arch
+# (nemotron_h_moe) no la lee aunque el GGUF la trajera. Con "--flag mtp" el
+# server pide un contexto MTP y aborta:
+#     "context type MTP requested but model doesn't contain MTP layers"
+# La MTP de este modelo va aparte (el fichero "mtp-*.gguf" de tngtech), como
+# modelo de draft, no embebida.
+base = [
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "3",
+    "--spec-draft-type-k", "turbo3",
+    "--spec-draft-type-v", "turbo3"
+]

@@ -8,7 +8,7 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf   = "Qwen3-Coder-30B-A3B-Instruct-IQ4_XS.gguf"
+gguf = "Qwen3-Coder-30B-A3B-Instruct-IQ4_NL.gguf"
 
 # ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
 #
@@ -18,6 +18,21 @@ gguf   = "Qwen3-Coder-30B-A3B-Instruct-IQ4_XS.gguf"
 # comando de abajo hacen EXACTAMENTE lo mismo.
 #
 #   ropero gguffer --repo Qwen/Qwen3-Coder-30B-A3B-Instruct \
+#       --quant "IQ4_NL" \
+#       --imatrix-repo n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF \
+#       --imatrix-file code.imatrix \
+#       --out "$HOME/models/gguf/qwencoder/Qwen3-Coder-30B-A3B-Instruct-IQ4_NL.gguf" \
+#       --keep-source
+#
+# Y la variante en NVFP4 (4 bits, mas rapido), que tambien se puede
+# fabricar con este mismo repo:
+#
+#   ropero gguffer --repo Qwen/Qwen3-Coder-30B-A3B-Instruct \
+#       --quant "NVFP4" \
+#       --imatrix-repo n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF \
+#       --imatrix-file code.imatrix \
+#       --out "$HOME/models/gguf/qwencoder/Qwen3-Coder-30B-A3B-Instruct-NVFP4.gguf" \
+#       --keep-source
 #       --quant IQ4_XS \
 #       --imatrix-repo n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF \
 #       --imatrix-file code.imatrix \
@@ -29,32 +44,18 @@ gguf   = "Qwen3-Coder-30B-A3B-Instruct-IQ4_XS.gguf"
 # para hablar.
 [build]
 repo         = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
-quant        = "IQ4_XS"
+quant        = "IQ4_NL"
 imatrix_repo = "n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF"
 imatrix_file = "code.imatrix"
 keep_source  = true
 # Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "61.1 GB"
-
-[download]
-repo = "n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF"
-file = "Qwen3-Coder-30B-A3B-Instruct-code-imatrix-IQ4_XS.gguf"
-size = "16.37 GB"
-
 [args]
 base = [
-    # ---- GPU offload: que el fitter reparta ----
     "--n-gpu-layers", "49",
     "--n-cpu-moe", "${env:ROPERO_QWENCODER_N_CPU_MOE:-22}",   # experts de las 22 primeras capas a la CPU
-
-    # ---- Attention ----
-    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
-
-    # ---- KV cache ----
     "--cache-type-k", "q4_0",
     "--cache-type-v", "q4_0",
-
-    # ---- Sampling del Qwen3-Coder ----
     "--temp", "0.7",
     "--top-p", "0.8",
     "--top-k", "20",
@@ -63,13 +64,6 @@ base = [
     "--repeat-last-n", "64",
     "--reasoning-format", "deepseek",
     "--keep", "1024",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "512",
     "--n-predict", "8192",
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",                   # mmap + page cache, no "none"
 ]
 

@@ -2023,13 +2023,24 @@ start_model() {
                 --api-key "$LLAMA_API_KEY"
                 --alias "$model"
                 --ctx-size "$ctx_size"
-                --threads 12
-                --threads-batch 24
+                --threads 10
+                --threads-batch 20
                 --flash-attn on
                 --jinja
                 --log-verbosity 4
                 --parallel 1
+                --load-mode none
                 --kv-unified                     # global: el KV unificado lo
+                --kv-offload
+                --batch-size 4096
+                --ubatch-size 1024
+                --cache-reuse 512
+                --cache-prompt
+                --context-shift
+                --poll 30
+                --metrics
+                --perf
+                --seed -1
                                                 # necesitan todos (y lo pidia
                                                 # 14 de 15 TOMLs, duplicado)
 
@@ -5246,6 +5257,48 @@ cmd_gguffer() {
     fi
     [[ -n "$out_name" ]] && nombre="$out_name"
     local sentinel="$work/.gguffer-complete"
+
+    # ── SI YA EXISTE, NO SE HACE NADA ───────────────────────────────────────
+    # El GGUF de salida puede ser que ya este ahi: entonces la tirada
+    # entera (bajar 60 GB, convertir, cuantizar) es trabajo para nada, y
+    # encima se pisa un fichero que puede ser hours de trabajo.
+    #
+    # Este check va ANTES de descargar, y no solo antes de convertir: la
+    # descarga es la parte cara (una hora y 60 GB). Por eso las rutas
+    # finales se calculan aqui, con el nombre base que ya se sabe, y no
+    # despues de la conversion.
+    #
+    # Con --force se rehace (que es lo que quiere quien pide --force).
+    if [[ -n "$repo" && $force -eq 0 && -z "$path" ]] && (( ${#quants[@]} > 0 )); then
+        local -a _previas=()
+        local _qp _qi=0
+        for _qp in "${quants[@]}"; do
+            if (( _qi == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL" ]]; then
+                _previas+=("$ROPERO_GGUF_OUT_PRINCIPAL")
+            elif (( _qi == 0 )) && [[ -n "$ROPERO_GGUF_OUT_PRINCIPAL_DIR" ]]; then
+                _previas+=("$ROPERO_GGUF_OUT_PRINCIPAL_DIR/${nombre}-${_qp}.gguf")
+            elif [[ -n "$ROPERO_GGUF_OUT_FILE" ]]; then
+                _previas+=("$ROPERO_GGUF_OUT_FILE")
+            else
+                _previas+=("$out_dir/${nombre}-${_qp}.gguf")
+            fi
+            _qi=$((_qi+1))
+        done
+        local _falta=0 _op
+        for _op in "${_previas[@]}"; do
+            [[ -f "$_op" ]] || _falta=1
+        done
+        if (( _falta == 0 )); then
+            if (( ${#_previas[@]} == 1 )); then
+                echo "[gguffer] ya existe: ${_previas[0]}"
+            else
+                echo "[gguffer] ya existen todos los quants pedidos:"
+                for _op in "${_previas[@]}"; do echo "           $_op"; done
+            fi
+            echo "           no se hace nada (usa --force para rehacerlo)"
+            return 0
+        fi
+    fi
 
     # ── el imatrix: si viene de un repo, se baja aqui ───────────────────────
     # El imatrix es un fichero aparte del modelo (unos 200 MB) y lo publica

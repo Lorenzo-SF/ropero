@@ -91,7 +91,7 @@ base = [
     "--jinja",                                         # chat template Qwen3.8
     "--reasoning-format", "deepseek",                  # limpia tags <think>
     "--chat-template-kwargs", '{"enable_thinking": false}',  # THINKING OFF
-    "--load-mode", "none",
+    "--load-mode", "auto",
 
     # ---- Sampling (modo INSTRUCT, canonico Qwen3.8) ----
     "--temp", "0.7",

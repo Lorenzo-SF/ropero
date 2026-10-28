@@ -1312,6 +1312,7 @@ def validate_model(path, engine_dir, origin):
     model = loaded["model"]
     files = loaded["files"]
     download = loaded["download"]
+    build = loaded["build"]
     levels = loaded["levels"]
     flags = loaded["flags"]
     options = loaded["options"]
@@ -1381,8 +1382,11 @@ def validate_model(path, engine_dir, origin):
                 bad("falta [download.aux.%s].file" % kind)
             if cfg.get("name") and os.path.isabs(str(cfg.get("name"))):
                 bad("[download.aux.%s].name debe ser un nombre de fichero" % kind)
-    elif fmt == "gguf":
-        bad("falta la tabla [download] (obligatoria para un modelo gguf)")
+    elif fmt == "gguf" and not build:
+        # Un modelo que se FABRICA no tiene [download]: no hay de donde
+        # bajar el GGUF principal (es justo lo que se fabrica). La [download]
+        # sigue siendo obligatoria para un modelo que se descarga.
+        bad("falta la tabla [download] (obligatoria para un modelo gguf que no se fabrica)")
 
     # ── [levels] ───────────────────────────────────────────────────────────
     levels_list = [str(x) for x in _as_list(levels.get("list"))]

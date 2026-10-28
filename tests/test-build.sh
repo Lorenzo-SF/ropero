@@ -207,8 +207,9 @@ check "6a. el destino es GGUF_DIR/<modelo>/<gguf>" \
       "$(cond 'printf "%s\n" "$catout" | grep -q "^build	fabrica-IQ4_XS.gguf"')" "$catout"
 
 # ══ 7. los TOML de VERDAD del repo tienen [build] bien formado ════════════
-# Los cinco modelos que se fabrican: nemotron, granite, qwen3, qwencoder, qwen
-for m in nemotron granite qwen3 qwencoder qwen; do
+# Los siete modelos que se fabrican: qwen, qwen3, qwencoder, granite,
+# nemotron, ornith y muse.
+for m in qwen qwen3 qwencoder granite nemotron ornith muse; do
   a="$(python3 "$MC" build --root "$REPO/models" --name "$m" 2>/dev/null)"
   check "7. $m -> el gguffer recibe un argv" "$(cond '[ -n "$a" ]')" "$a"
   check "7. $m -> tiene --quant"           "$(cond 'printf "%s\n" "$a" | grep -qx -- "--quant"')" "$a"
@@ -217,25 +218,58 @@ for m in nemotron granite qwen3 qwencoder qwen; do
 done
 
 # El nemotron NO puede fabricar desde el repo NVFP4 (ya viene cuantizado):
-# es el fallo quedg- dio, y la receta tiene que apuntar al BF16.
+# es el fallo quedg- dio, y la receta tiene que apuntar al BF16. El QUANT
+# puede ser NVFP4 (eso se fabrica desde el BF16, que es limpio): lo que no
+# puede es ser el REPO "...-NVFP4".
 a="$(python3 "$MC" build --root "$REPO/models" --name nemotron 2>/dev/null)"
 check "8a. el nemotron fabrica desde el BF16" \
       "$(cond 'printf "%s\n" "$a" | grep -qx "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"')" "$a"
-check "8b. el nemotron NO fabrica desde el NVFP4" \
-      "$(cond '! printf "%s\n" "$a" | grep -q "NVFP4"')" "$a"
+check "8b. el nemotron NO fabrica desde el REPO NVFP4" \
+      "$(cond '! printf "%s\n" "$a" | grep -qx "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4"')" "$a"
 check "8c. el nemotron usa el imatrix de bartowski" \
       "$(cond 'printf "%s\n" "$a" | grep -qx "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"')" "$a"
 
-# El qwen (Qwen3.8) se fabrica con --no-mtp, y por eso NO puede ofrecer el
-# flag "mtp": el server aborta si se le pide un contexto MTP y el modelo no
-# tiene la capa ("context type MTP requested but model doesn't contain MTP
-# layers").
+# El qwen (Qwen3.8) se fabrica CON la MTP: sus args de base usan
+# "--spec-type draft-mtp", y eso es un tipo de CONTEXTO (el server comprueba
+# que el modelo traiga la capa MTP). Sin la MTP en el GGUF, el server
+# aborta: "context type MTP requested but model doesn't contain MTP layers".
+# En el nemotron es al reves (su arch no lee la metadata), y por eso el
+# nemotron lleva el flag "mtp" apagado.
 a="$(python3 "$MC" build --root "$REPO/models" --name qwen 2>/dev/null)"
-check "9a. el qwen se fabrica con --no-mtp" \
-      "$(cond 'printf "%s\n" "$a" | grep -qx -- "--no-mtp"')" "$a"
-check "9b. el qwen NO tiene el flag mtp" \
-      "$(cond '! grep -q "^mtp$" <<<"$(python3 "$MC" dump --root "$REPO/models" | cut -f18 | grep -v "^$")"')" \
-      "el qwen ofrece el flag mtp con un GGUF sin MTP"
+check "9a. el qwen se fabrica CON la MTP" \
+      "$(cond '! printf "%s\n" "$a" | grep -qx -- "--no-mtp"')" "$a"
+check "9b. el qwen usa draft-mtp en sus args" \
+      "$(cond 'python3 "$MC" args --root "$REPO/models" --name qwen 2>/dev/null | grep -q "draft-mtp"')" \
+      "el qwen usa draft-mtp en sus args"
+
+# ══ 10. los siete modelos se fabrican con SU quant ═══════════════════════
+# Cada modelo tiene el quant que se le pidio, y el fichero final es el que
+# dice [files].gguf (el launcher lo busca con ese nombre).
+declare -A QUANT_ESPERADO=(
+  [qwen]=NVFP4        [qwen3]=NVFP4       [qwencoder]=IQ4_NL
+  [granite]=IQ4_NL    [nemotron]=NVFP4    [ornith]=NVFP4
+  [muse]=IQ4_NL
+)
+for m in qwen qwen3 qwencoder granite nemotron ornith muse; do
+  a="$(python3 "$MC" build --root "$REPO/models" --name "$m" 2>/dev/null)"
+  # El argv lleva una opcion por linea: "--quant" y el valor van en lineas
+  # seguidas. Se comprueba el valor que va justo detras de "--quant".
+  q="$(printf '%s\n' "$a" | awk '/^--quant$/ {getline; print; exit}')"
+  check "10. $m -> quant ${QUANT_ESPERADO[$m]}" \
+        "$(cond '[ "$q" = "${QUANT_ESPERADO[$m]}" ]')" "quant=$q"
+  gg="$(sed -n 's/^gguf[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO/models/llama/$m.toml" | head -1)"
+  check "10. $m -> el GGUF final tiene nombre" \
+        "$(cond '[ -n "$gg" ]')" "sin nombre para $m"
+done
+
+# ══ 11. un modelo que se fabrica NO necesita [download] ══════════════════
+# El granite y el qwen3 se fabrican y no tienen alternativa publicada
+# (su quant no lo ha hecho nadie): no hay de donde bajar el GGUF principal.
+for m in granite qwen3; do
+  check "11. $m -> no tiene [download]" \
+        "$(cond '! grep -q "^\[download\]" "$REPO/models/llama/$m.toml"')" \
+        "el $m declara [download]"
+done
 
 # ══ resumen ════════════════════════════════════════════════════════════════
 printf '\ntest-build.sh: %d correctos, %d fallos\n' "$PASS" "$FAIL"
