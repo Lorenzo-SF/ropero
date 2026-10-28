@@ -15,8 +15,8 @@ gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE-MTP.gguf"
-size = "19.76 GB"
+file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+size = "17.98 GB"
 
 [build]
 repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
@@ -51,17 +51,3 @@ base = [
     "--reasoning-budget", "12288",
 ]
 
-
-[args.flag.mtp]
-# OJO: este GGUF NO trae la cabeza MTP (52 bloques, nextn=0), y esta arch
-# (nemotron_h_moe) no la lee aunque el GGUF la trajera. Con "--flag mtp" el
-# server pide un contexto MTP y aborta:
-#     "context type MTP requested but model doesn't contain MTP layers"
-# La MTP de este modelo va aparte (el fichero "mtp-*.gguf" de tngtech), como
-# modelo de draft, no embebida.
-base = [
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "3",
-    "--spec-draft-type-k", "turbo3",
-    "--spec-draft-type-v", "turbo3"
-]

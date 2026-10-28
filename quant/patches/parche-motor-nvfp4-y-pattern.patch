@@ -1,0 +1,85 @@
+diff --git a/common/json-schema-to-grammar.cpp b/common/json-schema-to-grammar.cpp
+index b18607c..3dcfdf2 100644
+--- a/common/json-schema-to-grammar.cpp
++++ b/common/json-schema-to-grammar.cpp
+@@ -346,11 +346,42 @@ private:
+     }
+ 
+     std::string _visit_pattern(const std::string & pattern, const std::string & name) {
+-        if (!(pattern.front() == '^' && pattern.back() == '$')) {
+-            _errors.push_back("Pattern must start with '^' and end with '$'");
++        if (pattern.empty()) {
++            _errors.push_back("Empty pattern");
+             return "";
+         }
+-        std::string sub_pattern = pattern.substr(1, pattern.length() - 2);
++        // Un pattern SIN anclar no es un error: se trata como si lo
++        // estuviera.
++        //
++        // Antes esto tiraba la peticion ENTERA ("Pattern must start with
++        // '^' and end with '$'"), y el sintoma era que un server con tools
++        // devolvia 400 en cuanto le mandabas el schema de una tool con un
++        // "pattern" sin anclar. El sintoma no tiene nada que ver con el
++        // modelo ni con la plantilla: es el schema de la tool.
++        //
++        // El motor SIEMPRE ha exigido patterns anclados, asi que tratarlos
++        // como anclados no cambia el comportamiento de nada: solo deja de
++        // rechazar los que no lo estan. Se quita el ^ y el $ de los
++        // extremos y se usa el resto, que es justo lo que hacia el codigo
++        // original (que solo aceptaba "^...$").
++        //
++        // OJO: en JSON Schema un pattern sin anclar es una coincidencia
++        // PARCIAL ("abc" casaria con "abcd"), y aqui se aplica como
++        // COMPLETA. Es el mismo criterio que el motor ya usaba con los
++        // patterns anclados, asi que no cambia el criterio de nadie: solo
++        // deja de fallar.
++        std::string inner = pattern;
++        if (inner.front() == '^') {
++            inner.erase(0, 1);
++        }
++        if (!inner.empty() && inner.back() == '$') {
++            inner.pop_back();
++        }
++        if (inner.empty()) {
++            _errors.push_back("Pattern is only anchors");
++            return "";
++        }
++        std::string sub_pattern = inner;
+         std::unordered_map<std::string, std::string> sub_rule_ids;
+ 
+         size_t i = 0;
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+index fc200ab..d10b88c 100644
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -536,6 +536,30 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type
+         } else {
+             new_type = GGML_TYPE_Q8_0;
+         }
++    } else if (ftype == LLAMA_FTYPE_MOSTLY_NVFP4) {
++        // MoE   tensors -> NVFP4
++        // other tensors -> Q8_0
++        //
++        // ESTA REGLA HACE FALTA, Y ES LA HERMANA DE LA DEL MXFP4_MOE (que
++        // si existe y si funciona: "MoE tensors (ne[2] > 1) -> MXFP4; otros
++        // -> Q8_0"). Sin ella, el NVFP4 de llama.cpp cuantiza a 4 bits TODO
++        // lo que tenga 2 o mas dimensiones: la atencion, las proyecciones
++        // del Mamba (ssm_in/ssm_out) y el embedding. El resultado es un
++        // modelo que "habla cosas raras": el estado recurrente del Mamba se
++        // desincroniza y el embedding pierde precision.
++        //
++        // Medido en el NVFP4 fabricado SIN esta regla: 163 tensores a 4
++        // bits (46 expertos + 117 mas) y solo 1 en q8_0. Con la regla, los
++        // expertos van a NVFP4 y el resto a Q8_0, como en el MXFP4_MOE.
++        //
++        // (NVIDIA, con modelopt, deja el resto en F16: su GGUF tiene 93
++        // NVFP4, 71 F16 y 330 F32. Q8_0 es mas compacto y es lo que ya
++        // funciona en el MXFP4_MOE de este mismo motor.)
++        if (tensor->ne[2] > 1) {
++            new_type = GGML_TYPE_NVFP4;
++        } else {
++            new_type = GGML_TYPE_Q8_0;
++        }
+     } else if (category == tensor_category::TOKEN_EMBD) {
+         if (qs.params->token_embedding_type < GGML_TYPE_COUNT) {
+             new_type = qs.params->token_embedding_type;

@@ -992,7 +992,11 @@ def build_record(path, engine_dir, origin):
         aux_file = _clean(cfg.get("file", ""))
         aux_name = _clean(cfg.get("name", "")) or aux_file
         aux_size = _clean(cfg.get("size", ""))
-        return "|".join([repo, aux_file, aux_name, aux_size])
+        # El aux puede vivir en OTRO repo que el del modelo: el draft MTP
+        # del nemotron esta en tngtech y el MXFP4 en vcruz305. El que
+        # declara el TOML manda; si no lo declara, es el repo del modelo.
+        aux_repo = _clean(cfg.get("repo", "")) or repo
+        return "|".join([aux_repo, aux_file, aux_name, aux_size])
 
     # La spec de [args], serializada a JSON y en base64.
     spec = {}
