@@ -1,45 +1,25 @@
 # =============================================================================
 # granite — granite-4.0-h-small (MoE híbrido Mamba, 40 capas, 10 expertos)
 # =============================================================================
-#
-# Lo que es: 40 capas de las que 36 son Mamba (estado recurrente) y 4 son de
-# atencion. Es un MoE con 10 expertos activos por token.
-#
-# Su KV es diminuto (solo 4 de sus 40 capas son de atencion), asi que el
-# contexto largo no le cuesta lo que a un denso. El offload va por
-# --n-cpu-moe: los expertos routed son el grueso de los pesos.
-# =============================================================================
 
 [model]
 name    = "granite"
 engine  = "llama-server"
-context = 131072
+# context = 5242887
+context = 266144
+# context = 131072
 
 [files]
-gguf = "granite-4.0-h-small-IQ4_NL.gguf"
+# gguf = "granite-4.0-h-small-IQ4_NL.gguf"
+gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
 
-# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
-#
-# Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
-# sus claves son las mismas que acepta "ropero gguffer". El que la ejecuta
-# es el gguffer de verdad, asi que "ropero install models granite" y el
-# comando de abajo hacen EXACTAMENTE lo mismo.
-#
-#   ropero gguffer --repo ibm-granite/granite-4.0-h-small \
-#       --quant "IQ4_NL" \
-#       --imatrix-repo unsloth/granite-4.0-h-small-GGUF \
-#       --imatrix-file imatrix_unsloth.gguf_file \
-#       --out "$HOME/models/gguf/granite/granite-4.0-h-small-IQ4_NL.gguf" \
-#       --keep-source
 [build]
 repo         = "ibm-granite/granite-4.0-h-small"
 quant        = "IQ4_NL"
 imatrix_repo = "unsloth/granite-4.0-h-small-GGUF"
 imatrix_file = "imatrix_unsloth.gguf_file"
 keep_source  = true
-# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "64.4 GB"
-
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -47,34 +27,15 @@ default = "low"
 
 [args]
 base = [
-    # ---- GPU offload: 41 = las 40 capas + 1 (la convencion del repo) ----
     "--n-gpu-layers", "41",
-
-    # ---- Expertos routed a la CPU ----
-    # Los expertos son el grueso de los pesos de un MoE: mandarlos a la CPU
-    # es lo que deja entrar el modelo en la VRAM.
-    "--n-cpu-moe", "${env:ROPERO_GRANITE_N_CPU_MOE:-20}",
-
-    # ---- Atencion ----
-    "-fa", "on",
-
-    # ---- KV cache ----
+    "--n-cpu-moe", "18",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--cache-prompt",
-
-    # ---- Sampling ----
     "--temp", "0.60",
     "--top-k", "40",
     "--top-p", "0.95",
     "--min-p", "0.05",
-
-    # ---- Batch ----
-    "--batch-size", "512",
-    "--ubatch-size", "256",
     "--n-predict", "8192",
-
-    # ---- Modelo / carga ----
-    "--jinja",
-    "--load-mode", "auto",
+    
 ]
