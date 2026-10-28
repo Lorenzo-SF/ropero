@@ -4349,6 +4349,238 @@ for f in d.get("siblings", []):
 '
 }
 
+# _gguffer_es_json <fichero>
+#
+# 0 si el fichero existe y contiene JSON válido, 1 si no.
+#
+# Por qué hace falta: un 404 de HuggingFace NO es un JSON válido, pero
+# curl con "-o" puede dejar el cuerpo de la respuesta (que es el texto del
+# error) en el fichero. Sin esta comprobación, un repo que NO existe se
+# detectaría como "cuantizado" (porque su config.json "tiene" algo), y el
+# gguffer avisaría de un problema que no tiene.
+# -----------------------------------------------------------------------------
+_gguffer_es_json() {
+    local f="${1:-}"
+    [[ -s "$f" ]] || return 1
+    python3 - "$f" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        json.load(fh)
+except Exception:
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+# _gguffer_repo_ya_cuantizado <owner/repo>
+#
+# Devuelve 0 si el repo de pesos YA Viene cuantizado, 1 si no (o si no se
+# pudo saber). Imprime el motivo por stderr.
+#
+# ── POR QUÉ ESTE CHEQUEO ─────────────────────────────────────────────────────
+#
+# Cuantizar un repo que YA viene cuantizado no es un error raro: es lo que
+# pasa con todos los repos de NVIDIA ("...-NVFP4", "...-FP8") y con los
+# checkpoints de modelopt. Vienen con la metadata "hf_quant_config.json" o
+# con "quantization_config" en el config.json.
+#
+# El fallo es CARO, porque se descubre tarde: el gguffer baja 40-60 GB, los
+# convierte, y solo al cuantizar el motor dice
+#
+#     llama_model_quantize: failed to quantize: requantizing from type
+#     nvfp4 is disabled
+#
+# que no dice de donde sale el problema. Y la respuesta correcta (usar el
+# repo BF16) se puede saber ANTES de bajar nada.
+#
+# OJO: esto NO es el mismo caso que "el GGUF ya esta cuantizado", que se
+# comprueba con el file_type del GGUF (que se ve en la fase 3). Aqui se
+# mira el REPO, antes de descargar: el repo es la fuente, y la fuente dice
+# si sus pesos estan cuantizados.
+# -----------------------------------------------------------------------------
+_gguffer_repo_ya_cuantizado() {
+    local repo="$1"
+    [[ -n "$repo" && "$repo" == */* ]] || return 1
+
+    local _tmp
+    _tmp="$(mktemp "${TMPDIR:-/tmp}/gguffer-qcfg.XXXXXX")" || return 1
+
+    # hf_quant_config.json: la metadata que ponen los checkpoints de
+    # modelopt (NVIDIA y compañía). Su presencia ya dice "cuantizado".
+    local _hqc=1
+    if curl -fsS --max-time 60 -o "$_tmp" \
+            "https://huggingface.co/$repo/raw/main/hf_quant_config.json" 2>/dev/null \
+       && _gguffer_es_json "$_tmp"; then
+        _hqc=0
+    fi
+
+    # quantization_config en el config.json: la otra forma (AWQ, GPTQ,
+    # bnb, y el mxfp4 del gpt-oss).
+    local _qcfg=1
+    if [[ $_hqc -ne 0 ]] && curl -fsS --max-time 60 -o "$_tmp" \
+            "https://huggingface.co/$repo/raw/main/config.json" 2>/dev/null \
+       && _gguffer_es_json "$_tmp"; then
+        if python3 - "$_tmp" <<'PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if d.get("quantization_config") else 1)
+PY
+        then
+            _qcfg=0
+        fi
+    fi
+    rm -f "$_tmp" 2>/dev/null || true
+
+    if [[ $_hqc -eq 0 ]]; then
+        echo "el repo declara hf_quant_config.json (checkpoint ya cuantizado)" >&2
+        return 0
+    fi
+    if [[ $_qcfg -eq 0 ]]; then
+        echo "el config.json declara quantization_config (checkpoint ya cuantizado)" >&2
+        return 0
+    fi
+    return 1
+}
+
+# _gguffer_hermanos_sin_quantizar <owner/repo>
+#
+# Imprime, uno por linea, los repos del MISMO owner que parecen la version
+# SIN cuantizar del modelo. Es la respuesta que hay que dar cuando el repo
+# pedido ya viene cuantizado: "usa este otro".
+#
+# El criterio: mismo owner, y el nombre del repo pedido con el sufijo del
+# quant quitado. "nvidia/...-NVFP4" -> "nvidia/...-BF16".
+# -----------------------------------------------------------------------------
+_gguffer_hermanos_sin_quantizar() {
+    local repo="$1"
+    local owner="${repo%%/*}" name="${repo##*/}"
+    [[ -n "$owner" && -n "$name" ]] || return 0
+
+    # Los sufijos de quant que aparecen en el nombre del repo. Si el repo no
+    # termina en ninguno, no se puede adivinar el nombre del hermano: mejor
+    # no decir nada que decir uno inventado.
+    local base="" sufijos=(
+        "-NVFP4" "-MXFP4" "-FP8" "-FP4" "-INT4" "-INT8" "-AWQ" "-GPTQ"
+        "-W4A16" "-W4A8" "-W8A8" "-NF4" "-4BIT" "-8BIT" "-BF16" "-F16"
+    )
+    local s
+    for s in "${sufijos[@]}"; do
+        if [[ "$name" == *"$s" ]]; then
+            base="${name%"$s"}"
+            break
+        fi
+    done
+    [[ -n "$base" ]] || return 0
+
+    # Los candidatos: el mismo nombre base, sin cuantizar.
+    local -a candidos=("$base-BF16" "$base-F16" "$base")
+    local c
+    for c in "${candidos[@]}"; do
+        local hf_repo="$owner/$c"
+        # Se comprueba que EXISTE y que NO viene cuantizado: un hermano
+        # que también está cuantizado no sirve.
+        #
+        # La existencia se mira por el codigo de salida de curl (-f), y NO
+        # por "el fichero esta": un 404 tambien se puede escribir en el
+        # fichero de salida, y daria un falso positivo.
+        if curl -fsS --max-time 30 -o /dev/null \
+                "https://huggingface.co/$hf_repo/raw/main/config.json" 2>/dev/null; then
+            if ! _gguffer_repo_ya_cuantizado "$hf_repo"; then
+                printf '%s\n' "$hf_repo"
+            fi
+        fi
+    done
+    return 0
+}
+
+# _gguffer_quants_publicados <owner/repo>
+#
+# Imprime, uno por linea, los quants que YA estan publicados para ese modelo
+# base: "QUANT<TAB>repo". Es la respuesta a "que cuantizaciones soporta
+# esto": no las que el motor soporta en abstracto, sino las que hay hechas
+# de este modelo (que es lo que decide si vale la pena fabricar otra).
+#
+# Se busca por la API de HF con el filtro base_model:, que es como se
+# declaran los repos derivados de un checkpoint, y luego se leen los
+# nombres de los ficheros de cada repo (el quant va en el nombre).
+# -----------------------------------------------------------------------------
+_gguffer_quants_publicados() {
+    local repo="$1"
+    [[ -n "$repo" && "$repo" == */* ]] || return 1
+
+    local -a candidatos=()
+    mapfile -t candidatos < <(curl -s --max-time 90 \
+        "https://huggingface.co/api/models?filter=base_model:$repo&limit=60" 2>/dev/null \
+        | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+if not isinstance(d, list):
+    sys.exit(0)
+for m in d:
+    mid = m.get("id")
+    if mid:
+        print(mid)
+' 2>/dev/null)
+
+    ((${#candidatos[@]} > 0)) || return 1
+
+    local c
+    for c in "${candidatos[@]}"; do
+        # Solo los repos de GGUF: los demas no tienen quant que ofrecer.
+        case "$c" in
+            *-GGUF|*GGUF*) ;;
+            *) continue ;;
+        esac
+        local q
+        while IFS= read -r q; do
+            [[ -n "$q" ]] && printf '%s\t%s\n' "$q" "$c"
+        done < <(_gguffer_quants_de_repo "$c" 2>/dev/null)
+    done
+    return 0
+}
+
+# _gguffer_quants_de_repo <owner/repo>
+#
+# Los quants concretos publicados en un repo de GGUF, leidos de los nombres
+# de los ficheros. Un repo de GGUF publica el quant en el nombre del
+# fichero: "Qwen3.8-27B-UD-IQ3_XS.gguf" -> IQ3_XS.
+# -----------------------------------------------------------------------------
+_gguffer_quants_de_repo() {
+    local repo="$1"
+    local -a ficheros=()
+    mapfile -t ficheros < <(_gguffer_ficheros_hf "$repo")
+    ((${#ficheros[@]} > 0)) || return 1
+    printf '%s\n' "${ficheros[@]}" | python3 -c '
+import re, sys
+pat = re.compile(
+    r"(?:^|[-_.])(IQ[1-4](?:_[A-Z]+)+|Q[1-6]_K(?:_[A-Z]+)*|Q[1-6]_0|Q[1-6]_1"
+    r"|Q8_0|Q8_1|BF16|F16|F32|MXFP4(?:_MOE)?|NVFP4|TQ[12]_[0-9])(?=[-_.]|\.gguf$)")
+vistos = []
+for line in sys.stdin:
+    line = line.strip()
+    if not line.endswith(".gguf"):
+        continue
+    # El imatrix y el mmproj no son quants del modelo.
+    if "imatrix" in line.lower() or "mmproj" in line.lower():
+        continue
+    for m in pat.finditer(line):
+        q = m.group(1)
+        if q not in vistos:
+            vistos.append(q)
+for q in sorted(vistos):
+    print(q)
+'
+    return 0
+}
+
 # _gguffer_prepara_gguf <origen> <gguf_file> <dest_dir>
 #
 # Deja en <dest_dir> un GGUF UNICO y lo dice por stdout (la ruta). Si algo
@@ -4884,8 +5116,28 @@ cmd_gguffer() {
     done
 
     if (( list_only == 1 )); then
+        # ── Los quants del MOTOR ────────────────────────────────────────────
         echo "Quants disponibles (motor: $_quantize):"
         "$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" | sed 's/^/  /'
+        # ── Y los de ESTE modelo, si se sabe de donde viene ───────────────
+        #
+        # Los quants que el motor soporta son una cosa, y los que hay hechas
+        # de este modelo otra. Lo que decide si vale la pena fabricar es la
+        # segunda: un quant que ya esta publicado se puede bajar, y uno que no
+        # es el hueco que justifica una noche de cuantizacion.
+        local _modelo_para_listar="$repo"
+        [[ -n "$_modelo_para_listar" ]] || _modelo_para_listar="${gguf_origen%%:*}"
+        if [[ -n "$_modelo_para_listar" && "$_modelo_para_listar" == */* ]]; then
+            echo ""
+            echo "Quants ya publicados para $_modelo_para_listar:"
+            local _q _repo _n=0
+            while IFS=$'\t' read -r _q _repo; do
+                [[ -n "$_q" ]] || continue
+                printf '  %-12s %s\n' "$_q" "$_repo"
+                _n=$((_n+1))
+            done < <(_gguffer_quants_publicados "$_modelo_para_listar" 2>/dev/null | sort -u)
+            (( _n > 0 )) || echo "  (ninguno encontrado)"
+        fi
         return 0
     fi
 
@@ -5056,6 +5308,45 @@ cmd_gguffer() {
                 [[ "$_f" == "$_gguf_entrada" ]] && continue
                 rm -f "$_f"
             done
+        fi
+    fi
+
+    # ── FASE 0: el PREFLIGHT ────────────────────────────────────────────────
+    #
+    # Todo lo que se puede comprobar ANTES de bajar 40-60 GB. Bajar los pesos
+    # es la parte cara e irreversible del proceso (una hora y decenas de GB),
+    # y hay fallos que se saben de antemano:
+    #
+    #   · el repo ya viene CUANTIZADO (los de NVIDIA, los de modelopt): el
+    #     cuantizador no puede re-cuantizar y falla al final, cuando ya se ha
+    #     gastado todo;
+    #   · el motor no tiene el cuant que se pide;
+    #   · falta el imatrix que ese quant exige.
+    #
+    # El primero es el que mas duele, porque el error del motor
+    # ("requantizing from type nvfp4 is disabled") no dice de donde sale el
+    # problema, y la respuesta (usar el repo BF16) se puede buscar aqui.
+    if [[ -n "$repo" && -z "$gguf_origen" ]]; then
+        local _motivo=""
+        if _motivo="$(_gguffer_repo_ya_cuantizado "$repo" 2>&1)"; then
+            echo "ERROR: el repo $repo YA VIENE CUANTIZADO ($_motivo)." >&2
+            echo "       Cuantizar encima de eso es dequantizar y re-cuantizar:" >&2
+            echo "       se pierde calidad sin ganar nada, y el motor lo rechaza:" >&2
+            echo "         llama_model_quantize: failed to quantize:" >&2
+            echo "         requantizing from type nvfp4 is disabled" >&2
+            local _hermano
+            mapfile -t _hermanos < <(_gguffer_hermanos_sin_quantizar "$repo" 2>/dev/null)
+            if (( ${#_hermanos[@]} > 0 )); then
+                echo "       Usa el repo SIN cuantizar:" >&2
+                local _h
+                for _h in "${_hermanos[@]}"; do
+                    echo "         ropero gguffer --repo $_h --quant <QUANT> ..." >&2
+                done
+            else
+                echo "       No he encontrado un repo hermano sin cuantizar." >&2
+                echo "       Busca uno del mismo modelo en BF16 o F16." >&2
+            fi
+            return 1
         fi
     fi
 
