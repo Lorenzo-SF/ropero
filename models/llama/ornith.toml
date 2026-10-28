@@ -16,7 +16,6 @@ quant        = "NVFP4"
 imatrix_repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
 imatrix_file = "Ornith-1.5-35B-A3B-imatrix.gguf"
 keep_source  = true
-# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "71.9 GB"
 
 [levels]

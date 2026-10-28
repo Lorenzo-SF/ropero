@@ -906,3 +906,71 @@ cmake -B "$LLAMA_DIR/build" -S "$LLAMA_DIR" -G Ninja \
  -DLLAMA_BUILD_TESTS=OFF \
  -DLLAMA_BUILD_UI=OFF \
  -DLLAMA_BUILD_EXTRA=ON
+
+
+
+ 
+# granite 
+    ropero gguffer --repo ibm-granite/granite-4.0-h-small \
+        --quant "NVFP4" \
+        --imatrix-repo unsloth/granite-4.0-h-small-GGUF \
+        --imatrix-file imatrix_unsloth.gguf_file \
+        --out "$HOME/models/gguf/granite/granite-4.0-h-small-NVFP4.gguf" \
+        --keep-source
+
+
+
+# qwencoder
+    ropero gguffer --repo Qwen/Qwen3-Coder-30B-A3B-Instruct \
+        --quant "NVFP4" \
+        --imatrix-repo n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF \
+        --imatrix-file code.imatrix \
+        --out "$HOME/models/gguf/qwen/Qwen3-Coder-30B-A3B-Instruct-NVFP4.gguf" \
+        --keep-source
+
+
+# nemotron  
+    ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 \
+        --quant "NVFP4" \
+        --imatrix-repo bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF \
+        --imatrix-file NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf \
+        --out "$HOME/models/gguf/nemotron/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf" \
+        --keep-source
+
+
+# qwen  
+    ropero gguffer --repo Qwen/Qwen3.8-27B \    
+        --quant "NVFP4" \
+        --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
+        --imatrix-file Qwen3.8-27B-imatrix.gguf \
+        --out "$HOME/models/gguf/qwen/Qwen3.8-27B-NVFP4.gguf" \
+        --keep-source 
+
+
+# qwen3 (toml nuevo)
+    ropero gguffer --repo Qwen/Qwen3-30B-A3B \
+        --quant "NVFP4" \
+        --imatrix-repo bartowski/Qwen_Qwen3-30B-A3B-GGUF \
+        --imatrix-file Qwen3-30B-A3B.imatrix \
+        --out "$HOME/models/gguf/qwen/Qwen3-30B-A3B-NVFP4.gguf" \
+        --keep-source   
+
+
+# muse glimmer
+    ropero gguffer --repo meta-models/Muse-Glimmer-30B \
+        --quant "NVFP4" \
+        --imatrix-repo AtomicChat/Muse-Glimmer-30B-GGUF \
+        --imatrix-file imatrix/muse-glimmer.imatrix.gguf \
+        --out "$HOME/models/gguf/muse/Muse-Glimmer-30B-UD-NVFP4.gguf"  \
+        --keep-source   
+
+
+# ornith 
+ropero gguffer --repo ornith-ai/Ornith-1.5-35B-A3B \
+    --quant "NVFP4" \
+    --imatrix-repo bartowski/Ornith-1.5-35B-A3B-GGUF \
+    --imatrix-file Ornith-1.5-35B-A3B-imatrix.gguf \
+    --out "$HOME/models/gguf/ornith/Ornith-1.5-35B-A3B-NVFP4.gguf"   \
+    --keep-source
+
+     

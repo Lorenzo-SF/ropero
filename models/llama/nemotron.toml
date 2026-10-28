@@ -5,8 +5,8 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-# context = 5242887
-context = 266144
+context = 524288
+# context = 266144
 # context = 131072
 
 [files]
@@ -29,13 +29,10 @@ size = "65.8 GB"
 [levels]
 list = ["think"]
 
-[flags]
-list = ["mtp"]
-
 [args]
 base = [
     "--n-gpu-layers", "54",
-    "--n-cpu-moe", "12",
+    "--n-cpu-moe", "16",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "1.0",
@@ -45,9 +42,10 @@ base = [
     "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
     "--n-predict", "8192",
-    "--keep", "1024",
+    "--keep", "16384",
     "--chat-template-kwargs", '{"enable_thinking": true}',
+    "--reasoning-format", "deepseek",
     "--reasoning-preserve",
-    "--reasoning-budget", "12288",
+    "--reasoning-budget", "32768",
 ]
 

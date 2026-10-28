@@ -11,11 +11,11 @@ context = 266144
 # context = 131072
 
 [files]
-gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
+gguf = "granite-4.0-h-small-NVFP4.gguf"
 
 [download]
-repo = "noctrex/Granite-4.0-H-Small-MXFP4_MOE-GGUF"
-file = "Granite-4.0-H-Small-MXFP4_MOE.gguf"
+repo = "unsloth/granite-4.0-h-small-GGUF"
+file = "granite-4.0-h-small-NVFP4.gguf"
 size = "19.83 GB"
 
 [download.aux.imatrix]
