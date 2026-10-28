@@ -1,0 +1,50 @@
+diff --git a/common/json-schema-to-grammar.cpp b/common/json-schema-to-grammar.cpp
+index b18607c..3dcfdf2 100644
+--- a/common/json-schema-to-grammar.cpp
++++ b/common/json-schema-to-grammar.cpp
+@@ -346,11 +346,42 @@ private:
+     }
+ 
+     std::string _visit_pattern(const std::string & pattern, const std::string & name) {
+-        if (!(pattern.front() == '^' && pattern.back() == '$')) {
+-            _errors.push_back("Pattern must start with '^' and end with '$'");
++        if (pattern.empty()) {
++            _errors.push_back("Empty pattern");
+             return "";
+         }
+-        std::string sub_pattern = pattern.substr(1, pattern.length() - 2);
++        // Un pattern SIN anclar no es un error: se trata como si lo
++        // estuviera.
++        //
++        // Antes esto tiraba la peticion ENTERA ("Pattern must start with
++        // '^' and end with '$'"), y el sintoma era que un server con tools
++        // devolvia 400 en cuanto le mandabas el schema de una tool con un
++        // "pattern" sin anclar. El sintoma no tiene nada que ver con el
++        // modelo ni con la plantilla: es el schema de la tool.
++        //
++        // El motor SIEMPRE ha exigido patterns anclados, asi que tratarlos
++        // como anclados no cambia el comportamiento de nada: solo deja de
++        // rechazar los que no lo estan. Se quita el ^ y el $ de los
++        // extremos y se usa el resto, que es justo lo que hacia el codigo
++        // original (que solo aceptaba "^...$").
++        //
++        // OJO: en JSON Schema un pattern sin anclar es una coincidencia
++        // PARCIAL ("abc" casaria con "abcd"), y aqui se aplica como
++        // COMPLETA. Es el mismo criterio que el motor ya usaba con los
++        // patterns anclados, asi que no cambia el criterio de nadie: solo
++        // deja de fallar.
++        std::string inner = pattern;
++        if (inner.front() == '^') {
++            inner.erase(0, 1);
++        }
++        if (!inner.empty() && inner.back() == '$') {
++            inner.pop_back();
++        }
++        if (inner.empty()) {
++            _errors.push_back("Pattern is only anchors");
++            return "";
++        }
++        std::string sub_pattern = inner;
+         std::unordered_map<std::string, std::string> sub_rule_ids;
+ 
+         size_t i = 0;

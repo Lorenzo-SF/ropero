@@ -16,6 +16,30 @@ Todo lo de fabricar GGUFs con `ropero gguffer`, en un sitio y con un guion.
 | `lista-para-generar.md` | La lista de los 8 quants que compensa fabricar, con el porqué. |
 | `que-compensa-cuantizar.md` | El criterio (el filtro de VRAM) y lo que ya existe en HF. |
 | `comandos-cuantizar.md` | Los comandos a mano, para una tirada suelta. |
+| `aplicar-parche-motor.sh` | Aplica al clon del motor los dos parches que necesita (la regla del NVFP4 y los patterns sin anclar). |
+| `patches/` | Los parches del motor, como ficheros. |
+
+## Los parches del motor
+
+Dos cosas del motor (que es un fork de otro dueño) hay que parchearlas, y
+no se pueden pushear: se entregan como ficheros y se aplican en local.
+
+```bash
+quant/aplicar-parche-motor.sh --check    # ¿estan puestos?
+quant/aplicar-parche-motor.sh            # los pone y recompila
+quant/aplicar-parche-motor.sh --revert   # vuelve atras
+```
+
+- **La regla del NVFP4** (`src/llama-quant.cpp`): el motor tiene una regla
+  para el MXFP4_MOE (los tensores de expertos a 4 bits, el resto a Q8_0) y
+  no la tiene para el NVFP4. Sin ella, el NVFP4 cuantiza a 4 bits tambien
+  la atencion, las proyecciones del Mamba y el embedding, y el modelo
+  "habla cosas raras". **Sin este parche, el NVFP4 del nemotron no sirve.**
+- **Los patterns sin anclar** (`common/json-schema-to-grammar.cpp`): el
+  autoparser de templates rechazaba los `pattern` de las tools que no
+  empiezan por `^` y acaban en `$`, y devolvia un 400 a la peticion
+  entera. Afecta a los modelos sin plantilla "specialized" (el granite, el
+  qwen3).
 
 ## El guion
 
