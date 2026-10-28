@@ -2039,7 +2039,7 @@ start_model() {
                 --parallel 1
                 --load-mode none
                 --kv-unified                     # global: el KV unificado lo
-                --no-kv-offload
+                --kv-offload
                 --batch-size 4096
                 --ubatch-size 1024
                 --cache-reuse 512

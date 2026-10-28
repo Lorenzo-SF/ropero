@@ -7,11 +7,11 @@ engine  = "llama-server"
 context = 262144
 
 [files]
-gguf   = "Agents-A1-IQ2_M.gguf"
+gguf   = "Agents-A1-Q4_K_M.gguf"
 
 [download]
-repo = "KikoCis/Agents-A1-IQ2_M-GGUF"
-file = "Agents-A1-IQ2_M.gguf"
+repo = "InternScience/Agents-A1-Q4_K_M-GGUF"
+file = "Agents-A1-Q4_K_M.gguf"
 size = "11.66 GB"
 
 [levels]
@@ -21,8 +21,9 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "41",
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--n-cpu-moe", "14",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--temp", "0.55",
     "--top-p", "0.90",
     "--top-k", "15",

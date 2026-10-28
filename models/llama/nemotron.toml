@@ -10,7 +10,6 @@ context = 524288
 # context = 131072
 
 [files]
-# gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE-MTP.gguf"
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 
 [download]
@@ -32,7 +31,7 @@ list = ["think"]
 [args]
 base = [
     "--n-gpu-layers", "54",
-    "--n-cpu-moe", "16",
+    "--n-cpu-moe", "14",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "1.0",
@@ -44,6 +43,7 @@ base = [
     "--n-predict", "8192",
     "--keep", "16384",
     "--chat-template-kwargs", '{"enable_thinking": true}',
+    "--chat-template-file", '/home/lorenzo/models/gguf/nemotron/chat_template.jinja',
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",

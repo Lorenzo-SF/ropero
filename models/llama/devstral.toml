@@ -8,11 +8,11 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf   = "Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf"
+gguf   = "Devstral-Small-2-24B-Instruct-2512-UD-Q3_K_XL.gguf"
 
 [download]
 repo = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
-file = "Devstral-Small-2-24B-Instruct-2512-Q3_K_M.gguf"
+file = "Devstral-Small-2-24B-Instruct-2512-UD-Q3_K_XL.gguf"
 size = "11.47 GB"
 
 [args]
