@@ -55,6 +55,12 @@ agenta1	InternScience/Agents-A1	IQ2_XXS	KikoCis/Agents-A1-IQ2_M-GGUF	Agents-A1.i
 # fabrica: se baja. El MXFP4 no existe para nadie, ese si se fabrica, y
 # desde el BF16 de bartowski (no de los pesos en HF, que no se convert).
 # El GGUF BF16 va partido en 2 shards: el gguffer los baja y los une.
-qwen	Qwen/Qwen3.8-27B	MXFP4	bartowski/Qwen3.8-27B-GGUF	Qwen3.8-27B-imatrix.gguf		bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf
+#
+# OJO: el qwen se fabrica con IQ4_XS, no con MXFP4. Su [build] (en el TOML
+# del modelo) manda sobre esta tabla, porque es la que dice COMO se
+# fabrica: el repo de los pesos, el quant, el imatrix y el nombre final.
+# Los cinco modelos que se fabrican asi son nemotron, granite, qwen3,
+# qwencoder y qwen.
+qwen	Qwen/Qwen3.8-27B	IQ4_XS	bartowski/Qwen3.8-27B-GGUF	Qwen3.8-27B-imatrix.gguf		bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf
 devstral	mistralai/Devstral-Small-2-24B-Instruct-2512	Q3_K_M,MXFP4	unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF	imatrix_unsloth.gguf_file
 agenta-tiny	InternScience/Agents-A1-4B	Q8_0,TQ4_1S	bartowski/InternScience_Agents-A1-4B-GGUF	InternScience_Agents-A1-4B-imatrix.gguf

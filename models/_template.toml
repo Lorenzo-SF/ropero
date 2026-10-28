@@ -37,12 +37,44 @@
 #   mtp       Nombre final del fichero MTP (decoding especulativo). Opcional.
 #   mmproj    Nombre final del proyector de visión. Opcional.
 #
-# [download]  (obligatoria salvo que el modelo no se descargue)
+# [download]  (obligatoria salvo que el modelo se fabrique)
 #   repo      Repositorio de HuggingFace, "owner/repo".
 #   file      Nombre exacto del fichero dentro del repo.
 #   name      Nombre final en disco. Si se omite, vale lo mismo que file.
 #   size      Tamaño legible del fichero. Informativo: sale en las tablas.
 #   excludes  Patrones a excluir (sólo checkpoints). Ej.: ["original/*"].
+#
+# [build]  (opcional) — CÓMO SE FABRICA EL GGUF
+#
+# Con esta sección, el GGUF no se descarga: se FABRICA. `ropero install
+# models <modelo>` baja los pesos, los convierte y los cuantiza, con el
+# gguffer. Sus claves son las MISMAS que acepta `ropero gguffer`, asi que
+# la receta de un TOML y el comando a mano son la misma cosa:
+#
+#   [build]
+#   repo         = "owner/modelo"          # de dónde bajar los PESOS
+#   quant        = "IQ4_XS"                # el quant (o varios, con comas)
+#   imatrix_repo = "owner/modelo-GGUF"     # de dónde bajar el imatrix
+#   imatrix_file = "modelo.imatrix.gguf"   # el fichero del imatrix
+#   keep_source  = true                    # conservar los safetensors
+#   no_mtp       = true                    # excluir la cabeza MTP
+#   size         = "61.1 GB"               # INFO: los pesos que se bajan
+#
+# Las claves disponibles son las del gguffer: repo, gguf, gguf_file, quant,
+# imatrix, imatrix_repo, imatrix_file, out, out_principal, from_subdir,
+# include, intermedio, keep_source, keep_intermedio, no_mtp, force. Una clave
+# que no sea de esa lista se AVISA al cargar el TOML: un "imatrix_repos"
+# en vez de "imatrix_repo" fabricaria el GGUF sin importance matrix, y el
+# error sale 40 minutos después.
+#
+# El "size" es el de los PESOS que se bajan (no el del GGUF final, que
+# todavia no existe): es lo que ve el usuario cuando se le pregunta si
+# fabricar esto.
+#
+# OJO: [download] sigue siendo obligatoria en un modelo que se fabrica (el
+# esquema la pide), pero ahi NO se descarga el GGUF principal: [download]
+# queda para los ficheros AUXILIARES (MTP, mmproj). El GGUF principal sale
+# de [build] y se guarda con el nombre de [files].gguf.
 #
 # [download.aux.mtp] / [download.aux.mmproj]  (opcionales)
 #   file      Ruta del fichero dentro del repo. Puede llevar subdirectorio.

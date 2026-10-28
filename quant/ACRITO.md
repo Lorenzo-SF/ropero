@@ -5,6 +5,66 @@ es theory: es el procedimiento que funciona, con los comandos exactos.
 
 ## Lo primero: qué se fabrica y por qué
 
+### La vía corta: la sección `[build]` del TOML
+
+Desde el 2026-10-28, un modelo del roster puede **declarar cómo se fabrica**
+en su propio TOML, y `ropero install models <modelo>` lo hace por ti:
+
+```toml
+[build]
+repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+quant        = "MXFP4_MOE"
+imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
+keep_source  = true
+size         = "65.8 GB"
+```
+
+Las claves son las mismas que acepta `ropero gguffer`, y el que ejecuta es el
+gguffer de verdad: **la receta del TOML y el comando a mano son lo mismo**.
+El GGUF sale con el nombre de `[files] gguf`, en la carpeta del modelo, que es
+donde el lanzador va a buscarlo.
+
+Los cinco modelos que se fabrican así (y sus comandos equivalentes):
+
+| Modelo | Pesos | Quant | Imatrix |
+|---|---|---|---|
+| `nemotron` | `nvidia/...-BF16` | `MXFP4_MOE` | `bartowski/...-GGUF` |
+| `granite` | `ibm-granite/granite-4.0-h-small` | `MXFP4_MOE` | `unsloth/granite-4.0-h-small-GGUF` |
+| `qwen3` | `Qwen/Qwen3-30B-A3B` | `MXFP4_MOE` | `bartowski/Qwen_Qwen3-30B-A3B-GGUF` |
+| `qwencoder` | `Qwen/Qwen3-Coder-30B-A3B-Instruct` | `IQ4_XS` | `n19875624/...-code-imatrix-GGUF` |
+| `qwen` | `Qwen/Qwen3.8-27B` | `IQ4_XS` | `bartowski/Qwen3.8-27B-GGUF` |
+
+El `size` es el de los **pesos** que se bajan, no el del GGUF final (que
+todavía no existe): es lo que ve el usuario cuando se le pregunta si fabricar
+esto.
+
+### Los quants que ya están publicados
+
+Antes de fabricar nada, mira si el quant ya existe. El gguffer lo dice:
+
+```bash
+ropero gguffer --repo Qwen/Qwen3-30B-A3B --list-quants
+```
+
+Lista los quants que el motor soporta **y** los que ya están publicados para
+ese modelo base (con el repo donde están). Fabricar un quant que ya existe es
+una hora de trabajo para nada.
+
+### El preflight: lo que se sabe antes de bajar 60 GB
+
+```bash
+ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 --quant NVFP4
+```
+
+Si el repo **ya viene cuantizado** (los de NVIDIA con `-NVFP4`/`-FP8`, los de
+modelopt), el gguffer lo dice y propone el repo hermano sin cuantizar, sin
+bajar nada. Sin ese preflight, el fallo salía al final del proceso, cuando ya
+se habían bajado 60 GB y convertido, y el mensaje del motor
+(`requantizing from type nvfp4 is disabled`) no decía de dónde venía el
+problema.
+
+
 La tabla de qué fabricar es **`modelos.tsv`** (este directorio). Es la fuente
 de verdad: se edita la tabla, no el código. Cada línea es **una tirada**:
 
@@ -303,4 +363,58 @@ entonces no hace falta, porque su conversor ya deja fuera la nextn).
 | `Missing importance matrix for tensor blk.NN` | la MTP sin cobertura | el gguffer lo debería arreglar solo: mira el diagnóstico |
 | `Tokenizer class TokenizersBackend does not exist` | el repo se guardó con transformers v5 | el gguffer lo parchea a `PreTrainedTokenizerFast` y reintenta solo |
 | `invalid nthread '--imatrix'` | las flags detrás de los posicionales | el gguffer las pone delante; si se llama a mano, `--imatrix` antes |
-| `requantizing from type X is disabled` | se está cuantizando un GGUF ya cuantizado | los pesos se sacan del repo **sin cuantizar** (la columna de la tabla) |
+| `requantizing from type X is disabled` | se está cuantizando un GGUF **ya cuantizado** | los pesos se sacan del repo **sin cuantizar** (la columna de la tabla) |
+
+### El caso `nvidia/...-NVFP4`: un repo que YA viene cuantizado
+
+Los repos de NVIDIA con `NVFP4` o `FP8` en el nombre **no son los pesos
+crudos**: son checkpoints ya cuantizados (con `modelopt`, ver su
+`hf_quant_config.json`: `quant_algo: W4A16_NVFP4`). Al convertir uno de
+ellos, el GGUF intermedio sale con los tensores de experts **ya en tipo
+`nvfp4`**, y entonces:
+
+```
+llama_model_quantize: failed to quantize: requantizing from type nvfp4 is disabled
+```
+
+No es un fallo del imatrix ni del cuantizador: `llama-quantize` no sabe
+re-cuantizar desde `nvfp4` (no hay pérdida que re-derivar). Para fabricar un
+quant propio desde un repo de NVIDIA hay que usar el de **BF16**
+(`nvidia/...-BF16`), que sí son los pesos sin cuantizar.
+
+Si lo que se quiere es el NVFP4 ya hecho, no hay que fabricar nada: está
+publicado, y además **sin MTP embebida**, que es lo que lo hace arrancable:
+
+| Repo | Fichero | Tamaño | MTP |
+|---|---|---|---|
+| `tngtech/...-NVFP4-GGUF` | `Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf` | 17,22 GiB | suelta (`mtp-*.gguf`) |
+| `vcruz305/...-GGUF` | `Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf` | 16,75 GiB | ninguna |
+
+Los dos cargan. Y el `unsloth/...-GGUF` **no**: lleva la MTP embebida.
+
+### Que un GGUF con MTP embebida NO arranca
+
+Un GGUF con la MTP dentro (`block_count` = bloques + 1 y
+`nextn_predict_layers = 1`) **no carga** con este motor:
+
+```
+done_getting_tensors: wrong number of tensors; expected 417, got 408
+```
+
+Porque el motor no lee `nextn_predict_layers` (la clave existe en
+`llama-arch.cpp` pero nadie la consume), cuenta 53 capas en vez de 52, y el
+bloque de la MTP (`blk.52`) aporta 16 tensores de los que solo crea 7. Los
+9 que sobran son `blk.52.attn_k|attn_q|attn_v|attn_output.weight`, los
+`blk.52.nextn.*` y `blk.52.post_attention_norm.weight`.
+
+Esto no se arregla con un flag: es laMetadata del **fichero**, y se comprueba
+sin arrancar:
+
+```bash
+python3 bin/_ggufcheck.py RUTA/FICHERO.gguf --meta
+```
+
+Si `nextn_predict_layers=1`, ese fichero no arranca. Para uno sin MTP, o
+se descarga otro, o se fabrica desde los pesos sin cuantizar (el conversor
+del nemotron-h-moe ya deja fuera la nextn: `conversion/nemotron.py` salta
+los tensores `mtp.*`).
