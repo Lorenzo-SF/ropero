@@ -9,11 +9,10 @@ context = 131072
 
 [files]
 gguf = "Qwen3-Coder-30B-A3B-Instruct-NVFP4.gguf" # ok, 1.6 - 1.8 k entrada, 35 de salida
-# gguf = "Qwen3-Coder-30B-A3B-Instruct-MXFP4_MOE.gguf" # caca, baja el rendimiento de la entrada a unos 200t/s respecto al NVFP4, la generacion es similar (quiza 3 o 5 t/s mas)
-# gguf = "Qwen3-Coder-30B-A3B-Instruct-IQ4_NL.gguf" # procesamiento un poco mejor que el MXFP4 de entrada, de salida igual
+
 [build]
 repo         = "Qwen/Qwen3-Coder-30B-A3B-Instruct"
-quant        = "IQ4_NL"
+quant        = "NVFP4"
 imatrix_repo = "n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF"
 imatrix_file = "code.imatrix"
 keep_source  = true
@@ -22,7 +21,7 @@ size = "61.1 GB"
 [args]
 base = [
     "--n-gpu-layers", "49",
-    "--n-cpu-moe", "18",   # experts de las 22 primeras capas a la CPU
+    "--n-cpu-moe", "18",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "0.7",

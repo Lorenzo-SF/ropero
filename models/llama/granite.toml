@@ -10,12 +10,11 @@ context = 266144
 # context = 131072
 
 [files]
-# gguf = "granite-4.0-h-small-IQ4_NL.gguf"
 gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
 
 [build]
 repo         = "ibm-granite/granite-4.0-h-small"
-quant        = "IQ4_NL"
+quant        = "NVFP4"
 imatrix_repo = "unsloth/granite-4.0-h-small-GGUF"
 imatrix_file = "imatrix_unsloth.gguf_file"
 keep_source  = true
