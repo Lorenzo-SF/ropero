@@ -8,19 +8,65 @@ engine  = "llama-server"
 context = 163840
 
 [files]
-gguf   = "Qwen3.8-27B-IQ2_M.gguf"
+gguf   = "Qwen3.8-27B-IQ4_XS.gguf"
+
+# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
+#
+# Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
+# sus claves son las mismas que acepta "ropero gguffer". El que la ejecuta
+# es el gguffer de verdad, asi que "ropero install models qwen" y el
+# comando de abajo hacen EXACTAMENTE lo mismo.
+#
+#   ropero gguffer --repo Qwen/Qwen3.8-27B \
+#       --quant IQ4_XS \
+#       --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
+#       --imatrix-file Qwen3.8-27B-imatrix.gguf \
+#       --no-mtp --keep-source
+#
+# POR QUE FABRICARLO Y NO BAJAR EL DE BARTOWSKI: el IQ4_XS no esta
+# publicado para este modelo (bartowski publica del IQ2_XXS al Q3_K_XL). El
+# IQ4_XS es mas bits que el IQ2_M de antes: mejor calidad, y sigue
+# entrando en la VRAM.
+#
+# --no-mtp QUITA la cabeza MTP del GGUF (15 tensores "mtp.*"). OJO: en este
+# modelo la MTP SI se puede tener (a diferencia del nemotron, que no la
+# soporta: su arch no lee la metadata "nextn_predict_layers" y el server
+# aborta con "expected 417, got 408"). Aqui --no-mtp es una ELECCION: sin
+# el, el GGUF lleva la MTP y el flag "mtp" de abajo la usaria como draft.
+# Con --no-mtp, el flag "mtp" no tiene sentido y se queda sin usar.
+[build]
+repo         = "Qwen/Qwen3.8-27B"
+quant        = "IQ4_XS"
+imatrix_repo = "bartowski/Qwen3.8-27B-GGUF"
+imatrix_file = "Qwen3.8-27B-imatrix.gguf"
+no_mtp       = true
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "55.6 GB"
 
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-IQ2_M.gguf"
-size = "12.80 GB"
+file = "Qwen3.8-27B-IQ4_XS.gguf"
+size = "15.48 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
 default = "low"
 
-[flags]
-list = ["mtp"]
+# NO hay flag "mtp" en este TOML, y es a proposito.
+#
+# El flag usaba "--spec-type draft-mtp", que es un tipo de CONTEXTO: el
+# server comprueba que el modelo traiga la capa MTP y, si no la trae,
+# devuelve nullptr y no arranca:
+#     "context type MTP requested but model doesn't contain MTP layers"
+#
+# Y este GGUF se fabrica con --no-mtp, asi que NO la trae. Dejar el flag
+# seria dejar un "--flag mtp" que rompe el server.
+#
+# Para tener el MTP hay que fabricar el GGUF SIN --no-mtp: el conversor
+# entonces mete la MTP como el bloque 65 (blk.64.nextn.*). En este modelo
+# SI se puede (a diferencia del nemotron), porque la arch qwen35 si lee la
+# metadata "nextn_predict_layers".
 
 [args]
 base = [
@@ -58,13 +104,4 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
 [args.level.xhigh]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
-
-[args.flag.mtp]
-base = [
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "turbo3",
-    "--spec-draft-type-v", "turbo3",
-    "--no-spec-draft-backend-sampling",
-]
 

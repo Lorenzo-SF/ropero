@@ -1,0 +1,94 @@
+# =============================================================================
+# qwen3 — Qwen3-30B-A3B (MoE, 128 expertos, 8 activos)
+# =============================================================================
+#
+# Lo que es: un MoE denso de 30B con 128 expertos de los que se activan 8.
+# El unico qwen "normal" del roster: el "qwen" de mas abajo es el Qwen3.8
+# (denso + VLM), que es otra cosa.
+# =============================================================================
+
+[model]
+name    = "qwen3"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf = "Qwen3-30B-A3B-MXFP4_MOE.gguf"
+
+# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
+#
+# Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
+# sus claves son las mismas que acepta "ropero gguffer". El que la ejecuta
+# es el gguffer de verdad, asi que "ropero install models qwen3" y el
+# comando de abajo hacen EXACTAMENTE lo mismo.
+#
+#   ropero gguffer --repo Qwen/Qwen3-30B-A3B \
+#       --quant MXFP4_MOE \
+#       --imatrix-repo bartowski/Qwen_Qwen3-30B-A3B-GGUF \
+#       --imatrix-file Qwen3-30B-A3B.imatrix \
+#       --keep-source
+#
+# POR QUE FABRICAR Y NO BAJAR: el MXFP4_MOE no esta publicado para este
+# modelo (lo que hay son Q4_K_M, Q6_K, IQ2_XXS, IQ3_XXS...). Los expertos
+# en MXFP4 (4 bits) son justo lo que hace que un MoE de 30B quepa en 16 GB
+# de VRAM, y ese quant no existe todavia.
+[build]
+repo         = "Qwen/Qwen3-30B-A3B"
+quant        = "MXFP4_MOE"
+imatrix_repo = "bartowski/Qwen_Qwen3-30B-A3B-GGUF"
+imatrix_file = "Qwen3-30B-A3B.imatrix"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "61.1 GB"
+
+[download]
+repo = "bartowski/Qwen_Qwen3-30B-A3B-GGUF"
+file = "Qwen3-30B-A3B-MXFP4_MOE.gguf"
+size = "12.80 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "low"
+
+[args]
+base = [
+    # ---- GPU offload: 49 = las 48 capas + 1 (la convencion del repo) ----
+    "--n-gpu-layers", "49",
+
+    # ---- Expertos routed a la CPU ----
+    # El 88 % de los pesos de un MoE son los expertos: mandarlos a la CPU
+    # es lo que deja entrar el modelo.
+    "--n-cpu-moe", "${env:ROPERO_QWEN3_N_CPU_MOE:-22}",
+
+    # ---- Atencion ----
+    "-fa", "on",
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
+
+    # ---- Sampling del Qwen3 ----
+    "--temp", "0.60",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+
+    # ---- Batch ----
+    "--batch-size", "512",
+    "--ubatch-size", "256",
+    "--n-predict", "8192",
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }

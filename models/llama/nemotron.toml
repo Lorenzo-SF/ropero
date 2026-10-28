@@ -8,12 +8,52 @@ engine  = "llama-server"
 context = 524288
 
 [files]
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
+gguf = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+
+# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
+#
+# Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
+# sus claves son las mismas que acepta "ropero gguffer". El que la ejecuta
+# es el gguffer de verdad, asi que "ropero install models nemotron" y el
+# comando de abajo hacen EXACTAMENTE lo mismo.
+#
+#   ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16 \
+#       --quant MXFP4_MOE \
+#       --imatrix-repo bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF \
+#       --imatrix-file NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf \
+#       --keep-source
+#
+# LOS PESOS VIENEN DEL BF16, NO DEL NVFP4: el repo "...-NVFP4" ya viene
+# cuantizado (trae hf_quant_config.json), y cuantizar encima de eso el
+# motor lo rechaza:
+#     llama_model_quantize: failed to quantize:
+#     requantizing from type nvfp4 is disabled
+# El gguffer lo comprueba ANTES de bajar los 65 GB y avisa.
+#
+# EL GGUF VA SIN LA CABEZA MTP (52 bloques, nextn_predict_layers=0). El
+# checkpoint BF16 trae 270 tensores "mtp.*", pero el conversor de esta
+# arquitectura los deja fuera (no tiene export de MTP). Un GGUF con la MTP
+# EMBEBIDA (53 bloques) NO CARGA con este motor:
+#     done_getting_tensors: wrong number of tensors; expected 417, got 408
+# (el atomic no lee la metadata "nextn_predict_layers", asi que cuenta 53
+# capas y se queda sin usar 9 tensores del bloque 52).
+[build]
+repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+quant        = "MXFP4_MOE"
+imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
+keep_source  = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
+size = "65.8 GB"
 
 [download]
-repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-IQ3_XXS.gguf"
-size = "19.76 GB"
+repo = "vcruz305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+# OJO: este "size" es el del GGUF YA HECHO que hay en el repo (17.98 GB, medido
+# por HTTP), NO el de los pesos que se bajan al fabricar (65.8 GB de BF16).
+# Los pesos los baja el gguffer; este repo es la alternativa publicada, que se
+# puede bajar en 5 minutos en vez de fabricar en una hora.
+size = "17.98 GB"
 
 [levels]
 # El nemotron tambien razona por DEFECTO (su template: "enable_thinking if
