@@ -271,6 +271,56 @@ for m in granite qwen3; do
         "el $m declara [download]"
 done
 
+# ══ 12. los marcadores de ruta en los args ═════════════════════════════════
+# Los args del TOML son texto estatico, pero el modelo de draft de la MTP
+# necesita una ruta, y la carpeta del modelo depende del GGUF_DIR de cada
+# maquina. El launcher sustituye los marcadores.
+#
+#   {{gguf_dir}}  -> $GGUF_DIR
+#   {{model_dir}} -> $GGUF_DIR/<carpeta del modelo>
+check "12a. el launcher tiene la funcion que expande los marcadores" \
+      "$(cond 'grep -q "_ropero_expand_paths()" "$REPO/bin/22-models.sh"')"
+check "12b. el launcher la usa antes de arrancar" \
+      "$(cond 'grep -q "_ropero_expand_paths model_args" "$REPO/bin/ropero"')"
+
+# Y la funcion, probada de verdad: se extrae y se ejecuta.
+_L22="$(grep -n "^_ropero_expand_paths()" "$REPO/bin/22-models.sh" | cut -d: -f1)"
+_E22="$(awk -v s="$_L22" 'NR>=s && /^}/ {print NR; exit}' "$REPO/bin/22-models.sh")"
+sed -n "${_L22},${_E22}p" "$REPO/bin/22-models.sh" > "$WORK/expand.sh"
+cat >"$WORK/expand-test.sh" <<'EXP'
+set -u
+GGUF_DIR="$1"
+source "$2"
+_ropero_model_dir() { printf '%s' "${1//-/_}"; }
+arr=("--model-draft" "{{model_dir}}/mtp-x.gguf" "--x" "{{gguf_dir}}/y.gguf" "nada")
+_ropero_expand_paths arr nemotron
+printf '%s\n' "${arr[@]}"
+EXP
+exp_out="$(bash "$WORK/expand-test.sh" "$WORK/gguf" "$WORK/expand.sh" 2>&1)"
+check "12c. {{model_dir}} se sustituye por la carpeta del modelo" \
+      "$(cond 'printf %s "$exp_out" | grep -qxF "$WORK/gguf/nemotron/mtp-x.gguf"')" "$exp_out"
+check "12d. {{gguf_dir}} se sustituye por el GGUF_DIR" \
+      "$(cond 'printf %s "$exp_out" | grep -qxF "$WORK/gguf/y.gguf"')" "$exp_out"
+check "12e. lo que no es un marcador no se toca" \
+      "$(cond 'printf %s "$exp_out" | grep -qxF "nada"')" "$exp_out"
+
+# ══ 13. el aux puede vivir en otro repo que el del modelo ═════════════════
+# El draft MTP del nemotron esta en tngtech y el MXFP4 en vcruz305.
+check "13a. el nemotron declara el draft MTP como aux" \
+      "$(cond 'grep -q "^\[download.aux.mtp\]" "$REPO/models/llama/nemotron.toml"')"
+check "13b. el aux declara su propio repo" \
+      "$(cond 'awk "/^\[download.aux.mtp\]/{f=1;next} /^\[/{f=0} f" "$REPO/models/llama/nemotron.toml" | grep -q "repo = \"tngtech/"')"
+check "13c. el aux del MTP se serializa con SU repo" \
+      "$(cond 'cd "$REPO" && python3 bin/_modelconf.py dump --root models 2>/dev/null | grep -q "tngtech/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-GGUF|mtp-Nemotron"')"
+
+# ══ 14. el nemotron apunta a ficheros que EXISTEN de verdad ════════════════
+# El nombre "...-MXFP4_MOE-MTP.gguf" no existe en ningun repo (404): el
+# MXFP4 se llama sin el sufijo.
+check "14a. el [download] del nemotron NO es un 404" \
+      "$(cond '! awk "/^\[download\]/{f=1;next} /^\[/{f=0} f" "$REPO/models/llama/nemotron.toml" | grep -E "^file = " | grep -q "MXFP4_MOE-MTP.gguf"')"
+check "14b. el [download] del nemotron es el MXFP4 de vcruz305" \
+      "$(cond 'grep -q "vcruz305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF" "$REPO/models/llama/nemotron.toml"')"
+
 # ══ resumen ════════════════════════════════════════════════════════════════
 printf '\ntest-build.sh: %d correctos, %d fallos\n' "$PASS" "$FAIL"
 if (( FAIL > 0 )); then

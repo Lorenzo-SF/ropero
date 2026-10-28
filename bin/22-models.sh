@@ -610,6 +610,43 @@ _ropero_model_dir() {
 }
 
 # -----------------------------------------------------------------------------
+# _ropero_expand_paths <nombre_del_array> [modelo]
+#
+# Sustituye en los args del modelo los marcadores de ruta:
+#   {{gguf_dir}}  -> $GGUF_DIR
+#   {{model_dir}} -> $GGUF_DIR/<subdirectorio del modelo>
+# (y las dos formas con llaves simples: ${gguf_dir}, ${model_dir})
+#
+# ── POR QUÉ EXISTE ───────────────────────────────────────────────────────────
+#
+# Los args del TOML son texto estatico, pero hay args que necesitan una ruta:
+# el modelo de draft de la MTP ("--model-draft"), el chat template
+# ("--chat-template-file"). Poner una ruta absoluta en el TOML no es portable:
+# la carpeta del modelo depende de donde este el GGUF_DIR, y el mismo TOML
+# tiene que servir en la maquina de cada uno.
+#
+# El array se pasa POR NOMBRE (nameref): se modifica en el sitio.
+# -----------------------------------------------------------------------------
+_ropero_expand_paths() {
+    local -n _dst="$1"
+    local _key="${2:-}"
+    local _mdir=""
+    [[ -n "$_key" ]] && _mdir="$(_ropero_model_dir "$_key")"
+    local -a _out=()
+    local _a
+    for _a in "${_dst[@]}"; do
+        _a="${_a//\{\{gguf_dir\}\}/$GGUF_DIR}"
+        _a="${_a//\$\{gguf_dir\}/$GGUF_DIR}"
+        if [[ -n "$_mdir" ]]; then
+            _a="${_a//\{\{model_dir\}\}/$GGUF_DIR/$_mdir}"
+            _a="${_a//\$\{model_dir\}/$GGUF_DIR/$_mdir}"
+        fi
+        _out+=("$_a")
+    done
+    _dst=("${_out[@]}")
+}
+
+# -----------------------------------------------------------------------------
 # ropero_model_check_limits <modelo> <ctx>
 #
 # Aplica los límites declarados en [limits] del TOML. Devuelve 1 si el modelo

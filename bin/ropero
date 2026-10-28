@@ -2015,6 +2015,14 @@ start_model() {
                 esac
             fi
 
+            # ── PLACEHOLDERS DE RUTA EN LOS ARGS DEL MODELO ──────────────────
+            # Los args del TOML son texto estatico, y hay args que necesitan
+            # una ruta: el modelo de draft de la MTP ("--model-draft"), el
+            # chat template ("--chat-template-file"). Poner una ruta
+            # absoluta en el TOML no es portable (la carpeta del modelo
+            # depende de donde este el GGUF_DIR).
+            _ropero_expand_paths model_args "$model_key"
+
             local -a cmd=(
                 "$LLAMA_BIN"
                 --model "$gguf_path"

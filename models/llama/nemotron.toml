@@ -10,13 +10,44 @@ context = 266144
 # context = 131072
 
 [files]
-# OJO: el nombre NO lleva "-MTP". El GGUF fabricado sale con 52 bloques y
-# nextn_predict_layers=0: el conversor de esta arch no tiene export de MTP, y
-# los 270 tensores "mtp.*" del checkpoint BF16 se quedan fuera. Un GGUF con
-# la MTP EMBEBIDA (53 bloques) NO CARGA con este motor:
-#     done_getting_tensors: wrong number of tensors; expected 417, got 408
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf"
+# El nombre local del GGUF. OJO: el sufijo "-MTP" es historico: este
+# fichero NO lleva la MTP dentro (52 bloques, nextn=0). La MTP va SUELTA, en
+# su propio GGUF, como modelo de draft (ver [download.aux.mtp]).
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE-MTP.gguf"
 
+[download]
+# OJO: el fichero "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE-MTP.gguf"
+# NO EXISTE en ningun repo (HTTP 404). En el repo de unsloth el MXFP4 se
+# llama sin el sufijo, y ESE lleva la MTP DENTRO (53 bloques).
+#
+# Este es el de vcruz305: 401 tensores, 52 bloques, nextn=0, file_type 38
+# (MOSTLY_MXFP4_MOE). Es el que carga:
+#   "done_getting_tensors: wrong number of tensors; expected 417, got 408"
+# es el sintoma de un GGUF con la MTP EMBEBIDA en un motor que no la lee
+# (el atomic no lee la metadata "nextn_predict_layers": cuenta 53 capas,
+# crea 52 y se quedan 9 tensores del bloque 52 sin usar).
+#
+# Si el MXFP4 con la MTP embebida (el de unsloth) es lo que tienes en disco,
+# con el atomic NO ARRANCA. Con el upstream (que si lee la metadata) si.
+repo = "vcruz305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+size = "17.98 GB"
+
+[download.aux.mtp]
+# El modelo de DRAFT de la MTP, en su propio GGUF (20 tensores, 1.99 GB).
+# Es la unica MTP que existe suelta; la que va embebida en el GGUF del
+# modelo no la entiende el atomic.
+#
+# Se baja en la carpeta del modelo, y el flag "mtp" la apunta con
+# "{{model_dir}}" (el launcher sustituye ese marcador por la ruta real de
+# la carpeta del modelo: no se puede poner una ruta absoluta en el TOML,
+# porque depende de donde este el GGUF_DIR).
+repo = "tngtech/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-GGUF"
+file = "mtp-Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf"
+name = "mtp-Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf"
+size = "1.99 GB"
+
+[build]
 # ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
 #
 # Este GGUF no se descarga: se FABRICA. La seccion [build] es la receta, y
@@ -40,20 +71,26 @@ gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf"
 #
 # EL CHAT TEMPLATE: NVIDIA lo publica en "chat_template.jinja", NO dentro del
 # tokenizer_config.json, y el conversor de llama.cpp solo mira el
-# tokenizer_config.json (nunca el .jinja). Sin este arreglo, el GGUF se queda
+# tokenizer_config.json (nunca el .jinja). Sin ese arreglo, el GGUF se queda
 # con el template de la comunidad de llama.cpp, que para esta familia es el
 # del Nemotron 3 NANO: con ese template el modelo responde en HTML y no
 # razona bien. El gguffer lo arregla solo (mete el .jinja en el
 # tokenizer_config.json antes de convertir), asi que aqui NO hace falta
 # ningun --chat-template-file.
 #
-# EL QUANT NVFP4: el motor tiene una regla para el MXFP4_MOE (los expertos a
-# FP4 y el resto a Q8_0) y NO la tiene para el NVFP4: sin ella, la atencion,
-# las proyecciones del Mamba (ssm_in/ssm_out) y el embedding salen tambien a
-# 4 bits, y el estado recurrente se desincroniza (el modelo "habla cosas
-# raras"). Con la regla del motor, el NVFP4 sale con la misma receta que
-# publica NVIDIA.
-[build]
+# EL QUANT NVFP4 NECESITA EL PARCHE DEL MOTOR: el motor tiene una regla para
+# el MXFP4_MOE (los expertos a FP4 y el resto a Q8_0) y NO la tiene para el
+# NVFP4. Sin ella, la atencion, las proyecciones del Mamba (ssm_in/ssm_out)
+# y el embedding salen tambien a 4 bits, el estado recurrente se
+# desincroniza y el modelo "habla cosas raras" (que es justo lo que pasa con
+# el NVFP4 fabricado sin el parche). El parche esta en
+# "parche-motor-nvfp4-y-pattern.patch" (ropero/output): la rama nueva del
+# cuantizador pone F16 en todo lo que no son tensores de expertos.
+#
+# LA MTP: el GGUF fabricado sale con 52 bloques y nextn_predict_layers=0
+# (esta arch, nemotron_h_moe, no tiene export de MTP: los 270 tensores
+# "mtp.*" del checkpoint BF16 se quedan fuera). Con la MTP suelta de
+# [download.aux.mtp] se usa igual.
 repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
 quant        = "NVFP4"
 imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
@@ -61,18 +98,6 @@ imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
 keep_source  = true
 # Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "65.8 GB"
-
-[download]
-# La alternativa YA HECHA: mismo quant (NVFP4), mismo numero de bloques (52,
-# nextn=0), y verificada que carga. Se baja en 5 minutos en vez de fabricar en
-# una noche.
-#
-# OJO: el nombre del fichero es "Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf",
-# SIN el sufijo "-F16" (ese no existe en ningun repo: HTTP 404), y SIN "-MTP"
-# (este fichero no lleva la MTP embebida).
-repo = "tngtech/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-GGUF"
-file = "Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf"
-size = "18.49 GB"
 
 [levels]
 list = ["think"]
@@ -82,6 +107,7 @@ list = ["mtp"]
 
 [args]
 base = [
+    "--chat-template-kwargs", '{"enable_thinking": false}',  # OFF por defecto
     "--n-gpu-layers", "54",
     "--n-cpu-moe", "15",
     "--cache-type-k", "turbo3",
@@ -94,39 +120,21 @@ base = [
     "--repeat-last-n", "64",
     "--n-predict", "8192",
     "--keep", "1024",
-    # OJO: "--chat-template-kwargs {"enable_thinking": ...}" esta DEPRECADO
-    # ("Setting 'enable_thinking' via --chat-template-kwargs is deprecated.
-    # Use --reasoning on / --reasoning off instead"). El interruptor va con
-    # --reasoning: el OFF pone enable_thinking=false en el template, y el ON
-    # lo pone a true.
-    #
-    # El template del nemotron razona POR DEFECTO ("enable_thinking if
-    # enable_thinking is defined else True"), asi que sin --reasoning off
-    # el modelo razona siempre. Con el OFF aqui, el razonamiento se enciende
-    # a pedido: "ropero nemotron --nivel think".
-    "--reasoning", "off",
-    "--reasoning-preserve",
-    "--reasoning-budget", "12288",
+
 ]
 
 [args.level.think]
-# El nivel "think" enciende el razonamiento. Va DESPUES del "--reasoning off"
-# del base, y en los args gana el ultimo: asi el bloque de razonamiento llega
-# a opencode con el formato que espera.
-base = [
-    "--reasoning", "on",
-    "--reasoning-format", "deepseek",
-]
+base = ["--chat-template-kwargs", '{"enable_thinking": true}']
 
 [args.flag.mtp]
-# OJO: este GGUF NO trae la cabeza MTP (52 bloques, nextn=0), y esta arch
-# (nemotron_h_moe) no la lee aunque el GGUF la trajera. Con "--flag mtp" el
-# server pide un contexto MTP y aborta:
+# La MTP de este modelo va SUELTA (fichero aparte, el de [download.aux.mtp]),
+# no embebida: el atomic no lee la metadata "nextn_predict_layers" y con la
+# MTP dentro el GGUF no carga. Sin --model-draft, el server aborta con
 #     "context type MTP requested but model doesn't contain MTP layers"
-# La MTP de este modelo va aparte (el fichero "mtp-*.gguf" de tngtech), como
-# modelo de draft, no embebida.
+# "{{model_dir}}" lo sustituye el launcher por la carpeta del modelo.
 base = [
     "--spec-type", "draft-mtp",
+    "--model-draft", "{{model_dir}}/mtp-Nemotron-3.5-Lightning-30B-A3B-NVFP4.gguf",
     "--spec-draft-n-max", "3",
     "--spec-draft-type-k", "turbo3",
     "--spec-draft-type-v", "turbo3"
