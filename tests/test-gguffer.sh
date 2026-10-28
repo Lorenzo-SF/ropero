@@ -774,8 +774,12 @@ check "17a. cambia la clase del tokenizer" \
       "$(cat "$WORK/tok-src/tokenizer_config.json" 2>/dev/null)"
 check "17b. guarda una copia del original" \
       "$(cond '[ -f "$WORK/tok-src/tokenizer_config.json.bak" ]')" "$out"
+# El tokenizer se arregla ANTES de convertir, asi que la conversion ya va a
+# la primera: no hay fallo ni reintento. El aviso sale igualmente.
 check "17c. avisa de lo que ha hecho" \
-      "$(cond 'printf %s "$out" | grep -q "PreTrainedTokenizerFast y reintento"')" "$out"
+      "$(cond 'printf %s "$out" | grep -q "Lo cambio a PreTrainedTokenizerFast"')" "$out"
+check "17d. la conversion va a la primera (sin reintento)" \
+      "$(cond '! printf %s "$out" | grep -q "does not exist"')" "$out"
 
 # ── 18: el conversor que no admite --no-mtp para esta arch ─────────────────
 # El nemotron: el conversor acepta el flag, pero no para NemotronHForCausalLM.

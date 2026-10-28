@@ -4878,6 +4878,36 @@ _gguffer_escribe_fuente() {
 }
 
 # -----------------------------------------------------------------------------
+# _gguffer_meter_chat_template <tokenizer_config.json> <chat_template.jinja>
+#
+# Mete el contenido del .jinja dentro del tokenizer_config.json, que es de
+# donde el conversor de llama.cpp lee el chat template. Si el JSON ya trae
+# "chat_template", no se toca (el del repo manda).
+# -----------------------------------------------------------------------------
+_gguffer_meter_chat_template() {
+    local cfg="$1" tpl="$2"
+    [[ -f "$cfg" && -f "$tpl" ]] || return 1
+    python3 - "$cfg" "$tpl" <<'PY' || return 1
+import json, sys
+cfg, tpl = sys.argv[1], sys.argv[2]
+try:
+    with open(cfg, encoding="utf-8") as f:
+        d = json.load(f)
+except Exception:
+    sys.exit(1)
+if d.get("chat_template"):
+    sys.exit(0)   # ya tiene uno: no se toca
+try:
+    with open(tpl, encoding="utf-8") as f:
+        d["chat_template"] = f.read()
+except Exception:
+    sys.exit(1)
+with open(cfg, "w", encoding="utf-8") as f:
+    json.dump(d, f, indent=2, ensure_ascii=False)
+PY
+}
+
+# -----------------------------------------------------------------------------
 # _gguffer_arreglar_tokenizer <dir>
 #
 # Parchea el tokenizer_config.json de un clon de pesos para que lo entienda
@@ -4899,10 +4929,40 @@ _gguffer_arreglar_tokenizer() {
     local dir="$1"
     local cfg="$dir/tokenizer_config.json"
     [[ -f "$cfg" ]] || return 1
+
+    # ── EL CHAT TEMPLATE ───────────────────────────────────────────────────
+    # El conversor de llama.cpp lee el chat template del tokenizer.json o del
+    # tokenizer_config.json. NUNCA del "chat_template.jinja" del repo.
+    #
+    # Y hay repos que lo publican SOLO en ese fichero (NVIDIA lo hace con el
+    # Nemotron 3.5). Entonces el GGUF se queda con el template de la
+    # comunidad de llama.cpp, que puede ser de OTRO modelo: para el Nemotron
+    # 3.5 hay un "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja" (el del NANO, no
+    # el del 3.5 Lightning), y con ese template el modelo responde en HTML y
+    # no razona bien.
+    #
+    # Se arregla metiendo el chat_template.jinja dentro del
+    # tokenizer_config.json, que es de donde el conversor lo lee.
+    if [[ -f "$dir/chat_template.jinja" ]]; then
+        _gguffer_meter_chat_template "$cfg" "$dir/chat_template.jinja"
+        if grep -q '"chat_template"' "$cfg" 2>/dev/null; then
+            echo "[gguffer] el repo trae chat_template.jinja y el conversor no lo lee:"
+            echo "           lo meto en el tokenizer_config.json para que lo coja."
+        fi
+    elif [[ -f "$dir/../chat_template.jinja" ]]; then
+        # con --from-subdir, el source_dir es un subdirectorio del clon
+        _gguffer_meter_chat_template "$cfg" "$dir/../chat_template.jinja"
+        if grep -q '"chat_template"' "$cfg" 2>/dev/null; then
+            echo "[gguffer] el repo trae chat_template.jinja y el conversor no lo lee:"
+            echo "           lo meto en el tokenizer_config.json para que lo coja."
+        fi
+    fi
+
     grep -q '"tokenizer_class"' "$cfg" || return 1
     [[ -f "$cfg.bak" ]] || cp "$cfg" "$cfg.bak"
-    python3 - "$cfg" <<'PY'
-import json, sys
+    local _res
+    _res="$(python3 - "$cfg" <<'PY'
+import json, os, sys
 ruta = sys.argv[1]
 try:
     with open(ruta, encoding="utf-8") as f:
@@ -4914,17 +4974,26 @@ if viejo == "TokenizersBackend":
     d["tokenizer_class"] = "PreTrainedTokenizerFast"
     with open(ruta, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2, ensure_ascii=False)
+    print("CAMBIADO")
     sys.exit(0)
 # Otra clase desconocida: si el repo trae tokenizer.json, el fast generico
 # tambien vale.
-import os
 if os.path.exists(os.path.join(os.path.dirname(ruta), "tokenizer.json")):
     d["tokenizer_class"] = "PreTrainedTokenizerFast"
     with open(ruta, "w", encoding="utf-8") as f:
         json.dump(d, f, indent=2, ensure_ascii=False)
+    print("CAMBIADO")
     sys.exit(0)
+print("NO")
 sys.exit(1)
 PY
+)"
+    if [[ "$_res" == "CAMBIADO" ]]; then
+        echo "[gguffer] el tokenizer del repo usa una clase que tu transformers no conoce."
+        echo "           (TokenizersBackend es de transformers v5)"
+        echo "           Lo cambio a PreTrainedTokenizerFast."
+    fi
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -5579,6 +5648,12 @@ cmd_gguffer() {
             fi
         fi
         echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
+        # El tokenizer se arregla ANTES de convertir, no solo cuando la
+        # conversion falla: el chat template que falta NO hace fallar nada,
+        # pero deja el GGUF con el template de la comunidad de llama.cpp
+        # (que puede ser de otro modelo). Y el tokenizer_class de
+        # transformers v5 tampoco tiene que fallar: se arregla igualmente.
+        _gguffer_arreglar_tokenizer "$source_dir" || true
         local conv_log="${TMPDIR:-/tmp}/gguffer-conv.$$.log"
         local conv_ok=0
         if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
