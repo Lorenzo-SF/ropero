@@ -501,6 +501,37 @@ ropero_model_ctx() {
 }
 
 # -----------------------------------------------------------------------------
+# ropero_model_aux <modelo> → los ficheros extra del modelo, una linea cada
+# uno:
+#
+#   tipo|repo|fichero-en-el-repo|nombre-local|tamaño|use
+#
+# "use" dice CUÁNDO hace falta el fichero:
+#   build -> lo usa el gguffer al convertir/cuantizar (imatrix, chat template)
+#   run   -> lo usa el launcher al arrancar (mtp, mmproj)
+#
+# Es la fuente unica: el catalogo cuelga de aqui los extras de cada entrada, y
+# el instalador baja primero los de "build" (que hacen falta para fabricar) y
+# luego los de "run".
+# -----------------------------------------------------------------------------
+ropero_model_aux() {
+    local name="${1:-}"
+    local key="${name//-/_}"
+    local target="${MODEL_ALIAS_TARGET[$key]:-}"
+    if [[ -n "$target" ]]; then
+        name="${MODEL_ALIAS[$target]:-$target}"
+    elif [[ "$name" != "${MODEL_ALIAS[$key]:-}" ]]; then
+        name="${MODEL_ALIAS[$key]:-$name}"
+    fi
+
+    local conf py
+    conf=$(ropero_modelconf_path) || { ropero_err "falta el cargador de modelos"; return 1; }
+    py=$(ropero_python_resolve) || { ropero_err "hace falta python3 (>= 3.8)"; return 1; }
+
+    "$py" "$conf" aux --root "$MODELS_DIR" --name "$name"
+}
+
+# -----------------------------------------------------------------------------
 # ropero_model_build_argv <modelo> [destino]
 #
 # Imprime, UNA POR LÍNEA, el argv con el que se fabrica el GGUF de un modelo.

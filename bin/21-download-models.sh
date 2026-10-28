@@ -192,16 +192,38 @@ _cat_aux() {
 _ropero_cat_aux_join() {
     local current="${1:-}" incoming="${2:-}" label="${3:-}"
     [[ -n "$incoming" ]] || { printf '%s' "$current"; return 0; }
-    local repo file name size
-    IFS='|' read -r repo file name size <<<"$incoming"
+    local repo file name size use
+    IFS='|' read -r repo file name size use <<<"$incoming"
     [[ -n "$file" ]] || { printf '%s' "$current"; return 0; }
     [[ -n "$name" ]] && name="${name##*/}"
-    local entry="$repo|$file|$name|$size|$label"
+    # El "use" (build/run) lo pone el TOML; si no, el de por defecto del tipo.
+    [[ -n "$use" ]] || use="$(_ropero_aux_use_default "$label")"
+    local entry="$repo|$file|$name|$size|$use|$label"
     if [[ -n "$current" ]]; then
         printf '%s;%s' "$current" "$entry"
     else
         printf '%s' "$entry"
     fi
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_aux_use_default <tipo> → "build" o "run"
+#
+# Que hace falta un extra y CUANDO lo hace falta:
+#
+#   tipo             se usa en
+#   ---------------  ------------------
+#   mtp              el arranque (--model-draft)
+#   mmproj           el arranque (--mmproj)
+#   chat_template    al fabricar (el conversor lo lee y lo mete en el GGUF)
+#   imatrix          al fabricar (llama-quantize lo usa)
+#   tokenizer        al fabricar (el conversor lo lee del clon)
+# -----------------------------------------------------------------------------
+_ropero_aux_use_default() {
+    case "${1:-}" in
+        mtp|mmproj) printf 'run' ;;
+        *)          printf 'build' ;;
+    esac
 }
 
 # -----------------------------------------------------------------------------
@@ -256,9 +278,11 @@ _ropero_cat_build() {
                        "$(ropero_model_build_size "$m")" \
                        "$GGUF_DIR/${MODEL_ALIAS[$m]:-$m}"
             aux_spec=""
-            aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MTP[$m]:-}" "MTP")"
-            aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MMPROJ[$m]:-}" "mmproj")"
-            aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_CHAT_TEMPLATE[$m]:-}" "chat_template")"
+            while IFS='|' read -r _akind _arepo _afile _aname _asize _ause; do
+                [[ -n "${_akind:-}" ]] || continue
+                aux_spec="$(_ropero_cat_aux_join "$aux_spec" \
+                    "$_arepo|$_afile|$_aname|$_asize|$_ause" "$_akind")"
+            done < <(ropero_model_aux "$m")
             [[ -n "$aux_spec" ]] && _cat_aux "$key" "$aux_spec"
             continue
         fi
@@ -291,9 +315,12 @@ _ropero_cat_build() {
         # existen). Por eso NO son entradas seleccionables del catálogo: se
         # cuelgan de la entrada que los declara.
         aux_spec=""
-        aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MTP[$m]:-}" "MTP")"
-        aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MMPROJ[$m]:-}" "mmproj")"
-        aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_CHAT_TEMPLATE[$m]:-}" "chat_template")"
+        while IFS='|' read -r _akind _arepo _afile _aname _asize _ause; do
+            [[ -n "${_akind:-}" ]] || continue
+            aux_spec="$(_ropero_cat_aux_join "$aux_spec" \
+                "$_arepo|$_afile|$_aname|$_asize|$_ause" "$_akind")"
+        done < <(ropero_model_aux "$m")
+        # (el chat_template y el resto ya han entrado por la fuente unica)
         if [[ -n "$aux_spec" ]]; then
             _cat_aux "$key" "$aux_spec"
         fi
@@ -465,11 +492,12 @@ _ropero_cat_aux_paths() {
 # -----------------------------------------------------------------------------
 _ropero_cat_download_aux() {
     local i="$1"
+    local use="${2:-}"
     local specs="${_ROPERO_CAT_AUX[$i]:-}"
     [[ -n "$specs" ]] || return 0
 
     local repo="${_ROPERO_CAT_REPO[$i]}" dest_dir="$(_ropero_cat_dest_dir "$i")"
-    local spec aux_repo src name size label staged staged_file final rc=0
+    local spec aux_repo src name size aux_use label staged staged_file final rc=0
     local -a parts=()
     local IFS=';'
     # shellcheck disable=SC2206
@@ -478,11 +506,17 @@ _ropero_cat_download_aux() {
 
     for spec in "${parts[@]}"; do
         [[ -n "$spec" ]] || continue
-        # "repo|ruta/en/repo|nombre final|tamaño|etiqueta"
+        # "repo|ruta/en/repo|nombre final|tamaño|use|tipo"
         aux_repo="${spec%%|*}"; spec="${spec#*|}"
         src="${spec%%|*}"; spec="${spec#*|}"
         name="${spec%%|*}"; spec="${spec#*|}"
-        size="${spec%%|*}"; label="${spec#*|}"
+        size="${spec%%|*}"; spec="${spec#*|}"
+        aux_use="${spec%%|*}"; label="${spec#*|}"
+        # Si se pide un uso concreto, solo se bajan los de ese uso. Sin
+        # filtro, se bajan todos.
+        if [[ -n "$use" && "$aux_use" != "$use" ]]; then
+            continue
+        fi
         # El aux puede venir de otro repo: el que declara el TOML manda.
         [[ -n "$aux_repo" ]] || aux_repo="$repo"
         [[ -n "$src" && -n "$name" ]] || continue
@@ -523,6 +557,44 @@ _ropero_cat_download_aux() {
         ropero_ok "$label → $name"
     done
     return "$rc"
+}
+
+# -----------------------------------------------------------------------------
+# _ropero_cat_build_flags <índice> <dest_dir> → los flags que se le pasan al
+# gguffer por los ficheros extra de "build".
+#
+# El tipo del extra decide el flag:
+#   imatrix       -> --imatrix <fichero>
+#   chat_template -> --chat-template <fichero>
+#   tokenizer     -> --tokenizer <fichero>
+#
+# Solo se pasan los que existen de verdad en <dest_dir>: si el extra no se
+# ha bajado (o no se ha declarado), el gguffer no lo recibe.
+# -----------------------------------------------------------------------------
+_ropero_cat_build_flags() {
+    local i="$1" dest_dir="$2"
+    [[ -n "${_ROPERO_CAT_AUX[$i]:-}" ]] || return 0
+    local spec e_repo e_file e_name e_size e_use e_kind e_path
+    local IFS=';'
+    # shellcheck disable=SC2206
+    local -a espec=(${_ROPERO_CAT_AUX[$i]})
+    unset IFS
+    for spec in "${espec[@]}"; do
+        [[ -n "$spec" ]] || continue
+        e_repo="${spec%%|*}"; spec="${spec#*|}"
+        e_file="${spec%%|*}"; spec="${spec#*|}"
+        e_name="${spec%%|*}"; spec="${spec#*|}"
+        e_size="${spec%%|*}"; spec="${spec#*|}"
+        e_use="${spec%%|*}"; e_kind="${spec#*|}"
+        [[ "$e_use" == "build" ]] || continue
+        e_path="$dest_dir/$e_name"
+        [[ -s "$e_path" ]] || continue
+        case "$e_kind" in
+            imatrix)       printf '%s\n%s\n' "--imatrix" "$e_path" ;;
+            chat_template) printf '%s\n%s\n' "--chat-template" "$e_path" ;;
+            tokenizer)     printf '%s\n%s\n' "--tokenizer" "$e_path" ;;
+        esac
+    done
 }
 
 # -----------------------------------------------------------------------------
@@ -572,12 +644,40 @@ _ropero_cat_fabricate() {
         fi
     fi
 
+    # ── Los extras que hacen falta para FABRICAR ──────────────────────────
+    # El imatrix, el chat template y los tokenizers se usan al convertir y
+    # cuantizar, no al arrancar. Se bajan ANTES de fabricar (el gguffer los
+    # necesita) y van a la MISMA carpeta que el GGUF final.
+    _ropero_cat_download_aux "$i" "build" || return 1
+
     local -a argv=()
     mapfile -t argv < <(ropero_model_build_argv "$model_key" "$final")
     if (( ${#argv[@]} == 0 )); then
         ropero_err "$_name: no se pudo construir el argv de fabricacion (revisa su [build])"
         return 1
     fi
+
+    # Los ficheros de "build" que se han bajado se le pasan al gguffer, que
+    # es quien los usa.
+    local -a extra_flags=()
+    mapfile -t extra_flags < <(_ropero_cat_build_flags "$i" "$dest_dir")
+
+    # Si el imatrix viene como extra (ya bajado a la carpeta del modelo), se
+    # le pasa COMO FICHERO. Los flags "--imatrix-repo/--imatrix-file" del
+    # [build] sobrarian: el gguffer los usaria para bajar otra copia a su
+    # cache y pisaria el que le acabamos de pasar. Se quitan.
+    if printf '%s\n' "${extra_flags[@]}" | grep -qxF -- "--imatrix"; then
+        local -a argv_limpio=()
+        local _k
+        for ((_k = 0; _k < ${#argv[@]}; _k++)); do
+            case "${argv[$_k]}" in
+                --imatrix-repo|--imatrix-file) (( _k++ )) ;;
+                *) argv_limpio+=("${argv[$_k]}") ;;
+            esac
+        done
+        argv=("${argv_limpio[@]}")
+    fi
+    argv+=("${extra_flags[@]}")
 
     # El consentimiento se pide UNA vez, y dice lo que va a pasar de verdad:
     # esto no es una descarga, es una fabricacion (pesos + conversion +
@@ -600,9 +700,10 @@ _ropero_cat_fabricate() {
         return 1
     fi
 
-    # Los ficheros auxiliares (MTP, mmproj) se siguen DESCARGANDO: son
-    # ficheros ya hechos que no se fabrican.
-    _ropero_cat_download_aux "$i" || return 1
+    # Los ficheros que se usan en el ARRANQUE (MTP, mmproj) se bajan
+    # despues: no hacen falta para fabricar, y si la fabricacion falla no
+    # se descargan para nada.
+    _ropero_cat_download_aux "$i" "run" || return 1
     return 0
 }
 
@@ -653,6 +754,9 @@ _ropero_cat_download() {
         return 1
     fi
 
+    # En el caso de descarga se bajan TODOS los extras: los de "build" no
+    # hacen falta para nada (el GGUF ya esta hecho), pero son parte del
+    # modelo y su sitio es la misma carpeta.
     if _ropero_cat_download_aux "$i"; then
         ropero_ok "$_name: 100% completado"
         return 0

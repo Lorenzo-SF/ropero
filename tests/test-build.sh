@@ -247,7 +247,7 @@ check "9b. el qwen usa draft-mtp en sus args" \
 # dice [files].gguf (el launcher lo busca con ese nombre).
 declare -A QUANT_ESPERADO=(
   [qwen]=NVFP4        [qwen3]=NVFP4       [qwencoder]=IQ4_NL
-  [granite]=IQ4_NL    [nemotron]=NVFP4    [ornith]=NVFP4
+  [granite]=MXFP4_MOE  [nemotron]=NVFP4    [ornith]=NVFP4
   [muse]=IQ4_NL
 )
 for m in qwen qwen3 qwencoder granite nemotron ornith muse; do
@@ -263,13 +263,25 @@ for m in qwen qwen3 qwencoder granite nemotron ornith muse; do
 done
 
 # ══ 11. un modelo que se fabrica NO necesita [download] ══════════════════
-# El granite y el qwen3 se fabrican y no tienen alternativa publicada
-# (su quant no lo ha hecho nadie): no hay de donde bajar el GGUF principal.
-for m in granite qwen3; do
-  check "11. $m -> no tiene [download]" \
-        "$(cond '! grep -q "^\[download\]" "$REPO/models/llama/$m.toml"')" \
-        "el $m declara [download]"
-done
+# El qwen3 se fabrica y no tiene alternativa publicada (su quant no lo ha
+# hecho nadie): no hay de donde bajar el GGUF principal.
+check "11. qwen3 -> no tiene [download]" \
+      "$(cond '! grep -q "^\[download\]" "$REPO/models/llama/qwen3.toml"')" \
+      "el qwen3 declara [download]"
+
+# El granite SI tiene alternativa: el MXFP4_MOE ya esta hecho (noctrex), y
+# verificado (arch granitehybrid, 120 tensores MXFP4 de expertos + Q8_0, sin
+# MTP, con el chat template de IBM byte a byte). El [build] queda como la
+# via de fabricar TU variante CON imatrix.
+check "11b. granite -> tiene [download] (el MXFP4_MOE ya hecho)" \
+      "$(cond 'grep -q "^\[download\]" "$REPO/models/llama/granite.toml"')" \
+      "el granite no declara [download]"
+check "11c. granite -> el [build] fabrica el MISMO quant que el [files]" \
+      "$(cond 'grep -q "quant *= *\"MXFP4_MOE\"" "$REPO/models/llama/granite.toml"')" \
+      "el granite fabrica otro quant"
+check "11d. granite -> el imatrix es un extra (se baja a la carpeta)" \
+      "$(cond 'grep -q "^\[download.aux.imatrix\]" "$REPO/models/llama/granite.toml"')" \
+      "el granite no declara el imatrix como extra"
 
 # ══ 12. los marcadores de ruta en los args ═════════════════════════════════
 # Los args del TOML son texto estatico, pero el modelo de draft de la MTP

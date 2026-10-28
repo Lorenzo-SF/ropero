@@ -1,5 +1,6 @@
 # =============================================================================
-# granite — granite-4.0-h-small (MoE híbrido Mamba, 40 capas, 10 expertos)
+# granite — granite-4.0-h-small (MoE híbrido Mamba2 + atención, 40 capas,
+# 72 expertos, 10 activos, ctx nativo 1.048.576)
 # =============================================================================
 
 [model]
@@ -10,15 +11,78 @@ context = 266144
 # context = 131072
 
 [files]
-# gguf = "granite-4.0-h-small-IQ4_NL.gguf"
+# El nombre local del GGUF. OJO: el fichero de noctrex se llama
+# "Granite-4.0-H-Small-MXFP4_MOE.gguf" (con mayusculas y otro orden); el
+# nombre local es el de aqui, y el [download] dice de donde viene.
 gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
 
+[download]
+# El MXFP4_MOE YA ESTA HECHO (noctrex). Comprobado por HTTP y por el indice
+# de tensores del GGUF:
+#   · arch granitehybrid (la que escribe el conversor para el MoE hibrido)
+#   · 666 tensores: 120 MXFP4 (los expertos) + 209 Q8_0 (el resto) + 337 F32
+#     => es la regla del motor para MXFP4_MOE (expertos a 4 bits, resto Q8_0)
+#   · sin MTP (ningun tensor "blk.N.nextn.*"): carga con el atomic
+#   · el chat template es IDENTICO byte a byte al "chat_template.jinja" de
+#     IBM (6418 bytes): no es el de la comunidad de llama.cpp
+#
+# Son 19,83 GB: no cabe entero en los 15.300 MiB libres de VRAM, asi que va
+# con offload (los --n-gpu-layers y --n-cpu-moe de abajo).
+repo = "noctrex/Granite-4.0-H-Small-MXFP4_MOE-GGUF"
+file = "Granite-4.0-H-Small-MXFP4_MOE.gguf"
+size = "19.83 GB"
+
+[download.aux.imatrix]
+# La importance matrix. Se declara como EXTRA (no dentro del [build]) para
+# que se baje a la MISMA carpeta que el GGUF, tanto si el GGUF se descarga
+# como si se fabrica:
+#
+#   · si se FABRICA: el instalador se la pasa al gguffer con --imatrix
+#   · si se DESCARGA: se queda ahi, al lado del GGUF, y sirve para fabricar
+#     una variante propia luego
+#
+# El nombre del fichero tiene el sufijo "_file" (no ".gguf"): es como lo
+# publica unsloth, y el que declara el repo.
+#
+# OJO: este imatrix se hizo para el GGUF IQ4_NL de unsloth. Una importance
+# matrix no depende del quant (es la importancia de los pesos), asi que vale
+# igual para cualquier quant del mismo modelo base.
+repo = "unsloth/granite-4.0-h-small-GGUF"
+file = "imatrix_unsloth.gguf_file"
+name = "imatrix_unsloth.gguf_file"
+size = "0.11 GB"
+
 [build]
-repo         = "ibm-granite/granite-4.0-h-small"
-quant        = "IQ4_NL"
-imatrix_repo = "unsloth/granite-4.0-h-small-GGUF"
-imatrix_file = "imatrix_unsloth.gguf_file"
-keep_source  = true
+# ── CÓMO SE FABRICA ─────────────────────────────────────────────────────────
+#
+# La alternativa: fabricar TU MXFP4_MOE, CON imatrix (el de noctrex no lleva
+# imatrix, segun su model card). Fabricar son ~64 GB de pesos y una noche.
+#
+#   ropero gguffer --repo ibm-granite/granite-4.0-h-small \
+#       --quant "MXFP4_MOE" \
+#       --imatrix "$HOME/models/gguf/granite/imatrix_unsloth.gguf_file" \
+#       --out "$HOME/models/gguf/granite/granite-4.0-h-small-MXFP4_MOE.gguf" \
+#       --keep-source
+#
+# (el imatrix se baja una vez con "ropero install models granite" y se
+#  reutiliza de ahi; el gguffer tambien lo baja solo con
+#  --imatrix-repo unsloth/granite-4.0-h-small-GGUF
+#  --imatrix-file imatrix_unsloth.gguf_file)
+#
+# EL CHAT TEMPLATE: IBM lo publica en "chat_template.jinja", NO dentro del
+# tokenizer_config.json, y el conversor de llama.cpp solo mira el
+# tokenizer_config.json (nunca el .jinja). Sin el arreglo del gguffer (que
+# mete el .jinja en el tokenizer_config.json antes de convertir), el GGUF
+# se queda con el template de la comunidad de llama.cpp.
+#
+# EL QUANT MXFP4_MOE: el motor tiene la regla ("los tensores de expertos
+# (ne[2] > 1) a MXFP4, el resto a Q8_0"), y el granite es MoE, asi que
+# aplica. El Mamba2 (las 36 capas ssm_*) sale en Q8_0, que es lo que hace
+# bien (con 4 bits el estado recurrente se desincroniza).
+repo        = "ibm-granite/granite-4.0-h-small"
+quant       = "MXFP4_MOE"
+keep_source = true
+# Los pesos que se bajan al fabricar (tamano medido del repo de HF).
 size = "64.4 GB"
 
 [levels]
@@ -37,5 +101,5 @@ base = [
     "--top-p", "0.95",
     "--min-p", "0.05",
     "--n-predict", "8192",
-    
+
 ]
