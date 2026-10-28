@@ -10,11 +10,11 @@ context = 266144
 # context = 131072
 
 [files]
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-F16.gguf"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-F16.gguf"
 size = "19.76 GB"
 
 [levels]
@@ -25,17 +25,17 @@ list = ["mtp"]
 
 [args]
 base = [
-    "--n-gpu-layers", "54",                            # todos los layers GPU-eligible
-    "--n-cpu-moe", "${env:ROPERO_NEMOTRON_N_CPU_MOE:-23}",   # experts de las 18 primeras capas a la CPU
-    "--cache-type-k", "q4_0",                          # agresivo (mamba SSM no usa esto, attn sí)
-    "--cache-type-v", "q4_0",
+    "--n-gpu-layers", "54",                            
+    "--n-cpu-moe", "15",   
+    "--cache-type-k", "turbo3",                          
+    "--cache-type-v", "turbo3",
     "--temp", "1.0",
     "--top-p", "0.95",
-    "--top-k", "0",                                    # desactivado (solo top-p)
+    "--top-k", "0",                                    
     "--min-p", "0.0",
-    "--repeat-penalty", "1.0",                         # sin penalty
+    "--repeat-penalty", "1.0",                         
     "--repeat-last-n", "64",
-    "--n-predict", "8192",                             # reasoning puede requerir más
+    "--n-predict", "8192",                             
     "--keep", "1024",
 
 ]
@@ -47,7 +47,7 @@ base = ["--chat-template-kwargs", '{"enable_thinking": true}']
 base = [
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "3",
-    "--spec-draft-type-k", "q4_0",
-    "--spec-draft-type-v", "q4_0"
+    "--spec-draft-type-k", "turbo3",
+    "--spec-draft-type-v", "turbo3"
 ]
 

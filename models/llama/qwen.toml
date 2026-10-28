@@ -5,7 +5,7 @@
 [model]
 name    = "qwen"
 engine  = "llama-server"
-context = 196608
+context = 163840
 
 [files]
 gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
@@ -13,20 +13,17 @@ gguf   = "Qwen3.8-27B-UD-IQ3_S.gguf"
 [download]
 repo = "bartowski/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-UD-IQ3_S.gguf"
-size = "11.20 GB"
+size = "16.20 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
 default = "low"
 
-[flags]
-list = ["mtp"]
-
 [args]
 base = [
     "--n-gpu-layers", "66",
-    "--cache-type-k", "q4_0",              # el kernel de FA no tiene q4_0+q4_0
-    "--cache-type-v", "q4_0",              # (fattn.cu:2935 -> GGML_ABORT)
+    "--cache-type-k", "turbo3",              
+    "--cache-type-v", "turbo3",             
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
@@ -36,6 +33,11 @@ base = [
     "--reasoning-preserve",
     "--reasoning-budget", "12288",    
     "--checkpoint-min-step","256",
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "2",
+    "--spec-draft-type-k", "turbo3",
+    "--spec-draft-type-v", "turbo3",
+    "--no-spec-draft-backend-sampling",
 ]
 
 [args.level.low]
@@ -50,12 +52,4 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 [args.level.xhigh]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
-[args.flag.mtp]
-base = [
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "q4_0",
-    "--spec-draft-type-v", "q4_0",
-    "--no-spec-draft-backend-sampling",
-]
 

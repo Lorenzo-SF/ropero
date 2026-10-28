@@ -2895,8 +2895,8 @@ ropero_install_llama() {
         ropero_warn "$LLAMA_DIR existe pero no es un clon de git; lo sustituyo"
         rm -rf "$LLAMA_DIR"
     fi
-    if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
-    # if ! git clone -q git@github.com:AtomicBot-ai/atomic-llama-cpp-turboquant.git "$LLAMA_DIR"; then
+    # if ! git clone -q https://github.com/ggml-org/llama.cpp "$LLAMA_DIR"; then
+    if ! git clone -q git@github.com:AtomicBot-ai/atomic-llama-cpp-turboquant.git "$LLAMA_DIR"; then
         ropero_err "clone de llama.cpp falló"
         return 0
     fi
