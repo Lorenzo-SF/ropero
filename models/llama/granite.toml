@@ -1,5 +1,6 @@
 # =============================================================================
-# granite — granite-4.0-h-small (MoE híbrido Mamba, 40 capas, 10 expertos)
+# granite — granite-4.0-h-small (MoE híbrido Mamba2 + atención, 40 capas,
+# 72 expertos, 10 activos, ctx nativo 1.048.576)
 # =============================================================================
 
 [model]
@@ -11,6 +12,17 @@ context = 266144
 
 [files]
 gguf = "granite-4.0-h-small-MXFP4_MOE.gguf"
+
+[download]
+repo = "noctrex/Granite-4.0-H-Small-MXFP4_MOE-GGUF"
+file = "Granite-4.0-H-Small-MXFP4_MOE.gguf"
+size = "19.83 GB"
+
+[download.aux.imatrix]
+repo = "unsloth/granite-4.0-h-small-GGUF"
+file = "imatrix_unsloth.gguf_file"
+name = "imatrix_unsloth.gguf_file"
+size = "0.11 GB"
 
 [build]
 repo         = "ibm-granite/granite-4.0-h-small"
@@ -36,5 +48,5 @@ base = [
     "--top-p", "0.95",
     "--min-p", "0.05",
     "--n-predict", "8192",
-    
+
 ]

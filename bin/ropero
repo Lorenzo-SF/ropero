@@ -4936,6 +4936,11 @@ _gguffer_arreglar_tokenizer() {
     # vacio. Por eso van en dos lineas.
     local dir="$1"
     local cfg="$dir/tokenizer_config.json"
+    # El chat template que se pasa por --chat-template (ROPERO_CHAT_TEMPLATE).
+    # La funcion lo recibe por la variable de entorno porque su firma la
+    # comparten varios sitios y no quiero anadir otro parametro posicional
+    # que se pueda confundir con el directorio.
+    local ROPERO_CHAT_TEMPLATE="${ROPERO_CHAT_TEMPLATE:-}"
     [[ -f "$cfg" ]] || return 1
 
     # ── EL CHAT TEMPLATE ───────────────────────────────────────────────────
@@ -4951,7 +4956,16 @@ _gguffer_arreglar_tokenizer() {
     #
     # Se arregla metiendo el chat_template.jinja dentro del
     # tokenizer_config.json, que es de donde el conversor lo lee.
-    if [[ -f "$dir/chat_template.jinja" ]]; then
+    # El chat template puede venir de tres sitios, por orden:
+    #   1. el que se pasa con --chat-template (lo declara el TOML)
+    #   2. el chat_template.jinja del clon (lo publica el repo de pesos)
+    #   3. el tokenizer_config.json del clon (si ya trae "chat_template")
+    if [[ -n "$ROPERO_CHAT_TEMPLATE" && -f "$ROPERO_CHAT_TEMPLATE" ]]; then
+        _gguffer_meter_chat_template "$cfg" "$ROPERO_CHAT_TEMPLATE"
+        if grep -q '"chat_template"' "$cfg" 2>/dev/null; then
+            echo "[gguffer] chat template: el que declaraste ($(basename "$ROPERO_CHAT_TEMPLATE"))"
+        fi
+    elif [[ -f "$dir/chat_template.jinja" ]]; then
         _gguffer_meter_chat_template "$cfg" "$dir/chat_template.jinja"
         if grep -q '"chat_template"' "$cfg" 2>/dev/null; then
             echo "[gguffer] el repo trae chat_template.jinja y el conversor no lo lee:"
@@ -5062,6 +5076,7 @@ _gguffer_necesita_espacio() {
 # -----------------------------------------------------------------------------
 _gguffer_diagnostico() {
     local dir="$1" out_f16="$2" imatrix="$3" imatrix_repo="$4" imatrix_file="$5" quant="$6" origen_gguf="${7:-}"
+    local chat_template="" tokenizer_extra=""
     local _ggufcheck
     _ggufcheck="$(dirname "${BASH_SOURCE[0]}")/_ggufcheck.py"
     local _libre _margen _pesos _nextn_bloque _cubre
@@ -5161,6 +5176,8 @@ cmd_gguffer() {
                 done
                 shift ;;
             --imatrix)     [[ $# -ge 2 ]] || { echo "ERROR: --imatrix requiere un fichero" >&2; return 2; }; imatrix="$2"; shift 2 ;;
+            --chat-template) [[ $# -ge 2 ]] || { echo "ERROR: --chat-template requiere un fichero" >&2; return 2; }; chat_template="$2"; shift 2 ;;
+            --tokenizer)   [[ $# -ge 2 ]] || { echo "ERROR: --tokenizer requiere un fichero" >&2; return 2; }; tokenizer_extra="$2"; shift 2 ;;
             --imatrix=*)   imatrix="${1#--imatrix=}"; shift ;;
             --imatrix-repo)  [[ $# -ge 2 ]] || { echo "ERROR: --imatrix-repo requiere un repo (owner/name)" >&2; return 2; }; imatrix_repo="$2"; shift 2 ;;
             --imatrix-repo=*) imatrix_repo="${1#--imatrix-repo=}"; shift ;;
@@ -5655,19 +5672,43 @@ cmd_gguffer() {
                 echo "[gguffer] aviso: este conversor no sabe excluir la MTP (--no-mtp); sigo sin el"
             fi
         fi
+        # ── EL TOKENIZER EXTRA ────────────────────────────────────────────
+        # Hay repos cuyo tokenizer NO esta en el repo de los pesos (el
+        # tokenizer va aparte). Si se pasa, se copia al clon antes de
+        # convertir: el conversor lo lee de ahi.
+        if [[ -n "$tokenizer_extra" ]]; then
+            if [[ -s "$tokenizer_extra" ]]; then
+                local _tbase _tdest
+                _tbase="$(basename "$tokenizer_extra")"
+                case "$_tbase" in
+                    tokenizer.json|tokenizer_config.json|*.jinja) _tdest="$source_dir/$_tbase" ;;
+                    *) _tdest="$source_dir/$_tbase" ;;
+                esac
+                if cp -f "$tokenizer_extra" "$_tdest"; then
+                    echo "[gguffer] tokenizer extra copiado al clon: $_tbase"
+                else
+                    echo "ERROR: no se pudo copiar el tokenizer extra a $_tdest" >&2
+                    return 1
+                fi
+            else
+                echo "ERROR: el tokenizer extra no existe: $tokenizer_extra" >&2
+                return 1
+            fi
+        fi
+
         echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
         # El tokenizer se arregla ANTES de convertir, no solo cuando la
         # conversion falla: el chat template que falta NO hace fallar nada,
         # pero deja el GGUF con el template de la comunidad de llama.cpp
         # (que puede ser de otro modelo). Y el tokenizer_class de
         # transformers v5 tampoco tiene que fallar: se arregla igualmente.
-        _gguffer_arreglar_tokenizer "$source_dir" || true
+        ROPERO_CHAT_TEMPLATE="$chat_template" _gguffer_arreglar_tokenizer "$source_dir" || true
         local conv_log="${TMPDIR:-/tmp}/gguffer-conv.$$.log"
         local conv_ok=0
         if python3 "$_convert" "${conv_args[@]}" >"$conv_log" 2>&1; then
             conv_ok=1
         elif grep -q "Tokenizer class .* does not exist" "$conv_log" 2>/dev/null \
-             && _gguffer_arreglar_tokenizer "$source_dir"; then
+             && ROPERO_CHAT_TEMPLATE="$chat_template" _gguffer_arreglar_tokenizer "$source_dir"; then
             # Algunos repos se han guardado con transformers v5, cuyo
             # tokenizer_class es "TokenizersBackend". Con transformers v4 esa
             # clase no existe y la conversion muere con "Tokenizer class

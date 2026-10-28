@@ -118,6 +118,42 @@ no encontraba.
 La plantilla con el esquema completo está en `models/_template.toml`, y
 `ropero template` la enseña.
 
+### 1b. Los ficheros extra: los que van con el modelo
+
+Un modelo no es solo el GGUF. Al lado van el modelo de draft de la MTP, el
+proyector de visión, el chat template, la importance matrix... Todos se
+bajan a **la misma carpeta que el GGUF**, y se bajan **igual se descargue el
+GGUF o se fabrique**:
+
+```toml
+[download.aux.imatrix]
+repo = "unsloth/granite-4.0-h-small-GGUF"
+file = "imatrix_unsloth.gguf_file"
+name = "imatrix_unsloth.gguf_file"
+size = "0.11 GB"
+```
+
+El `repo` puede ser **otro** que el del modelo (el draft MTP del nemotron
+está en tngtech y su MXFP4 en vcruz305): el que declara el TOML manda.
+
+Cada tipo dice **cuándo** hace falta, y de eso depende que el flujo sea el de
+siempre:
+
+| tipo | se usa en | por qué |
+|---|---|---|
+| `mtp` | el arranque | `--model-draft` |
+| `mmproj` | el arranque | `--mmproj` |
+| `chat_template` | al fabricar | el conversor lo lee y lo mete en el GGUF |
+| `imatrix` | al fabricar | `llama-quantize` lo usa |
+| `tokenizer` | al fabricar | el conversor lo lee del clon |
+
+Los de "al fabricar" se bajan **antes** de fabricar y se le pasan al gguffer
+con el flag que toca (`--imatrix`, `--chat-template`, `--tokenizer`). Los de
+"el arranque" se bajan después y se pueden referenciar en los args con
+`{{model_dir}}`, que el launcher sustituye por la ruta real de la carpeta
+del modelo (una ruta absoluta en el TOML no es portable: depende de dónde
+esté el `GGUF_DIR`).
+
 ### 2. Sólo los modelos de `models/` se pueden usar
 
 Los que cuelgan de `models/<engine>/fired/` están **retirados**: no se

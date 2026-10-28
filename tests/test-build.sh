@@ -247,7 +247,7 @@ check "9b. el qwen usa draft-mtp en sus args" \
 # dice [files].gguf (el launcher lo busca con ese nombre).
 declare -A QUANT_ESPERADO=(
   [qwen]=NVFP4        [qwen3]=NVFP4       [qwencoder]=IQ4_NL
-  [granite]=IQ4_NL    [nemotron]=NVFP4    [ornith]=NVFP4
+  [granite]=MXFP4_MOE  [nemotron]=NVFP4    [ornith]=NVFP4
   [muse]=IQ4_NL
 )
 for m in qwen qwen3 qwencoder granite nemotron ornith muse; do
@@ -263,13 +263,25 @@ for m in qwen qwen3 qwencoder granite nemotron ornith muse; do
 done
 
 # ══ 11. un modelo que se fabrica NO necesita [download] ══════════════════
-# El granite y el qwen3 se fabrican y no tienen alternativa publicada
-# (su quant no lo ha hecho nadie): no hay de donde bajar el GGUF principal.
-for m in granite qwen3; do
-  check "11. $m -> no tiene [download]" \
-        "$(cond '! grep -q "^\[download\]" "$REPO/models/llama/$m.toml"')" \
-        "el $m declara [download]"
-done
+# El qwen3 se fabrica y no tiene alternativa publicada (su quant no lo ha
+# hecho nadie): no hay de donde bajar el GGUF principal.
+check "11. qwen3 -> no tiene [download]" \
+      "$(cond '! grep -q "^\[download\]" "$REPO/models/llama/qwen3.toml"')" \
+      "el qwen3 declara [download]"
+
+# El granite SI tiene alternativa: el MXFP4_MOE ya esta hecho (noctrex), y
+# verificado (arch granitehybrid, 120 tensores MXFP4 de expertos + Q8_0, sin
+# MTP, con el chat template de IBM byte a byte). El [build] queda como la
+# via de fabricar TU variante CON imatrix.
+check "11b. granite -> tiene [download] (el MXFP4_MOE ya hecho)" \
+      "$(cond 'grep -q "^\[download\]" "$REPO/models/llama/granite.toml"')" \
+      "el granite no declara [download]"
+check "11c. granite -> el [build] fabrica el MISMO quant que el [files]" \
+      "$(cond 'grep -q "quant *= *\"MXFP4_MOE\"" "$REPO/models/llama/granite.toml"')" \
+      "el granite fabrica otro quant"
+check "11d. granite -> el imatrix es un extra (se baja a la carpeta)" \
+      "$(cond 'grep -q "^\[download.aux.imatrix\]" "$REPO/models/llama/granite.toml"')" \
+      "el granite no declara el imatrix como extra"
 
 # ══ 12. los marcadores de ruta en los args ═════════════════════════════════
 # Los args del TOML son texto estatico, pero el modelo de draft de la MTP
@@ -304,22 +316,22 @@ check "12d. {{gguf_dir}} se sustituye por el GGUF_DIR" \
 check "12e. lo que no es un marcador no se toca" \
       "$(cond 'printf %s "$exp_out" | grep -qxF "nada"')" "$exp_out"
 
-# ══ 13. el aux puede vivir en otro repo que el del modelo ═════════════════
-# El draft MTP del nemotron esta en tngtech y el MXFP4 en vcruz305.
-check "13a. el nemotron declara el draft MTP como aux" \
-      "$(cond 'grep -q "^\[download.aux.mtp\]" "$REPO/models/llama/nemotron.toml"')"
-check "13b. el aux declara su propio repo" \
-      "$(cond 'awk "/^\[download.aux.mtp\]/{f=1;next} /^\[/{f=0} f" "$REPO/models/llama/nemotron.toml" | grep -q "repo = \"tngtech/"')"
-check "13c. el aux del MTP se serializa con SU repo" \
-      "$(cond 'cd "$REPO" && python3 bin/_modelconf.py dump --root models 2>/dev/null | grep -q "tngtech/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-GGUF|mtp-Nemotron"')"
+# ══ 13. los extras: el aux puede vivir en otro repo que el del modelo ═════
+# El imatrix del granite esta en unsloth y el modelo en ibm-granite.
+check "13a. el granite declara el imatrix como extra" \
+      "$(cond 'grep -q "^\[download.aux.imatrix\]" "$REPO/models/llama/granite.toml"')"
+check "13b. el extra declara su propio repo" \
+      "$(cond 'awk "/^\[download.aux.imatrix\]/{f=1;next} /^\[/{f=0} f" "$REPO/models/llama/granite.toml" | grep -q "unsloth/granite-4.0-h-small-GGUF"')"
+check "13c. el extra se serializa con SU repo y su uso" \
+      "$(cond 'cd "$REPO" && python3 bin/_modelconf.py aux --root models --name granite 2>/dev/null | grep -q "^imatrix|unsloth/granite-4.0-h-small-GGUF|.*|build$"')"
 
 # ══ 14. el nemotron apunta a ficheros que EXISTEN de verdad ════════════════
 # El nombre "...-MXFP4_MOE-MTP.gguf" no existe en ningun repo (404): el
 # MXFP4 se llama sin el sufijo.
 check "14a. el [download] del nemotron NO es un 404" \
       "$(cond '! awk "/^\[download\]/{f=1;next} /^\[/{f=0} f" "$REPO/models/llama/nemotron.toml" | grep -E "^file = " | grep -q "MXFP4_MOE-MTP.gguf"')"
-check "14b. el [download] del nemotron es el MXFP4 de vcruz305" \
-      "$(cond 'grep -q "vcruz305/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF" "$REPO/models/llama/nemotron.toml"')"
+check "14b. el [download] del nemotron es un MXFP4_MOE que existe" \
+      "$(cond 'grep -q "MXFP4_MOE.gguf" "$REPO/models/llama/nemotron.toml"')"
 
 # ══ resumen ════════════════════════════════════════════════════════════════
 printf '\ntest-build.sh: %d correctos, %d fallos\n' "$PASS" "$FAIL"

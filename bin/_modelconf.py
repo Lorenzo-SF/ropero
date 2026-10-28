@@ -996,7 +996,11 @@ def build_record(path, engine_dir, origin):
         # del nemotron esta en tngtech y el MXFP4 en vcruz305. El que
         # declara el TOML manda; si no lo declara, es el repo del modelo.
         aux_repo = _clean(cfg.get("repo", "")) or repo
-        return "|".join([aux_repo, aux_file, aux_name, aux_size])
+        # Cuando se usa: por defecto, el del tipo. El TOML puede cambiarlo.
+        aux_use = _clean(cfg.get("use", "")) or AUX_USE_DEFAULT.get(kind, "run")
+        if aux_use not in AUX_USES:
+            aux_use = AUX_USE_DEFAULT.get(kind, "run")
+        return "|".join([aux_repo, aux_file, aux_name, aux_size, aux_use])
 
     # La spec de [args], serializada a JSON y en base64.
     spec = {}
@@ -1203,6 +1207,42 @@ _BUILD_OPTS = (
 )
 
 
+# ===========================================================================
+# Los EXTRAS: ficheros que van con el modelo, en su misma carpeta
+# ===========================================================================
+#
+# Un modelo no es solo el GGUF: al lado van el modelo de draft de la MTP, el
+# proyector de vision, el chat template, la importance matrix... Todos ellos
+# se bajan a la MISMA carpeta que el GGUF (la que declara el [files].gguf), y
+# se bajan tanto si el GGUF se DESCARGA como si se FABRICA.
+#
+# Cada tipo de extra se usa en un momento distinto, y de eso depende de que
+# el flujo sea el de siempre:
+#
+#   tipo             se usa en            por que
+#   ---------------  ------------------  ------------------------------------
+#   mtp              el arranque          --model-draft
+#   mmproj           el arranque          --mmproj
+#   chat_template    al fabricar           el conversor lo lee y lo mete en el
+#                                          GGUF (tokenizer.chat_template)
+#   imatrix          al fabricar           llama-quantize lo usa
+#   tokenizer        al fabricar           el conversor lo lee del clon
+#
+# El "use" se puede declarar en el TOML; si no, es el de por defecto del
+# tipo.
+AUX_KINDS = ("mtp", "mmproj", "chat_template", "imatrix", "tokenizer")
+
+AUX_USE_DEFAULT = {
+    "mtp": "run",
+    "mmproj": "run",
+    "chat_template": "build",
+    "imatrix": "build",
+    "tokenizer": "build",
+}
+
+AUX_USES = ("build", "run")
+
+
 def build_argv_for(spec, out_path=None):
     """Traduce la spec de [build] al argv del gguffer.
 
@@ -1254,6 +1294,34 @@ def unknown_build_keys(build):
     if not build:
         return []
     return [k for k in build if k not in BUILD_KEYS]
+
+
+def cmd_aux(opts):
+    """Imprime los EXTRAS de un modelo: tipo, repo, fichero, nombre y uso.
+
+    Una linea por extra, con los campos separados por "|". Es lo que leen
+    el instalador (para bajarlos) y el launcher (para saber cuales van en
+    el arranque y cuales en la fabricacion).
+    """
+    path, _engine_dir, _origin = find_model(opts.root, opts.name)
+    loaded = load_model(path)
+    aux = loaded["aux"]
+    for kind in AUX_KINDS:
+        cfg = aux.get(kind) or {}
+        if not cfg:
+            continue
+        aux_file = _clean(cfg.get("file", ""))
+        if not aux_file:
+            continue
+        aux_name = _clean(cfg.get("name", "")) or aux_file
+        aux_size = _clean(cfg.get("size", ""))
+        aux_repo = _clean(cfg.get("repo", "")) or _clean(loaded["download"].get("repo", ""))
+        aux_use = _clean(cfg.get("use", "")) or AUX_USE_DEFAULT.get(kind, "run")
+        if aux_use not in AUX_USES:
+            aux_use = AUX_USE_DEFAULT.get(kind, "run")
+        sys.stdout.write("|".join([kind, aux_repo, aux_file, aux_name, aux_size, aux_use]) + "\n")
+    sys.stdout.flush()
+    return 0
 
 
 def cmd_build(opts):
@@ -1609,6 +1677,12 @@ def build_parser():
     build_cmd.add_argument("--out", default=None,
                            help="ruta EXACTA del GGUF final (la pone la instalación)")
     build_cmd.set_defaults(func=cmd_build)
+
+    aux_cmd = subs.add_parser(
+        "aux", help="imprime los ficheros extra de un modelo (mtp, imatrix, ...)")
+    aux_cmd.add_argument("--root", required=True, help="directorio de modelos")
+    aux_cmd.add_argument("--name", required=True, help="nombre del modelo")
+    aux_cmd.set_defaults(func=cmd_aux)
 
     return parser
 
