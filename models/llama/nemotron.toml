@@ -10,7 +10,8 @@ context = 266144
 # context = 131072
 
 [files]
-gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE-MTP.gguf"
+# gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE-MTP.gguf"
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
@@ -33,9 +34,8 @@ list = ["mtp"]
 
 [args]
 base = [
-    "--chat-template-kwargs", '{"enable_thinking": false}',  # OFF por defecto
     "--n-gpu-layers", "54",
-    "--n-cpu-moe", "15",
+    "--n-cpu-moe", "12",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "1.0",
@@ -46,11 +46,11 @@ base = [
     "--repeat-last-n", "64",
     "--n-predict", "8192",
     "--keep", "1024",
-
+    "--chat-template-kwargs", '{"enable_thinking": true}',
+    "--reasoning-preserve",
+    "--reasoning-budget", "12288",
 ]
 
-[args.level.think]
-base = ["--chat-template-kwargs", '{"enable_thinking": true}']
 
 [args.flag.mtp]
 # OJO: este GGUF NO trae la cabeza MTP (52 bloques, nextn=0), y esta arch
