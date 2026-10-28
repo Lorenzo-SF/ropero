@@ -61,6 +61,38 @@ KNOWN_FORMATS = ("gguf", "safetensors")
 # ${mmproj} apuntan a estos tres.
 FILE_KEYS = ("gguf", "mtp", "mmproj", "chat_template")
 
+# Claves que se aceptan en la sección [build] de un TOML de modelo.
+#
+# [build] describe CÓMO fabricar el GGUF, y sus claves son las MISMAS que
+# acepta `ropero gguffer`. Se listan aquí para que un typo se avise al
+# cargar el TOML y no 40 minutos después, cuando el cuantizador falla.
+#
+#   repo            de dónde bajar los PESOS (clonar y convertir)
+#   gguf            fuente ya quantizada: "owner/repo" o "owner/repo:fichero"
+#   gguf_file       el fichero dentro del repo, con gguf
+#   quant           el quant a aplicar (o varios, separados por coma)
+#   imatrix         importance matrix LOCAL (ruta)
+#   imatrix_repo    de dónde bajar el imatrix
+#   imatrix_file    el fichero del imatrix dentro de ese repo
+#   out             nombre o ruta del GGUF de salida
+#   out_principal   ruta EXACTA del primer quant de la tirada
+#   from_subdir     subcarpeta del repo de la que sacar los pesos
+#   include         qué ficheros descargar
+#   intermedio      f16 (por defecto) o bf16
+#   keep_source     conservar los safetensors
+#   keep_intermedio no borrar el GGUF intermedio
+#   no_mtp          excluir la cabeza MTP
+#   force           rehacerlo todo desde cero
+BUILD_KEYS = (
+    "repo", "gguf", "gguf_file", "quant", "imatrix", "imatrix_repo",
+    "imatrix_file", "out", "out_principal", "from_subdir", "include",
+    "intermedio", "keep_source", "keep_intermedio", "no_mtp", "force",
+    # Informativo: el tamaño de los PESOS que se bajan al fabricar. Es lo
+    # que ve el usuario cuando se le pregunta "esto va a bajar 65 GB, ¿va?".
+    # No es una flag del gguffer: es un dato de la receta.
+    "size",
+)
+
 
 # ===========================================================================
 # Parser TOML
@@ -619,6 +651,7 @@ def load_model(path):
     args = data.get("args") or {}
     limits = data.get("limits") or {}
     aux = download.get("aux") or {}
+    build = data.get("build") or {}
     return {
         "path": os.path.abspath(path),
         "data": data,
@@ -633,6 +666,7 @@ def load_model(path):
         "args": args,
         "limits": limits,
         "aux": aux,
+        "build": build,
     }
 
 
@@ -1005,6 +1039,26 @@ def build_record(path, engine_dir, origin):
     if limits:
         limits_b64 = _b64_json(dict((_clean(k), v) for k, v in limits.items()))
 
+    # ── La spec de [build] ──────────────────────────────────────────────────
+    #
+    # [build] dice CÓMO se fabrica el GGUF de este modelo, en vez de DÓNDE
+    # se descarga. Los campos son los mismos que acepta `ropero gguffer`, y
+    # el que se ejecuta es el gguffer de verdad: una sola implementación.
+    #
+    # Va serializada en JSON+base64 como la spec de [args] y los [limits],
+    # porque son datos estructurados (listas, booleanos) y no caben bien en
+    # un campo de texto separado por \x1f.
+    build = loaded["build"]
+    build_b64 = ""
+    if build:
+        build_spec = {}
+        for key, value in build.items():
+            key = _clean(key)
+            if key in BUILD_KEYS:
+                build_spec[key] = value
+        if build_spec:
+            build_b64 = _b64_json(build_spec)
+
     fields = [
         name,
         engine,
@@ -1042,6 +1096,10 @@ def build_record(path, engine_dir, origin):
         # `chat_template`: fichero auxiliar (plantilla Jinja) que se descarga
         # con el bundle y se referencia desde [args] con ${chat_template}.
         aux_field("chat_template"),
+        # `build`: cómo se fabrica el GGUF (los parámetros del gguffer). Si
+        # está vacío, el modelo se DESCARGA de [download]; si no, se
+        # FABRICA con el gguffer.
+        build_b64,
     ]
     return fields
 
@@ -1068,6 +1126,16 @@ def cmd_dump(opts):
             failed += 1
             sys.stderr.write("ERROR: %s: %s\n" % (path, exc))
             continue
+        # Las claves desconocidas de [build] se avisan aqui tambien: el dump
+        # es lo que lee `ropero list`, y es donde se veria un "imatrix_repos"
+        # mal escrito (que fabricaria el GGUF sin importance matrix).
+        try:
+            for key in unknown_build_keys(load_model(path)["build"]):
+                sys.stderr.write(
+                    "AVISO: %s: [build] tiene una clave desconocida: %s\n"
+                    % (path, key))
+        except (ModelConfError, Exception):  # noqa: BLE001
+            pass
         out.write(FIELD_SEP.join(fields) + "\n")
     out.flush()
     if failed:
@@ -1088,6 +1156,128 @@ def cmd_args(opts):
     for item in argv:
         out.write("%s\n" % item)
     out.flush()
+    return 0
+
+
+# ===========================================================================
+# Build
+# ===========================================================================
+#
+# El subcomando "build" imprime CÓMO se fabrica el GGUF de un modelo: los
+# parámetros de su sección [build], traducidos al argv del gguffer.
+#
+# Por qué un subcomando y no un campo más del dump:
+#   · el dump es un registro por línea, y esta spec es una estructura;
+#   · quien lo consume es el gguffer, no el catálogo de descargas;
+#   · y así el argv se construye en UN sitio (python), no en bash y en
+#     python a la vez, que es como se desincronizan estas cosas.
+#
+# El argv sale UNA OPCIÓN POR LÍNEA, como el de "args": el shell lo lee con
+# mapfile y lo ejecuta sin word-splitting, de modo que un valor con
+# espacios (una ruta con espacios) no se pierde.
+#
+# --out se calcula aquí, no en el TOML: el destino del GGUF fabricationado
+# lo decide la instalación (dónde va el fichero del modelo), y meterlo en
+# el TOML duplicaría la verdad.
+
+# Las opciones de [build] que son banderas (no llevan valor).
+_BUILD_FLAGS = ("keep_source", "keep_intermedio", "no_mtp", "force")
+
+# Las opciones de [build] que llevan valor, y cómo se pasan al gguffer.
+_BUILD_OPTS = (
+    ("repo", "--repo"),
+    ("gguf", "--gguf"),
+    ("gguf_file", "--gguf-file"),
+    ("imatrix", "--imatrix"),
+    ("imatrix_repo", "--imatrix-repo"),
+    ("imatrix_file", "--imatrix-file"),
+    ("out", "--out"),
+    ("out_principal", "--out-principal"),
+    ("from_subdir", "--from-subdir"),
+    ("include", "--include"),
+    ("intermedio", "--intermedio"),
+)
+
+
+def build_argv_for(spec, out_path=None):
+    """Traduce la spec de [build] al argv del gguffer.
+
+    Devuelve una lista de strings. Los valores booleanos True/False se
+    traducen a la bandera o se omiten; los strings van tal cual.
+    """
+    argv = []
+    for key, flag in _BUILD_OPTS:
+        if key not in spec:
+            continue
+        value = spec[key]
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            # Una opción con valor que llegó como booleano es un error de
+            # escritura: se ignora en vez de pasarle "True" al gguffer.
+            continue
+        value = str(value).strip()
+        if not value:
+            continue
+        argv.extend([flag, value])
+    for key in _BUILD_FLAGS:
+        if spec.get(key):
+            argv.append("--" + key.replace("_", "-"))
+    # El quant: puede ser uno o varios (lista, o string con comas).
+    quant = spec.get("quant")
+    if quant:
+        if isinstance(quant, list):
+            values = [str(q).strip() for q in quant if str(q).strip()]
+        else:
+            values = [q.strip() for q in str(quant).split(",") if q.strip()]
+        for value in values:
+            argv.extend(["--quant", value])
+    # El destino. Lo pone la instalación, no el TOML.
+    if out_path:
+        argv.extend(["--out", out_path])
+    return argv
+
+
+def unknown_build_keys(build):
+    """Las claves de [build] que el gguffer no entiende.
+
+    Se comprueba en TODOS los caminos (el dump, el subcomando build y el
+    validate) porque una clave mal escrita es un fallo silencioso: si
+    "imatrix_repos" se cuela por "imatrix_repo", el GGUF se fabrica SIN
+    importance matrix, y el error sale 40 minutos después, cuando el
+    cuantizador dice que falta la matriz.
+    """
+    if not build:
+        return []
+    return [k for k in build if k not in BUILD_KEYS]
+
+
+def cmd_build(opts):
+    path, _engine_dir, _origin = find_model(opts.root, opts.name)
+    loaded = load_model(path)
+    build = loaded["build"]
+    for key in unknown_build_keys(build):
+        sys.stderr.write(
+            "AVISO: %s: [build] tiene una clave desconocida: %s\n" % (path, key))
+    spec = {}
+    for key, value in build.items():
+        if key in BUILD_KEYS:
+            spec[key] = value
+    if not spec:
+        # Un modelo sin [build] se DESCARGA. Decirlo es mejor que imprimir
+        # un argv vacío, que el que lo llama tomaría por "no hay nada que
+        # fabricar" sin saber que el error fue otro.
+        sys.stderr.write(
+            "ERROR: %s: este modelo no se fabrica: no tiene [build].\n"
+            "       Se descarga de su [download].\n" % path)
+        return 1
+    if opts.format == "json":
+        sys.stdout.write(json.dumps(spec, sort_keys=True) + "\n")
+        sys.stdout.flush()
+        return 0
+    for item in build_argv_for(spec, out_path=opts.out):
+        sys.stdout.write("%s\n" % item)
+    sys.stdout.flush()
     return 0
 
 
@@ -1401,6 +1591,16 @@ def build_parser():
     validate = subs.add_parser("validate", help="comprueba el esquema de cada .toml")
     validate.add_argument("--root", required=True, help="directorio de modelos")
     validate.set_defaults(func=cmd_validate)
+
+    build_cmd = subs.add_parser(
+        "build", help="imprime cómo se fabrica el GGUF de un modelo (su [build])")
+    build_cmd.add_argument("--root", required=True, help="directorio de modelos")
+    build_cmd.add_argument("--name", required=True, help="nombre del modelo")
+    build_cmd.add_argument("--format", default="argv", choices=("argv", "json"),
+                           help="argv: una opción por línea; json: el spec entero")
+    build_cmd.add_argument("--out", default=None,
+                           help="ruta EXACTA del GGUF final (la pone la instalación)")
+    build_cmd.set_defaults(func=cmd_build)
 
     return parser
 

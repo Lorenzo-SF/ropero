@@ -78,6 +78,9 @@ _ROPERO_CAT_AUX=()
 # modelos con checkpoint (safetensors) los tienen.
 _ROPERO_CAT_EXCLUDES=()
 _ROPERO_CAT_POSTCOPY=()
+# La key del modelo en los arrays del loader, para las entradas que se
+# FABRICAN (kind=build): quien fabrica la necesita para leer su [build].
+_ROPERO_CAT_MODEL=()
 
 # _cat_gguf <fichero_final> <repo> <filename> <nombre> <size> [dest_dir] [dest_name]
 # El key (1er argumento) es el nombre FINAL del fichero, que es lo que declara
@@ -99,6 +102,7 @@ _cat_gguf() {
     # desfasado respecto a los demás, y el exclude de un checkpoint se leería
     # de la entrada equivocada.
     _ROPERO_CAT_EXCLUDES+=("")
+    _ROPERO_CAT_MODEL+=("")
 }
 
 # _cat_safetensors <dir_name> <repo> <modelname> <size> [dest_dir] [excludes]
@@ -113,6 +117,36 @@ _cat_safetensors() {
     _ROPERO_CAT_DNAME+=("")
     _ROPERO_CAT_AUX+=("")
     _ROPERO_CAT_EXCLUDES+=("${6:-}")
+}
+
+# _cat_build <key> <model_key> <name> <size> <dest_dir>
+#
+# Una entrada que se FABRICA en vez de descargarse: el modelo declara [build]
+# en su TOML y el GGUF sale del gguffer (bajar pesos, convertir, cuantizar).
+#
+# La entrada no tiene repo: no se descarga nada del GGUF principal. Los
+# ficheros AUXILIARES (MTP, mmproj) sí se descargan, y se cuelgan de esta
+# entrada igual que de una de descarga.
+#
+# "model_key" es la key del modelo en los arrays del loader: la necesita
+# quien fabrica, para leer su [build] y preguntarle al gguffer.
+#
+# OJO con el "size": en una entrada de descarga es el tamaño del fichero que
+# se baja; en una de FABRICACION es el de los PESOS que se bajan (60 GB de
+# BF16), que es lo que el usuario espera esperar. No es el tamaño del GGUF
+# final: ese todavia no existe, y ponerlo seria inventarse una cifra.
+_cat_build() {
+    _ROPERO_CAT_KIND+=("build")
+    _ROPERO_CAT_KEY+=("$1")
+    _ROPERO_CAT_REPO+=("")
+    _ROPERO_CAT_ARG2+=("")
+    _ROPERO_CAT_NAME+=("$3")
+    _ROPERO_CAT_SIZE+=("$4")
+    _ROPERO_CAT_DEST+=("$5")
+    _ROPERO_CAT_DNAME+=("$1")
+    _ROPERO_CAT_AUX+=("")
+    _ROPERO_CAT_EXCLUDES+=("")
+    _ROPERO_CAT_MODEL+=("$2")
 }
 # -----------------------------------------------------------------------------
 # _cat_aux <key> <aux> — cuelga ficheros secundarios de una entrada existente.
@@ -206,6 +240,28 @@ _ropero_cat_build() {
 
         # Descarga manual: no se ofrece en `ropero install models`.
         if [[ "${MODEL_MANUAL[$m]:-0}" == "1" && "${ROPERO_CAT_INCLUDE_MANUAL:-0}" != "1" ]]; then continue; fi
+
+        # ── Un modelo que se FABRICA ────────────────────────────────────
+        # Si su TOML declara [build], el GGUF no se descarga: se fabrica
+        # con el gguffer (bajar pesos, convertir, cuantizar). El [download]
+        # sigue declarando los ficheros AUXILIARES (MTP, mmproj), que sí
+        # se descargan.
+        if ropero_model_is_build "$m"; then
+            key="${MODEL_GGUF[$m]:-}"
+            [[ -n "$key" ]] || continue
+            # El tamaño que se muestra es el de los PESOS que se bajan al
+            # fabricar, no el del GGUF final (que todavia no existe). El
+            # [build].size lo declara el TOML; si no, se cae al [download].
+            _cat_build "$key" "$m" "${MODEL_ALIAS[$m]:-$m}" \
+                       "$(ropero_model_build_size "$m")" \
+                       "$GGUF_DIR/${MODEL_ALIAS[$m]:-$m}"
+            aux_spec=""
+            aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MTP[$m]:-}" "MTP")"
+            aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_MMPROJ[$m]:-}" "mmproj")"
+            aux_spec="$(_ropero_cat_aux_join "$aux_spec" "${MODEL_AUX_CHAT_TEMPLATE[$m]:-}" "chat_template")"
+            [[ -n "$aux_spec" ]] && _cat_aux "$key" "$aux_spec"
+            continue
+        fi
 
         repo="${MODEL_REPO[$m]:-}"
         [[ -n "$repo" ]] || continue
@@ -470,6 +526,87 @@ _ropero_cat_download_aux() {
 }
 
 # -----------------------------------------------------------------------------
+# _ropero_cat_fabricate <índice> — FABRICA el GGUF de una entrada "build".
+#
+# En vez de descargar el GGUF, se ejecuta el gguffer: baja los pesos, los
+# convierte y los cuantiza. Los parámetros son los que declara el [build] del
+# TOML, y el que los ejecuta es el gguffer de verdad (una sola
+# implementación: la que ya knows hacer esto a mano).
+#
+# POR QUÉ NO SE REIMPLEMENTA AQUÍ
+# El gguffer tiene la lógica difícil: el bloque MTP que el imatrix no cubre,
+# el tokenizer de transformers v5, la arquitectura que no admite --no-mtp, la
+# limpieza por fases, la verificación del GGUF final. Si la instalación
+# fabricara por su cuenta, habría dos implementaciones y la que se usaría de
+# noche (la que no está probada) sería la nueva.
+#
+# El destino es EXACTO: $GGUF_DIR/<carpeta del modelo>/<nombre del GGUF>,
+# que es donde el launcher va a buscarlo. Por eso se pasa --out con la ruta
+# completa y no un nombre: si el nombre no cuadrase con el del TOML, el
+# modelo se fabricaría y luego no arrancaría ("no encuentro el GGUF").
+# -----------------------------------------------------------------------------
+_ropero_cat_fabricate() {
+    local i="$1"
+    local model_key="${_ROPERO_CAT_MODEL[$i]:-}"
+    local _name="${_ROPERO_CAT_NAME[$i]:-}"
+
+    if [[ -z "$model_key" ]]; then
+        ropero_err "entrada de fabricacion sin modelo: no se sabe que [build] usar"
+        return 1
+    fi
+
+    local dest_dir dest_name final
+    dest_dir="$(_ropero_cat_dest_dir "$i")"
+    dest_name="$(_ropero_cat_dest_name "$i")"
+    final="$dest_dir/$dest_name"
+
+    # ── ¿Ya está? ──────────────────────────────────────────────────────────
+    # Igual que la descarga: si el GGUF ya está, no se rehace. Fabricar son
+    # horas y decenas de GB de pesos: repetirlo sin querer es caro.
+    if [[ -f "$final" && -s "$final" ]]; then
+        if [[ "${ROPERO_FORCE:-0}" == "1" ]]; then
+            ropero_info "--force: borrando $final"
+            rm -f "$final" || { ropero_err "no se pudo borrar $final"; return 1; }
+        else
+            ropero_ok "$dest_name ya fabricado"; return 0
+        fi
+    fi
+
+    local -a argv=()
+    mapfile -t argv < <(ropero_model_build_argv "$model_key" "$final")
+    if (( ${#argv[@]} == 0 )); then
+        ropero_err "$_name: no se pudo construir el argv de fabricacion (revisa su [build])"
+        return 1
+    fi
+
+    # El consentimiento se pide UNA vez, y dice lo que va a pasar de verdad:
+    # esto no es una descarga, es una fabricacion (pesos + conversion +
+    # cuantizacion), y tarda.
+    if ! ropero_ask "Fabricar $_name (~${_ROPERO_CAT_SIZE[$i]:-?} de pesos, mas la cuantizacion)?"; then
+        ropero_info "$_name omitido por el usuario"; return 0
+    fi
+
+    mkdir -p "$dest_dir" || { ropero_err "no se pudo crear $dest_dir"; return 1; }
+
+    ropero_info "$_name: fabricando el GGUF (esto tarda: pesos, conversion y cuantizacion)..."
+    if cmd_gguffer "${argv[@]}"; then
+        if [[ ! -s "$final" ]]; then
+            ropero_err "$_name: el gguffer dijo que ok pero no esta $final"
+            return 1
+        fi
+        ropero_ok "$_name: GGUF fabricado → $final"
+    else
+        ropero_err "$_name: error en la fabricacion"
+        return 1
+    fi
+
+    # Los ficheros auxiliares (MTP, mmproj) se siguen DESCARGANDO: son
+    # ficheros ya hechos que no se fabrican.
+    _ropero_cat_download_aux "$i" || return 1
+    return 0
+}
+
+# -----------------------------------------------------------------------------
 # _ropero_cat_download <índice> — descarga una entrada del catálogo: el
 # fichero principal y, si tiene, sus ficheros secundarios (bundle completo).
 # -----------------------------------------------------------------------------
@@ -479,6 +616,11 @@ _ropero_cat_download() {
 
     local _name="${_ROPERO_CAT_NAME[$i]:-}"
     ropero_info "$_name: descargando..."
+
+    if [[ "${_ROPERO_CAT_KIND[$i]}" == "build" ]]; then
+        _ropero_cat_fabricate "$i"
+        return $?
+    fi
 
     if [[ "${_ROPERO_CAT_KIND[$i]}" == "safetensors" ]]; then
         if ropero_download_safetensors \
