@@ -1,1132 +1,178 @@
 #!/usr/bin/env bash
-# =============================================================================
-# bench_ropero.sh — bateria de pruebas de los modelos locales de ropero
-# =============================================================================
-#
-# Por cada carpeta de modelo:
-#   1. arranca "ropero <modelo>" (log en <resultados>/<modelo>/ropero-<prueba>.log)
-#   2. espera a que el modelo responda en el puerto de los providers
-#   3. por cada TAREA: "opencode run" y la sesion exportada
-#   4. comprueba que el modelo RESPONDIÓ y que la salida pegada es REAL
-#   5. para el modelo con "ropero stop <modelo>"
-#
-# QUE DEJA CADA MODELO (en <OUT_DIR>/<modelo>/):
-#   ropero-<tarea>.log      el log del servidor de esa tarea
-#   opencode-<tarea>.json   los eventos del run (JSON)
-#   opencode-<tarea>.log    su stderr
-#   sesion-<tarea>.md       la sesion exportada
-#   resumen.tsv             una linea por tarea
-#
-# Y EN LA RAIZ (este directorio):
-#   resumen-global.tsv      una linea por (modelo, tarea)
-#   juez/<modelo>/          el paquete para la IA juez: el prompt 3 junto
-#                           con las transcripciones
-#
-# ── LO QUE ESTA VERSION CORRIGE (2026-10-25) ──────────────────────────────
-# En la corrida anterior al banco le medicio el harness, no a los modelos:
-#
-#   1. TODAS las tareas de una prueba iban en un solo turno. Los modelos se
-#      cortaban a mitad (agenta1 se paró en S3 de 18) y el tiempo medido era
-#      el del corte, no el del trabajo. Ahora CADA TAREA va en su turno.
-#   2. No se comprobaba que el modelo hubiera RESPONDIDO. Un modelo que
-#      spends 900 s sin contestar nada se registraba igual, con gpu=ok y sus
-#      t/s. Ahora un turno sin respuesta cuenta como FALLO y no puntua.
-#   3. No se comprobaba que la salida pegada fuera REAL. Un modelo se
-#      invento un "cat /etc/os-release" de un Ubuntu que no era esta maquina
-#      y otro se invento un "mix test" con 2 tests. Ahora, si la respuesta
-#      pega una salida de terminal, el script la EJECUTA y compara.
-#   4. El prompt largo era el prompt 1 repetido. Ahora prueba_larga.md es
-#      una prueba de verdad: contexto largo (45k tokens con 5 datos
-#      plantados), deriva, bucles y reproducibilidad, en 6 bloques.
-#   5. La temperatura no se podia fijar. Tres de los cinco modelos estaban en
-#      temp 1.0 (el default de gpt-oss) y el banco pide 0-0,2. Ahora TEMP lo
-#      fija el script via ROPERO_TEMP (override global de ropero).
-#
-# ── SEPARADO DONDE CORRE Y DONDE DEPOSITA ────────────────────────────────
-#   · MODELOS_DIR  (por defecto ~/test)  -> las carpetas de los modelos, con
-#     la configuracion de opencode de cada una. Ahi se ejecuta opencode run.
-#   · OUT_DIR      (por defecto ~/test/resultados) -> donde quedan los
-#     resultados: una carpeta por modelo y el paquete del juez.
-#
-# ── INDEPENDIENTE DE DONDE ESTE EL SCRIPT ────────────────────────────────
-#   El bench se puede copiar a donde uno hace las pruebas (~/test/) o
-#   dejarlo en el repo. NO depende de estar junto al repo de ropero:
-#     · el ctx del modelo lo pregunta al ropero INSTALADO (`ropero list`),
-#       que es el que arranca;
-#     · los prompts se buscan en PROMPTS_DIR (por defecto, junto al
-#       script);
-#     · los modelos y los resultados, en MODELOS_DIR y OUT_DIR.
-#   Antes el ctx se buscaba con una ruta RELATIVA al script
-#   ($AQUI/../models/llama/), que con el bench copiado daba ctx=0, la
-#   espera se quedaba vacia y el bench fallaba al instante matando el
-#   server de llama.cpp.
-#
-# USO:
-#   ./bench_ropero.sh                # lista los modelos y sale (no prueba nada)
-#   ./bench_ropero.sh gptoss qwen    # solo esos
-#   ./bench_ropero.sh all            # todos los de MODELOS_DIR
-#   MODELOS="gptoss qwen" ./bench_ropero.sh   # lo mismo, por variable
-#   PROMPTS="pruebas1.md" ./bench_ropero.sh gptoss     # solo la prueba 1
-#   FORCE=1 ./bench_ropero.sh gptoss  # repetir aunque ya este probado
-#   TEMP=0.1 ./bench_ropero.sh gptoss # medir a otra temperatura
-#
-# Los prompts se pueden cambiar por variable, pero la lista por defecto son
-# los cuatro bloques del banco: pruebas1 (G1-G16), pruebas2a (S1-S9),
-# pruebas2b (S10-S18) y prueba_larga (contexto largo, deriva y bucles).
-#
-# El prompt 3 NO se le pasa al modelo evaluado: es el que va a la IA juez
-# con las transcripciones. El script deja el paquete listo en juez/.
-# =============================================================================
-
+# bench_ropero.sh — versión robusta. No muere en silencio.
 set -uo pipefail
 
-AQUI="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+trap 'echo; echo "[abort] limpiando…" >&2; ropero stop 2>/dev/null || true; \
+      pkill -f llama-server 2>/dev/null || true; exit 130' INT TERM
 
-# ── AJUSTES ────────────────────────────────────────────────────────────────
-MODELOS_DIR="${MODELOS_DIR:-$HOME/test}"
-OUT_DIR="${OUT_DIR:-$MODELOS_DIR/resultados}"
-# Que se prueba se decide con los argumentos (o MODELOS=), no con una lista
-# fija aqui a proposito: la lista de modelos que hay en el roster vive en
-# models/llama/, y escribirla tambien en el script seria una
-# segunda copia de la verdad que se desincroniza sola.
-MODELOS="${MODELOS:-}"
-PROMPTS_DIR="${PROMPTS_DIR:-$AQUI}"
-# Los prompts que se prueban. Se pueden acotar desde fuera (el comentario de
-# arriba lo prometia, pero la variable se sobrescribia sin mirar el entorno):
-#
-#   PROMPTS="pruebas1.md" ./bench_ropero.sh gptoss
-#
-if [[ -n "${PROMPTS:-}" ]]; then
-    read -r -a PROMPTS <<< "$PROMPTS"
-else
-    PROMPTS=("pruebas1.md" "pruebas2a.md" "pruebas2b.md" "prueba_larga.md")
-fi
-PROMPT_JUEZ="pruebas3.md"                   # el que ve la IA juez
-MODELO="${MODELO:-marichocho/Puertourraco}" # provider/model de opencode
-AGENTE="${AGENTE:-build}"
-PUERTO="${PUERTO:-9999}"                     # donde apuntan los providers
-API_KEY="${API_KEY:-sk-local-dev-key}"
-# Segundos esperando a que el modelo responda. Con el ctx nativo (262144, y
-# 1M en el nemotron) la carga tarda MUCHO mas que antes: hay que reservar
-# el KV entero (1.44 GB en los hibridos, 1.69 GB en el nemotron a 1M) y
-# paginarlo. Los 900 s de antes eran justos para ctx 65536.
-#
-# Si el modelo declara su ctx, la espera se escala con el: a mas ctx, mas
-# tiempo de carga. El minimo son 900 s (un modelo pequeno en frio, con el
-# SSD ocupado, tambien tarda).
-ESPERA_MIN="${ESPERA_MIN:-900}"
-ESPERA="${ESPERA:-}"
-TIMEOUT="${TIMEOUT:-900}"                    # segundos maximos por TAREA
-# 3600 era una hora y pico colgada sin decir nada; 900 avisa antes.
-FORCE="${FORCE:-0}"                          # 1 = repetir los ya probados
-# La temperatura de la medicion. El banco (pruebas1.md) pide 0-0,2: con
-# temp 1.0 (el default de gpt-oss) se esta midiendo el sampler, no el modelo.
-# Con 0.15 los cinco se miden en el mismo punto.
-TEMP="${TEMP:-0.15}"
+BASE=${BASE:-$HOME/test}
+OUT=$BASE/resultados
+PROMPTS=${PROMPTS:-$BASE}
+PUERTO=${PUERTO:-9999}
+API_KEY=${API_KEY:-sk-local-dev-key}
+MODELO_OC=${MODELO:-"marichocho/Puertourraco-512k"}
+AGENTE_OC=${AGENTE:-build}
+ESPERA_MAX=${ESPERA_MAX:-900}
+TIMEOUT=${TIMEOUT:-1800}
+ROPERO_TEMP=${TEMP:-0.15}
 
-# El nivel de razonamiento con el que se mide. Los modelos tienen niveles
-# distintos (gptoss: low/medium/high; qwen36: low/medium/xhigh; muse: no
-# tiene niveles, se ajusta por system prompt; laguna: thinking/no-thinking).
-#
-# MEDIR EL DEFAULT DE CADA MODELO NO COMPARA NADA: se estaria midiendo "el
-# modelo con su nivel por defecto" contra "el modelo con su nivel por
-# defecto", y eso mezcla dos variables (la calidad del modelo y la del
-# razonamiento).
-#
-# Con NIVEL=high, el bench arranca el modelo en el nivel pedido (ropero
-# registra un alias por nivel) y asi todos se miden pensando igual.
-# Los modelos sin niveles se miden con el suyo (que es el unico).
-#
-#   NIVEL=medium ./bench_ropero.sh gptoss qwen36
-#
-# El nivel se pasa como flag: `ropero gptoss --high`. Los niveles los
-# declara cada modelo en su TOML ([levels].list), asi que no todos los
-# modelos los tienen. Ver _ropero_model_levels en bin/ropero.
-NIVEL="${NIVEL:-high}"
-
-# Si el nombre de la carpeta no es el del modelo en ropero, se mapea aqui.
-declare -A MODELO_ROPERO=(
-  [agentas1]=agenta1
-  [codernext]=qwen3-coder-next
+PRUEBAS=(prueba1 prueba2 prueba3 prueba_larga prueba_gorda)
+MODELOS=(
+  "nemotron  nemotron"
+  "onirith   onirith"
+  "qwencoder qwencoder"
 )
 
-# ── COLORES ────────────────────────────────────────────────────────────────
-if [[ -t 1 ]]; then R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; B=$'\033[1m'; D=$'\033[2m'; N=$'\033[0m'
-else R=""; G=""; Y=""; B=""; D=""; N=""; fi
-info() { printf '%s%s%s\n' "$D" "$*" "$N"; }
-warn() { printf '%s[!] %s%s\n' "$Y" "$*" "$N" >&2; }
-err()  { printf '%s[x] %s%s\n' "$R" "$*" "$N" >&2; }
-ok()   { printf '%s[+] %s%s\n' "$G" "$*" "$N"; }
-head2(){ printf '\n%s══ %s %s\n' "$B" "$*" "$N"; }
+log() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 
-# ── HELPERS ───────────────────────────────────────────────────────────────
-responde() {
-  curl -sf --max-time 3 -H "Authorization: Bearer $API_KEY" \
-    "http://127.0.0.1:$PUERTO/v1/models" >/dev/null 2>&1
-}
-
-# El server de llama.cpp ABRE EL PUERTO ANTES de que el modelo este listo:
-# /v1/models responde en cuanto hay un proceso escuchando, aunque el server
-# este todavia cargando los pesos y reservando el KV. Con eso, el bench
-# avanzaba al turno siguiente con el modelo sin cargar, y el turno se
-# quedaba sin respuesta: el fallo era del BANCO, no del modelo.
-#
-# Asi que no basta con que el puerto responda: tiene que responder el MODELO
-# que se ha pedido. /v1/models devuelve el alias del modelo servido; si no es
-# el que buscamos, el server es otro (o esta a medio cargar).
-modelo_responde() {
-  local esperado="$1" got
-  got="$(modelo_en_puerto)"
-  [[ -n "$got" ]] || return 1
-  # el alias puede ser el nombre publico o el del modelo fisico
-  [[ "$got" == "$esperado" || "$got" == *"$esperado"* ]] && return 0
-  return 1
-}
-
-esperar_modelo() {
-  local esperado="${1:-$MODELO_ROPERO_ESPERADO}"
-  local espera="${2:-${ESPERA:-$ESPERA_MIN}}"
-  # La espera NUNCA es 0: si ESPERA se quedara vacía, el deadline sería
-  # "ahora" y el bench fallaría al instante (matando el server) sin esperar
-  # al modelo.
-  local deadline=$(( $(date +%s) + espera ))
-  while (( $(date +%s) < deadline )); do
-    if [[ -n "$esperado" ]]; then
-      modelo_responde "$esperado" && return 0
-    else
-      responde && return 0
-    fi
-    sleep 3
-  done
-  return 1
-}
-
-# id del modelo que sirve el puerto
-modelo_en_puerto() {
-  curl -sf --max-time 5 -H "Authorization: Bearer $API_KEY" \
-    "http://127.0.0.1:$PUERTO/v1/models" 2>/dev/null \
-    | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]+"' | head -1 \
-    | grep -oE '"[^"]+"$' | tr -d '"'
-}
-
-# id de la sesion en los eventos del run
-id_sesion() {
-  grep -oiE '"session_?id"[[:space:]]*:[[:space:]]*"[^"]+"' "$1" 2>/dev/null | head -1 \
-    | grep -oE '"[^"]+"$' | tr -d '"'
-}
-
-# tokens/s de GENERACION. El log tiene dos timings: "prompt eval time" y
-# "eval time". El que sirve es el segundo: hay que quitar el primero.
-tokens_por_segundo() {
-  grep -a "eval time" "$1" 2>/dev/null | grep -av "prompt eval" | tail -1 \
-    | grep -oE '[0-9]+(\.[0-9]+)? tokens per second' | tail -1 | grep -oE '^[0-9.]+'
-}
-
-# ms por token (para comparar con el techo teorico)
-ms_por_token() {
-  grep -a "eval time" "$1" 2>/dev/null | grep -av "prompt eval" | tail -1 \
-    | grep -oE '[0-9]+(\.[0-9]+)? ms per token' | tail -1 | grep -oE '^[0-9.]+'
-}
-
-# ── EL LOG DEL SERVIDOR, POR TAREA ──────────────────────────────────────────
-# El servidor se arranca una vez por modelo, asi que su log acumula los
-# timings de TODAS las tareas. Los tokens/s de una tarea son los que
-# aparecen DESPUES de su marca, no los del final del log (que serian los de
-# la ultima tarea).
-#
-# Por eso, antes de lanzar la tarea se marca el byte en el que acaba el log,
-# y despues se recorta desde ahi. Con el modelo anterior (arranque en frio
-# por tarea) cada tarea tenia su propio log y no hacia falta nada de esto.
-marcar_log() {
-  local log="$1"
-  [[ -f "$log" ]] || { printf '0'; return 0; }
-  wc -c < "$log" | tr -d ' '
-}
-
-recortar_log() {
-  local log="$1" desde="$2" destino="$3"
-  if [[ ! -f "$log" ]]; then
-      : > "$destino"
-      return 0
-  fi
-  tail -c "+$((desde + 1))" "$log" > "$destino" 2>/dev/null || : > "$destino"
-}
-
-# ── ¿EL PROVIDER TIENE ESA VARIANT? ────────────────────────────────────────
-#
-# --variant de opencode es el reasoning effort que se manda al provider, y la
-# doc es explicita: "an unknown variant produces a model-resolution error".
-# O sea, un variant que el modelo no tiene NO se ignora: el run muere sin
-# respuesta, y el bench lo reporta como si el modelo no hubiera contestado.
-#
-# La verdad esta en el catalogo de opencode ("opencode models --json"), no en
-# una lista aqui. Se consulta UNA vez y se cachea: el catalogo no cambia
-# durante una corrida, y `opencode models` tarda.
-#
-# Si no se puede consultar (opencode que no esta, sin red, json que no se
-# entiende), se devuelve "no": es mas seguro no pasar el variant que pasarlo
-# a ciegas y que el turno muera.
-VARIANTES_CACHE=""
-variant_existe() {
-  local variante="${1:-}"
-  [[ -n "$variante" ]] || return 1
-  if [[ -z "$VARIANTES_CACHE" ]]; then
-    VARIANTES_CACHE="$(opencode models --json 2>/dev/null || true)"
-  fi
-  [[ -n "$VARIANTES_CACHE" ]] || return 1
-  # el catalogo puede traer "variants": {"high": {...}} o una lista de ids
-  printf '%s' "$VARIANTES_CACHE" | grep -qE "\"${variante}\"[[:space:]]*:" \
-    && return 0
-  printf '%s' "$VARIANTES_CACHE" | grep -qE "\"id\"[[:space:]]*:[[:space:]]*\"${variante}\"" \
-    && return 0
-  return 1
-}
-
-# ── VERIFICAR QUE EL MODELO ESTA ENTERO EN LA GPU ───────────────────────────
-#
-# El fitter de llama.cpp recorta SILENCIOSAMENTE: si el modelo + la KV + el
-# compute no caben en la VRAM, quita capas y se las deja en la CPU. El
-# servidor arranca igual, responde igual... y va a 9 t/s en vez de 30. Sin
-# este check, el bench mide una configuracion rota y no lo dice.
-#
-# Las dos señales en el log:
-#   · "cannot meet free memory target"  -> el fitter no pudo cumplir
-#   · "offloaded X/Y layers"            -> X < Y = hay capas en la CPU
-gpu_completo() {
-  local log="$1" off="" mal=0 motivo=""
-
-  local aviso=""
-  if grep -qa "cannot meet free memory target" "$log" 2>/dev/null; then
-      aviso="el fitter no pudo ajustar a la VRAM ($(grep -a -m1 'cannot meet free memory target' "$log" | sed 's/.*: //'))"
-  fi
-
-  off=$(grep -aoE "offloaded [0-9]+/[0-9]+ layers" "$log" 2>/dev/null | tail -1)
-  if [[ -n "$off" ]]; then
-    local x y
-    x=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\1|')
-    y=$(echo "$off" | sed -E 's|offloaded ([0-9]+)/([0-9]+) layers|\2|')
-    if [[ "$x" -lt "$y" ]]; then
-      mal=1
-      motivo="solo $x de $y capas en la GPU (el resto en la CPU)"
-      aviso=""
-    else
-      GPU_AVISO="modelo entero en la GPU ($x/$y capas)"
-      [[ -n "$aviso" ]] && GPU_AVISO="$GPU_AVISO; $aviso"
-      return 0
-    fi
-  fi
-
-  # sin "offloaded X/Y" no se puede asegurar
-  if [[ -n "$aviso" && $mal -eq 0 ]]; then
-    GPU_AVISO="$aviso (no se pudo comprobar el reparto de capas)"
-    return 0
-  fi
-
-  if (( mal )); then
-    GPU_AVISO="$motivo"
-    return 1
-  fi
-  GPU_AVISO="modelo entero en la GPU"
-  return 0
-}
-
-# ── EL MODELO HA RESPONDIDO? ──────────────────────────────────────────────
-#
-# El fallo de la corrida anterior: un modelo puede pasar 900 s, agotar el
-# timeout y no decir NADA. El resumen lo registraba igual, con gpu=ok y sus
-# t/s, y el juez lo puntuaba como "no completo" sin saber que el modelo
-# ni se entro. Un turno sin respuesta NO PUNTA: es un fallo del bench, no
-# un 0 del modelo.
-#
-# Se mira la transcripcion exportada: tiene que haber texto del asistente
-# (no solo razonamiento) con un minimo de caracteres.
-respuesta_real() {
-  local sesion="$1"
-  [[ -f "$sesion" ]] || return 1
-  python3 - "$sesion" <<'PYEOF' 2>/dev/null
-import json, sys
-try:
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
-    sys.exit(1)
-n = 0
-for m in d.get("messages", []):
-    if m.get("type") != "assistant":
-        continue
-    for c in (m.get("content") or []):
-        if c.get("type") == "text":
-            t = c.get("text") or ""
-            if len(t.strip()) > 20:
-                n += len(t)
-sys.exit(0 if n >= 40 else 1)
-PYEOF
-}
-
-# ── LA SALIDA PEGADA ES REAL? ─────────────────────────────────────────────
-#
-# El otro fallo de la corrida anterior: dos modelos se inventaron salidas de
-# terminal. Uno pego un "cat /etc/os-release" de un Ubuntu 20.04 en un host
-# llamado "diana-de-2" (esta maquina es CachyOS). Otro pego un "mix test"
-# con "2 tests, 0 failures" sin haber ejecutado nada.
-#
-# Aqui no se puede re-ejecutar el comando del modelo (no es de esta maquina
-# y puede ser cualquier cosa). Lo que se puede es COMPARAR: si la respuesta
-# pega una salida con datos concretos de ESTA maquina (el hostname, la
-# version del kernel, el nombre de la distribucion) y no coincide, la
-# respuesta es inventada. Y se avisa en el resumen para que el juez lo sepa.
-salida_inventada() {
-  local sesion="$1" work="$2"
-  local host_real distro_real kernel_real
-  host_real="$(hostname 2>/dev/null)"
-  distro_real="$(. /etc/os-release 2>/dev/null && echo "$ID")"
-  kernel_real="$(uname -r 2>/dev/null)"
-
-  python3 - "$sesion" "$host_real" "$distro_real" "$kernel_real" <<'PYEOF'
-import json, re, sys
-try:
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
-    sys.exit(0)
-texto = []
-for m in d.get("messages", []):
-    if m.get("type") != "assistant":
-        continue
-    for c in (m.get("content") or []):
-        if c.get("type") == "text":
-            texto.append(c.get("text") or "")
-t = "\n".join(texto)
-host, distro, kernel = sys.argv[2], sys.argv[3], sys.argv[4]
-mal = []
-# si la respuesta pega una salida de terminal de un sistema DISTINTO al nuestro
-for campo, patron in (("hostname", r"Linux\s+\S+\s+\d+\.\d+\.\d+"),
-                       ("distro", r"^NAME=\"?(\w+)" ),
-                       ("kernel", r"\d+\.\d+\.\d+-\d+[-\w]*\s+generic")):
-    pass
-if host and re.search(r"\bLinux\s+(\S+)\s+\d+\.\d+\.\d+", t):
-    m = re.search(r"\bLinux\s+(\S+)\s+\d+\.\d+\.\d+", t)
-    if m.group(1) != host:
-        mal.append("hostname pegado '%s' != '%s'" % (m.group(1), host))
-if distro and re.search(r'ID=([a-z]+)', t):
-    m = re.search(r'ID=([a-z]+)', t)
-    if m.group(1) != distro:
-        mal.append("distro pegada '%s' != '%s'" % (m.group(1), distro))
-if kernel and re.search(r"\b\d+\.\d+\.\d+-(\d+)-generic", t):
-    mal.append("kernel pegado de otra maquina")
-for x in mal:
-    print(x)
-sys.exit(1 if mal else 0)
-PYEOF
-}
-
-# ── LA RESPUESTA SE REPITE? ───────────────────────────────────────────────
-#
-# El fallo del fable: emitia la MISMA tool call 40 veces seguidas hasta que
-# opencode abortaba con "MAXIMUM STEPS REACHED". En el texto plano eso se ve
-# como un bloque de palabras repetido.
-#
-# Se busca un bloque de 8 palabras CONSECUTIVAS que aparezca 3 o mas veces
-# en sitios distintos. Es lo bastante ancho para no confundirlo con codigo
-# normal (que repite tokens, no frases enteras) y lo bastante estrecho para
-# pillar un bucle.
-#
-# Devuelve 1 y lista los indicios si la respuesta se repite; 0 si no.
-repetitiva() {
-    local sesion="$1"
-    python3 - "$sesion" <<'PYEOF'
-import json, re, sys
-try:
-    d = json.load(open(sys.argv[1], encoding="utf-8"))
-except Exception:
-    sys.exit(0)
-try:
-    texto = []
-    for m in d.get("messages", []):
-        if m.get("type") != "assistant":
-            continue
-        for c in (m.get("content") or []):
-            if c.get("type") == "text":
-                texto.append(c.get("text") or "")
-    t = "\n".join(texto)
-    if not t.strip():
-        sys.exit(0)
-    palabras = re.findall(r"\S+", t)
-    N = 8
-    if len(palabras) < N * 3:
-        sys.exit(0)
-    vistos = {}
-    for i in range(len(palabras) - N + 1):
-        clave = " ".join(palabras[i:i + N])
-        vistos.setdefault(clave, []).append(i)
-    mal = []
-    for clave, pos in vistos.items():
-        if len(pos) >= 3:
-            mal.append((len(pos), clave))
-    if not mal:
-        sys.exit(0)
-    mal.sort(reverse=True)
-    for n, clave in mal[:3]:
-        print("el bloque '%s' aparece %d veces" % (clave, n))
-    sys.exit(1)
-except SystemExit:
-    raise
-except Exception:
-    # si el analisis falla, no se marca nada: es un check, no un juez
-    sys.exit(0)
-PYEOF
-}
-
-# ── SIN ARGUMENTOS: LISTAR Y SALIR ────────────────────────────────────────
-# Esto va ANTES del precheck a proposito: listar los modelos disponibles no
-# necesita ni ropero ni opencode. Probar, si.
-#
-#   listar_modelos — lo que hay en MODELOS_DIR, con su nombre de ropero.
-listar_modelos() {
-  local d c n=0 m
-  echo "Modelos disponibles en $MODELOS_DIR:"
-  for d in "$MODELOS_DIR"/*/; do
-    [[ -d "$d" ]] || continue
-    c="$(basename "$d")"
-    [[ "$c" == "resultados" ]] && continue
-    m="${MODELO_ROPERO[$c]:-$c}"
-    printf '  %-16s (ropero: %s)\n' "$c" "$m"
-    n=$((n + 1))
-  done
-  (( n > 0 )) || echo "  (ninguna carpeta de modelo)"
-  echo ""
-  echo "Para probar:   ./bench_ropero.sh <modelo> [<modelo> ...]"
-  echo "               ./bench_ropero.sh all"
-}
-
-pedidos=()
-if [[ -n "$MODELOS" ]]; then
-  read -r -a pedidos <<< "$MODELOS"
-elif [[ $# -gt 0 ]]; then
-  pedidos=("$@")
-fi
-
-if [[ ${#pedidos[@]} -eq 0 ]]; then
-  listar_modelos
-  exit 0
-fi
-
-# ── PRECHECK ───────────────────────────────────────────────────────────────
-for b in ropero opencode curl python3; do
-  command -v "$b" >/dev/null 2>&1 || { err "falta '$b' en el PATH"; exit 1; }
+# ── pre-requisitos ──────────────────────────────────────────
+for bin in ropero opencode jq curl; do
+  command -v "$bin" >/dev/null || { echo "falta '$bin' en PATH" >&2; exit 1; }
 done
-for p in "${PROMPTS[@]}"; do
-  [[ -f "$PROMPTS_DIR/$p" ]] || { err "no encuentro el prompt $PROMPTS_DIR/$p"; exit 1; }
-done
-[[ -d "$MODELOS_DIR" ]] || { err "no existe el directorio de modelos $MODELOS_DIR"; exit 1; }
-mkdir -p "$OUT_DIR" "$OUT_DIR/juez" || { err "no puedo escribir en $OUT_DIR"; exit 1; }
+command -v timeout >/dev/null || log "[!] sin 'timeout' — sin límite por prueba"
 
-# ── CERROJO ───────────────────────────────────────────────────────────────
-# Dos corridas a la vez se pisan los ficheros y el resumen. Va en /tmp para no
-# dejar nada en la raiz.
-LOCK="${TMPDIR:-/tmp}/.bench_ropero-$(id -u).lock"
-if command -v flock >/dev/null 2>&1; then
-  exec 9>"$LOCK"
-  flock -n 9 || { err "ya hay otra corrida de bench en marcha"; exit 1; }
-fi
+mkdir -p "$OUT"
 
-# ── QUÉ SE PRUEBA ──────────────────────────────────────────────────────────
-# SIN ARGUMENTOS NO SE PRUEBA NADA: se listan los modelos disponibles y se
-# sale. Probar 15 modelos sin querer tarda horas, llena la VRAM de modelos
-# que no te interesan y deja el portatil encogido.
-#
-#   ./bench_ropero.sh gptoss qwen   -> prueba esos
-#   ./bench_ropero.sh all            -> prueba todos los de MODELOS_DIR
-#   MODELOS="gptoss qwen" ./bench_ropero.sh
-#   ./bench_ropero.sh                -> lista los disponibles y sale
-#
-# Los modelos son las CARPETAS de MODELOS_DIR: ~/test/<modelo>/. El nombre
-# de la carpeta es el nombre del modelo de ropero, salvo en los dos casos
-# del mapa MODELO_ROPERO.
+listo() {
+  local rc
+  rc=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+       -H "Authorization: Bearer $API_KEY" \
+       -H "Content-Type: application/json" \
+       -d '{"model":"x","messages":[{"role":"user","content":"x"}],"max_tokens":1}' \
+       "http://127.0.0.1:$PUERTO/v1/chat/completions" 2>/dev/null) || true
+  [[ "$rc" == 2* ]]
+}
 
-carpetas=()
-if [[ "${pedidos[0]}" == "all" ]]; then
-  for d in "$MODELOS_DIR"/*/; do
-    [[ -d "$d" ]] || continue
-    c="$(basename "$d")"
-    [[ "$c" == "resultados" ]] && continue
-    carpetas+=("$c")
+# sin pipefail: si jq falla, head -n1 sigue sacando lo que pueda
+extraer_sid() {
+  local f s=""
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    s=$(jq -r 'select(.sessionID or .session_id) | (.sessionID // .session_id)' \
+        "$f" 2>/dev/null | head -n1) || true
+    [ -n "$s" ] && { echo "$s"; return; }
   done
-  if [[ ${#carpetas[@]} -eq 0 ]]; then
-    err "no hay carpetas de modelo en $MODELOS_DIR"
-    exit 1
-  fi
-else
-  for o in "${pedidos[@]}"; do
-    if [[ ! -d "$MODELOS_DIR/$o" ]]; then
-      err "no hay carpeta para '$o' en $MODELOS_DIR"
-      listar_modelos
-      exit 1
+}
+
+for par in "${MODELOS[@]}"; do
+  read -r dir romodel <<<"$par"
+  work=$BASE/$dir
+  mkdir -p "$work"
+  cd "$work" || { log "cd $work falló"; continue; }
+
+  nombre=${dir^^}
+  resumen=$OUT/${nombre}_RESUMEN.txt
+  : > "$resumen"
+
+  log "================= $dir ================="
+  ropero stop || true
+  pkill -f llama-server 2>/dev/null || true
+  sleep 2
+
+  ROPERO_TEMP=$ROPERO_TEMP ropero "$romodel" > "$work/log_llama_global.log" 2>&1 &
+  ropero_pid=$!
+
+  t0=$(date +%s)
+  ok_carga=0
+  until listo; do
+    if ! kill -0 "$ropero_pid" 2>/dev/null; then
+      log "[x] $romodel: ropero murió. Tail del log:"
+      tail -30 "$work/log_llama_global.log" >&2
+      break
     fi
-    carpetas+=("$o")
+    if (( $(date +%s) - t0 > ESPERA_MAX )); then
+      log "[x] $romodel no respondió en ${ESPERA_MAX}s"
+      break
+    fi
+    sleep 5
   done
-fi
-
-# ── EL CORPUS DE LA PRUEBA LARGA ───────────────────────────────────────────
-# prueba_larga.md lleva el codigo entre dos marcas. Se genera aqui (es
-# determinista) y se inyecta, para que el prompt que se manda al modelo
-# lleve los ~45k tokens de verdad y el fichero en git siga siendo legible.
-CORPUS=""
-corpus_en_prompt() {
-  local prompt="$1"
-  [[ "$prompt" == *"<!-- CORPUS:INICIO -->"* ]] || return 0
-  [[ -n "$CORPUS" ]] && return 0
-  local gen="$PROMPTS_DIR/gen_corpus_largo.py"
-  if [[ -f "$gen" ]] && command -v python3 >/dev/null 2>&1; then
-    CORPUS="$(python3 "$gen" 2>/dev/null)"
-    info "  corpus largo generado: ${#CORPUS} caracteres (~$(( ${#CORPUS} / 4 )) tokens)"
-  fi
-  [[ -n "$CORPUS" ]] || { warn "  no pude generar el corpus; el prompt va sin el"; return 0; }
-}
-
-inyectar_corpus() {
-  local prompt="$1"
-  [[ "$prompt" == *"<!-- CORPUS:INICIO -->"* ]] || { printf '%s' "$prompt"; return; }
-  local pre post
-  pre="${prompt%%<!-- CORPUS:INICIO -->*}"
-  post="${prompt#*<!-- CORPUS:FIN -->}"
-  printf '%s\n\n%s\n\n%s' "$pre" "$CORPUS" "$post"
-}
-
-# El ctx de cada modelo se lee de su TOML (la fuente de verdad). Con esto el
-# bench puede COMPROBAR que el test cabe antes de lanzar, y avisar si no.
-# ctx_de_modelo <modelo> — el contexto del modelo, o 0 si no se sabe.
-#
-# POR QUÉ NO SE BUSCA EL TOML RELATIVO AL BENCH
-#   El bench está pensado para poder copiarse a donde uno hace las pruebas
-#   (~/test/ y compañía), y el TOML vive en el repo de ropero, no junto al
-#   bench. Con la ruta relativa, un bench copiado devolvía ctx=0, la espera
-#   se quedaba en 0, y el bench fallaba al instante y mataba el server sin
-#   llegar a esperar al modelo.
-#
-#   La fuente de verdad es el ropero INSTALADO (es el que arranca):
-#   `ropero list` deriva el ctx de los TOMLs. Si no está en el PATH, se
-#   busca el TOML en los sitios habituales.
-ctx_de_modelo() {
-    local modelo="$1" ctx=""
-
-    if command -v ropero >/dev/null 2>&1; then
-        ctx=$(ropero list 2>/dev/null | awk -v want="$modelo" '
-            $1 == want {
-                for (i = 1; i <= NF; i++)
-                    if ($i ~ /^ctx=/) { sub(/^ctx=/, "", $i); print $i; exit }
-            }')
-    fi
-    if [[ -n "$ctx" && "$ctx" != "0" ]]; then
-        printf '%s\n' "$ctx"
-        return 0
-    fi
-
-    local d toml
-    for d in "${ROPERO_ROOT:-}" "$AQUI/.." "$AQUI/../.." "$HOME/ropero" "$HOME/setup"; do
-        [[ -n "$d" ]] || continue
-        toml="$d/models/llama/$modelo.toml"
-        [[ -f "$toml" ]] || continue
-        ctx=$(sed -n 's/^context[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$toml" | head -1)
-        if [[ -n "$ctx" && "$ctx" != "0" ]]; then
-            printf '%s\n' "$ctx"
-            return 0
-        fi
-    done
-
-    printf '0\n'
-}
-
-GLOBAL="$OUT_DIR/resumen-global.tsv"
-GLOBAL_PREV="$OUT_DIR/.resumen-global.prev.tsv"
-# No se trunca: si ya existe, se conserva y al final se fusiona con lo nuevo
-# (sin duplicar las filas de los modelos repetidos).
-if [[ -f "$GLOBAL" ]]; then
-    cp "$GLOBAL" "$GLOBAL_PREV"
-fi
-printf 'modelo\ttarea\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\trespundio\tsalida_real\n' > "$GLOBAL"
-
-# ── LIMPIAR EL ESTADO ENTRE PRUEBAS ─────────────────────────────────────────
-# Sin esto, la segunda prueba de un modelo arranca sobre lo que dejó la
-# primera: el opencode arrastra sesiones del run anterior.
-#
-# OJO: antes esto mataba TAMBIÉN el servidor de llama.cpp, y el bench lo
-# arrancaba otra vez en cada tarea. Eso es un arranque en frío de 12-20 GB
-# POR TAREA: con el ctx nativo (512K en el nemotron) son minutos de espera
-# antes de medir nada, y el bench se comia el tiempo en vez de medirlo.
-#
-# Ahora el servidor se arranca UNA VEZ por modelo y se deja vivo entre
-# tareas. No se contaminated la conversación: cada tarea es un "opencode
-# run" nuevo, o sea una sesión nueva. Lo que sí queda en el servidor es el
-# cache de prompt (--cache-prompt), que acelera el PROCESADO del prompt,
-# no la generación: los tokens/s que se miden salen del "eval time", no
-# del "prompt eval time".
-limpiar_opencode() {
-  pkill -f 'opencode run' 2>/dev/null || true
-  pkill -f 'opencode.*--format json' 2>/dev/null || true
-  sleep 0.3
-}
-
-# Parar el servidor del modelo. Es lo que se hace al final de cada modelo y
-# antes de arrancarlo, para que el puerto quede libre.
-parar_modelo() {
-  local modelo="$1"
-  ropero stop "$modelo" >/dev/null 2>&1 || true
-  sleep 1
-}
-
-# ── ARRANCAR EL MODELO Y ESPERAR A QUE ESTÉ LISTO ───────────────────────────
-# El server de llama.cpp ABRE EL PUERTO antes de tener los pesos cargados:
-# /v1/models responde en cuanto hay un proceso escuchando. Por eso la espera
-# mira el MODELO que sirve el puerto, no solo que el puerto conteste.
-#
-# Con reintento: un arranque puede quedarse sin VRAM o morir al cargar (el
-# fitter, el KV de 512K, el SSD ocupado). Un reintento lo salva, y el error
-# que se queda dice las dos cosas: que no arrancó y qué dice su log.
-arrancar_modelo() {
-  local modelo="$1" log="$2" flag_nivel="$3" etiqueta="$4"
-  local intento max_intentos=2 espera_local="$ESPERA"
-  for (( intento=1; intento<=max_intentos; intento++ )); do
-    parar_modelo "$modelo"
-    : > "$log"
-    ( cd "$ROPERO_WORK_DIR" && ROPERO_TEMP="$TEMP" nohup ropero "$modelo" $flag_nivel > "$log" 2>&1 & )
-    sleep 1
-    if grep -q "ya está corriendo" "$log" 2>/dev/null; then
-      err "  $etiqueta: el modelo $modelo ya estaba corriendo: no se puede medir en limpio"
-      err "  -> para el ropero $modelo (ropero stop $modelo) y vuelve a lanzarlo"
-      return 2
-    fi
-    if esperar_modelo "$modelo" "$espera_local"; then
-      ok "  $etiqueta: $modelo listo"
-      return 0
-    fi
-    err "  $etiqueta: $modelo no respondió en :$PUERTO tras ${espera_local}s (intento $intento/$max_intentos)"
-    tail -n 15 "$log" | sed 's/^/    /'
-  done
-  return 1
-}
-
-# ── UNA TAREA POR TURNO ────────────────────────────────────────────────────
-# Cada tarea del prompt va en su propio turno. Asi:
-#   · el modelo no se corta a mitad del bloque (agenta1 se paraba en S3)
-#   · una tarea lenta no se come el tiempo de las demas
-#   · el juez recibe una transcripcion por tarea, y puede decir QUE FALLO
-#
-# El corte se hace por el encabezado de cada tarea: "**S12 (", "**G4 (",
-# "## BLOQUE 3 —". Cada trozo lleva delante la cabecera del prompt (las
-# instrucciones generales), para que cada turno sepa las reglas.
-partir_tareas() {
-  local prompt="$1"
-  python3 - "$prompt" <<'PYEOF'
-import re, sys, os
-p = sys.argv[1]
-try:
-    texto = open(p, encoding="utf-8").read()
-except Exception:
-    texto = p
-# la cabecera: todo lo anterior a la primera tarea
-m = re.search(r'^\*\*[GS]\d+\s*\(', texto, re.M)
-if not m:
-    m = re.search(r'^##\s*BLOQUE', texto, re.M)
-if not m:
-    print("TAREA\t0\t" + texto.replace("\t", " "))
-    sys.exit(0)
-cabecera = texto[:m.start()].rstrip()
-cuerpo = texto[m.start():]
-# los cortes: cada linea que empieza una tarea
-cortes = [x.start() for x in re.finditer(r'^(?:\*\*[GS]\d+\s*\(|\*\*[GS]\d+\.|##\s*BLOQUE)', cuerpo, re.M)]
-if not cortes:
-    print("TAREA\t0\t" + cuerpo.replace("\t", " "))
-    sys.exit(0)
-for i, ini in enumerate(cortes):
-    fin = cortes[i+1] if i+1 < len(cortes) else len(cuerpo)
-    trozo = cuerpo[ini:fin].strip()
-    if not trozo:
-        continue
-    # el id de la tarea: "**S12 (React TS)" -> "S12"
-    t = re.match(r'^\*\*([GS]\d+)', trozo)
-    tid = t.group(1) if t else ("BLOQUE%d" % (i+1))
-    # el titulo corto: hasta el primer parentesis cerrado o los 40 chars
-    tt = re.match(r'^\*\*([GS]\d+)\s*\(?([^)]{0,40})', trozo)
-    nombre = ("%s %s" % (tid, tt.group(2).strip())) if tt else tid
-    print("TAREA\t%s\t%s" % (tid, nombre.replace("\t", " ")))
-    print("CUERPO\t%s\t%s" % (tid, (cabecera + "\n\n" + trozo).replace("\t", " ")))
-PYEOF
-}
-
-# ── UNA PRUEBA POR CARPETA ─────────────────────────────────────────────────
-n=0
-for carpeta in "${carpetas[@]}"; do
-  n=$((n+1))
-  dir="$MODELOS_DIR/$carpeta"          # donde vive el modelo (y su config)
-  out="$OUT_DIR/$carpeta"               # donde se depositan los resultados
-  modelo="${MODELO_ROPERO[$carpeta]:-$carpeta}"
-  mkdir -p "$out"
-
-  head2 "[$n/${#carpetas[@]}] $carpeta  (ropero: $modelo)"
-  [[ -d "$dir" ]] || { err "no existe la carpeta del modelo $dir"; continue; }
-
-  # ── idempotente: si este modelo ya esta probado, no se repite ───────────
-  if [[ "$FORCE" != "1" && -f "$out/.bench-hecho" ]]; then
-    ok "ya estaba probado entero — me lo salto (FORCE=1 para repetir)"
+  listo && ok_carga=1
+  if (( ok_carga == 0 )); then
+    ropero stop || true
+    pkill -f llama-server 2>/dev/null || true
     continue
   fi
-  rm -f "$out/.bench-hecho"
+  log "[+] $romodel cargado en $(( $(date +%s) - t0 ))s"
 
-  if [[ ! -f "$out/resumen.tsv" ]]; then
-    printf 'tarea\trc\tduracion_s\tsesion_id\tmodelo_servido\ttokens_s\tms_por_token\tgpu\trespundio\tsalida_real\n' > "$out/resumen.tsv"
-  fi
+  for prueba in "${PRUEBAS[@]}"; do
+    prompt=$PROMPTS/${prueba}.md
+    pdir=$work/$prueba
+    mkdir -p "$pdir"
 
-  # ── EL MODELO, ARRANCADO UNA VEZ ──────────────────────────────────────────
-  # Antes se arrancaba en cada tarea, en frio: 12-20 GB de pesos a leer del
-  # disco y el KV entero a reservar, POR TAREA. Con el ctx nativo (512K en el
-  # nemotron) eso son minutos, y el bench se comia el tiempo esperando al
-  # modelo en vez de medirlo.
-  #
-  # Ahora se arranca una vez por modelo y se deja vivo para todas sus
-  # tareas. Cada tarea es un "opencode run" nuevo (sesion nueva), asi que la
-  # conversacion no secontamination entre tareas.
-  #
-  # La espera se escala con el ctx del modelo: 900 s de base y 60 s mas por
-  # cada 32K de tokens de contexto. Sin ctx conocido se espera el minimo y se
-  # avisa: NUNCA 0, porque con 0 el bench falla al instante.
-  ctx_para_espera="$(ctx_de_modelo "$modelo")"
-  if [[ -z "$ESPERA" ]]; then
-      if [[ -z "$ctx_para_espera" || "$ctx_para_espera" == "0" ]]; then
-          ESPERA=$ESPERA_MIN
-          warn "  $carpeta: no se el ctx de $modelo; espero ${ESPERA}s (el minimo)"
-      else
-          extra=$(( (ctx_para_espera + 32767) / 32768 ))
-          ESPERA=$(( ESPERA_MIN + extra * 60 ))
-          info "  $carpeta: espero ${ESPERA}s para que cargue (ctx $ctx_para_espera)"
-      fi
-  fi
-
-  # El nivel es un flag (ropero gptoss --high), y SOLO lo acepta un modelo
-  # que lo declare en su [levels].list. Si no lo declara,
-  # `ropero <modelo> --high` es un error de uso:
-  #
-  #     _ropero_usage_error '' "opcion desconocida: '$1'"
-  #
-  # y el modelo NO ARRANCA. Pasarlo a ciegas hacia que 7 de los 15 modelos del
-  # roster no lleguen nunca a levantar el server. El nivel se consulta al
-  # propio ropero, que es quien sabe lo que cada modelo declara.
-  flag_nivel=""
-  if [[ -n "$NIVEL" ]]; then
-      if ropero levels "$modelo" 2>/dev/null | tr " " "\n" | grep -qx "$NIVEL"; then
-          flag_nivel="--$NIVEL"
-      else
-          warn "  $carpeta: $modelo no declara el nivel '$NIVEL'; se mide con el suyo"
-      fi
-  fi
-
-  ROPERO_WORK_DIR="$dir"
-  LOG_MODELO="$out/ropero-modelo.log"
-  if ! arrancar_modelo "$modelo" "$LOG_MODELO" "$flag_nivel" "$carpeta"; then
-      err "  $carpeta: $modelo no arranca; me lo salto entero"
-      ropero stop "$modelo" >/dev/null 2>&1 || true
+    if [ ! -f "$prompt" ]; then
+      log "  [!] falta $prompt, salto $prueba"
       continue
-  fi
+    fi
 
-  # ── las pruebas, y dentro de cada una, las tareas ────────────────────────
-  for p in "${PROMPTS[@]}"; do
-    prueba="${p%.md}"
-    prompt_file="$PROMPTS_DIR/$p"
-    [[ -f "$prompt_file" ]] || continue
-    corpus_en_prompt "$prompt_file"
+    log "  → $prueba (prompt $(wc -c <"$prompt") bytes)"
+    marca=$(stat -c%s "$work/log_llama_global.log" 2>/dev/null || echo 0)
+    t_prueba=$(date +%s)
 
-    # La sesion que esta tarea encadena (si alguna). La lleva la tarea
-    # ANTERIOR de la misma prueba: el BLOQUE 3 continua el BLOQUE 2.
-    sesion_cadena=""
+    TO=()
+    command -v timeout >/dev/null && TO=(timeout --signal=TERM --kill-after=30 "$TIMEOUT")
 
-    # las tareas de esta prueba
-    tareas=()
-    while IFS=$'\t' read -r tipo tid cuerpo; do
-      [[ "$tipo" == "CUERPO" ]] || continue
-      tareas+=("$tid"$'\t'"$cuerpo")
-    done < <(partir_tareas "$prompt_file")
-    [[ ${#tareas[@]} -gt 0 ]] || { err "  $p: no he encontrado ninguna tarea"; continue; }
+    set +e
+    "${TO[@]}" opencode run "$(<"$prompt")" \
+      --agent "$AGENTE_OC" \
+      --model "$MODELO_OC" \
+      --format json \
+      > "$pdir/log_opencode.json" 2> "$pdir/log_opencode.err"
+    rc=$?
+    set -e 2>/dev/null || true
 
-    for entrada in "${tareas[@]}"; do
-      tid="${entrada%%$'\t'*}"
-      cuerpo="${entrada#*$'\t'}"
-      nombre="$prueba-$tid"
+    dur=$(( $(date +%s) - t_prueba ))
+    case $rc in
+      0)   log "  ✓ $prueba OK (${dur}s)" ;;
+      124) log "  [!] $prueba TIMEOUT ${TIMEOUT}s (${dur}s)" ;;
+      137) log "  [!] $prueba matado tras TERM (${dur}s)" ;;
+      *)   log "  [!] $prueba opencode rc=$rc (${dur}s)" ;;
+    esac
 
-      # ya está hecha esta tarea para este modelo? -> no se repite
-      if [[ "$FORCE" != "1" ]] && grep -q "^$tid"$'\t' "$out/resumen.tsv" 2>/dev/null; then
-        ok "  $tid ya estaba hecha — me la salto"
-        continue
+    sleep 1
+    if [ -f "$work/log_llama_global.log" ]; then
+      tail -c +$((marca + 1)) "$work/log_llama_global.log" > "$pdir/log_llama.log" 2>/dev/null \
+        || : > "$pdir/log_llama.log"
+    else
+      : > "$pdir/log_llama.log"
+    fi
+
+    sid=$(extraer_sid "$pdir/log_opencode.json" "$pdir/log_opencode.err")
+    if [ -n "${sid:-}" ]; then
+      log "  $prueba: sessionID=$sid"
+      if ! opencode session export "$sid" > "$pdir/session_opencode.json" 2>/dev/null; then
+        log "  [!] $prueba: export falló"
+        echo "(export falló)" > "$pdir/session_opencode.json"
       fi
+    else
+      log "  [!] $prueba: sin sessionID"
+      echo "(sin sessionID)" > "$pdir/session_opencode.json"
+    fi
 
-      # ── estado limpio entre tareas ───────────────────────────────────────
-      limpiar_opencode
-
-      work="$dir/$nombre"
-      rm -rf "$work"; mkdir -p "$work"
-
-      # ── EL MISMO SYSTEM PROMPT PARA TODOS ────────────────────────────────
-      # El bench escribe un AGENTS.md en el directorio de trabajo. opencode lo
-      # mete en el contexto como instrucciones del proyecto, IGUAL para
-      # todos los modelos. Asi el system prompt no es una variable mas que
-      # diferencia a unos de otros.
-      #
-      # Ademas lleva la linea del reasoning strength, que es lo que necesita
-      # el muse (el unico del roster que no lo expone como reasoning_effort).
-      cat > "$work/AGENTS.md" <<AGENTS_EOF
-# Banco de pruebas de ropero
-
-Estas instrucciones son identicas para todos los modelos que se miden. No
-las cambies ni las completes: si anades reglas, el modelo deja de estar
-midiendo lo mismo que los demas.
-
-Reasoning strength: ${NIVEL}
-
-Responde a la tarea que te llega. Si no puedes hacer alguna parte, dilo y
-sigue con el resto. No inventes salidas de terminal ni resultados de tests:
-si dices que algo se ejecuto, tiene que haberse ejecutado de verdad.
-AGENTS_EOF
-
-      # ── ropero, limpio para esta tarea ───────────────────────────────────
-      # Se arranca en el NIVEL pedido, no en el default del modelo: si no,
-      # cada modelo se mide con el nivel de razonamiento que le de la gana y
-      # la comparacion no significa nada.
-      #
-      # El nivel es un flag (ropero gptoss --high), no un alias. Y solo se
-      # pasa si el modelo lo declara: `ropero gptoss --high` funciona,
-      # `ropero muse --high` no (el muse no tiene niveles: se ajusta con
-      # "Reasoning strength: <valor>" en el system prompt).
-      LOG_PRUEBA="$LOG_MODELO"
-
-      # El modelo NO se rearranca aqui: se arranca una vez por modelo, antes
-      # de las pruebas (ver arrancar_modelo). Aqui solo se comprueba que siga
-      # vivo: si se ha caido (VRAM, fitter, el server matado por el opencode),
-      # se levanta otra vez, y si no, la tarea se salta con el motivo claro.
-      if ! modelo_responde "$modelo"; then
-          warn "  $tid: el modelo $modelo no está sirviendo; lo arranco otra vez"
-          if ! arrancar_modelo "$modelo" "$LOG_PRUEBA" "$flag_nivel" "$tid"; then
-              err "  $tid: no se pudo arrancar $modelo; esta tarea no puntúa"
-              continue
-          fi
-      fi
-
-      # ¿Se arranca en el nivel pedido? Si el modelo no declara ese nivel,
-      # ropero lo avisa y arranca con el suyo. Sin avisar, comparariamos
-      # modelos con distinto nivel de razonamiento.
-      if [[ -n "$flag_nivel" ]]; then
-          if grep -qaE "nivel|level|unknown option|opción desconocida|invalid" "$LOG_PRUEBA" 2>/dev/null \
-             && ! grep -qaE "n_ctx|context size|n_layer" "$LOG_PRUEBA" 2>/dev/null; then
-              warn "  $tid: el nivel $flag_nivel no se pudo aplicar (mira el log); se mide con el default"
-          fi
-      fi
-
-      # El modelo esta entero en la VRAM? Si no, los tokens/s no valen.
-      # Se lee del log del MODELO: el reparto de capas se anuncia al cargar.
-      gpu_nota="ok"
-      if gpu_completo "$LOG_PRUEBA"; then
-          info "  $GPU_AVISO"
-      else
-          gpu_nota="RECORTADO"
-          err "  $tid: $GPU_AVISO"
-          err "  -> los tokens/s estarian medidos con parte del modelo en la CPU"
-      fi
-
-      # ── ¿CABE ESTE TEST EN EL CONTEXTO DEL MODELO? ──────────────────────
-      # El banco exige que todos los modelos puedan hacer todos los tests.
-      # Si el prompt no cabe en el ctx del modelo, el server lo rechaza y el
-      # turno no cuenta para nada: es un fallo del BANCO, no del modelo.
-      # Se avisa (y se marca) en vez de lanzar un turno que va a fallar.
-      ctx_modelo="$(ctx_de_modelo "$modelo")"
-      if [[ "$ctx_modelo" != "0" ]]; then
-          tokens_prompt=$(( ${#cuerpo} / 3 ))
-          # margen: la respuesta del modelo + el overhead del servidor
-          if (( tokens_prompt + 2000 > ctx_modelo )); then
-              err "  $tid: el prompt (~${tokens_prompt} tokens) no cabe en el ctx del modelo ($ctx_modelo)"
-              err "  -> este turno NO puntua: es un fallo del banco, no del modelo"
-              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$tid" "-" "-" "-" "-" "-" "-" "NO_CABE" "no" "no" >> "$out/resumen.tsv"
-              printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$carpeta" "$tid" "-" "-" "-" "-" "-" "NO_CABE" "no" "no" >> "$GLOBAL"
-              continue
-          fi
-      fi
-
-      info "  $tid"
-      # La marca del log del servidor: los timings de esta tarea son los que
-      # aparezcan DESPUES de aqui. El servidor es el mismo para todas las
-      # tareas del modelo, asi que su log las acumula.
-      MARCA_LOG="$(marcar_log "$LOG_PRUEBA")"
-      t0=$(date +%s)
-      # ── LA SESION SE ENCADENA ────────────────────────────────────────────
-      # El BLOQUE 3 de la prueba larga se hace "10 turnos despues" del
-      # BLOQUE 2: eso solo tiene sentido si los turnos son de la MISMA
-      # sesion. Con un "opencode run" nuevo en cada turno, cada turno es una
-      # sesion nueva y el BLOQUE 3 mediria una deriva que empieza de cero
-      # para todos (que es cero para todos).
-      #
-      # Los bloques que forman una secuencia (BLOQUE 2 -> 3, y el 6) se
-      # encadenan con --session <id>, que continua una sesion CONCRETA (no
-      # "la ultima": --continue seria una carrera si dos runs se solaparan).
-      # Los que son independientes (BLOQUE 1, 4, 5) van en sesion nueva,
-      # para que el contexto no se contamine.
-      flag_sesion=""
-      if [[ -n "$sesion_cadena" ]]; then
-          flag_sesion="--session $sesion_cadena"
-      fi
-
-      # ── EL VARIANT DE OPENCODE, SOLO SI EL MODELO LO TIENE ────────────────
-      # --variant es de OPENCODE, no de ropero: es el reasoning effort que se
-      # manda al provider. Y la doc de opencode es explicita: "an unknown
-      # variant produces a model-resolution error". O sea, pasar un variant
-      # que el modelo no tiene NO es que se ignore: es un ERROR, y el run se
-      # queda sin respuesta.
-      #
-      # El nivel que se pide se pasa por el mecanismo que el modelo declara:
-      #   · si declara niveles  -> se arrancan con --<nivel> (flag de ropero)
-      #   · y el AGENTS.md lleva "Reasoning strength: <nivel>" para el que lo
-      #     ajuste por system prompt (el muse).
-      # El --variant solo se pasa si el provider tiene esa variante, que se
-      # consulta en el catalogo de opencode.
-      flag_variant=""
-      if [[ -n "$NIVEL" ]] && variant_existe "$NIVEL"; then
-          flag_variant="--variant $NIVEL"
-      elif [[ -n "$NIVEL" ]]; then
-          info "  $tid: el provider no tiene la variante '$NIVEL'; el nivel va por el AGENTS.md"
-      fi
-
-      ( cd "$work" && timeout "$TIMEOUT" opencode run "$(inyectar_corpus "$cuerpo")" \
-        --model "$MODELO" --agent "$AGENTE" $flag_variant $flag_sesion --format json ) \
-      > "$out/opencode-$nombre.json" 2> "$out/opencode-$nombre.log"
-      rc=$?
-      dur=$(( $(date +%s) - t0 ))
-
-      # ── EL LOG DE ESTA TAREA ──────────────────────────────────────────────
-      # El del servidor, recortado desde la marca: con un solo servidor para
-      # todas las tareas, el log entero tiene los timings de todas y hay que
-      # quedarse con los de esta. Si no se recorta, los tokens/s de cada
-      # tarea serian los de la ULTIMA.
-      LOG_TAREA="$out/ropero-$nombre.log"
-      # Un segundo de margen: el server puede tener el ultimo timing en el
-      # buffer del stdout, y sin vaciarlo el recorte se queda corto.
-      sleep 1
-      recortar_log "$LOG_PRUEBA" "$MARCA_LOG" "$LOG_TAREA"
-
-      # la temperatura con la que se ha medido, del log del servidor
-      temp_log="$(grep -aoE 'temp[ ]*=[ ]*[0-9.]+' "$LOG_TAREA" 2>/dev/null | tail -1 | grep -oE '[0-9.]+$')"
-      [[ -n "$temp_log" ]] || temp_log="?"
-      if [[ "$temp_log" != "?" && "$temp_log" != "$TEMP" ]]; then
-          warn "  $tid: temp en el log ($temp_log) != la pedida ($TEMP)"
-      fi
-
-      # la sesion, exportada
-      sid="$(id_sesion "$out/opencode-$nombre.json")"
-      if [[ -n "$sid" ]]; then
-        if opencode session export "$sid" > "$out/sesion-$nombre.md" 2>> "$out/opencode-$nombre.log"; then
-          info "  ${dur}s — sesión $sid exportada"
-        else
-          warn "  la exportación falló (queda el json crudo)"
-        fi
-      else
-        warn "  no encontré el id de sesión (queda el json crudo)"
-      fi
-
-      # ── ¿EL MODELO RESPONDIÓ? ─────────────────────────────────────────────
-      respondio="si"
-      if ! respuesta_real "$out/sesion-$nombre.md"; then
-        respondio="NO"
-        err "  $tid: el modelo NO respondió (o respondió menos de 40 caracteres)"
-        err "  -> esta tarea NO puntúa: es un fallo del bench, no un 0 del modelo"
-      fi
-
-      # ── ¿LA SALIDA PEGADA ES REAL? ────────────────────────────────────────
-      salida="si"
-      if [[ -f "$out/sesion-$nombre.md" ]]; then
-        if salida_inventada "$out/sesion-$nombre.md" "$work"; then
-          salida="INVENTADA"
-          err "  $tid: la respuesta pega una salida de OTRA máquina:"
-          salida_inventada "$out/sesion-$nombre.md" "$work" 2>/dev/null | sed 's/^/    /'
-          err "  -> el juez tiene que saberlo: es evidencia falsa"
-        fi
-      fi
-
-      # ── ¿SE REPITE? ───────────────────────────────────────────────────────
-      # Un bucle de tool calls o de frases: el modelo dice lo mismo una y
-      # otra vez. Es el fallo que hizo que el fable quemara 40 turnos.
-      if [[ -f "$out/sesion-$nombre.md" ]]; then
-        if repetitiva "$out/sesion-$nombre.md"; then
-          salida="REPETIDA"
-          err "  $tid: la respuesta se REPITE:"
-          repetitiva "$out/sesion-$nombre.md" 2>/dev/null | sed 's/^/    /'
-          err "  -> el modelo se ha enrollado: el juez no debe contarlo como respuesta"
-        fi
-      fi
-
-      if [[ $rc -ne 0 ]]; then
-        err "  $tid: opencode rc=$rc"
-        tail -n 5 "$out/opencode-$nombre.log" | sed 's/^/    /'
-      fi
-
-      # Si esta tarea encadena con la siguiente, la siguiente continua SU
-      # sesion (el session id, que es lo que entiende --session).
-      case "$tid" in
-          BLOQUE1|BLOQUE2) sesion_cadena="$sid" ;;
-          *)               sesion_cadena="" ;;   # fin de cadena
-      esac
-      # shellcheck disable=SC2034  # el reset del final tambien cuenta como uso
-
-      ts="$(tokens_por_segundo "$LOG_TAREA")"; ts="${ts:-?}"
-      ms="$(ms_por_token "$LOG_TAREA")";     ms="${ms:-?}"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$tid" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" "$respondio" "$salida" \
-        >> "$out/resumen.tsv"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "$carpeta" "$tid" "$rc" "$dur" "${sid:--}" "$(modelo_en_puerto)" "$ts" "$ms" "$gpu_nota" "$respondio" "$salida" \
-        >> "$GLOBAL"
-    done
+    {
+      echo
+      echo "############################################################"
+      echo "## PRUEBA: $prueba  (rc=$rc, ${dur}s)"
+      echo "############################################################"
+      echo
+      echo "----------------- log llama-server -----------------"
+      cat "$pdir/log_llama.log"
+      echo
+      echo "-----------------   log opencode   -----------------"
+      cat "$pdir/log_opencode.json"
+      echo
+      echo "----------------- stderr opencode  -----------------"
+      cat "$pdir/log_opencode.err"
+      echo
+      echo "-----------------  sesion opencode -----------------"
+      cat "$pdir/session_opencode.json"
+      echo
+    } >> "$resumen"
   done
 
-  # ── paquete para la IA juez ──────────────────────────────────────────────
-  # El prompt 3 va a otra IA (Claude, DeepSeek, MiniMax) con las
-  # transcripciones. Se deja el paquete montado, no se lanza: cada juez tiene
-  # su propio provider.
-  if [[ -f "$PROMPTS_DIR/$PROMPT_JUEZ" ]]; then
-    mkdir -p "$OUT_DIR/juez/$carpeta"
-    cp "$PROMPTS_DIR/$PROMPT_JUEZ" "$OUT_DIR/juez/$carpeta/$PROMPT_JUEZ"
-    for s in "$out"/sesion-*.md; do
-      [[ -f "$s" ]] || continue
-      cp "$s" "$OUT_DIR/juez/$carpeta/$(basename "$s")"
-    done
-    for s in "$out"/ropero-*.log; do
-      [[ -f "$s" ]] || continue
-      cp "$s" "$OUT_DIR/juez/$carpeta/$(basename "$s")"
-    done
-    # los ficheros que el modelo haya generado en las carpetas de trabajo
-    for w in "$dir"/*/; do
-      [[ -d "$w" ]] || continue
-      nombre="$(basename "$w")"
-      [[ "$nombre" == "sesion-*" ]] && continue
-      if [[ -d "$w/.git" || -d "$w/node_modules" ]]; then continue; fi
-      mkdir -p "$OUT_DIR/juez/$carpeta/ficheros/$nombre"
-      find "$w" -maxdepth 2 -type f \
-        ! -path '*/.git/*' ! -path '*/node_modules/*' \
-        -exec cp --parents {} "$OUT_DIR/juez/$carpeta/ficheros/" \; 2>/dev/null || true
-    done
-    ok "  paquete del juez montado en $OUT_DIR/juez/$carpeta"
-  fi
-
-  # ── parar el modelo ──────────────────────────────────────────────────────
-  ropero stop "$modelo" 2>&1 | sed 's/^/  /'
-
-  # marca: este modelo ya esta. La proxima corrida se lo salta.
-  date -Is > "$out/.bench-hecho"
+  ropero stop || true
+  pkill -f llama-server 2>/dev/null || true
+  log "[+] $resumen"
 done
 
-# ── fusionar el global: lo viejo + lo nuevo, sin filas duplicadas ─────────
-if [[ -f "$GLOBAL_PREV" ]]; then
-    { cat "$GLOBAL_PREV"; tail -n +2 "$GLOBAL"; } | \
-        awk -F'\t' 'NR==1{print; next} !seen[$1"\t"$2]++' > "$GLOBAL.nuevo"
-    mv "$GLOBAL.nuevo" "$GLOBAL"
-    rm -f "$GLOBAL_PREV"
-fi
-
-head2 "resumen global"
-cat "$GLOBAL"
-head2 "paquetes del juez"
-ls -1 "$OUT_DIR/juez" 2>/dev/null | sed 's/^/  /' || true
+ropero stop || true
+pkill -f llama-server 2>/dev/null || true

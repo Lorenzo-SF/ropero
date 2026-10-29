@@ -3037,6 +3037,17 @@ ropero_install_mlx() {
         { pip install --quiet mlx-lm 2>/dev/null || pip3 install --quiet mlx-lm 2>/dev/null; } && rc=0
     fi
 
+    # HE REALIZADO PRUEBAS Y PARA SACAR JUGO AL M5 MAX DEBE SER CON MLX-SERVE
+    # EN MACOS LO HE INSTALADO ASI
+
+    if command -v mlx_lm.serve &>/dev/null; then
+        ropero_info "instalando mlx-serve via brew..."
+        brew trust --cask ddalcu/mlx-serve/mlx-serve     
+        brew tap ddalcu/mlx-serve https://github.com/ddalcu/mlx-serve
+        brew install --cask mlx-serve
+    fi
+
+
     if (( rc == 0 )); then
         ropero_ok "mlx-lm instalado"
         ropero_link_mlx
