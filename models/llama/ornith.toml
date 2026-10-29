@@ -25,8 +25,8 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "42",
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--temp", "0.60",
     "--top-k", "35",
     "--top-p", "0.93",

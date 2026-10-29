@@ -24,8 +24,8 @@ base = [
     "--n-gpu-layers", "53",                            # ~22 de 52 layers en GPU; resto CPU
     "--swa-full",                                      # CRÍTICO: sliding window pattern [L,L,L,G]
     "--rope-freq-base", "500000",                      # θ=500k del repo
-    "--cache-type-k", "q4_0",                          # agresivo (SWA usa ventanas pequeñas)
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",                          # agresivo (SWA usa ventanas pequeñas)
+    "--cache-type-v", "turbo3",
     "--reasoning-format", "deepseek",                  # limpia tags <think> del output
     "--temp", "1.0",
     "--top-p", "0.95",

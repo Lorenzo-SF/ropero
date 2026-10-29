@@ -2045,6 +2045,7 @@ start_model() {
                 --cache-reuse 512
                 --cache-prompt
                 --context-shift
+                --cont-batching
                 --poll 30
                 --metrics
                 --perf

@@ -18,8 +18,8 @@ size = "11.47 GB"
 [args]
 base = [
     "--n-gpu-layers", "41",
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--chat-template-kwargs", '{"enable_thinking": false}',
     "--reasoning-format", "deepseek",
     "--temp", "0.6",

@@ -22,6 +22,8 @@ default = "low"
 base = [
     "--n-gpu-layers", "41",
     "--n-cpu-moe", "14",
+    "--moe-cache","auto",
+
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "0.55",

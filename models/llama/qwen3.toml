@@ -25,9 +25,11 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "49",
-    "--n-cpu-moe", "${env:ROPERO_QWEN3_N_CPU_MOE:-22}",
-    "--cache-type-k", "q4_0",
-    "--cache-type-v", "q4_0",
+    "--n-cpu-moe", "22",
+    "--moe-cache","auto",
+
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--temp", "0.60",
     "--top-p", "0.95",
     "--top-k", "20",

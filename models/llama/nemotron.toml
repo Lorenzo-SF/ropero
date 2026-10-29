@@ -26,26 +26,41 @@ keep_source  = true
 size = "65.8 GB"
 
 [levels]
-list = ["think"]
+list        = ["think", "instruct"]
+default     = "think"
 
 [args]
 base = [
     "--n-gpu-layers", "54",
     "--n-cpu-moe", "14",
+    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+	
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
-    "--temp", "1.0",
-    "--top-p", "0.95",
-    "--top-k", "0",
-    "--min-p", "0.0",
+
     "--repeat-penalty", "1.0",
     "--repeat-last-n", "64",
     "--n-predict", "8192",
     "--keep", "16384",
-    "--chat-template-kwargs", '{"enable_thinking": true}',
     "--chat-template-file", '/home/lorenzo/models/gguf/nemotron/chat_template.jinja',
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",
 ]
 
+[args.level.think]
+base = [
+    "--temp", "0.6",
+    "--top-p", "0.9",
+    "--min-p", "0.01",
+    "--top-k", "5",
+    "--reasoning", "true",
+    # "--chat-template-kwargs", '{"enable_thinking": true}',
+]
+
+[args.level.instruct]
+base = [
+    "--temp", "0.2",
+    "--reasoning", "false",
+    # "--chat-template-kwargs", '{"enable_thinking": true}',
+]
