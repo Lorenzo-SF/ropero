@@ -13,8 +13,8 @@ gguf = "Qwen3.8-27B-NVFP4.gguf"
 [build]
 repo         = "Qwen/Qwen3.8-27B"
 quant        = "NVFP4"
-imatrix_repo = "bartowski/Qwen3.8-27B-GGUF"
-imatrix_file = "Qwen3.8-27B-imatrix.gguf"
+imatrix_repo = "pugant/Qwen3.8-27B-imatrix"
+imatrix_file = "imatrix-qwen38.gguf"
 keep_source  = true
 size = "55.6 GB"
 

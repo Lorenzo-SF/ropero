@@ -8,7 +8,7 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "Muse-Glimmer-30B-UD-IQ4_NL.gguf"
+gguf = "Muse-Glimmer-30B-UD-Q3_K_XL.gguf"
 
 [build]
 repo         = "meta-models/Muse-Glimmer-30B"

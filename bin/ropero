@@ -2046,7 +2046,7 @@ start_model() {
                 --cache-prompt
                 --context-shift
                 --cont-batching
-                --poll 30
+                --poll 60
                 --metrics
                 --perf
                 --seed -1

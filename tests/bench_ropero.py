@@ -2,23 +2,33 @@
 """
 bench_ropero.py — banco de pruebas para modelos locales servidos por ropero.
 
-Estructura de directorios:
-  ~/test/<modelo>/                    config del modelo (ropero la lee de aquí)
-  ~/test/<modelo>/work-<prueba>/      directorio de trabajo de opencode
-  ~/test/resultados/<modelo>/         resultados por prueba + informe.md
-  ~/test/resultados/juez/<modelo>.md  el paquete que ve el juez
-  ~/test/resultados/resumen-global.*  tabla agregada de todos los modelos
+Estructura:
+  ~/test/<modelo>/                     config del modelo (la lee ropero)
+  ~/test/<modelo>/work-<prueba>/       directorio de trabajo de opencode
+  ~/test/resultados/<modelo>/          resultados por prueba + informe.md
+  ~/test/resultados/juez/<modelo>.md   el paquete que ve el juez
+  ~/test/resultados/resumen-global.*   tabla agregada
 
 Uso:
-  ./bench_ropero.py                    lista los modelos disponibles
-  ./bench_ropero.py <m1> <m2> …        prueba esos modelos
-  ./bench_ropero.py all                todos los de ~/test/
-  FORCE=1 ./bench_ropero.py <m>        rehace aunque ya esté
+  ./bench_ropero.py                    lista los modelos
+  ./bench_ropero.py <m1> <m2> …        prueba esos
+  ./bench_ropero.py all                todos
+  FORCE=1 ./bench_ropero.py <m>        rehace
+  DEBUG=1 ./bench_ropero.py <m>        sondeos de puerto/log y stderr si falla
 
 Variables de entorno:
-  MODELOS_DIR  OUT_DIR  PROMPTS_DIR
-  AGENTE  MODELO  PUERTO  API_KEY
-  TEMP  NIVEL  TIMEOUT  ESPERA_MIN  FORCE
+  MODELOS_DIR OUT_DIR PROMPTS_DIR
+  AGENTE MODELO PUERTO API_KEY
+  TEMP NIVEL TIMEOUT ESPERA_MIN FORCE DEBUG
+
+Notas:
+  · NIVEL="" desactiva --<nivel>.
+  · Si :PUERTO sigue ocupado antes de arrancar: `ropero stop` y, si no basta,
+    `pkill -f llama-server`. Si aún así no se libera, la prueba se marca como
+    no arrancada (nunca como ok).
+  · La espera NO se conforma con que responda /v1/models: exige un POST real
+    a /v1/chat/completions con max_tokens=1. Así no se mide un servidor a
+    medio cargar.
 """
 import argparse
 import fcntl
@@ -41,15 +51,16 @@ MODELOS_DIR  = Path(os.environ.get("MODELOS_DIR", HOME / "test"))
 OUT_DIR      = Path(os.environ.get("OUT_DIR", MODELOS_DIR / "resultados"))
 PROMPTS_DIR  = Path(os.environ.get("PROMPTS_DIR", Path(__file__).resolve().parent))
 
-AGENTE        = os.environ.get("AGENTE", "mavis")
-MODELO_OC     = os.environ.get("MODELO", "marichocho/Puertourraco")
+AGENTE        = os.environ.get("AGENTE", "build")
+MODELO_OC     = os.environ.get("MODELO", "marichocho/Puertourraco-256k")
 PUERTO        = int(os.environ.get("PUERTO", "9999"))
 API_KEY       = os.environ.get("API_KEY", "sk-local-dev-key")
-TIMEOUT       = int(os.environ.get("TIMEOUT", "1800"))    # por prueba
-ESPERA_MIN    = int(os.environ.get("ESPERA_MIN", "900"))   # carga en frío
+TIMEOUT       = int(os.environ.get("TIMEOUT", "1800"))     # por prueba
+ESPERA_MIN    = int(os.environ.get("ESPERA_MIN", "900"))    # carga en frío
 TEMP          = os.environ.get("TEMP", "0.15")
 NIVEL         = os.environ.get("NIVEL", "high")
 FORCE         = os.environ.get("FORCE", "0") == "1"
+DEBUG         = os.environ.get("DEBUG", "0") == "1"
 FORCE_MODELOS = set(os.environ.get("FORCE_MODELO", "").split())
 
 PRUEBAS = [
@@ -68,11 +79,11 @@ if sys.stdout.isatty():
 else:
     R = G = Y = B = D = N = ""
 
-def info(m): print(f"{D}{m}{N}")
-def warn(m): print(f"{Y}[!] {m}{N}", file=sys.stderr)
-def err(m):  print(f"{R}[x] {m}{N}", file=sys.stderr)
-def ok(m):   print(f"{G}[+] {m}{N}")
-def head2(m): print(f"\n{B}══ {m}{N}")
+def info(m): print(f"{D}{m}{N}", flush=True)
+def warn(m): print(f"{Y}[!] {m}{N}", file=sys.stderr, flush=True)
+def err(m):  print(f"{R}[x] {m}{N}", file=sys.stderr, flush=True)
+def ok(m):   print(f"{G}[+] {m}{N}", flush=True)
+def head2(m): print(f"\n{B}══ {m}{N}", flush=True)
 
 
 # ── ropero / opencode ─────────────────────────────────────────────────────
@@ -101,7 +112,7 @@ def ctx_de_modelo(modelo):
 
 
 def nivel_flag(modelo):
-    """Devuelve '--high' si ropero levels lo declara, si no ''."""
+    """'--high' si ropero levels lo declara, si no ''."""
     if not NIVEL:
         return ""
     try:
@@ -127,14 +138,41 @@ def modelo_en_puerto():
     return None
 
 
-def esperar_modelo(modelo, timeout):
-    deadline = time.time() + max(1, timeout)
-    while time.time() < deadline:
-        got = modelo_en_puerto()
-        if got and (got == modelo or modelo in got):
-            return True
-        time.sleep(3)
-    return False
+def _puerto_ocupado():
+    return modelo_en_puerto() is not None
+
+
+def completion_ok(timeout=20):
+    """POST real a /v1/chat/completions con max_tokens=1.
+    True solo si el modelo responde 200."""
+    mid = modelo_en_puerto()
+    if not mid:
+        return False
+    body = json.dumps({
+        "model": mid,
+        "messages": [{"role": "user", "content": "x"}],
+        "max_tokens": 1,
+        "temperature": 0,
+        "stream": False,
+    }).encode()
+    req = Request(
+        f"http://127.0.0.1:{PUERTO}/v1/chat/completions",
+        data=body,
+        headers={
+            "Authorization": f"Bearer {API_KEY}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=timeout) as r:
+            if DEBUG:
+                info(f"    completion: HTTP {r.status}")
+            return 200 <= r.status < 300
+    except Exception as e:
+        if DEBUG:
+            info(f"    completion: {type(e).__name__}: {e}")
+        return False
 
 
 def parar_modelo(modelo):
@@ -146,9 +184,29 @@ def parar_modelo(modelo):
     time.sleep(1)
 
 
-def arrancar_modelo(modelo, work_dir, log_path):
-    """Arranca `ropero <modelo>` en background. Devuelve el Popen."""
+def liberar_puerto(modelo):
+    """Deja :PUERTO vacío. True si lo consigue."""
     parar_modelo(modelo)
+    if not _puerto_ocupado():
+        return True
+    warn(f"  {modelo}: :{PUERTO} sigue ocupado tras 'ropero stop {modelo}'")
+    try:
+        subprocess.run(["pkill", "-f", "llama-server"],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+    for _ in range(10):
+        time.sleep(1)
+        if not _puerto_ocupado():
+            return True
+    return False
+
+
+def arrancar_modelo(modelo, work_dir, log_path):
+    """Arranca ropero en background. Devuelve (proc|None, motivo)."""
+    if not liberar_puerto(modelo):
+        return None, f":{PUERTO} no se pudo liberar"
+
     log_path.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["ROPERO_TEMP"] = TEMP
@@ -156,11 +214,81 @@ def arrancar_modelo(modelo, work_dir, log_path):
     nf = nivel_flag(modelo)
     if nf:
         cmd.append(nf)
+    info(f"    cmd: {' '.join(cmd)}")
     logf = open(log_path, "w")
     proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT,
                             cwd=str(work_dir), env=env, start_new_session=True)
-    # logf se queda abierto: el proceso escribe en él.
-    return proc
+
+    time.sleep(3)
+    if proc.poll() is not None:
+        try:
+            tail = log_path.read_text(errors="replace")[-600:].strip()
+        except Exception:
+            tail = ""
+        return None, f"ropero salió inmediatamente (rc={proc.returncode}):\n{tail}"
+
+    try:
+        txt = log_path.read_text(errors="replace")
+    except Exception:
+        txt = ""
+    if "ya está corriendo" in txt or "already running" in txt.lower():
+        return None, "ropero dice que ya estaba corriendo (no se puede medir en limpio)"
+
+    return proc, ""
+
+
+LOADED_RE = re.compile(
+    r"(all slots are idle|server is listening|HTTP server listening|"
+    r"model loaded|server is running)",
+    re.I,
+)
+DEADLY_RE = re.compile(
+    r"(error loading model|failed to load model|unknown option|"
+    r"opción desconocida|cannot meet free memory target)",
+    re.I,
+)
+
+
+def esperar_modelo(modelo, timeout, proc=None, log_path=None):
+    """Espera a que el modelo esté REALMENTE listo.
+    · proc.poll() para detectar muerte
+    · log: marcadores de 'cargado' y de error fatal
+    · completion real: POST /v1/chat/completions con max_tokens=1
+    """
+    deadline = time.time() + max(1, timeout)
+    n = 0
+    log_ready = False
+    while time.time() < deadline:
+        n += 1
+        if proc is not None and proc.poll() is not None:
+            err(f"    ropero murió durante la carga (rc={proc.returncode})")
+            if log_path and log_path.exists():
+                err(f"    log:\n{log_path.read_text(errors='replace')[-800:]}")
+            return False
+
+        if log_path and log_path.exists():
+            try:
+                txt = log_path.read_text(errors="replace")
+            except Exception:
+                txt = ""
+            m = DEADLY_RE.search(txt)
+            if m:
+                err(f"    el log contiene «{m.group(0)}»: no va a cargar")
+                return False
+            if not log_ready and LOADED_RE.search(txt):
+                log_ready = True
+                if DEBUG:
+                    info(f"    [{n}] log: modelo cargado")
+
+        # Hasta que veamos el marcador o pasemos de 5 sondeos,
+        # no lanzamos completion para no martillear el servidor.
+        if log_ready or n >= 5:
+            if completion_ok(timeout=20):
+                info(f"    modelo listo (sondeo {n})")
+                return True
+
+        time.sleep(3)
+    return False
 
 
 def exportar_sesion(sid, out_path):
@@ -188,15 +316,23 @@ def extraer_session_id(events_path):
                 continue
             if not isinstance(ev, dict):
                 continue
-            for k in ("session_id", "sessionId", "sessionID"):
-                if k in ev:
-                    return ev[k]
-            for wrap in ("message", "session", "data"):
+            for k in ("sessionID", "session_id", "sessionId"):
+                v = ev.get(k)
+                if isinstance(v, str) and v:
+                    return v
+            for wrap in ("properties", "data"):
                 w = ev.get(wrap)
                 if isinstance(w, dict):
-                    for k in ("session_id", "sessionId"):
-                        if k in w:
-                            return w[k]
+                    for k in ("sessionID", "session_id", "sessionId"):
+                        v = w.get(k)
+                        if isinstance(v, str) and v:
+                            return v
+                    info_ = w.get("info")
+                    if isinstance(info_, dict):
+                        for k in ("sessionID", "session_id", "sessionId", "id"):
+                            v = info_.get(k)
+                            if isinstance(v, str) and v.startswith("ses"):
+                                return v
     return None
 
 
@@ -210,6 +346,7 @@ def lanzar_opencode(prompt, work_dir, events_path, stderr_path,
     if session_id:
         cmd.extend(["--session", session_id])
     events_path.parent.mkdir(parents=True, exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     with open(events_path, "w") as outf, open(stderr_path, "w") as errf:
         try:
@@ -219,14 +356,25 @@ def lanzar_opencode(prompt, work_dir, events_path, stderr_path,
             rc = r.returncode
         except subprocess.TimeoutExpired:
             rc = -1
-    return rc, int(time.time() - t0)
+    dur = int(time.time() - t0)
+
+    # diagnóstico si falla rápido (probable config error, no problema del modelo)
+    if rc != 0 and dur < 5:
+        try:
+            er_txt = stderr_path.read_text(errors="replace")[-1000:]
+            if er_txt.strip():
+                err(f"    opencode falló rápido (rc={rc}) — stderr:\n{er_txt}")
+            ev_txt = events_path.read_text(errors="replace")[-500:] \
+                if events_path.exists() else ""
+            if ev_txt.strip():
+                err(f"    opencode events:\n{ev_txt}")
+        except Exception:
+            pass
+
+    return rc, dur
 
 
 # ── Métricas ─────────────────────────────────────────────────────────────
-
-RE_PROMPT_EVAL = re.compile(r"prompt eval time\s*=\s*[\d.]+\s*ms\s*/\s*\d+\s*tokens\s*\([^,]*,\s*([\d.]+)\s*tokens per second\)")
-RE_EVAL        = re.compile(r"(?<!prompt )eval time\s*=\s*[\d.]+\s*ms\s*/\s*\d+\s*tokens\s*\([^,]*,\s*([\d.]+)\s*tokens per second\)")
-
 
 def metricas_de_log_llama(log_path):
     """Extrae prompt/eval t/s del log de llama-server."""
@@ -234,13 +382,16 @@ def metricas_de_log_llama(log_path):
     if log_path.exists():
         with open(log_path, errors="replace") as f:
             for line in f:
-                m = RE_PROMPT_EVAL.search(line)
-                if m:
-                    prompt_speeds.append(float(m.group(1)))
+                if "eval time" not in line:
                     continue
-                m = RE_EVAL.search(line)
-                if m:
-                    gen_speeds.append(float(m.group(1)))
+                m = re.search(r"([\d.]+)\s*tokens per second", line)
+                if not m:
+                    continue
+                v = float(m.group(1))
+                if "prompt eval" in line:
+                    prompt_speeds.append(v)
+                else:
+                    gen_speeds.append(v)
     return {
         "prompt_samples": len(prompt_speeds),
         "gen_samples": len(gen_speeds),
@@ -254,7 +405,7 @@ def metricas_de_log_llama(log_path):
 
 
 def tokens_de_sesion(sesion_path):
-    """Suma input/output/reasoning tokens de la sesión exportada (JSON)."""
+    """Suma input/output/reasoning tokens de la sesión exportada."""
     result = {"in": 0, "out": 0, "reasoning": 0}
     if not sesion_path.exists():
         return result
@@ -262,18 +413,31 @@ def tokens_de_sesion(sesion_path):
         data = json.loads(sesion_path.read_text(errors="replace"))
     except Exception:
         return result
-    msgs = data.get("messages") if isinstance(data, dict) else None
+    if isinstance(data, dict):
+        msgs = (data.get("messages")
+                or data.get("parts")
+                or data.get("events"))
+    else:
+        msgs = data
     if not isinstance(msgs, list):
         return result
     for m in msgs:
         if not isinstance(m, dict):
             continue
-        u = m.get("usage") or {}
+        u = m.get("usage") or m.get("tokens") or {}
         if not isinstance(u, dict):
             continue
-        result["in"]        += int(u.get("input_tokens") or u.get("prompt_tokens") or 0)
-        result["out"]       += int(u.get("output_tokens") or u.get("completion_tokens") or 0)
-        result["reasoning"] += int(u.get("reasoning_tokens") or u.get("reasoning") or 0)
+        result["in"] += int(
+            u.get("input_tokens") or u.get("prompt_tokens")
+            or u.get("input") or u.get("prompt") or 0
+        )
+        result["out"] += int(
+            u.get("output_tokens") or u.get("completion_tokens")
+            or u.get("output") or u.get("completion") or 0
+        )
+        result["reasoning"] += int(
+            u.get("reasoning_tokens") or u.get("reasoning") or 0
+        )
     return result
 
 
@@ -295,7 +459,7 @@ def construir_metricas(llama_log, events_path, sesion_path, duracion, status):
     }
 
 
-# ── Corpus largo (determinista) ───────────────────────────────────────────
+# ── Corpus largo determinista ─────────────────────────────────────────────
 
 _CORPUS_CACHE = None
 
@@ -432,10 +596,18 @@ def tamano_legible(n):
     return f"{n:.1f} PB"
 
 
-# ── Ejecución por modelo ─────────────────────────────────────────────────
+AGENTS_MD = (
+    "# Banco de pruebas de ropero\n\n"
+    "Responde a la tarea. No inventes salidas de terminal ni resultados "
+    "de tests: si dices que algo se ejecutó, tiene que haberse ejecutado "
+    "de verdad. Si no puedes hacer una parte, dilo y sigue con el resto.\n"
+)
+
+
+# ── Ejecución por prueba ─────────────────────────────────────────────────
 
 def ejecutar_prueba_simple(modelo, out_dir, prompt_file, work_dir, llama_log):
-    """Ejecuta una prueba de un solo run (prueba1/2/3)."""
+    """Una prueba de un solo run (prueba1/2/3)."""
     pr_dir = out_dir
     pr_dir.mkdir(parents=True, exist_ok=True)
     events = pr_dir / "opencode-events.json"
@@ -458,12 +630,12 @@ def ejecutar_prueba_simple(modelo, out_dir, prompt_file, work_dir, llama_log):
 
 
 def ejecutar_prueba_larga(modelo, out_dir, prompt_file, work_dir, llama_log):
-    """Ejecuta la prueba larga por bloques, encadenando sesiones."""
+    """Prueba larga por bloques, encadenando sesiones B2→B3 y B2→B6."""
     pr_dir = out_dir
     pr_dir.mkdir(parents=True, exist_ok=True)
 
     bloques = split_bloques(prompt_file)
-    sessions = {}         # clave de cadena → session id
+    sessions = {}
     totales = {"in": 0, "out": 0, "reasoning": 0, "duracion": 0,
                "prompt_max": None, "prompt_avg_l": [],
                "gen_max": None, "gen_avg_l": []}
@@ -471,20 +643,37 @@ def ejecutar_prueba_larga(modelo, out_dir, prompt_file, work_dir, llama_log):
 
     for bid, texto in bloques:
         texto = inyectar_corpus(texto)
+
         sid_in = None
-        if bid == "BLOQUE2": sid_in = sessions.get("drift")
-        elif bid == "BLOQUE3": sid_in = sessions.get("drift")
-        elif bid == "BLOQUE6": sid_in = sessions.get("drift")
+        if bid in ("BLOQUE3", "BLOQUE6"):
+            sid_in = sessions.get("drift")
 
         sub = pr_dir / bid
         sub.mkdir(exist_ok=True)
+        block_work = work_dir / bid
+        block_work.mkdir(parents=True, exist_ok=True)
+        # AGENTS.md por bloque (opencode lo busca junto al cwd)
+        (block_work / "AGENTS.md").write_text(AGENTS_MD)
+
         events = sub / "opencode-events.json"
         stderr = sub / "opencode-stderr.log"
         sesion = sub / "sesion-export.json"
 
-        print(f"  {bid} …")
-        rc, dur = lanzar_opencode(texto, work_dir / bid, events, stderr,
+        marca = llama_log.stat().st_size if llama_log.exists() else 0
+
+        print(f"  {bid} …", flush=True)
+        rc, dur = lanzar_opencode(texto, block_work, events, stderr,
                                   session_id=sid_in)
+
+        # volcar el trozo del log del servidor correspondiente a este bloque
+        time.sleep(1)
+        log_bloque = sub / "llama-server.log"
+        try:
+            with open(llama_log, "rb") as f:
+                f.seek(marca)
+                log_bloque.write_bytes(f.read())
+        except Exception:
+            log_bloque.write_text("")
 
         sid = extraer_session_id(events)
         if sid:
@@ -493,24 +682,29 @@ def ejecutar_prueba_larga(modelo, out_dir, prompt_file, work_dir, llama_log):
         status = "ok" if rc == 0 else ("timeout" if rc == -1 else f"rc={rc}")
         statuses.append(status)
 
-        m = construir_metricas(llama_log, events, sesion, dur, status)
+        m = construir_metricas(log_bloque, events, sesion, dur, status)
         (sub / "metricas.json").write_text(json.dumps(m, indent=2))
 
         totales["in"]        += m["tokens_in"]
         totales["out"]       += m["tokens_out"]
         totales["reasoning"] += m["tokens_reasoning"]
         totales["duracion"]  += m["duracion_s"]
-        for k in ("prompt_max_tps", "gen_max_tps"):
-            if m[k] is not None:
-                key = "prompt_max" if "prompt" in k else "gen_max"
-                totales[key] = (m[k] if totales[key] is None
-                                else max(totales[key], m[k]))
-        for k, acc in (("prompt_avg_tps", "prompt_avg_l"),
-                       ("gen_avg_tps", "gen_avg_l")):
-            if m[k] is not None:
-                totales[acc].append(m[k])
+        if m["prompt_max_tps"] is not None:
+            totales["prompt_max"] = (m["prompt_max_tps"]
+                                     if totales["prompt_max"] is None
+                                     else max(totales["prompt_max"],
+                                              m["prompt_max_tps"]))
+        if m["gen_max_tps"] is not None:
+            totales["gen_max"] = (m["gen_max_tps"]
+                                  if totales["gen_max"] is None
+                                  else max(totales["gen_max"],
+                                           m["gen_max_tps"]))
+        if m["prompt_avg_tps"] is not None:
+            totales["prompt_avg_l"].append(m["prompt_avg_tps"])
+        if m["gen_avg_tps"] is not None:
+            totales["gen_avg_l"].append(m["gen_avg_tps"])
 
-        if bid in ("BLOQUE1", "BLOQUE2", "BLOQUE3") and sid:
+        if bid == "BLOQUE2" and sid:
             sessions["drift"] = sid
 
     agregado = {
@@ -583,14 +777,13 @@ def informe_modelo(modelo, out_dir, gguf):
         lineas.append(f"\n## {p['id']}")
         lineas.append("")
 
-        # Lista de ficheros
         if p["id"] == "prueba_larga" and pr_dir.is_dir():
-            subs = [d for d in sorted(pr_dir.iterdir()) if d.is_dir()
-                    and d.name.startswith("BLOQUE")]
+            subs = [d for d in sorted(pr_dir.iterdir())
+                    if d.is_dir() and d.name.startswith("BLOQUE")]
             for sub in subs:
                 lineas.append(f"### {sub.name} — llama-server")
-                log = sub / "llama-server.log"
                 lineas.append("```")
+                log = sub / "llama-server.log"
                 lineas.append(log.read_text(errors="replace")
                               if log.exists() else "(sin log)")
                 lineas.append("```")
@@ -608,7 +801,6 @@ def informe_modelo(modelo, out_dir, gguf):
                 lineas.append("```")
             continue
 
-        # Pruebas simples
         lineas.append("### llama-server")
         log = pr_dir / "llama-server.log"
         lineas.append("```")
@@ -727,6 +919,11 @@ def main():
         listar_modelos()
         return
 
+    if DEBUG:
+        print(f"[debug] PUERTO={PUERTO} MODELO={MODELO_OC} "
+              f"AGENTE={AGENTE} TIMEOUT={TIMEOUT} ESPERA_MIN={ESPERA_MIN} "
+              f"TEMP={TEMP} NIVEL={NIVEL!r}")
+
     precheck()
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / "juez").mkdir(exist_ok=True)
@@ -742,7 +939,6 @@ def main():
             err(f"no hay carpeta para '{m}' en {MODELOS_DIR}")
             return
 
-    # Lock
     lock = Path(tempfile.gettempdir()) / f".bench_ropero-{os.getuid()}.lock"
     lock_fd = open(lock, "w")
     try:
@@ -768,39 +964,41 @@ def main():
 
             for p in PRUEBAS:
                 pr_dir = out_dir / p["id"]
-                if (not FORCE and modelo not in FORCE_MODELOS
-                        and (pr_dir / "metricas.json").exists()):
+
+                if not FORCE and modelo not in FORCE_MODELOS \
+                        and (pr_dir / "metricas.json").exists():
                     info(f"  {p['id']} ya estaba — me la salto")
                     continue
 
                 pr_dir.mkdir(parents=True, exist_ok=True)
-
-                # 1) Arrancar el modelo
                 log = pr_dir / "llama-server.log"
+
                 ctx = ctx_de_modelo(modelo)
                 espera = ESPERA_MIN
                 if ctx:
                     espera = ESPERA_MIN + ((ctx + 32767) // 32768) * 60
                 info(f"  {p['id']}: arrancando {modelo} (espera {espera}s)")
-                proc = arrancar_modelo(modelo, model_dir, log)
-                todos_arrancados.append(modelo)
-                if not esperar_modelo(modelo, espera):
-                    err(f"  {p['id']}: {modelo} no respondió en :{PUERTO}")
+
+                proc, motivo = arrancar_modelo(modelo, model_dir, log)
+                if proc is None:
+                    err(f"  {p['id']}: no arrancó — {motivo}")
                     parar_modelo(modelo)
+                    if modelo in todos_arrancados:
+                        todos_arrancados.remove(modelo)
+                    continue
+                todos_arrancados.append(modelo)
+
+                if not esperar_modelo(modelo, espera, proc, log):
+                    err(f"  {p['id']}: {modelo} no respondió en :{PUERTO} "
+                        f"en {espera}s")
+                    parar_modelo(modelo)
+                    if modelo in todos_arrancados:
+                        todos_arrancados.remove(modelo)
                     continue
 
-                # 2) Lanzar opencode
                 work = model_dir / f"work-{p['id']}"
                 work.mkdir(exist_ok=True)
-                (work / "AGENTS.md").write_text(
-                    "# Banco de pruebas de ropero\n\n"
-                    "Estas instrucciones son idénticas para todos los modelos.\n"
-                    "No las modifiques.\n\n"
-                    "Responde a la tarea. No inventes salidas de terminal ni\n"
-                    "resultados de tests: si dices que algo se ejecutó, tiene\n"
-                    "que haberse ejecutado de verdad. Si no puedes hacer una\n"
-                    "parte, dilo y sigue con el resto.\n"
-                )
+                (work / "AGENTS.md").write_text(AGENTS_MD)
 
                 info(f"  {p['id']}: lanzando opencode run")
                 if p["split"]:
@@ -813,12 +1011,10 @@ def main():
                                                  work, log)
                 ok(f"  {p['id']}: {met['status']} en {met['duracion_s']}s")
 
-                # 3) Parar el modelo
                 parar_modelo(modelo)
                 if modelo in todos_arrancados:
                     todos_arrancados.remove(modelo)
 
-            # Informe del modelo
             gguf = encontrar_gguf(out_dir / "prueba1" / "llama-server.log",
                                   modelo)
             informe = informe_modelo(modelo, out_dir, gguf)

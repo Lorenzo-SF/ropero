@@ -22,6 +22,8 @@ size = "61.1 GB"
 base = [
     "--n-gpu-layers", "49",
     "--n-cpu-moe", "18",
+    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+	
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "0.7",
