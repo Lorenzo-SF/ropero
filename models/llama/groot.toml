@@ -1,0 +1,60 @@
+[model]
+name    = "groot"
+engine  = "llama-server"
+# context = 524288 
+context = 266144 
+
+[files]
+gguf = "Groot-19B-A3B-261023-Q4_K_M.gguf"
+
+[download]
+repo = "GrootTeam/Groot-19B-A3B-261023-GGUF"
+file = "Groot-19B-A3B-261023-Q4_K_M.gguf"
+size = "11.7 GB" # Tamaño estimado para Q4_K_M
+
+# [build]
+
+[levels]
+list    = ["think", "instruct"]
+default = "think"
+
+[args]
+base = [
+    "--n-gpu-layers", "999",
+    "--moe-cache","soft", 
+	
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
+
+    "--n-predict", "8192",
+    "--keep", "16384",
+    "--presence-penalty", "1.5",
+    "--repeat-penalty", "1.0",
+
+    "--spec-type", "nextn",
+    "--spec-draft-n-max", "4" ,
+    "--spec-draft-n-min", "1"
+]
+
+[args.level.think]
+chat_template_kwargs = { enable_thinking = true }
+base = [
+    # Parámetros recomendados para tareas generales en modo pensamiento
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--reasoning", "true",
+
+]
+
+[args.level.instruct]
+chat_template_kwargs = { enable_thinking = false }
+base = [
+    # Parámetros recomendados para modo instructivo (sin pensamiento)
+    "--temp", "0.7",
+    "--top-p", "0.8",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--reasoning", "false",
+]
