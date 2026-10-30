@@ -628,6 +628,13 @@ rp_start_model() {
     if [[ "$fmt" == "gguf" && "$engine" == "llama-server" && -n "$gguf_path" ]]; then
         argv=("--model" "$gguf_path" ${argv[@]+"${argv[@]}"})
     fi
+    # --cpu se añade AL FINAL (como el monolito): tiene que ganar a los
+    # --n-gpu-layers / --threads que declare el TOML.
+    if [[ "$cpu" == "1" && "$engine" == "llama-server" ]]; then
+        local nproc_n
+        nproc_n="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)"
+        argv+=(--n-gpu-layers 0 --threads "$nproc_n")
+    fi
     local sello
     sello="$(_rp_launch_stamp ${argv[@]+"${argv[@]}"})"
 

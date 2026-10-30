@@ -314,11 +314,32 @@ _rp_models_build() {
 
     _rp_models_aux "$real" build "$dry" "$force" || return 1
 
+    # El destino lo pone la instalación, no el TOML: el GGUF final vive en
+    # $GGUF_DIR/<modelo>/ con el nombre de [files].gguf (el launcher busca
+    # justo ahí). Sin este --out el gguffer escribiría en la RAÍZ de
+    # GGUF_DIR y `ropero use` no encontraría el artefacto.
+    #
+    # Limitación conocida: con varios quants, --out no puede ser un fichero
+    # (el gguffer lo rechaza pidiendo un directorio). Ningún modelo actual
+    # usa varios; si alguno lo hace, se verá en el error del gguffer.
+    local destino=""
+    local gguf
+    if gguf="$(rp_model_field "$real" gguf 2>/dev/null)" && [[ -n "$gguf" ]]; then
+        destino="$GGUF_DIR/$real/$gguf"
+    fi
+    local -a out_args=()
+    [[ -n "$destino" ]] && out_args=(--out "$destino")
+
     if [[ "$dry" == "1" ]]; then
         local out rc=0
-        out="$(rp_model_build_argv "$real" 2>/dev/null)" || rc=$?
+        out="$(rp_model_build_argv "$real" ${out_args[@]+"${out_args[@]}"} 2>/dev/null)" || rc=$?
         if (( rc == 0 )); then
-            rp_msg info "fabricaría '$real' con el gguffer: ropero gguffer $(printf '%s ' $out)"
+            local force_txt=""
+            # --force se añade al argv del gguffer, no al del modelconf: el
+            # subcomando `build` no tiene esa opción (es del [build] TOML o
+            # de la instalación).
+            [[ "$force" == "1" ]] && force_txt="--force"
+            rp_msg info "fabricaría '$real' con el gguffer: ropero gguffer $(printf '%s ' $out)${force_txt:+$force_txt }"
         else
             rp_msg info "fabricaría '$real' con el gguffer (la receta no se pudo serializar)"
         fi
@@ -337,7 +358,7 @@ _rp_models_build() {
     fi
 
     local out rc=0
-    out="$(rp_model_build_argv "$real" 2>&1)" || rc=$?
+    out="$(rp_model_build_argv "$real" ${out_args[@]+"${out_args[@]}"} 2>&1)" || rc=$?
     if (( rc != 0 )); then
         rp_msg error "la receta [build] de '$real' no es válida:"
         printf '%s\n' "$out" >&2
@@ -351,6 +372,10 @@ _rp_models_build() {
         [[ -n "$linea" ]] || continue
         ggargv+=("$linea")
     done <<<"$out"
+    # --force del install tiene que llegar al gguffer: sin esto reutilizaría
+    # el GGUF ya fabricado y el usuario no podría rehacerlo (el legacy sí lo
+    # hacía, borrando el destino antes de fabricar).
+    [[ "$force" == "1" ]] && ggargv+=(--force)
     rp_cmd_gguffer ${ggargv[@]+"${ggargv[@]}"} || return 1
 
     _rp_models_aux "$real" run 0 "$force" || return 1

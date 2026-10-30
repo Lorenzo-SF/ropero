@@ -70,11 +70,26 @@ rp_eng_tensorrt-llm_install() {
     rp_step 1 2 "creando el venv de tensorrt-llm ($venv)..."
     uv venv "$venv" --python 3.12 || return 1
 
-    rp_step 2 2 "instalando tensorrt-llm (20-40 min)..."
+    # TensorRT-LLM NO publica wheels en PyPI: allí sólo hay sdists (1.2.1 y
+    # 1.4.0rc2.post1), y compilarlo desde fuente no es una opción real. Las
+    # wheels están en el índice de NVIDIA (pypi.nvidia.com). Para Blackwell y
+    # NVFP4 hace falta la 1.4.x, que todavía es pre-release: por eso se pinea
+    # en vez de instalar "la última".
+    #
+    # `--index-strategy unsafe-best-match` es imprescindible: por defecto uv
+    # se queda con el PRIMER índice que tenga el paquete, y PyPI (el de por
+    # defecto) tiene tensorrt-llm (sdist). Sin esto, uv intentaría compilar
+    # el sdist y fallaría.
+    local trt_version="${ROPERO_TRTLLM_VERSION:-1.4.0rc2.post1}"
+    rp_step 2 2 "instalando tensorrt-llm $trt_version desde pypi.nvidia.com (20-40 min)..."
     if ! uv pip install --python "$venv/bin/python" --quiet \
-            tensorrt-llm fastapi uvicorn; then
-        rp_msg error "falló la instalación de tensorrt-llm"
-        rp_msg info "  puede necesitar wheels CUDA manuales: https://nvidia.github.io/TensorRT-LLM/"
+            --extra-index-url https://pypi.nvidia.com \
+            --index-strategy unsafe-best-match \
+            "tensorrt-llm==$trt_version" fastapi uvicorn; then
+        rp_msg error "falló la instalación de tensorrt-llm $trt_version"
+        rp_msg info "  requisitos/wheels: https://nvidia.github.io/TensorRT-LLM/"
+        rp_msg info "  alternativa aislada con Docker (imagen 1.4.0rc2): bin/install-tensorrt.sh"
+        rp_msg info "  otra versión: ROPERO_TRTLLM_VERSION=<x.y.z> ropero install engines tensorrt-llm --force"
         return 1
     fi
     if [[ ! -x "$venv/bin/trtllm-serve" ]]; then
@@ -142,6 +157,11 @@ rp_eng_tensorrt-llm_launch() {
         rp_msg error "'$modelo' no declara [model].path (el checkpoint de tensorrt)"
         return 1
     fi
+    # [model].context es el max_seq_len del engine. Se pasa al endpoint como
+    # --context y éste lo traduce a --max_seq_len en el argv de trtllm-serve:
+    # sin esto trtllm usa el default del checkpoint y el TOML mentiría.
+    local ctx=""
+    ctx="$(rp_model_field "$modelo" context)" || ctx=""
 
     # Los args del modelo van ENVUELTOS en --extra-arg: el endpoint los
     # reenvía tal cual al trtllm-serve interno (no son flags del endpoint).
@@ -153,6 +173,9 @@ rp_eng_tensorrt-llm_launch() {
         --port "$puerto"
         --api-key "$LLAMA_API_KEY"
         --backend-port $(( puerto + 1000 )))
+    if [[ -n "$ctx" && "$ctx" != "0" ]]; then
+        cmd+=(--context "$ctx")
+    fi
     local a
     for a in "$@"; do
         cmd+=(--extra-arg "$a")

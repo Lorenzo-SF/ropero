@@ -1034,7 +1034,11 @@ def tensorrt_argv(args, bin_path: str, with_served_model_name: bool):
     """
     argv = [
         bin_path, "serve",
-        "--model", str(args.model_path),
+        # El modelo es POSICIONAL: `trtllm-serve serve MODEL [OPTIONS]`.
+        # `--model` no existe en 1.2, 1.3 ni 1.4 (verificado contra el
+        # fuente de `tensorrt_llm/commands/serve.py`); con --model el
+        # binario moría con "no such option".
+        str(args.model_path),
         "--host", "127.0.0.1",
         "--port", str(args.backend_port),
     ]

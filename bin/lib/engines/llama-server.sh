@@ -273,12 +273,37 @@ rp_eng_llama-server_launch() {     # llama-server no lo necesita: su identidad
     fi
 
     # El modelo y sus flags ya vienen en "$@" (rp_model_argv). El engine
-    # añade SÓLO binario + host + puerto + auth (§5.4, §6).
+    # añade binario + host + puerto + auth y, ANTES de "$@", los defaults
+    # del servidor. Los args del TOML van después y por tanto GANAN: un
+    # modelo que quiera otros threads los declara en [args].base.
+    #
+    # Estos defaults son los del launcher del monolito 0.x (start_model):
+    # el refactor los perdió y con ellos el --threads 16/16. Sin ellos,
+    # llama-server usa su default (-1 = todos los núcleos físicos).
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
     nohup "$bin" \
         --host "${HOST:-127.0.0.1}" \
         --port "$puerto" \
         --api-key "$LLAMA_API_KEY" \
+        --threads 16 \
+        --threads-batch 16 \
+        --flash-attn on \
+        --jinja \
+        --log-verbosity 4 \
+        --parallel 1 \
+        --load-mode none \
+        --kv-unified \
+        --kv-offload \
+        --batch-size 4096 \
+        --ubatch-size 1024 \
+        --cache-reuse 512 \
+        --cache-prompt \
+        --context-shift \
+        --cont-batching \
+        --poll 60 \
+        --metrics \
+        --perf \
+        --seed -1 \
         "$@" >>"$logfile" 2>&1 &
     printf '%s\n' "$!"
     return 0
