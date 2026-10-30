@@ -207,6 +207,103 @@ case_chat_template() {
   fi
 }
 
+# -----------------------------------------------------------------------------
+# Los --extra-arg del endpoint: un flag del backend SIEMPRE empieza por '-',
+# y argparse con nargs NO admite un valor así (lo toma por una opción
+# desconocida y aborta con "unrecognized arguments"). El symptom real: el
+# tensorrt se quejaba de --max_batch_size, --max_num_tokens,
+# --kv_cache_free_gpu_memory_fraction, --enable_chunked_prefill y
+# --kv_cache_dtype, y moría con rc 2.
+# -----------------------------------------------------------------------------
+case_endpoint_extra_args() {
+  local out
+  # 1) EL SÍNTOMA REAL: el endpoint tiene que ACEPTAR un --extra-arg cuyo
+  #    valor empieza por '-'. Antes moría con "unrecognized arguments".
+  #    No se llama a split_extra_args() directamente: lo que hay que
+  #    comprobar es el parseo real, que es donde estaba el bug.
+  out="$(python3 "$ROOT/bin/server/endpoint.py" \
+           --backend tensorrt --model-path /m --model-id x \
+           --extra-arg --max_batch_size --extra-arg 1 \
+           --extra-arg --enable_chunked_prefill 2>&1)"
+  if printf '%s\n' "$out" | grep -q 'unrecognized arguments'; then
+    fail "endpoint: acepta un --extra-arg que empieza por guion" "$out"
+  else
+    ok "endpoint: acepta un --extra-arg que empieza por guion"
+  fi
+
+  # 2) Y los flags tienen que LLEGAR al argv del backend, tal cual.
+  out="$(cd "$ROOT" && python3 - "$ROOT/bin/server/endpoint.py" <<'PY' 2>&1
+import argparse, importlib.util, sys
+spec = importlib.util.spec_from_file_location("ep", sys.argv[1])
+ep = importlib.util.module_from_spec(spec)
+sys.argv = ["endpoint.py"]
+try:
+    spec.loader.exec_module(ep)
+except SystemExit:
+    pass
+argv = ["--backend", "tensorrt", "--model-path", "/m", "--model-id", "x",
+        "--port", "9999", "--backend-port", "10999", "--context", "262144"]
+for a in ["--max_batch_size", "1", "--max_num_tokens", "8192",
+          "--kv_cache_free_gpu_memory_fraction", "0.90",
+          "--enable_chunked_prefill", "--kv_cache_dtype", "fp8"]:
+    argv += ["--extra-arg", a]
+rest, extra = ep.split_extra_args(argv)
+ap = argparse.ArgumentParser()
+ap.add_argument("--backend"); ap.add_argument("--model-path"); ap.add_argument("--model-id")
+ap.add_argument("--port", type=int); ap.add_argument("--backend-port", type=int)
+ap.add_argument("--context", type=int)
+args = ap.parse_args(rest)
+ep.apply_extra_args(args, extra)
+final = ep.tensorrt_argv(args, "/usr/bin/trtllm-serve", True)
+esperado = ["--max_batch_size", "1", "--max_num_tokens", "8192",
+            "--kv_cache_free_gpu_memory_fraction", "0.90",
+            "--enable_chunked_prefill", "--kv_cache_dtype", "fp8"]
+print("ARGV_OK" if all(f in final for f in esperado) else "ARGV_MAL %s" % final)
+PY
+)"
+  if printf '%s\n' "$out" | grep -q 'ARGV_OK'; then
+    ok "endpoint: los flags llegan al argv del backend"
+  else
+    fail "endpoint: los flags llegan al argv del backend" "$out"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# El color: el log en vivo del engine va coloreado por semántica (error en
+# rojo, tokens/s en magenta, aviso en amarillo). Sin ANSI con NO_COLOR.
+# -----------------------------------------------------------------------------
+case_color() {
+  local out
+  out="$(cd "$ROOT" && bash -c '
+    . bin/lib/00-utils.sh
+    . bin/lib/06-styles.sh
+    RP_UI_ANSI=1; RP_UI_INITED=1
+    printf "error: se rompio\ntokens per second: 120\n" | rp_colorize qwen38 llama-server
+  ' 2>/dev/null | cat -v)"
+  if printf '%s\n' "$out" | grep -q 'error: se rompio' &&
+     printf '%s\n' "$out" | grep -q 'tokens per second'; then
+    ok "color: el log en vivo sale coloreado"
+  else
+    fail "color: el log en vivo sale coloreado" "$out"
+  fi
+  if printf '%s\n' "$out" | grep -q '\^\[\['; then
+    ok "color: hay códigos ANSI con TTY"
+  else
+    fail "color: hay códigos ANSI con TTY" "$out"
+  fi
+  out="$(cd "$ROOT" && bash -c '
+    . bin/lib/00-utils.sh
+    . bin/lib/06-styles.sh
+    RP_UI_ANSI=0; RP_UI_INITED=1
+    printf "error: se rompio\n" | rp_colorize qwen38 llama-server
+  ' 2>/dev/null | cat -v)"
+  if printf '%s\n' "$out" | grep -q '\^\[\['; then
+    fail "color: sin ANSI cuando NO_COLOR" "$out"
+  else
+    ok "color: sin ANSI cuando NO_COLOR"
+  fi
+}
+
 echo "ropero suite 1.0"
 case_help
 case_catalogo
@@ -217,6 +314,8 @@ case_test_cmd
 case_launch_foreground
 case_launch_foreground_vivo
 case_chat_template
+case_endpoint_extra_args
+case_color
 echo
 echo "$N_OK ok · $N_FAIL fallo(s)"
 [[ "$N_FAIL" -eq 0 ]]

@@ -35,9 +35,19 @@ manual   = false
 
 [limits]
 # El checkpoint pesa ~13,5 GB y TRT-LLM lo copia entero a la GPU: en una
-# tarjeta de 16 GB entra muy justo (el KV cache va aparte). El mínimo de RAM
-# del sistema es para el `hf download`, no para inferir.
-min_ram_gb = 32
+# tarjeta de 16 GB entra muy justo (el KV cache va aparte).
+#
+# min_ram_gb es lo que necesita la MÁQUINA para servirlo, no lo que pesa el
+# modelo: TRT-LLM carga el checkpoint en la GPU, así que la RAM del host sólo
+# lo aguanta mientras se lee (13,5 GB) y durante la construcción del engine
+# de TensorRT, que es la parte que más pico tiene. Con 16 GB hay margen para
+# el checkpoint; el pico de la construcción es lo que puede pedir más, y ese
+# check es ORIENTATIVO (avisa, no bloquea).
+#
+# Antes ponía 32, que era el tamaño que hace falta para BAJAR los pesos, no
+# para inferir: en una máquina de 30 GB salía un aviso que no significaba
+# nada ("pide 32 GB" para un modelo de 13,5).
+min_ram_gb = 16
 
 # ── Flags del servidor de TensorRT-LLM ──────────────────────────────────────
 # Para un engine con servidor propio, [args].base son flags de SU servidor.

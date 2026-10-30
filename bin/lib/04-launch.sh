@@ -36,6 +36,12 @@ if ! declare -F rp_engine_call >/dev/null 2>&1; then
     . "${ROPERO_ROOT}/bin/lib/03-engines.sh"
 fi
 
+# El color de la salida en vivo del engine (06-styles.sh).
+if ! declare -F rp_colorize >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    . "${ROPERO_ROOT}/bin/lib/06-styles.sh"
+fi
+
 # Separador del dump de modelconf (0x1F), como constante bash para awk -F.
 RP_LAUNCH_SEP=$'\x1f'
 
@@ -566,6 +572,20 @@ _rp_launch_check_chat_template() {
     return 0
 }
 
+# -----------------------------------------------------------------------------
+# _rp_launch_kill_follow <pid...> — mata el tail y el colorizador del log en
+# vivo. Con Ctrl-C también hay que cerrar esa boca: si no, el tail se queda
+# bloqueado en inotify para siempre, sin dueño (medido en el monolito 1.0).
+# -----------------------------------------------------------------------------
+_rp_launch_kill_follow() {
+    local p
+    for p in "$@"; do
+        [[ -n "$p" ]] || continue
+        kill "$p" 2>/dev/null || true
+    done
+    return 0
+}
+
 # rp_start_model <modelo> <bg> <cpu> <force> <port> <nivel> <flags> <opts>
 #
 # Porta start_model del legado (bin/ropero:1600+) al esquema 1.0: el argv lo
@@ -797,21 +817,34 @@ rp_start_model() {
         return 1
     fi
 
-    # ── Primer plano: log en vivo (stderr) + espera del proceso ───────────
+    # ── Primer plano: log en vivo COLOREO + espera del proceso ─────────────
     # El engine siempre arranca en background con salida al logfile; aquí se
     # sigue el log en vivo y se espera al PID. Ctrl-C para el server, limpia
     # el estado y sale 130 (spec §8: 130 = SIGINT).
+    #
+    # EL LOG EN VIVO VA COLOREADO (06-styles.sh): sin color, la salida del
+    # engine es un muro gris en el que no se distingue un error de un dato.
+    # El colorizador va por un FIFO para que el tail y él sean los DOS hijos
+    # directos y se puedan matar por PID (ver 06-styles.sh).
     rp_msg info "primer plano: Ctrl-C detiene el modelo (salida en $logfile)"
-    tail -n +1 -F "$logfile" >&2 2>/dev/null &
-    local tail_pid=$!
-    trap 'rp_stop_port "$puerto"; exit 130' INT
-    trap 'rp_stop_port "$puerto"; exit 130' TERM
+    rp_colorize_follow_start "$logfile" "$real" "$engine"
+    local tail_pid="$RP_COLOR_TAIL_PID" color_pid="$RP_COLOR_PID"
+    # El trap mata los dos: sin esto, con Ctrl-C el tail se quedaba vivo
+    # bloqueado en inotify (medido en el monolito 1.0).
+    trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; exit 130' INT
+    trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; exit 130' TERM
     wait "$pid"
     local rc_proceso=$?
     trap - INT TERM
-    kill "$tail_pid" 2>/dev/null || true
-    wait "$tail_pid" 2>/dev/null || true
+    _rp_launch_kill_follow "$tail_pid" "$color_pid"
     rp_state_clear "$puerto"
+    # El Ctrl-C lo mata la terminal, que manda SIGINT al GRUPO de procesos:
+    # el engine y ropero. El engine muere con 130 y bash difiere el trap
+    # INT hasta que el comando esperado acaba (por eso el trap puede no
+    # llegar a correr). Se recognizes el 130 por el CÓDIGO, no por el trap.
+    if (( rc_proceso == 130 )); then
+        exit 130
+    fi
     if (( rc_proceso != 0 )); then
         rp_msg error "'$real' terminó con código $rc_proceso; últimas líneas del log:"
         tail -n 15 "$logfile" 2>/dev/null | sed 's/^/    /' >&2

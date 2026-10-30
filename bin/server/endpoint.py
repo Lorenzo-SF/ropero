@@ -978,8 +978,59 @@ AIRLLM_EXTRA_FLAGS = {
 }
 
 
-def apply_extra_args(args):
-    extra = [x for x in (getattr(args, "extra_arg", None) or []) if x]
+# -----------------------------------------------------------------------------
+# split_extra_args(argv) -> (resto, extras)
+#
+# POR QUÉ HAY QUE SACAR LOS --extra-arg ANTES DE ARGPARSE
+#
+# argparse NO admite un valor que empiece por '-' cuando el flag usa
+# nargs: en "--extra-arg --max_batch_size" el "--max_batch_size" se toma
+# como una opción desconocida y el parseo ABORTA con "unrecognized
+# arguments". Es justo el caso de siempre: los flags del backend
+# (trtllm-serve, llama-server) empiezan SIEMPRE por '-'.
+#
+# El síntoma era: el endpoint se quejaba de --max_batch_size,
+# --max_num_tokens, --kv_cache_free_gpu_memory_fraction,
+# --enable_chunked_prefill y --kv_cache_dtype, y se moría con rc 2. Los
+# VALORES ("1", "8192", "0.90", "fp8") sí llegaban, porque no empiezan por
+# '-': sólo se perdían los flags, que es justo la mitad inútil.
+#
+# Aquí se sacan a mano, en las dos formas (con espacio y con '='), y se
+# devuelve el resto tal cual para que argparse no los vea.
+# -----------------------------------------------------------------------------
+def split_extra_args(argv):
+    extra = []
+    rest = []
+    i = 0
+    n = len(argv)
+    while i < n:
+        token = argv[i]
+        if token == "--extra-arg":
+            # "--extra-arg" solo, sin valor: se ignora (no hay flag que
+            # reenviar). Antes argparse lo aceptaba con nargs="?" y lo
+            # guardaba como None; el filtro de apply_extra_args lo
+            # descartaba igual.
+            if i + 1 < n:
+                extra.append(argv[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+        if token.startswith("--extra-arg="):
+            value = token.split("=", 1)[1]
+            if value:
+                extra.append(value)
+            i += 1
+            continue
+        rest.append(token)
+        i += 1
+    return rest, extra
+
+
+def apply_extra_args(args, extra=None):
+    if extra is None:
+        extra = [x for x in (getattr(args, "extra_arg", None) or []) if x]
+    extra = [x for x in extra if x]
     if not extra:
         return
 
@@ -1256,7 +1307,10 @@ def main() -> int:
                     help="airllm: dónde guardar las capas troceadas (ponlo en SSD rápido)")
     ap.add_argument("--no-prefetch", action="store_true",
                     help="airllm: no prefetchear la capa siguiente")
-    args = ap.parse_args()
+    # Los --extra-arg se sacan ANTES: argparse no admite valores que
+    # empiezan por '-', y los flags del backend siempre empiezan por '-'.
+    argv_rest, extra_args = split_extra_args(sys.argv[1:])
+    args = ap.parse_args(argv_rest)
 
     # --context y --max-seq-len son el mismo dato con dos nombres.
     context = args.max_seq_len or args.context
@@ -1314,7 +1368,7 @@ def main() -> int:
     # uno por flag. Para tensorrt y flm son flags del backend nativo y se
     # añaden tal cual a su argv. Para airllm, que no es un proceso sino una
     # biblioteca, se traducen a los parámetros de carga del modelo.
-    apply_extra_args(args)
+    apply_extra_args(args, extra_args)
 
     if args.backend == "airllm":
         backend = AirLLMBackend(args)
