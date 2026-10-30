@@ -17,7 +17,7 @@
 
 [model]
 name    = "mlx_lm"
-engine  = "mlx_lm"
+engine  = "mlx-serve"
 context = 131072
 format  = "safetensors"
 path    = "mlx-llama-7b"

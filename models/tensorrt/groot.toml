@@ -1,0 +1,53 @@
+# =============================================================================
+# groot-trt — Groot-19B-A3B (NVFP4, TensorRT-LLM)
+# =============================================================================
+#
+# El MISMO modelo que models/llama/groot.toml, pero por TensorRT-LLM en vez
+# de llama-server: sirve para comparar motores sobre el mismo checkpoint.
+#
+# El checkpoint NO es un GGUF: son 4 shards de safetensors + mtp.safetensors
+# (~13,5 GB) con cuantización mixta (8-bit en atención + NVFP4 en expertos y
+# lm_head). trtllm-serve 1.4 lo carga directamente desde el directorio HF:
+# `Qwen3_5MoeForConditionalGeneration` y `compressed-tensors` están en su
+# tabla de soporte (model_config.py: update_quant_config_from_compressed_tensors).
+#
+# Nombre: "groot-trt" y no "groot" porque el nombre es único global y el de
+# llama-server ya está cogido. Los dos pueden convivir en el catálogo.
+# =============================================================================
+
+[model]
+name    = "groot-trt"
+engine  = "tensorrt-llm"
+# max_position_embeddings del config.json del checkpoint.
+context = 262144
+format  = "safetensors"
+path    = "groot-nvfp4"
+
+[files]
+# TensorRT-LLM carga un checkpoint, no un GGUF: [files].gguf se queda vacío
+# a propósito.
+
+[download]
+repo     = "GrootTeam/Groot-19B-A3B-261023-NVFP4"
+size     = "13.5 GB"
+excludes = ["assets/*"]
+manual   = false
+
+[limits]
+# El checkpoint pesa ~13,5 GB y TRT-LLM lo copia entero a la GPU: en una
+# tarjeta de 16 GB entra muy justo (el KV cache va aparte). El mínimo de RAM
+# del sistema es para el `hf download`, no para inferir.
+min_ram_gb = 32
+
+# ── Flags del servidor de TensorRT-LLM ──────────────────────────────────────
+# Para un engine con servidor propio, [args].base son flags de SU servidor.
+# NO se ponen flags de sampling (eso es por request en la API OpenAI).
+# `--max_seq_len` lo añade el endpoint desde [model].context; no se repite.
+[args]
+base = [
+    "--max_batch_size", "1",
+    "--max_num_tokens", "8192",
+    "--kv_cache_free_gpu_memory_fraction", "0.90",
+    "--enable_chunked_prefill",
+    "--kv_cache_dtype", "fp8",
+]

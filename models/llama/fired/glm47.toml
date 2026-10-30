@@ -10,7 +10,7 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "GLM-4.7-Flash-NVFP4.gg"
+gguf = "GLM-4.7-Flash-NVFP4.gguf"
 
 # [download]
 # repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
@@ -20,9 +20,13 @@ gguf = "GLM-4.7-Flash-NVFP4.gg"
 [build]
 repo         = "unsloth/GLM-4.7-Flash"
 quant        = "NVFP4"
-imatrix_repo = "unsloth/GLM-4.7-Flash"
+imatrix_repo = "unsloth/GLM-4.7-Flash-GGUF"
 imatrix_file = "imatrix_unsloth.gguf_file"
 keep_source  = true
+# El repo unsloth/GLM-4.7-Flash no trae imatrix (solo pesos); la matriz está
+# en el repo -GGUF. La conversión con MTP falla para esta arquitectura, así
+# que se fabrica sin ella (verificado con el gguffer).
+no_mtp       = true
 size = "65.8 GB"
 
 [levels]

@@ -42,7 +42,7 @@ base = [
     "--repeat-last-n", "64",
     "--n-predict", "8192",
     "--keep", "16384",
-    "--chat-template-file", '/home/lorenzo/models/gguf/nemotron/chat_template.jinja',
+    "--chat-template-file", '{gguf_dir}/nemotron/chat_template.jinja',
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",
