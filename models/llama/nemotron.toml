@@ -46,6 +46,7 @@ base = [
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",
+    "--spec-default",
 ]
 
 [args.level.think]

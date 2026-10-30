@@ -21,7 +21,9 @@ size = "59.6 GB"
 
 [args]
 base = [
-    "--n-gpu-layers", "53",                            # ~22 de 52 layers en GPU; resto CPU
+    "--n-gpu-layers", "53",  
+    "--n-cpu-moe", "16",
+    "--moe-cache","soft",                          # ~22 de 52 layers en GPU; resto CPU
     "--swa-full",                                      # CRÍTICO: sliding window pattern [L,L,L,G]
     "--rope-freq-base", "500000",                      # θ=500k del repo
     "--cache-type-k", "turbo3",                          # agresivo (SWA usa ventanas pequeñas)
@@ -35,4 +37,6 @@ base = [
     "--repeat-last-n", "64",
     "--n-predict", "4096",
     "--keep", "1024",
+    "--spec-default",
+
 ]

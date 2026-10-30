@@ -5,7 +5,7 @@
 [model]
 name    = "qwen36"
 engine  = "llama-server"
-context = 262144
+context = 196608
 
 [files]
 gguf = "Qwen3.6-35B-A3B-NVFP4.gguf"
@@ -25,9 +25,8 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "49",
-    "--n-cpu-moe", "14",
-    "--moe-cache","auto",
-
+    "--n-cpu-moe", "16",
+    "--moe-cache","soft",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "0.60",
@@ -36,6 +35,15 @@ base = [
     "--min-p", "0.0",
     "--repeat-penalty", "1.0",
     "--n-predict", "8192",
+    "--reasoning-preserve",         
+    "--reasoning-budget", "12288",
+    "--checkpoint-min-step","256",
+    "--spec-default",
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "2",
+    "--spec-draft-type-k", "turbo3",
+    "--spec-draft-type-v", "turbo3",
+    "--no-spec-draft-backend-sampling",
 ]
 
 [args.level.low]

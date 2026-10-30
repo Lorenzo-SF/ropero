@@ -2031,8 +2031,8 @@ start_model() {
                 --api-key "$LLAMA_API_KEY"
                 --alias "$model"
                 --ctx-size "$ctx_size"
-                --threads 10
-                --threads-batch 20
+                --threads 16
+                --threads-batch 16
                 --flash-attn on
                 --jinja
                 --log-verbosity 4

@@ -34,14 +34,13 @@ size = "64.4 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "low"
+default = "medium"
 
 [args]
 base = [
     "--n-gpu-layers", "41",
-    "--n-cpu-moe", "18",
-    "--moe-cache","auto",
-
+    "--n-cpu-moe", "13",
+    "--moe-cache","soft",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--cache-prompt",
@@ -50,5 +49,8 @@ base = [
     "--top-p", "0.95",
     "--min-p", "0.05",
     "--n-predict", "8192",
-
-]
+    "--chat-template-file", '/home/lorenzo/models/gguf/granite/chat_template.jinja',
+    "--reasoning-format", "deepseek",
+    "--reasoning-preserve",
+    "--reasoning-budget", "32768",
+    "--spec-default",]

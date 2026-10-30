@@ -21,7 +21,7 @@ size = "61.1 GB"
 [args]
 base = [
     "--n-gpu-layers", "49",
-    "--n-cpu-moe", "18",
+    "--n-cpu-moe", "13",
     "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
 	
     "--cache-type-k", "turbo3",
@@ -35,6 +35,7 @@ base = [
     "--reasoning-format", "deepseek",
     "--keep", "1024",
     "--n-predict", "8192",
+    "--spec-default"
 ]
 
 # nota: activar el mtp requiere perder un montono de ctx, no compensa

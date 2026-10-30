@@ -8,7 +8,7 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "gpt-oss-20b-nvfp4.gguf"
+gguf = "gpt-oss-20b-MXFP4_MOE.gguf"
 
 [download]
 repo = "FreedomAISVR/gpt-oss-20B-NVFP4-GGUF"
