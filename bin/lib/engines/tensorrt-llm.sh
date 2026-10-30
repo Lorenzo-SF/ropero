@@ -182,7 +182,7 @@ rp_eng_tensorrt-llm_launch() {
     done
 
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
-    nohup ${cmd[@]+"${cmd[@]}"} >>"$logfile" 2>&1 &
+    nohup ${cmd[@]+"${cmd[@]}"} >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
 }

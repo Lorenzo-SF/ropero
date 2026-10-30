@@ -126,7 +126,7 @@ rp_eng_airllm_launch() {
         --port "$puerto" \
         --api-key "$LLAMA_API_KEY" \
         --backend-port $(( puerto + 1000 )) \
-        "$@" >>"$logfile" 2>&1 &
+        "$@" >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
 }

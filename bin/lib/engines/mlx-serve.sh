@@ -134,7 +134,7 @@ rp_eng_mlx-serve_launch() {
         --port "$puerto" \
         --model "$mpath" \
         --api-key-env ROPERO_MLX_API_KEY \
-        --api-key-strict >>"$logfile" 2>&1 &
+        --api-key-strict >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
 }

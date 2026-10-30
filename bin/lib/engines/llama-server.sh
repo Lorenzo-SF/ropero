@@ -304,7 +304,7 @@ rp_eng_llama-server_launch() {     # llama-server no lo necesita: su identidad
         --metrics \
         --perf \
         --seed -1 \
-        "$@" >>"$logfile" 2>&1 &
+        "$@" >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
 }

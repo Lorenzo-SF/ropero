@@ -304,6 +304,47 @@ case_color() {
   fi
 }
 
+# -----------------------------------------------------------------------------
+# El log en vivo enseña lo NUEVO de este arranque, no el historial.
+#
+# El log se ACUMULA (los arranques anteriores siguen ahí). Con "tail -n +1"
+# cada arranque repetía el fichero entero: cinco intentos fallidos y el
+# bueno, todo mezclado, y parecía que seguía roto. Es lo que pasó con el
+# tensorrt: cinco "unrecognized arguments" viejos arriba y el bueno abajo.
+# -----------------------------------------------------------------------------
+case_log_acumulado() {
+  local dir="$TMP/log-acum"
+  mkdir -p "$dir"
+  local i
+  for i in $(seq 1 30); do printf 'linea vieja %s\n' "$i" >>"$dir/engine.log"; done
+  # SIN captura con $( ): el tail -F sigue el fichero y mantiene el pipe
+  # abierto, así que una sustitución de comandos NUNCA volvería (la trampa
+  # clásica: un proceso con el pipe abierto cuelga la captura). Se escribe
+  # a fichero y el tail se mata al final.
+  ( cd "$ROOT" && bash -c '
+    . bin/lib/00-utils.sh
+    . bin/lib/06-styles.sh
+    RP_UI_ANSI=0; RP_UI_INITED=1
+    rp_colorize_follow_start "'"$dir"'/engine.log" demo llama-server 30
+    sleep 1
+    printf "linea nueva del arranque\n" >> "'"$dir"'/engine.log"
+    sleep 1
+    kill "$RP_COLOR_TAIL_PID" "$RP_COLOR_PID" 2>/dev/null || true
+  ' >"$dir/out.txt" 2>&1 )
+  local out
+  out="$(cat "$dir/out.txt" 2>/dev/null)"
+  if printf '%s\n' "$out" | grep -q 'linea vieja'; then
+    fail "log en vivo: no enseña el historial" "$out"
+  else
+    ok "log en vivo: no enseña el historial"
+  fi
+  if printf '%s\n' "$out" | grep -q 'linea nueva del arranque'; then
+    ok "log en vivo: enseña lo nuevo"
+  else
+    fail "log en vivo: enseña lo nuevo" "$out"
+  fi
+}
+
 echo "ropero suite 1.0"
 case_help
 case_catalogo
@@ -316,6 +357,7 @@ case_launch_foreground_vivo
 case_chat_template
 case_endpoint_extra_args
 case_color
+case_log_acumulado
 echo
 echo "$N_OK ok · $N_FAIL fallo(s)"
 [[ "$N_FAIL" -eq 0 ]]

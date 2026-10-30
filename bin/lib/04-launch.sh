@@ -766,6 +766,15 @@ rp_start_model() {
         rp_msg error "no se pudo crear $LOG_DIR"
         return 1
     }
+    # Cuántas líneas tiene el log ANTES de este arranque. El log en vivo
+    # enseña lo NUEVO desde aquí: el log se acumula, y con "tail -n +1" cada
+    # arranque repetía el historial entero (cinco intentos fallidos y el
+    # bueno, todo junto, y parecía que seguía roto).
+    local log_offset=0
+    if [[ -f "$logfile" ]]; then
+        log_offset="$(wc -l <"$logfile" 2>/dev/null || echo 0)"
+        [[ "$log_offset" =~ ^[0-9]+$ ]] || log_offset=0
+    fi
 
     rp_msg info "arrancando '$real' ($engine) en :$puerto — log: $logfile"
 
@@ -827,7 +836,7 @@ rp_start_model() {
     # El colorizador va por un FIFO para que el tail y él sean los DOS hijos
     # directos y se puedan matar por PID (ver 06-styles.sh).
     rp_msg info "primer plano: Ctrl-C detiene el modelo (salida en $logfile)"
-    rp_colorize_follow_start "$logfile" "$real" "$engine"
+    rp_colorize_follow_start "$logfile" "$real" "$engine" "$log_offset"
     local tail_pid="$RP_COLOR_TAIL_PID" color_pid="$RP_COLOR_PID"
     # El trap mata los dos: sin esto, con Ctrl-C el tail se quedaba vivo
     # bloqueado en inotify (medido en el monolito 1.0).

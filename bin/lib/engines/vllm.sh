@@ -125,7 +125,7 @@ rp_eng_vllm_launch() {
         "$@" \
         --host "${HOST:-127.0.0.1}" \
         --port "$puerto" \
-        --api-key "$LLAMA_API_KEY" >>"$logfile" 2>&1 &
+        --api-key "$LLAMA_API_KEY" >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
 }

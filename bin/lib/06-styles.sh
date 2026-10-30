@@ -119,10 +119,16 @@ rp_colorize() {
 }
 
 # -----------------------------------------------------------------------------
-# rp_colorize_follow_start <fichero> <tema> <engine>
+# rp_colorize_follow_start <fichero> <tema> <engine> [linea_inicial]
 #
 # Deja el log en vivo COLOREA en stderr, y deja los dos PIDs en las globales
 # RP_COLOR_TAIL_PID y RP_COLOR_PID para que quien llama los pueda matar.
+#
+# linea_inicial: por dónde empieza lo NUEVO del log. El log se ACUMULA (los
+# arranques anteriores siguen ahí), y con "tail -n +1" cada arranque
+# enseñaba el fichero entero: cinco intentos fallidos old y el bueno nuevo,
+# todo mezclado, y da la impresión de que sigue roto. Se pasa el número de
+# líneas que había ANTES de arrancar y se sigue desde ahí.
 #
 # POR QUÉ UN FIFO Y NO UNA TUBERÍA
 #   En "tail -F f | rp_colorize", $! es el PID del ÚLTIMO (el colorizador).
@@ -141,20 +147,24 @@ RP_COLOR_PID=""
 
 rp_colorize_follow_start() {
     local fichero="${1:-}" tema="${2:-default}" engine="${3:-llama-server}"
+    local desde="${4:-0}"
     local fifo="${TMPDIR:-/tmp}/ropero-color.$$"
+    local primera
 
     RP_COLOR_TAIL_PID=""
     RP_COLOR_PID=""
     [[ -n "$fichero" ]] || return 1
+    [[ "$desde" =~ ^[0-9]+$ ]] || desde=0
+    primera=$(( desde + 1 ))
 
     if ! mkfifo "$fifo" 2>/dev/null; then
         # Sin FIFO: el log en vivo, sin color. Es peor, pero funciona.
-        tail -n +1 -F "$fichero" >&2 2>/dev/null &
+        tail -n "+$primera" -F "$fichero" >&2 2>/dev/null &
         RP_COLOR_TAIL_PID=$!
         return 0
     fi
 
-    tail -n +1 -F "$fichero" >"$fifo" 2>/dev/null &
+    tail -n "+$primera" -F "$fichero" >"$fifo" 2>/dev/null &
     RP_COLOR_TAIL_PID=$!
     rp_colorize "$tema" "$engine" <"$fifo" >&2 &
     RP_COLOR_PID=$!

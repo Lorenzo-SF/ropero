@@ -221,7 +221,7 @@ rp_eng_fastflowlm_launch() {
     # el entorno del shell padre.
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
     env FLM_DISABLE_UPDATE_CHECK="${FLM_DISABLE_UPDATE_CHECK:-1}" \
-    nohup ${cmd[@]+"${cmd[@]}"} >>"$logfile" 2>&1 &
+    nohup ${cmd[@]+"${cmd[@]}"} >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"
     return 0
 }
