@@ -521,6 +521,51 @@ _rp_launch_stamp() {
     printf '%s\n' "$@" | cksum | awk '{print $1}'
 }
 
+# -----------------------------------------------------------------------------
+# _rp_launch_check_chat_template <modelo> <argv...> — el fichero que
+# --chat-template-file apunta, ¿existe?
+#
+# POR QUÉ ESTE CHECK
+# llama-server, cuando el --chat-template-file no existe, NO dice "no existe
+# ese fichero": aborta con el muro de las plantillas built-in (sesenta líneas)
+# y un "(env: LLAMA_ARG_CHAT_TEMPLATE_FILE)". El error real queda enterrado
+# ARRIBA del todo y lo que se lee (el final del log) no menciona el template.
+# Se corta aquí, con una línea que sí dice qué pasa y dónde.
+#
+# Es un check de LECTURA: el fichero tiene que estar en disco antes de
+# arrancar el engine. Si el path viene sin expandir (un "{gguf_dir}" que nadie
+# expandió, o una ruta absoluta de otra máquina), esto lo delata.
+# -----------------------------------------------------------------------------
+_rp_launch_check_chat_template() {
+    local real="${1:-}"
+    shift || true
+    local -a args=("$@")
+    local i=0 n="${#args[@]}" v ruta
+    while (( i < n )); do
+        v="${args[$i]}"
+        case "$v" in
+            --chat-template-file=*)
+                ruta="${v#*=}"
+                ;;
+            --chat-template-file)
+                if (( i + 1 >= n )); then
+                    rp_msg error "--chat-template-file sin valor (modelo '$real')"
+                    return 1
+                fi
+                ruta="${args[$((i + 1))]}"
+                ;;
+            *) i=$((i + 1)); continue ;;
+        esac
+        if [[ -n "$ruta" && ! -f "$ruta" ]]; then
+            rp_msg error "el chat template no existe: $ruta (modelo '$real')"
+            rp_msg info "  (ropero install models $real lo descarga; si ya lo tienes, mira la ruta)"
+            return 1
+        fi
+        return 0
+    done
+    return 0
+}
+
 # rp_start_model <modelo> <bg> <cpu> <force> <port> <nivel> <flags> <opts>
 #
 # Porta start_model del legado (bin/ropero:1600+) al esquema 1.0: el argv lo
@@ -638,6 +683,10 @@ rp_start_model() {
     local sello
     sello="$(_rp_launch_stamp ${argv[@]+"${argv[@]}"})"
 
+    # El chat template tiene que estar en disco ANTES de arrancar: si no,
+    # llama-server aborta con el muro de sus plantillas built-in.
+    _rp_launch_check_chat_template "$real" ${argv[@]+"${argv[@]}"} || return 1
+
     # [limits]: aviso orientativo, nunca bloqueo (ver _rp_launch_check_limits).
     _rp_launch_check_limits "$real"
 
@@ -699,13 +748,31 @@ rp_start_model() {
     }
 
     rp_msg info "arrancando '$real' ($engine) en :$puerto — log: $logfile"
-    local pid=""
-    pid="$(rp_engine_call "$engine" launch "$real" "$puerto" "$logfile" \
-        ${argv[@]+"${argv[@]}"})" || {
-        rp_msg error "falló el lanzamiento de '$engine'"
+
+    # EL PID SE CAPTURA SIN SUSTITUCIÓN DE COMANDOS.
+    #
+    # El engine arranca con "nohup ... &". Si la llamada va dentro de $( ),
+    # el proceso lo crea el SUBSHELL, no este shell: al morir el subshell el
+    # engine queda huérfano y el `wait` de más abajo responde "pid N no es un
+    # proceso hijo de este shell" con rc 127. Como 127 != 0, roperoledgeaba
+    # "el modelo terminó con código 127" y limpiaba el estado, mientras el
+    # engine seguía vivo: el modelo arrancaba y ropero decía que había
+    # muerto. Con el PID en un fichero temporal, el proceso lo crea ESTE
+    # shell, `wait` funciona y el código de salida es el del engine.
+    local pidfile pid=""
+    pidfile="$(mktemp "${TMPDIR:-/tmp}/ropero-launch.XXXXXX" 2>/dev/null)" || {
+        rp_msg error "no pude crear el fichero temporal del PID"
         return 1
     }
-    pid="$(printf '%s\n' "$pid" | head -1)"
+    if ! rp_engine_call "$engine" launch "$real" "$puerto" "$logfile" \
+            ${argv[@]+"${argv[@]}"} >"$pidfile"; then
+        cat "$pidfile" >&2
+        rm -f "$pidfile"
+        rp_msg error "falló el lanzamiento de '$engine'"
+        return 1
+    fi
+    pid="$(head -n 1 "$pidfile")"
+    rm -f "$pidfile"
     if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
         rp_msg error "el engine no devolvió un PID válido (recibido: '${pid:-vacío}')"
         return 1

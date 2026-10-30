@@ -11,11 +11,25 @@ context = 524288
 
 [files]
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
+# El chat template va como AUXILIARIO descargado, no como una ruta escrita a
+# mano en los args. Motivo: NVIDIA publica el template oficial SÓLO como
+# "chat_template.jinja" aparte (nunca dentro del tokenizer_config.json), y
+# con el template de la comunidad el modelo responde en HTML y no razona
+# bien. Con el aux, ropero lo baja a la carpeta del modelo y ${chat_template}
+# apunta a él sin rutas absolutas: el mismo fichero en otra máquina.
+chat_template = "chat_template.jinja"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
 file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
 size = "17.98 GB"
+
+[download.aux.chat_template]
+repo = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+file = "chat_template.jinja"
+name = "chat_template.jinja"
+size = "9.87 KB"
+use = "run"
 
 [build]
 repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
@@ -42,7 +56,7 @@ base = [
     "--repeat-last-n", "64",
     "--n-predict", "8192",
     "--keep", "16384",
-    "--chat-template-file", '{gguf_dir}/nemotron/chat_template.jinja',
+    "--chat-template-file", "${chat_template}",
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",

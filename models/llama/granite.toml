@@ -12,11 +12,23 @@ context = 266144
 
 [files]
 gguf = "granite-4.0-h-small-NVFP4.gguf"
+# El template oficial de IBM va como auxiliar descargado (ver nemotron.toml:
+# el mismo problema y la misma solución). Antes era una ruta ABSOLUTA
+# escrita a mano ("/home/lorenzo/..."), que sólo funcionaba en la máquina
+# donde se escribió y que rompía el arranque si el fichero no estaba.
+chat_template = "chat_template.jinja"
 
 [download]
 repo = "unsloth/granite-4.0-h-small-GGUF"
 file = "granite-4.0-h-small-NVFP4.gguf"
 size = "19.83 GB"
+
+[download.aux.chat_template]
+repo = "ibm-granite/granite-4.0-h-small"
+file = "chat_template.jinja"
+name = "chat_template.jinja"
+size = "6.42 KB"
+use = "run"
 
 [download.aux.imatrix]
 repo = "unsloth/granite-4.0-h-small-GGUF"
@@ -49,7 +61,7 @@ base = [
     "--top-p", "0.95",
     "--min-p", "0.05",
     "--n-predict", "8192",
-    "--chat-template-file", '/home/lorenzo/models/gguf/granite/chat_template.jinja',
+    "--chat-template-file", "${chat_template}",
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",

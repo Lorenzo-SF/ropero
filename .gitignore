@@ -28,3 +28,7 @@ hs_err_pid*.log
 replay_pid*.log
 core
 core.*
+
+# Restos del refactor 1.0: la carpeta quant/ se movió a bin/quant/.
+# Estos ficheros son locales (el usuario de HF y los logs de subida).
+/quant/

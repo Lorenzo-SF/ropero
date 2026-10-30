@@ -103,6 +103,110 @@ case_test_cmd() {
   grep -q 'pkill -9 -x llama-server' "$FAKE_LOG" 2>/dev/null && ok "test usa pkill" || fail "test usa pkill"
 }
 
+# -----------------------------------------------------------------------------
+# El engine tiene que ser HIJO del shell que arranca ropero.
+#
+# El engine arranca con "nohup ... &". Si la llamada va dentro de $( ), el
+# proceso lo crea el subshell y al morir éste el engine queda huérfano: el
+# `wait` de primer plano responde "pid N no es un proceso hijo de este shell"
+# con rc 127. Como 127 != 0, ropero decía "el modelo terminó con código
+# 127" y limpió el estado, mientras el engine seguía VIVO: el modelo
+# arrancaba y roperoimentarya que había muerto.
+#
+# El test mete un engine falso que muere con 42. El código que tiene que
+# ver ropero es 42 (el del engine), nunca 127 (el del `wait` sin hijo).
+# -----------------------------------------------------------------------------
+case_launch_foreground() {
+  local d out rc
+  d="$TMP/badengine"; mkdir -p "$d"
+  cat >"$d/llama-server" <<'FAKE'
+#!/usr/bin/env bash
+echo "fake engine: muere con 42" >&2
+exit 42
+FAKE
+  chmod +x "$d/llama-server"
+
+  out="$(PATH="$d:$PATH" "$RP" qwen38 --port 41003 2>&1)"
+  rc=$?
+
+  if printf '%s\n' "$out" | grep -q 'terminó con código 42'; then
+    ok "foreground: el código del engine llega a ropero"
+  else
+    fail "foreground: el código del engine llega a ropero" "rc=$rc · $out"
+  fi
+  # El aviso de bash sale en el idioma del locale: "is not a child of this
+  # shell" en inglés, "no es un proceso hijo de este shell" en español. Un
+  # grep de un idioma sólo no vigila nada en el otro: se buscan los dos.
+  if printf '%s\n' "$out" | grep -qE 'is not a child of this shell|no es un proceso hijo de este shell'; then
+    fail "foreground: el engine es hijo del shell" "$out"
+  else
+    ok "foreground: el engine es hijo del shell"
+  fi
+  if [[ "$rc" -ne 1 ]]; then
+    fail "foreground: rc 1 cuando el engine muere" "rc=$rc"
+  else
+    ok "foreground: rc 1 cuando el engine muere"
+  fi
+}
+
+# El escenario real del usuario: un engine que VIVE, arrancado en primer
+# plano. Antes del fix, ropero decía "terminó con código 127" en los
+# segundos siguientes y limpiaba el estado, mientras el engine seguía
+# sirviendo: el modelo arrancaba y ropero decía que había muerto.
+case_launch_foreground_vivo() {
+  local out
+  # Si una corrida anterior dejó el engine HUÉRFANO (el bug del wait), este
+  # test falla por el puerto ocupado y no por lo que quiere comprobar. Se
+  # limpia antes y el engine huérfano se mata al terminar.
+  pkill -f "_fake_openai.py --host 127.0.0.1 --port 41004" 2>/dev/null || true
+  sleep 1
+  out="$(timeout -s TERM 6 "$RP" qwen38 --port 41004 2>&1)"
+  pkill -f "_fake_openai.py --host 127.0.0.1 --port 41004" 2>/dev/null || true
+  if printf '%s\n' "$out" | grep -qE 'terminó con código 127'; then
+    fail "foreground con engine vivo: no muere" "$out"
+  else
+    ok "foreground con engine vivo: no muere"
+  fi
+  if printf '%s\n' "$out" | grep -q 'arrancando'; then
+    ok "foreground con engine vivo: anuncia el arranque"
+  else
+    fail "foreground con engine vivo: anuncia el arranque" "$out"
+  fi
+  # Al matarlo con SIGTERM, el trap limpia y sale 130: tampoco 127.
+  if printf '%s\n' "$out" | grep -qE 'terminó con código 127'; then
+    fail "foreground con engine vivo: SIGTERM no da 127" "$out"
+  else
+    ok "foreground con engine vivo: SIGTERM no da 127"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Un --chat-template-file que no existe tiene que fallar ANTES de arrancar,
+# con una línea que lo diga. llama-server, en su lugar, aborta con el muro
+# de sus plantillas built-in: el motivo real queda enterrado arriba.
+# -----------------------------------------------------------------------------
+case_chat_template() {
+  local out
+  out="$("$RP" args nemotron 2>/dev/null | grep -A1 -x -- '--chat-template-file' | tail -1)"
+  if [[ -n "$out" && "$out" != *'{'* && "$out" != *'$'* ]]; then
+    ok "el placeholder del chat template está expandido"
+  else
+    fail "el placeholder del chat template está expandido" "$out"
+  fi
+  out="$(python3 "$ROOT/bin/python/modelconf.py" aux --root "$ROOT/models" --name nemotron 2>/dev/null)"
+  if printf '%s\n' "$out" | grep -q '^chat_template|.*|chat_template.jinja|.*|run$'; then
+    ok "nemotron declara el chat template como aux"
+  else
+    fail "nemotron declara el chat template como aux" "$out"
+  fi
+  out="$(python3 "$ROOT/bin/python/modelconf.py" aux --root "$ROOT/models" --name granite 2>/dev/null)"
+  if printf '%s\n' "$out" | grep -q '^chat_template|'; then
+    ok "granite declara el chat template como aux"
+  else
+    fail "granite declara el chat template como aux" "$out"
+  fi
+}
+
 echo "ropero suite 1.0"
 case_help
 case_catalogo
@@ -110,6 +214,9 @@ case_runtime
 case_install
 case_gguffer
 case_test_cmd
+case_launch_foreground
+case_launch_foreground_vivo
+case_chat_template
 echo
 echo "$N_OK ok · $N_FAIL fallo(s)"
 [[ "$N_FAIL" -eq 0 ]]
