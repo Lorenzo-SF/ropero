@@ -750,6 +750,10 @@ def _resolve_token(token, ctx):
         return "" if ctx["ctx"] is None else str(ctx["ctx"])
     if token == "value":
         return ctx.get("value", "")
+    if token == "gguf_dir":
+        return ctx.get("gguf_dir", "")
+    if token == "safetensors_dir":
+        return ctx.get("safetensors_dir", "")
     if token == "model_path":
         # $SAFETENSORS_DIR/<[model].path> (spec §7.2). Sólo tiene valor en un
         # modelo safetensors que declare [model].path.
@@ -882,6 +886,8 @@ def build_argv(loaded, level=None, flags=(), options=()):
         "model_path": "",
     }
     gguf_dir = _gguf_dir()
+    ctx["gguf_dir"] = gguf_dir
+    ctx["safetensors_dir"] = _safetensors_dir()
     model_dir = _clean(model.get("name", "")) or "model"
     if model.get("path") and (model.get("format") or "gguf") == "safetensors":
         # ${model_path}: el checkpoint entero, relativo a $SAFETENSORS_DIR

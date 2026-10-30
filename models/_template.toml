@@ -134,7 +134,7 @@
 #   ${chat_template}  $GGUF_DIR/<name>/<files.chat_template>
 #   ${ctx}            Contexto efectivo ([model].context o su override)
 #   ${value}          El valor pedido a una opción (sólo [args.option])
-#   ${model_path}     $SAFETENSORS_DIR/<[model].path> (sólo safetensors)
+#   ${gguf_dir} ${safetensors_dir} ${model_path}     $SAFETENSORS_DIR/<[model].path> (sólo safetensors)
 #   ${env:VAR}        Valor de la variable de entorno VAR
 #   ${env:VAR:-def}   Ídem con default si VAR no está fijada
 #
