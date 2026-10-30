@@ -21,7 +21,7 @@ LOG_DIR="${LOG_DIR:-$HOME/.logs/ropero}"
 LLAMA_BIN="${LLAMA_BIN:-llama-server}"
 LLAMA_API_KEY="${LLAMA_API_KEY:-sk-local-dev-key}"
 HOST="${HOST:-0.0.0.0}"
-
+export TURBO_AUTO_ASYMMETRIC=0
 # -----------------------------------------------------------------------------
 # Puertos "slot" por defecto (los dos únicos que existían antes de MODEL_PORT).
 #   $PORT     → GPU  :9999

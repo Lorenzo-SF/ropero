@@ -8,12 +8,12 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "gpt-oss-20b-UD-Q8_K_XL.gguf"
+gguf = "gpt-oss-20b-nvfp4.gguf"
 
 [download]
-repo = "unsloth/gpt-oss-20b-GGUF"
-file = "gpt-oss-20b-UD-Q8_K_XL.gguf"
-size = "13.2 GB"
+repo = "FreedomAISVR/gpt-oss-20B-NVFP4-GGUF"
+file = "gpt-oss-20b-nvfp4.gguf"
+size = "12.7 GB"
 
 [levels]
 list    = ["low", "medium", "high"]

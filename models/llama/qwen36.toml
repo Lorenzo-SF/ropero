@@ -3,18 +3,18 @@
 # =============================================================================
 
 [model]
-name    = "qwen3"
+name    = "qwen36"
 engine  = "llama-server"
 context = 262144
 
 [files]
-gguf = "Qwen3-30B-A3B-NVFP4.gguf"
+gguf = "Qwen3.6-35B-A3B-NVFP4.gguf"
 
 [build]
-repo         = "Qwen/Qwen3-30B-A3B"
+repo         = "Qwen/Qwen3.6-35B-A3B"
 quant        = "NVFP4"
-imatrix_repo = "bartowski/Qwen_Qwen3-30B-A3B-GGUF"
-imatrix_file = "Qwen_Qwen3-30B-A3B.imatrix"
+imatrix_repo = "mradermacher/Qwen3.6-35B-A3B-i1-GGUF"
+imatrix_file = "Qwen3.6-35B-A3B.imatrix.gguf"
 keep_source  = true
 size = "61.1 GB"
 
@@ -25,7 +25,7 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "49",
-    "--n-cpu-moe", "22",
+    "--n-cpu-moe", "14",
     "--moe-cache","auto",
 
     "--cache-type-k", "turbo3",
@@ -42,7 +42,7 @@ base = [
 chat_template_kwargs = { enable_thinking = false }
 
 [args.level.medium]
-chat_template_kwargs = { enable_thinking = false }
+chat_template_kwargs = { enable_thinking = true }
 
 [args.level.high]
 chat_template_kwargs = { enable_thinking = true }

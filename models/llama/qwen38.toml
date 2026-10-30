@@ -3,20 +3,25 @@
 # =============================================================================
 
 [model]
-name    = "qwen"
+name    = "qwen38"
 engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "Qwen3.8-27B-NVFP4.gguf"
+gguf = "Qwen3.8-27B-UD-IQ3_XXS.gguf"
 
-[build]
-repo         = "Qwen/Qwen3.8-27B"
-quant        = "NVFP4"
-imatrix_repo = "pugant/Qwen3.8-27B-imatrix"
-imatrix_file = "imatrix-qwen38.gguf"
-keep_source  = true
-size = "55.6 GB"
+# [download]
+# repo = "unsloth/Qwen3.8-27B-GGUF"
+# file = "Qwen3.8-27B-UD-IQ3_XXS.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" # con mtp, IQ3_XXS, sin mtp, entra el 
+# size = "4.48 GB"
+
+# [build]
+# repo         = "nvidia/Qwen3.8-27B-NVFP4"
+# quant        = "NVFP4"
+# imatrix_repo = "unsloth/Qwen3.8-27B-GGUF"
+# imatrix_file = "imatrix_unsloth.gguf"
+# keep_source  = true
+# size = "55.6 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
@@ -24,7 +29,7 @@ default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "48",
+    "--n-gpu-layers", "66",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
     "--temp", "1.0",
@@ -54,3 +59,4 @@ reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
 
 [args.level.xhigh]
 reasoning_effort = "${env:ROPERO_QWEN_REASONING:-xhigh}"
+
