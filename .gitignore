@@ -1,23 +1,30 @@
-*.log
+# ── SO y editores ───────────────────────────────────────────────────────────
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
 
-# Python bytecode (los servidores de ropero.d/ son .py)
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
 
-# Lock files de runtime (vault, cron, procesos efímeros)
+# ── Logs y artefactos de runtime ────────────────────────────────────────────
+*.log
 *.lock
 .lock/
 
-# Artefactos de crash (Erlang, Java, Python). No son código: son el
-# equivalente de un volcado de memoria que alguien dejó en el directorio de
-# trabajo, y se cuelan en un `git add -A` sin que nadie los mire.
+# Informes de `ropero test` (dato de una corrida, no código)
+ropero-test-*.md
+
+# Resultados de bench (transcripciones, logs, paquetes del juez)
+tests/resultados/
+
+# ── Artefactos de crash (Erlang, Java, Python, core dumps) ──────────────────
 erl_crash.dump
 hs_err_pid*.log
 replay_pid*.log
 core
 core.*
-
-# Resultados del bench: transcripciones, logs de opencode y paquetes del
-# juez. Son datos de una corrida, no codigo, y pesan.
-tests/resultados/

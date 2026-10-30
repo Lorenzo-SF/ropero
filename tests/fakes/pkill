@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# fake pkill: la suite NUNCA debe matar procesos reales (opencode incluido)
+echo "pkill $*" >> "${FAKE_LOG:-/dev/null}"
+exit 1

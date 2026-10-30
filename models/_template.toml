@@ -1,191 +1,286 @@
 # =============================================================================
-# PLANTILLA DE UN MODELO DE ROPERO
+# PLANTILLA DE UN MODELO DE ROPERO 1.0 — esquema TOML completo (spec §7)
 # =============================================================================
 #
-# Copia este fichero a `models/<engine>/<nombre>.toml` y ajusta lo que aplique.
-# Los modelos retired (los que ya no deben usarse) viven en
-# `models/<engine>/fired/<nombre>.toml` con EXACTAMENTE el mismo formato: la
-# diferencia es la carpeta, no el esquema.
+# Copia este fichero a `models/<engine>/<nombre>.toml` y ajústalo. Un modelo
+# retirado va en `models/<engine>/fired/<nombre>.toml` con EXACTAMENTE el
+# mismo formato: la diferencia es la carpeta, no el esquema.
 #
-# El punto de este formato es que un modelo es DATOS, no código. Nada de lo
-# que hay aquí se ejecuta: el CLI lo lee, lo carga en variables y decide.
+# Un modelo es DATO. Nada de lo que hay aquí se ejecuta. La fuente de verdad
+# del esquema es el validador:
+#   python3 bin/python/modelconf.py validate --root models
 #
-# ---------------------------------------------------------------------------
-# ESQUEMA
-# ---------------------------------------------------------------------------
+# Al final del fichero hay un EJEMPLO MÍNIMO REAL (las secciones activas de
+# abajo) y un EJEMPLO COMENTADO con [build]+[download], niveles, flags y
+# opciones. Borra lo que no aplique.
 #
-# [model]  (obligatoria)
-#   name      Identificador único del modelo. Kebab-case. Es el nombre que se
-#             escribe en `ropero <name>`. Ej.: "gptoss", "qwen38-apex".
-#   engine    Motor que lo ejecuta. Uno de:
-#               llama-server  → GGUF, servidor propio con --api-key
-#               airllm        → checkpoint safetensors, endpoint propio de ropero
-#               mlx_lm        → checkpoint MLX (safetensors), macOS/Apple Silicon
-#               tensorrt-llm  → checkpoint TRT, NVIDIA
-#               fastflowlm    → modelo del almacén de FLM, AMD NPU
-#   context   Tokens de contexto por defecto.
-#   alias     Alias público adicional (sin nivel). Ej.: "coder".
-#   port      Puerto fijo del modelo. Si no se declara, usa el slot por defecto
-#             (:9999 GPU / :9998 CPU) o el --port que se pase en la línea de
-#             órdenes.
-#   format    "gguf" (por defecto) o "safetensors" (engines con checkpoint).
-#   path      Sólo para format = "safetensors". Ruta del checkpoint, relativa a
-#             $SAFETENSORS_DIR.
+# -----------------------------------------------------------------------------
+# [model] — obligatoria
+# -----------------------------------------------------------------------------
+#   name      Identificador único global (activos+fired), kebab-case. Es lo que
+#             se escribe en `ropero <name>`.
+#   engine    Uno de: llama-server | vllm | mlx-serve | airllm | tensorrt-llm
+#             | fastflowlm. El id legacy "mlx_lm" se acepta y se canóniza a
+#             "mlx-serve" con un aviso.
+#   context   int. Tokens de contexto por defecto.
+#   alias     Alias público adicional. El alias responde igual que el nombre.
+#   port      int opcional. Puerto pineado del modelo; si no se declara, se
+#             usa el slot (--port > pineado > slot :9999).
+#   format    "gguf" (default) o "safetensors" (checkpoint).
+#   path      OBLIGATORIO si format=safetensors, PROHIBIDO si gguf. Ruta del
+#             checkpoint relativa a $SAFETENSORS_DIR.
 #
-# [files]  (obligatoria)
-#   gguf      Nombre final del GGUF principal en disco. Vacío si format=safetensors.
-#   mtp       Nombre final del fichero MTP (decoding especulativo). Opcional.
-#   mmproj    Nombre final del proyector de visión. Opcional.
+# -----------------------------------------------------------------------------
+# [files] — ficheros finales en disco. Los gguf/aux viven en
+#           $GGUF_DIR/<name>/; nunca rutas absolutas, sólo nombres.
+# -----------------------------------------------------------------------------
+#   gguf            Nombre del GGUF principal. Obligatorio si format=gguf.
+#   mtp             Nombre del fichero MTP (decoding especulativo).
+#   mmproj          Nombre del proyector de visión.
+#   chat_template   Nombre de la plantilla Jinja (referida con
+#                   ${chat_template} en [args]).
 #
-# [download]  (obligatoria salvo que el modelo se fabrique con [build])
-#   repo      Repositorio de HuggingFace, "owner/repo".
-#   file      Nombre exacto del fichero dentro del repo.
-#   name      Nombre final en disco. Si se omite, vale lo mismo que file.
-#   size      Tamaño legible del fichero. Informativo: sale en las tablas.
-#   excludes  Patrones a excluir (sólo checkpoints). Ej.: ["original/*"].
+# -----------------------------------------------------------------------------
+# [download] — obligatoria salvo que el modelo se fabrique con [build].
+#              Con [build], [download] es opcional y sólo lleva los auxiliares.
+# -----------------------------------------------------------------------------
+#   repo      "owner/repo" de HuggingFace.
+#   file      Nombre exacto del fichero dentro del repo. OBLIGATORIO si
+#             format=gguf. Con safetensors es el checkpoint entero vía
+#             `hf download`: si aparece, sólo genera un aviso.
+#   name      Nombre final en disco (default: file).
+#   size      Tamaño legible ("~18 GB"). Informativo: sale en las tablas.
+#   excludes  Patrones a excluir del checkpoint. Ej.: ["original/*"].
+#   manual    bool. Si true, no se ofrece en `ropero install models`
+#             (checkpoints enormes que el install no baja por sorpresa).
 #
-# [build]  (opcional) — CÓMO SE FABRICA EL GGUF
+# [download.aux.<tipo>] — auxiliares. tipo ∈
+#   mtp | mmproj | chat_template | imatrix | tokenizer
+#   file      Obligatorio. Nombre del fichero en su repo.
+#   repo      Si el aux vive en OTRO repo (default: [download].repo).
+#   name      Nombre final en disco (default: file).
+#   size      Informativo.
+#   use       "run" | "build" — cuándo se usa el aux. Default por tipo:
+#             mtp/mmproj/chat_template de runtime = run;
+#             imatrix/tokenizer (los de fabricar) = build.
 #
-# Con esta sección, el GGUF no se descarga: se FABRICA. `ropero install
-# models <modelo>` baja los pesos, los convierte y los cuantiza, con el
-# gguffer. Sus claves son las MISMAS que acepta `ropero gguffer`, asi que
-# la receta de un TOML y el comando a mano son la misma cosa:
+# -----------------------------------------------------------------------------
+# [build] — CÓMO SE FABRICA EL GGUF (la receta del gguffer, spec §7.3).
+#           Puede coexistir con [download]: entonces `ropero install models`
+#           exige --download o --build para elegir camino.
+# -----------------------------------------------------------------------------
+#   repo            Repo de los pesos fuente.
+#   gguf            GGUF fuente ya publicado en el repo (se baja y se
+#                   re-cuantiza; si quant == la del repo, sólo se coloca).
+#   gguf_file       Nombre del fichero fuente si difiere del patrón.
+#   quant           Cuantización objetivo: string ("q4_k_m") o lista.
+#   imatrix         Importance matrix para la cuantización.
+#   imatrix_repo    Repo de la imatrix (si vive en otro).
+#   imatrix_file    Fichero de la imatrix en su repo.
+#   out             Ruta EXACTA del GGUF final (la fija la instalación).
+#   out_principal   Nombre del GGUF principal si hay varios.
+#   from_subdir     Subdirectorio del repo donde están los pesos.
+#   include         Patrón(s) de ficheros a incluir.
+#   intermedio      "f16" | "bf16" — formato del intermedio de conversión.
+#   keep_source     bool. No borra los pesos fuente.
+#   keep_intermedio bool. No borra el intermedio.
+#   no_mtp          bool. Fabricar sin el fichero MTP.
+#   force           bool. Re-fabricar aunque ya exista.
+#   size            Informativo (tamaño esperado del resultado).
+#   Una clave DESCONOCIDA en [build] genera AVISO en dump/build/validate.
 #
-#   [build]
-#   repo         = "owner/modelo"          # de dónde bajar los PESOS
-#   quant        = "IQ4_XS"                # el quant (o varios, con comas)
-#   imatrix_repo = "owner/modelo-GGUF"     # de dónde bajar el imatrix
-#   imatrix_file = "modelo.imatrix.gguf"   # el fichero del imatrix
-#   keep_source  = true                    # conservar los safetensors
-#   no_mtp       = true                    # excluir la cabeza MTP
-#   size         = "61.1 GB"               # INFO: los pesos que se bajan
+# -----------------------------------------------------------------------------
+# [levels] / [flags] / [options] — lo que el modelo ACEPTA por CLI.
+#   Niveles, flags y opciones no declarados aquí son ERROR DE USO (exit 2):
+#   no se ignoran en silencio.
+# -----------------------------------------------------------------------------
+#   [levels]         list[]   Niveles de razonamiento ("low" "medium" "high").
+#                     default  Nivel si no se pide ninguno.
+#   [flags]          list[]   Flags booleanos que acepta el modelo.
+#   [options]        list[]   Opciones con valor que acepta.
+#   [options.default]         Defaults por opción; debe estar en [options].list.
+#   [aliases]         <alias> = "<nivel>"  — atajo de nivel. El nivel debe
+#                     estar en [levels].list.
 #
-# Las claves disponibles son las del gguffer: repo, gguf, gguf_file, quant,
-# imatrix, imatrix_repo, imatrix_file, out, out_principal, from_subdir,
-# include, intermedio, keep_source, keep_intermedio, no_mtp, force. Una clave
-# que no sea de esa lista se AVISA al cargar el TOML: un "imatrix_repos"
-# en vez de "imatrix_repo" fabricaria el GGUF sin importance matrix, y el
-# error sale 40 minutos después.
+# -----------------------------------------------------------------------------
+# [limits]
+# -----------------------------------------------------------------------------
+#   min_ram_gb   número > 0. Check antes de arrancar (macOS pagina en vez de
+#                fallar: mejor no llegar).
 #
-# El "size" es el de los PESOS que se bajan (no el del GGUF final, que
-# todavia no existe): es lo que ve el usuario cuando se le pregunta si
-# fabricar esto.
+# -----------------------------------------------------------------------------
+# [args] — el argv del server que SIRVE el modelo. Un elemento = un argumento.
+#          Obligatorio .base para llama-server.
+# -----------------------------------------------------------------------------
+#   [args]        base[]              La base común.
+#   [args.level.<n>]  base[]          Args que AÑADE el nivel <n>.
+#                     reasoning_effort  Atajo: se traduce a
+#                                       --chat-template-kwargs <json>.
+#                     chat_template_kwargs{}  El json completo del kwargs.
+#   [args.flag.<f>]   base[]          Args que AÑADE el flag <f>.
+#                     requires[]      Claves de [files] que exige (si falta
+#                                     el fichero, el flag es error).
+#   [args.option.<o>] base[]          Args que AÑADE la opción <o> (admite
+#                                     ${value} = el valor pedido).
+#                     replace         "--flag": SUSTITUYE la pareja del base
+#                                     en vez de añadirse detrás.
 #
-# OJO: en un modelo que se fabrica, la [download] es OPCIONAL: no hay de
-# donde bajar el GGUF principal (es justo lo que se fabrica). Si el modelo
-# tiene ficheros AUXILIARES (MTP, mmproj), esos se siguen descargando con
-# [download.aux.*]. El GGUF principal sale de [build] y se guarda con el
-# nombre de [files].gguf.
+# -----------------------------------------------------------------------------
+# PLACEHOLDERS (válidos en cualquier base[])
+# -----------------------------------------------------------------------------
+#   ${gguf}           $GGUF_DIR/<name>/<files.gguf>
+#   ${mtp}            $GGUF_DIR/<name>/<files.mtp>
+#   ${mmproj}         $GGUF_DIR/<name>/<files.mmproj>
+#   ${chat_template}  $GGUF_DIR/<name>/<files.chat_template>
+#   ${ctx}            Contexto efectivo ([model].context o su override)
+#   ${value}          El valor pedido a una opción (sólo [args.option])
+#   ${model_path}     $SAFETENSORS_DIR/<[model].path> (sólo safetensors)
+#   ${env:VAR}        Valor de la variable de entorno VAR
+#   ${env:VAR:-def}   Ídem con default si VAR no está fijada
 #
-# [download.aux.mtp] / [download.aux.mmproj]  (opcionales)
-#   file      Ruta del fichero dentro del repo. Puede llevar subdirectorio.
-#   name      Nombre final en disco. Si se omite, vale lo mismo que file.
-#   size      Tamaño legible. Informativo.
+# ORDEN de montaje del argv:
+#   [args].base → [args.level.<nivel>] → [args.flag.<f>] (en el orden pedido)
+#   → [args.option.<o>]
 #
-# [levels]  (opcional)
-#   list      Niveles de razonamiento que acepta el modelo por argumento.
-#             `ropero <modelo> --high` sólo vale si "high" está en la lista.
-#   default   Nivel por defecto.
-#
-# [flags]  (opcional)
-#   list      Flags booleanos que acepta. Ej.: ["vision"].
-#
-# [options]  (opcional)
-#   list      Opciones con valor que acepta. Ej.: ["n-cpu-moe"].
-#
-# [options.default]  (opcional)
-#   <opcion> = "<valor>"  Valor por defecto de la opción si el usuario no la pasa.
-#
-# [aliases]  (opcional)
-#   <alias> = "<nivel>"  Alias público con nivel de razonamiento por defecto.
-#                        El nivel debe estar en [levels].list.
-#
-# [limits]  (opcional)
-#   min_ram_gb  RAM unificada mínima (GB) para poder arrancar. El CLI lo
-#               comprueba antes de arrancar: en macOS un modelo que no cabe
-#               empieza a paginar contra el disco y da ~0.2 tok/s, que parece
-#               un modelo roto pero es falta de RAM. Es un LÍMITE, no un
-#               requisito de hardware: sin esta sección no hay límite.
-#
-# [args]  (obligatoria)
-#   base      Lista de argumentos, UNO POR ELEMENTO (no string partido).
-#             Son SIEMPRE "los argumentos del servidor que sirve este modelo":
-#
-#               · engine = "llama-server" → flags de llama-server
-#               · engine = "airllm" | "mlx_lm" | "tensorrt-llm" | "fastflowlm"
-#                 → flags del servidor de ese engine
-#
-#             El CLI los pasa tal cual, sin reordenar.
-#
-# [args.level.<nivel>]  (opcional)
-#   base      Argumentos extra al arrancar con ese nivel.
-#   reasoning_effort    Atajo: se traduce a
-#                       --chat-template-kwargs {"reasoning_effort": "<valor>"}
-#   chat_template_kwargs  Diccionario que se traduce a
-#                       --chat-template-kwargs <json>
-#
-# [args.flag.<flag>]  (opcional)
-#   base      Argumentos extra al arrancar con ese flag.
-#   requires  Ficheros que tienen que estar en disco. Si falta alguno, el
-#             arranque falla con un mensaje claro en vez de caerse al usarlo.
-#
-# [args.option.<opcion>]  (opcional)
-#   base      Argumentos extra cuando se pasa esa opción. Puede usar ${value}.
-#
-# ---------------------------------------------------------------------------
-# PLACEHOLDERS DISPONIBLES EN LOS ARGUMENTOS
-# ---------------------------------------------------------------------------
-#   ${gguf}      Ruta absoluta del GGUF principal ($GGUF_DIR/<files.gguf>).
-#   ${mtp}       Ruta absoluta del MTP ($GGUF_DIR/<files.mtp>).
-#   ${mmproj}    Ruta absoluta del mmproj ($GGUF_DIR/<files.mmproj>).
-#   ${ctx}       Contexto efectivo (el de [model].context, o el override).
-#   ${value}     Valor de la opción (sólo en [args.option.*]).
-#   ${env:VAR}           Valor de la variable de entorno VAR.
-#   ${env:VAR:-defecto}  Lo mismo, con defecto.
-#
-# ---------------------------------------------------------------------------
-# ORDEN DE MONTAJE DE LOS ARGUMENTOS
-# ---------------------------------------------------------------------------
-#   1. [args].base
-#   2. [args.level.<nivel>]        (si el modelo tiene niveles)
-#   3. [args.flag.<flag>]          (por cada flag pedido, en el orden pedido)
-#   4. [args.option.<opcion>]      (por cada opción pedida)
-#
-# ---------------------------------------------------------------------------
-# EJEMPLO MÍNIMO (modelo de texto, llama-server)
-# ---------------------------------------------------------------------------
-#   [model]
-#   name    = "ejemplo"
-#   engine  = "llama-server"
-#   context = 32768
-#
-#   [files]
-#   gguf = "ejemplo-Q4_K_M.gguf"
-#
-#   [download]
-#   repo = "owner/ejemplo-GGUF"
-#   file = "ejemplo-Q4_K_M.gguf"
-#   size = "2.1 GB"
-#
-#   [args]
-#   base = ["--n-gpu-layers", "99", "--temp", "0.7"]
+# OVERRIDES de entorno (sin tocar el TOML):
+#   ROPERO_<NOMBRE>_CTX    cambia el contexto efectivo (${ctx})
+#   ROPERO_<NOMBRE>_GGUF   apunta ${gguf} a otra cuantización del mismo repo
+#   ROPERO_MODEL_OPT_<K>   default de la opción <K>
+
+# =============================================================================
+# EJEMPLO MÍNIMO REAL — modelo gguf descargable servido por llama-server.
+# Estas secciones de abajo son TOML vivo: copia el fichero, cambia los
+# valores y ya tienes un modelo válido.
 # =============================================================================
 
 [model]
-name    = "nombre-del-modelo"
+name    = "mi-modelo"
 engine  = "llama-server"
 context = 32768
+# alias   = "mi-atajo"
+# port    = 9997
 
 [files]
-gguf = "nombre-del-modelo.gguf"
+gguf = "mi-modelo-q4_k_m.gguf"
 
 [download]
-repo = "owner/nombre-del-modelo-GGUF"
-file = "nombre-del-modelo.gguf"
-size = "0.0 GB"
+repo = "usuario/mi-modelo"
+file = "mi-modelo-q4_k_m.gguf"
+size = "~5 GB"
 
 [args]
 base = [
     "--n-gpu-layers", "99",
-    "--jinja",
+    "--ctx-size", "${ctx}",
+    "--temp", "0.7",
 ]
+
+# =============================================================================
+# EJEMPLO COMENTADO — modelo gguf FABRICADO (build+download coexisten),
+# con niveles, flags, opciones, alias, límites y todos los auxiliares.
+# =============================================================================
+#
+# [model]
+# name    = "modelo-fabricado"
+# engine  = "llama-server"
+# context = 131072
+# alias   = "fabricado"
+# port    = 9995
+#
+# [files]
+# gguf           = "modelo-fabricado-q4_k_m.gguf"
+# mtp            = "modelo-fabricado-mtp.gguf"
+# mmproj         = "modelo-fabricado-mmproj.gguf"
+# chat_template  = "modelo-fabrico.jinja"
+#
+# [download]
+# repo    = "usuario/modelo-fabricado"     # fuente de los pesos
+# size    = "~40 GB"
+# manual  = false
+#
+# [download.aux.mtp]
+# file = "mtp.gguf"
+# use  = "run"                             # runtime: lo carga el server
+#
+# [download.aux.mmproj]
+# file = "mmproj.gguf"
+# use  = "run"
+#
+# [download.aux.chat_template]
+# file = "chat_template.jinja"
+# use  = "run"
+#
+# [download.aux.imatrix]
+# file = "imatrix.dat"
+# repo = "otro-usuario/imatrices"          # vive en OTRO repo
+# use  = "build"                           # sólo lo usa el gguffer
+#
+# [download.aux.tokenizer]
+# file = "tokenizer.json"
+# use  = "build"
+#
+# [build]
+# repo            = "usuario/modelo-fabricado"
+# gguf            = "modelo-fabricado-f16.gguf"   # fuente: el f16 del repo
+# quant           = "q4_k_m"
+# imatrix         = "imatrix.dat"
+# out             = "$GGUF_DIR/modelo-fabricado/modelo-fabricado-q4_k_m.gguf"
+# out_principal   = "modelo-fabricado-q4_k_m.gguf"
+# intermedio      = "f16"
+# keep_source     = false
+# size            = "~6 GB"
+#
+# [levels]
+# list    = ["low", "medium", "high"]
+# default = "medium"
+#
+# [flags]
+# list = ["flash", "sin-vision"]
+#
+# [options]
+# list = ["temp", "top-p"]
+#
+# [options.default]
+# temp  = "0.7"
+# top-p = "0.95"
+#
+# [aliases]
+# x  = "high"        # `ropero modelo-fabricado --x` == --high
+# eco = "low"
+#
+# [limits]
+# min_ram_gb = 32
+#
+# [args]
+# base = [
+#     "--n-gpu-layers", "99",
+#     "--ctx-size", "${ctx}",
+#     "--temp", "0.7",
+#     "--model", "${gguf}",
+#     "--model-mtp", "${mtp}",
+#     "--mmproj", "${mmproj}",
+#     "--chat-template-file", "${chat_template}",
+# ]
+#
+# [args.level.high]
+# base = ["--reasoning-budget", "16384"]
+# # o el atajo equivalente:
+# # reasoning_effort = "high"
+# # chat_template_kwargs = { reasoning_effort = "high" }
+#
+# [args.level.low]
+# base = ["--reasoning-budget", "0"]
+#
+# [args.flag.flash]
+# base = ["--flash-attn"]
+#
+# [args.flag.sin-vision]
+# base = ["--no-mmproj"]
+# requires = ["mmproj"]      # exige [files].mmproj en disco
+#
+# [args.option.temp]
+# base = ["--temp", "${value}"]
+# # replace = "--temp"       # sustituye la pareja del base, no la duplica
+#
+# [args.option.top-p]
+# base = ["--top-p", "${value}"]
