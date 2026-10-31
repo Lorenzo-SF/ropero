@@ -254,7 +254,7 @@ ap.add_argument("--port", type=int); ap.add_argument("--backend-port", type=int)
 ap.add_argument("--context", type=int)
 args = ap.parse_args(rest)
 ep.apply_extra_args(args, extra)
-final = ep.tensorrt_argv(args, "/usr/bin/trtllm-serve", True)
+final = ep.tensorrt_argv(args, "/usr/bin/trtllm-serve")
 esperado = ["--max_batch_size", "1", "--max_num_tokens", "8192",
             "--kv_cache_free_gpu_memory_fraction", "0.90",
             "--enable_chunked_prefill", "--kv_cache_dtype", "fp8"]
@@ -345,6 +345,124 @@ case_log_acumulado() {
   fi
 }
 
+# -----------------------------------------------------------------------------
+# El backend puede ser MÁS VIEJO que el TOML. Si rechaza una opción
+# ("No such option 'X'"), el endpoint la quita (con su valor) y reintenta.
+#
+# El caso real: el TOML de groot-trt declara los flags de trtllm-serve 1.4
+# (--served_model_name y --kv_cache_dtype) y el binario instalado es un
+# 1.2.1 que no tiene ninguno de los dos. Con el flag puesto, el backend
+# moría con rc=2 y el modelo no arrancaba.
+# -----------------------------------------------------------------------------
+case_trt_flags() {
+  local out
+  out="$(cd "$ROOT" && python3 - "$ROOT/bin/server/endpoint.py" "$ROOT/tests/fakes/trtllm-serve" <<'PY' 2>&1
+import importlib.util, os, shutil, socket, sys, time
+
+ruta_endpoint = sys.argv[1]
+ruta_binario = sys.argv[2]
+
+spec = importlib.util.spec_from_file_location("ep", ruta_endpoint)
+ep = importlib.util.module_from_spec(spec)
+sys.argv = ["endpoint.py"]
+try:
+    spec.loader.exec_module(ep)
+except SystemExit:
+    pass
+
+
+class A: pass
+
+
+def nuevo(puerto):
+    a = A()
+    a.model_path = "/m"; a.model_id = "groot-trt"; a.backend_port = puerto
+    a.context = 262144; a.backend_bin = ruta_binario
+    a.backend_extra_args = ["--max_batch_size", "1", "--max_num_tokens", "8192",
+                             "--kv_cache_free_gpu_memory_fraction", "0.90",
+                             "--enable_chunked_prefill", "--kv_cache_dtype", "fp8"]
+    return a
+
+
+def puerto_libre():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+# El binario NO conoce esas dos opciones (como el trtllm-serve 1.2.1).
+os.environ["FAKE_TRT_OPTS"] = "--served_model_name,--kv_cache_dtype"
+estado = os.path.join(os.environ.get("TMPDIR", "/tmp"), "ropero-suite-estado")
+shutil.rmtree(estado, ignore_errors=True)
+os.environ["STATE_DIR"] = estado
+
+# ── 1ª corrida: no hay caché, se pagan los reintentos. Pero ARRANCA.
+b = ep.ProxyBackend(nuevo(puerto_libre()), "tensorrt", "tensorrt-llm", ep.tensorrt_argv)
+b.start()
+time.sleep(4)
+argv = b.argv_builder(b.args, b.bin_path, b._omit)
+if not (b.ready_flag and not b.error
+        and "--kv_cache_dtype" not in argv
+        and "--served_model_name" not in argv
+        and "--max_batch_size" in argv):
+    print("TRT_MAL_1 ready=%s error=%s argv=%s" % (b.ready_flag, b.error, argv))
+    raise SystemExit(0)
+b.stop()
+time.sleep(1)
+
+# ── 2ª corrida: la caché se aplica, el argv va bien A LA PRIMERA.
+b2 = ep.ProxyBackend(nuevo(puerto_libre()), "tensorrt", "tensorrt-llm", ep.tensorrt_argv)
+argv_primero = []
+_spy = b2._spawn
+def _spy_spawn(argv, _orig=_spy, _acc=argv_primero):
+    _acc.append(list(argv))
+    return _orig(argv)
+b2._spawn = _spy_spawn
+b2.start()
+time.sleep(4)
+argv2 = b2.argv_builder(b2.args, b2.bin_path, b2._omit)
+if not (b2.ready_flag and not b2.error and "--kv_cache_dtype" not in argv2):
+    print("TRT_MAL_2 ready=%s error=%s argv=%s" % (b2.ready_flag, b2.error, argv2))
+    raise SystemExit(0)
+# La prueba de que la CACHÉ sirve: el PRIMER argv ya iba sin el flag.
+if not argv_primero or "--kv_cache_dtype" in argv_primero[0]:
+    print("TRT_MAL_2B la cache no se aplico al primer arranque: %s" % (argv_primero[:1],))
+    raise SystemExit(0)
+b2.stop()
+time.sleep(1)
+
+# ── Si el binario CAMBIA, la caché se ignora (no puede quedar un "no lo
+#    admite" de la versión vieja aplicado a la nueva). Con el binario
+#    cambiado, el PRIMER argv vuelve a llevar el flag: el endpoint se
+#    entera otra vez.
+st = os.stat(ruta_binario)
+os.utime(ruta_binario, (st.st_atime + 60, st.st_mtime + 60))
+b3 = ep.ProxyBackend(nuevo(puerto_libre()), "tensorrt", "tensorrt-llm", ep.tensorrt_argv)
+argv3 = []
+_spy3 = b3._spawn
+def _spy_spawn3(argv, _orig=_spy3, _acc=argv3):
+    _acc.append(list(argv))
+    return _orig(argv)
+b3._spawn = _spy_spawn3
+b3.start()
+time.sleep(2)
+if not argv3 or "--kv_cache_dtype" not in argv3[0]:
+    print("TRT_MAL_3 la cache sobrevivio al cambio del binario: %s" % (argv3[:1],))
+    raise SystemExit(0)
+b3.stop()
+
+print("TRT_OK")
+PY
+)"
+  if printf '%s\n' "$out" | grep -q 'TRT_OK'; then
+    ok "backend: se salta la opción que el binario no admite"
+  else
+    fail "backend: se salta la opción que el binario no admite" "$out"
+  fi
+}
+
 echo "ropero suite 1.0"
 case_help
 case_catalogo
@@ -358,6 +476,7 @@ case_chat_template
 case_endpoint_extra_args
 case_color
 case_log_acumulado
+case_trt_flags
 echo
 echo "$N_OK ok · $N_FAIL fallo(s)"
 [[ "$N_FAIL" -eq 0 ]]

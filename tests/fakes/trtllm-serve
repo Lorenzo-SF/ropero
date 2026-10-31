@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""trtllm-serve FAKE que se comporta como el de verdad en lo que importa:
+rechaza con "Error: No such option 'X'." las opciones que no conoce (como
+hace click) y, si todas las que le pasan son conocidas, sirve en el puerto.
+
+Es lo que reproduce el caso real: el TOML declara los flags de trtllm-serve
+1.4 y el binario instalado es un 1.2.1 que no los tiene.
+
+Las opciones que "conoce" son las de la lista KNOWN; se pueden quitar con la
+variable de entorno FAKE_TRT_OPTS (separadas por comas)."""
+import os
+import sys
+
+KNOWN = {
+    "--host", "--port", "--max_seq_len", "--max_batch_size", "--max_num_tokens",
+    "--kv_cache_free_gpu_memory_fraction", "--enable_chunked_prefill",
+    "--served_model_name", "--kv_cache_dtype",
+}
+NEEDS_VALUE = {
+    "--host", "--port", "--max_seq_len", "--max_batch_size", "--max_num_tokens",
+    "--kv_cache_free_gpu_memory_fraction", "--served_model_name", "--kv_cache_dtype",
+}
+
+extra = os.environ.get("FAKE_TRT_OPTS", "")
+if extra:
+    KNOWN -= {x for x in extra.split(",") if x}
+
+args = sys.argv[1:]
+i = 0
+port = 0
+while i < len(args):
+    a = args[i]
+    if not a.startswith("-"):
+        i += 1
+        continue
+    if a not in KNOWN:
+        sys.stderr.write("Usage: trtllm-serve serve [OPTIONS] MODEL\n")
+        sys.stderr.write("Try 'trtllm-serve serve --help' for help.\n")
+        sys.stderr.write("Error: No such option '%s'.\n" % a)
+        sys.stderr.flush()
+        sys.exit(2)
+    if a in NEEDS_VALUE:
+        v = args[i + 1] if i + 1 < len(args) else ""
+        i += 2
+    else:
+        v = ""
+        i += 1
+    if a == "--port":
+        port = int(v)
+
+import http.server
+import json
+
+
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        body = json.dumps({"object": "list", "data": [{"id": "fake-trt"}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+http.server.HTTPServer(("127.0.0.1", port), H).serve_forever()

@@ -76,6 +76,7 @@ import hmac
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -644,8 +645,67 @@ class ProxyBackend:
         self.ready_flag = False
         self._stop = threading.Event()
         self._recent = []            # últimas líneas de stderr del sub-proceso
-        self._retry_pending = True   # aún no se ha reintentado sin el flag
+        # Opciones que el binario ha rechazado ("No such option 'X'"): se
+        # quitan del argv y se reintenta. Se quitan de UNA en una, según lo
+        # que diga el error, para que el TOML pueda declarar los flags de la
+        # versión que se quiera y el backend se adapte a la instalada.
+        self._omit = set()
         self._client = None          # cliente httpx (si se usa)
+
+    # ── caché de las opciones rechazadas ────────────────────────────────────
+    #
+    # POR QUÉ SE GUARDA
+    # Cada intento cuesta lo que cuesta arrancar el binario: con
+    # trtllm-serve son ~20 s (importa torch antes de parsear los args). Con
+    # dos flags que no conoce, el primer arranque paga 3 intentos: ~60 s.
+    # Guardando el set, los arranques SIGUIENTES pasan el argv correcto a la
+    # primera: ~20 s.
+    #
+    # POR QUÉ ES SEGURO
+    # La caché lleva la identidad del binario (ruta + mtime + tamaño). Si se
+    # actualiza trtllm-serve, el mtime cambia y la caché se ignora: el
+    # endpoint vuelve a preguntar al binario. No puede quedar un "no lo
+    # admite" de una versión antigua aplicado a la nueva.
+    def _cache_path(self) -> str:
+        state = os.environ.get("STATE_DIR") or os.path.expanduser(
+            "~/.local/state/ropero")
+        return os.path.join(state, "backend-flags-%s.cache" % self.engine)
+
+    def _binary_stamp(self) -> str:
+        try:
+            st = os.stat(self.bin_path)
+        except OSError:
+            return "%s 0 0" % self.bin_path
+        # mtime en NANOSEGUNDOS: con segundos bastaría para casi todo, pero
+        # un binario replaced dentro del mismo segundo dejaría la caché
+        # valida (y aplicaría a la versión nueva un "no lo admite" de la
+        # vieja). Con ns, cambiar el binario cambia la caché SIEMPRE.
+        return "%s %d %d" % (self.bin_path, st.st_mtime_ns, st.st_size)
+
+    def _load_cached_omit(self):
+        try:
+            with open(self._cache_path(), encoding="utf-8") as fh:
+                lines = [l.strip() for l in fh.read().splitlines() if l.strip()]
+        except OSError:
+            return set()
+        if len(lines) < 2:
+            return set()
+        if lines[0] != self._binary_stamp():
+            return set()
+        return set(lines[1:])
+
+    def _save_cached_omit(self) -> None:
+        if not self._omit:
+            return
+        try:
+            path = self._cache_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._binary_stamp() + "\n")
+                for flag in sorted(self._omit):
+                    fh.write(flag + "\n")
+        except OSError:
+            pass
 
     # ── ciclo de vida ───────────────────────────────────────────────────────
     def start(self) -> None:
@@ -655,7 +715,13 @@ class ProxyBackend:
             log("ERROR: %s" % self.error)
             return
         self.bin_path = bin_path
-        self._spawn(self.argv_builder(self.args, bin_path, True))
+        # Las opciones que el binario rechazó en una corrida anterior (si el
+        # binario es el mismo): se pasan ya quitadas y no se paga el reintento.
+        self._omit = self._load_cached_omit()
+        if self._omit:
+            log("%s: quito %s (esta versión no lo admite)"
+                % (self.engine, ", ".join(sorted(self._omit))))
+        self._spawn(self.argv_builder(self.args, bin_path, self._omit))
         threading.Thread(target=self._supervise, daemon=True).start()
         threading.Thread(target=self._poll_ready, daemon=True).start()
 
@@ -698,10 +764,17 @@ class ProxyBackend:
     def _supervise(self) -> None:
         """Vigila al sub-proceso.
 
-        Si muere con "no such option", se reintenta sin el flag opcional (el
-        caso real: trtllm-serve 1.2.1 NO tiene --served_model_name, que sí
-        tienen las versiones 1.x más nuevas). Si muere por otro motivo, se
-        marca como caído y el endpoint responde 503 en vez de colgarse.
+        Si muere con "No such option 'X'", se reintenta SIN esa opción (y
+        con su valor). Es el caso real: el TOML declara los flags del backend
+        para la versión nueva (trtllm-serve 1.4 tiene --served_model_name y
+        --kv_cache_dtype) y el binario instalado puede ser más viejo (1.2.1
+        no tiene ninguno de los dos). Con el flag puesto, el backend moría
+        con rc=2 y el modelo no arrancaba.
+
+        Se quita el que diga el error, NO una lista fija: así el TOML puede
+        declarar los flags de la versión que se quiera y el backend se
+        adapta a la que hay. Si muere por otro motivo, se marca como caído y
+        el endpoint responde 503 en vez de colgarse.
         """
         while not self._stop.is_set():
             child = self.child
@@ -710,12 +783,22 @@ class ProxyBackend:
             rc = child.wait()
             if self._stop.is_set():
                 return
-            recent = " ".join(self._recent).lower()
-            if self._retry_pending and "no such option" in recent:
-                self._retry_pending = False
-                log("%s no admite el flag opcional; reintento sin él" % self.engine)
-                self._spawn(self.argv_builder(self.args, self.bin_path, False))
-                continue
+            recent = " ".join(self._recent)
+            match = re.search(r"no such option ['\"]?(--[A-Za-z0-9_-]+)",
+                              recent, re.IGNORECASE)
+            if match:
+                flag = match.group(1)
+                if flag not in self._omit:
+                    self._omit.add(flag)
+                    log("%s no admite %s; lo quito y reintento"
+                        % (self.engine, flag))
+                    self._save_cached_omit()
+                    self._spawn(self.argv_builder(self.args, self.bin_path,
+                                                  self._omit))
+                    continue
+                # Ya lo habíamos quitado y sigue quejándose: no insistir.
+                log("%s sigue rechazando %s aunque no lo pasamos"
+                    % (self.engine, flag))
             self.error = "el backend %s terminó (rc=%s)" % (self.engine, rc)
             log("ERROR: %s" % self.error)
             return
@@ -1074,7 +1157,45 @@ def apply_extra_args(args, extra=None):
 # -----------------------------------------------------------------------------
 # Construcción del argv de cada backend
 # -----------------------------------------------------------------------------
-def tensorrt_argv(args, bin_path: str, with_served_model_name: bool):
+def expand_extra_flags(items, omit=None):
+    """Convierte la lista PLANA de flags del modelo en argv, quitando los que
+    están en `omit`.
+
+    POR QUÉ HAY QUE EMPAREJARLOS
+    La lista plana ([args].base del TOML) no dice qué valor va con qué flag:
+    es ["--max_batch_size", "1", "--enable_chunked_prefill", ...]. Para
+    poder QUITAR un flag hay que saber dónde acaba: un flag empieza por '-'
+    y se lleva los valores que NO empiezan por '-' hasta el siguiente flag.
+
+    POR QUÉ HAY QUE PODER QUITARLOS
+    El binario del backend puede ser una versión que no conhece un flag: el
+    TOML se escribe para la versión nueva (trtllm-serve 1.4 tiene
+    --kv_cache_dtype) y el que hay instalado puede ser más viejo (1.2.1 no
+    lo tiene). Con el flag puesto, el backend moría con "No such option".
+    """
+
+    omit = omit or set()
+    out = []
+    i = 0
+    n = len(items)
+    while i < n:
+        tok = items[i]
+        if not isinstance(tok, str) or not tok.startswith("-"):
+            i += 1
+            continue
+        j = i + 1
+        vals = []
+        while j < n and isinstance(items[j], str) and not items[j].startswith("-"):
+            vals.append(items[j])
+            j += 1
+        if tok not in omit:
+            out.append(tok)
+            out.extend(vals)
+        i = j
+    return out
+
+
+def tensorrt_argv(args, bin_path: str, omit=None):
     """`trtllm-serve serve [OPTIONS] MODEL` (TensorRT-LLM 1.x).
 
     · `--served_model_name` es lo más parecido al `--alias` de llama-server:
@@ -1082,7 +1203,10 @@ def tensorrt_argv(args, bin_path: str, with_served_model_name: bool):
       (verificado contra su `--help`), así que se pasa sólo si el binario lo
       admite; si no, el backend se relanza sin él (ver ProxyBackend._supervise).
     · NO existe `--api_key`: la auth la pone este proxy.
+    · `omit` es el conjunto de opciones que el binario ha rechazado: se quitan
+      del argv (con sus valores) y el backend se relanza.
     """
+    omit = omit or set()
     argv = [
         bin_path, "serve",
         # El modelo es POSICIONAL: `trtllm-serve serve MODEL [OPTIONS]`.
@@ -1093,16 +1217,17 @@ def tensorrt_argv(args, bin_path: str, with_served_model_name: bool):
         "--host", "127.0.0.1",
         "--port", str(args.backend_port),
     ]
-    if with_served_model_name:
+    if "--served_model_name" not in omit:
         argv += ["--served_model_name", str(args.model_id)]
     if args.context:
         argv += ["--max_seq_len", str(args.context)]
-    # Los flags que declara el modelo en su TOML, tal cual y en su orden.
-    argv += list(getattr(args, "backend_extra_args", None) or [])
+    # Los flags que declara el modelo en su TOML, tal cual y en su orden
+    # (menos los que el binario haya rechazado).
+    argv += expand_extra_flags(getattr(args, "backend_extra_args", None) or [], omit)
     return argv
 
 
-def flm_argv(args, bin_path: str, with_served_model_name: bool):
+def flm_argv(args, bin_path: str, omit=None):
     """`flm serve [model_tag] --port N` (FastFlowLM).
 
     · El modelo se identifica por TAG (`llama3.2:1b`), NO por ruta: `flm serve`
@@ -1111,6 +1236,7 @@ def flm_argv(args, bin_path: str, with_served_model_name: bool):
       backend no pueda salir a la red ni por accidente.
     · NO hay auth: su doc dice "the key is not checked".
     """
+    omit = omit or set()
     argv = [
         bin_path, "serve", str(args.model_path),
         "--host", "127.0.0.1",
@@ -1120,11 +1246,11 @@ def flm_argv(args, bin_path: str, with_served_model_name: bool):
         argv += ["--ctx-len", str(args.context)]
     argv += ["--cors", "0"]
     # Los flags que declara el modelo en su TOML, tal cual y en su orden.
-    argv += list(getattr(args, "backend_extra_args", None) or [])
+    argv += expand_extra_flags(getattr(args, "backend_extra_args", None) or [], omit)
     return argv
 
 
-def mlx_argv(args, bin_path: str, with_served_model_name: bool):
+def mlx_argv(args, bin_path: str, omit=None):
     """`mlx_lm.server --model <path> --host 127.0.0.1 --port N` (MLX).
 
     · NO tiene --api-key ni --alias: la auth la pone este endpoint y el nombre
@@ -1132,6 +1258,7 @@ def mlx_argv(args, bin_path: str, with_served_model_name: bool):
     · Los flags propios del modelo (los de [args].base en su TOML) se añaden
       tal cual y en su orden.
     """
+    omit = omit or set()
     argv = [
         bin_path,
         "--model", str(args.model_path),
@@ -1140,7 +1267,7 @@ def mlx_argv(args, bin_path: str, with_served_model_name: bool):
     ]
     if args.context:
         argv += ["--max-tokens", str(args.context)]
-    argv += list(getattr(args, "backend_extra_args", None) or [])
+    argv += expand_extra_flags(getattr(args, "backend_extra_args", None) or [], omit)
     return argv
 
 
