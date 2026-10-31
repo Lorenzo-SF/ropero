@@ -1,0 +1,93 @@
+# =============================================================================
+# flint — Recursive Flint (MoE, 39.8 B params, NVFP4)
+# =============================================================================
+#
+#   - GGUF   : flint-nvfp4.gguf  (22,86 GB)
+#   - repo   : RecursiveSI/flint-nvfp4-gguf
+#   - pesos  : 39.785.287.456 parámetros (BF16 en el original, NVFP4 aquí)
+#
+# ── QUÉ ES ─────────────────────────────────────────────────────────────────
+# MoE disperso: 49 capas, hidden 2048, 32 cabezas de atención, 4 de KV,
+# head_dim 128, vocab 150144. Las capas mezclan atención completa y
+# deslizante (layer_types: 14 "F" + 35 "S", sliding_window 513), así que el
+# coste de la atención no crece con el contexto: la KV de las capas "S" es
+# minúscula (513 tokens) y sólo las 14 "F" guardan el contexto entero.
+#
+# Razonamiento: sí, y el `reasoning_content` va intercalado (lo dicen las
+# configs de pi y de opencode que publica el repo). NO admite
+# reasoning_effort ("supportsReasoningEffort": false), y el GGUF no lleva
+# MTP ni draft (un solo fichero, y el card no menciona ninguno): no hay
+# levels ni --spec-type.
+#
+# El GGUF lleva el tokenizer y el chat template DENTRO (dice el card), así que
+# no hace falta ningún [download.aux] de chat_template.
+#
+# ── POR QUÉ ESTA CONFIGURACIÓN ──────────────────────────────────────────────
+# La card del modelo recomienda "at least 48 GB of GPU memory". Esta máquina
+# tiene 16 GB (14,94 GiB utilizables). Los números, calculados con el tamaño
+# REAL del fichero (22.863.084.160 bytes) y la arquitectura de arriba:
+#
+#   pesos en total ............ 21,29 GiB
+#   KV a ctx 262144, ctk=ctv=f16  7,03 GiB   (14 capas full × 0,50 GiB)
+#   KV a ctx 262144, ctk=ctv=q8_0  3,53 GiB
+#
+# Con la KV en f16 (lo que dice la card) sólo quedarían ~7,6 GiB para los
+# pesos: unas 17 de 49 capas en la GPU y 32 en la CPU. Inservible. Por eso
+# la KV va en q8_0 (la mitad de f16, y el calidad apenas se nota): así
+# quedan ~11,1 GiB para los pesos, unas 26 capas en la GPU.
+#
+# OJO: el reparto por capa es una ESTIMACIÓN a partir del tamaño total (el
+# GGUF no se puede medir aquí: no hay GPU). Si al arrancar se queda corto de
+# VRAM, baja --n-gpu-layers; si te sobra, súbelo.
+#
+# El ctx es el NATIVO (262144), que es el que usan las configs de pi y de
+# opencode que publica el repo.
+#
+# ── MUESTRA ─────────────────────────────────────────────────────────────────
+# Del comando que publica el card:
+#     --temp 1 --top-p 0.95 --top-k 20 --min-p 0
+# y las configs de pi/opencode: temperature 1.0, top_p 0.95.
+#
+# NO se pasa --swa-full: el card dice expressly que hay que DEJARLO sin
+# poner para que la caché deslizante compacta siga activa (con él, la KV
+# crece con el contexto y no cabe).
+
+[model]
+name    = "flint"
+engine  = "llama-server"
+context = 262144
+
+[files]
+gguf = "flint-nvfp4.gguf"
+
+[download]
+repo = "RecursiveSI/flint-nvfp4-gguf"
+file = "flint-nvfp4.gguf"
+size = "22.86 GB"
+
+[limits]
+# Lo que ocupa en la RAM del host es la parte de los pesos que NO cabe en la
+# VRAM (~23 de 49 capas ≈ 9,5 GiB) más lo que tarde el motor al mapear el
+# checkpoint. Con 16 GB hay margen; el check es orientativo (avisa, no
+# bloquea).
+min_ram_gb = 16
+
+[args]
+base = [
+    # 26 capas ≈ 10,7 GiB de pesos en la GPU (estimado, ver arriba).
+    "--n-gpu-layers", "26",
+
+    # q8_0 y no f16 (lo que dice la card) porque con f16 la KV a ctx 262144
+    # son 7 GiB y sólo caben 17 capas en la GPU. Ver la aritmética arriba.
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+
+    # Muestreo del card y de las configs de pi/opencode.
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+
+    "--n-predict", "8192",
+    "--keep", "16384",
+]
