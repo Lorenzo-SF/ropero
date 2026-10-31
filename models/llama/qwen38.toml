@@ -8,12 +8,12 @@ engine  = "llama-server"
 context = 133072
 
 [files]
-gguf = "Qwen3.8-27B-UD-IQ3_XXS.gguf"
+gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf"
 
-# [download]
-# repo = "unsloth/Qwen3.8-27B-GGUF"
-# file = "Qwen3.8-27B-UD-IQ3_XXS.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" # con mtp, IQ3_XXS, sin mtp, entra el 
-# size = "4.48 GB"
+[download]
+repo = "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
+file = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" # con mtp, IQ3_XXS, sin mtp, entra el 
+size = "4.48 GB"
 
 # [build]
 # repo         = "nvidia/Qwen3.8-27B-NVFP4"
