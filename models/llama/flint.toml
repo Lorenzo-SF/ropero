@@ -65,13 +65,6 @@ repo = "RecursiveSI/flint-nvfp4-gguf"
 file = "flint-nvfp4.gguf"
 size = "22.86 GB"
 
-[limits]
-# Lo que ocupa en la RAM del host es la parte de los pesos que NO cabe en la
-# VRAM (~23 de 49 capas ≈ 9,5 GiB) más lo que tarde el motor al mapear el
-# checkpoint. Con 16 GB hay margen; el check es orientativo (avisa, no
-# bloquea).
-min_ram_gb = 16
-
 [args]
 base = [
     # 26 capas ≈ 10,7 GiB de pesos en la GPU (estimado, ver arriba).

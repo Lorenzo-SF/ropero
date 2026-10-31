@@ -33,7 +33,7 @@ size     = "13.5 GB"
 excludes = ["assets/*"]
 manual   = false
 
-[limits]
+#[limits]
 # El checkpoint pesa ~13,5 GB y TRT-LLM lo copia entero a la GPU: en una
 # tarjeta de 16 GB entra muy justo (el KV cache va aparte).
 #
@@ -47,7 +47,7 @@ manual   = false
 # Antes ponía 32, que era el tamaño que hace falta para BAJAR los pesos, no
 # para inferir: en una máquina de 30 GB salía un aviso que no significaba
 # nada ("pide 32 GB" para un modelo de 13,5).
-min_ram_gb = 16
+#min_ram_gb = 16
 
 # ── Flags del servidor de TensorRT-LLM ──────────────────────────────────────
 # Para un engine con servidor propio, [args].base son flags de SU servidor.
