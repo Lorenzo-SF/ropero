@@ -5,7 +5,7 @@
 [model]
 name    = "qwen36"
 engine  = "llama-server"
-context = 196608
+context = 266144
 
 [files]
 gguf = "Qwen3.6-35B-A3B-NVFP4.gguf"

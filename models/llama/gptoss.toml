@@ -22,7 +22,7 @@ default = "medium"
 [args]
 base = [
     "--n-gpu-layers", "99",
-    "--moe-cache","auto",
+    "--moe-cache","soft",
 
     "--temp", "0.8",
     "--top-k", "40",
