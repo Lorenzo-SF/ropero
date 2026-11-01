@@ -61,3 +61,11 @@ base = [
     "--enable_chunked_prefill",
     "--kv_cache_dtype", "fp8",
 ]
+
+
+# NOTA (2026-11-01): este checkpoint (NVFP4 mixto, estrategia "tensor" en los
+# pesos) NO es compatible con trtllm-serve 1.4.0rc2.post1: el loader rechaza
+# weights_quant_strategy="tensor" (solo admite "channel"/"block"). La
+# instalación de TRT-LLM está actualizada (1.4.0rc2.post1), pero el modelo
+# requiere re-cuantización con estrategia channel/block, o una versión posterior
+# de TRT-LLM. Mientras tanto usar `ropero groot` (llama-server).

@@ -4,7 +4,7 @@
 # =============================================================================
 # USO:
 #   curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
-#   install.sh [--version <ref>] [--dir <ruta>] [--tarball <fichero>] [--help]
+#   install.sh [--version <ref>] [--dir <ruta>] [--tarball <fichero>] [--local] [--help]
 #
 # SÓLO OBTIENE ROPERO. Nada de engines, modelos, opencode ni alaja: eso es
 # `ropero install ...` DESPUÉS (requiere GPU, compilaciones y GB de disco, y
@@ -76,6 +76,7 @@ DIR="${ROPERO_DIR:-${HOME:-}/.local/share/ropero}"
 BIN_DIR="${ROPERO_BIN_DIR:-${HOME:-}/.local/bin}"
 VERSION="main"
 TARBALL=""
+LOCAL=0
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
 TMP_DIR=""      # temporal de descarga (se borra siempre)
@@ -180,6 +181,8 @@ parse_args() {
                 TARBALL="$2"; shift 2 ;;
             --tarball=*)
                 TARBALL="${1#*=}"; shift ;;
+            --local)
+                LOCAL=1; shift ;;
             -h|--help)
                 usage; exit 0 ;;
             *)
@@ -275,6 +278,13 @@ make_tmp() {
 }
 
 phase_fetch() {
+    if [[ "$LOCAL" == "1" ]]; then
+        STAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        SRC_CLONE=1
+        SRC_TAR="$STAGE_DIR"
+        ok "modo local: $STAGE_DIR"
+        return 0
+    fi
     phase "obtener ropero (ref: $VERSION)"
 
     if [[ -n "$TARBALL" ]]; then
