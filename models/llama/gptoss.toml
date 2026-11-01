@@ -17,7 +17,7 @@ size = "12.7 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
