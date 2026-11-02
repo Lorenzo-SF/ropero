@@ -220,6 +220,15 @@ rp_eng_llama-server_install() {
     fi
     mkdir -p "$BIN_DIR" || return 1
     ln -sf "$build_dir/bin/llama-server" "$BIN_DIR/llama-server" || return 1
+    # ── 6. dependencias Python del conversor (convert_hf_to_gguf.py) ─────
+    if [[ -f "$LLAMA_DIR/requirements.txt" ]]; then
+        rp_step 6 6 "instalando dependencias Python (torch, transformers, ...)..."
+        if ! python3 -m pip install --upgrade --requirement "$LLAMA_DIR/requirements.txt" >/dev/null 2>&1; then
+            rp_msg warn "pip install de requirements.txt falló; el build sirve, pero gguffer puede fallar"
+        else
+            rp_msg ok "dependencias Python instaladas"
+        fi
+    fi
     rp_msg ok "llama-server instalado: $BIN_DIR/llama-server"
     return 0
 }
