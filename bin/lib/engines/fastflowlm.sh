@@ -109,11 +109,21 @@ rp_eng_fastflowlm_install() {
     fi
 
     # Límite de memoria bloqueada: la NPU reserva memoria no swapeable.
+    # Se deja en 'unlimited' automáticamente (antes solo se avisaba).
     local memlock
     memlock="$(ulimit -l 2>/dev/null || echo unknown)"
     if [[ "$memlock" != "unlimited" ]]; then
-        rp_msg warn "memlock = $memlock (la NPU necesita 'unlimited')"
-        rp_msg info "  añade a /etc/security/limits.conf: * soft/hard memlock unlimited"
+        if [[ -w /etc/security/limits.d || -w /etc/security ]]; then
+            cat > /etc/security/limits.d/99-fastflowlm.conf <<'EOF'
+* soft memlock unlimited
+* hard memlock unlimited
+EOF
+            rp_msg ok "memlock puesto en unlimited (/etc/security/limits.d/99-fastflowlm.conf)"
+            rp_msg warn "el cambio aplica al próximo login (o reinicia la sesión)"
+        else
+            rp_msg warn "memlock = $memlock (la NPU necesita 'unlimited')"
+            rp_msg info "  ejecuta como root: echo '* soft/hard memlock unlimited' > /etc/security/limits.d/99-fastflowlm.conf"
+        fi
     fi
 
     # ── 2. Compilar el runtime (preset linux-default → /opt/fastflowlm) ──

@@ -387,18 +387,13 @@ _rp_models_build() {
 # rp_cmd_models — entrypoint (models / install models)
 # -----------------------------------------------------------------------------
 rp_cmd_models() {
-    local a camino="" dry=0 force=0
+    local a camino="" prio="" dry=0 force=0
     local -a pedidos=()
     local _next=0
     for a in "$@"; do
         if (( _next == 1 )); then
             case "$a" in
-                download) [[ -z "$camino" || "$camino" == "download" ]] || \
-                                rp_usage_error models "especifica --download O --build, no ambos"
-                            camino="download" ;;
-                build)    [[ -z "$camino" || "$camino" == "build" ]] || \
-                                rp_usage_error models "especifica --download O --build, no ambos"
-                            camino="build" ;;
+                download|build) prio="$a" ;;
                 *)        rp_usage_error models "--prio requiere 'download' o 'build'" ;;
             esac
             _next=0
@@ -415,12 +410,7 @@ rp_cmd_models() {
             --prio)     _next=1 ;;
             --prio=*)   v="${a#--prio=}"
                         case "$v" in
-                            download) [[ -z "$camino" || "$camino" == "download" ]] || \
-                                          rp_usage_error models "especifica --download O --build, no ambos"
-                                      camino="download" ;;
-                            build)    [[ -z "$camino" || "$camino" == "build" ]] || \
-                                          rp_usage_error models "especifica --download O --build, no ambos"
-                                      camino="build" ;;
+                            download|build) prio="$v" ;;
                             *)        rp_usage_error models "--prio requiere 'download' o 'build'" ;;
                         esac ;;
             --force|-f) force=1 ;;
@@ -483,7 +473,24 @@ rp_cmd_models() {
         camino_modelo="$camino"
         if [[ -z "$camino_modelo" ]]; then
             if (( tiene_dl == 1 && tiene_bld == 1 )); then
-                if [[ "$interactivo" == "1" ]]; then
+                if [[ -n "$prio" ]]; then
+                    if [[ "$prio" == "download" && "$tiene_dl" == "1" ]]; then
+                        camino_modelo="download"
+                    elif [[ "$prio" == "build" && "$tiene_bld" == "1" ]]; then
+                        camino_modelo="build"
+                    elif [[ "$interactivo" == "1" ]]; then
+                        local resp=""
+                        printf '¿descargar o fabricar %s? [d/b]: ' "$real" >&2
+                        read -r resp || resp=""
+                        case "$resp" in
+                            d|D|descargar) camino_modelo="download" ;;
+                            b|B|fabricar)  camino_modelo="build" ;;
+                            *) rp_msg info "'$real' omitido por el usuario"; continue ;;
+                        esac
+                    else
+                        rp_usage_error models "'$real' tiene [download] y [build]: la prioridad '$prio' no está disponible"
+                    fi
+                elif [[ "$interactivo" == "1" ]]; then
                     local resp=""
                     printf '¿descargar o fabricar %s? [d/b]: ' "$real" >&2
                     read -r resp || resp=""
@@ -493,7 +500,7 @@ rp_cmd_models() {
                         *) rp_msg info "'$real' omitido por el usuario"; continue ;;
                     esac
                 else
-                    rp_usage_error models "'$real' tiene [download] y [build]: especifica --download o --build"
+                    rp_usage_error models "'$real' tiene [download] y [build]: especifica --download, --build o --prio"
                 fi
             elif (( tiene_dl == 1 )); then
                 camino_modelo="download"
