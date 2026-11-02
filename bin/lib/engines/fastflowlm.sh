@@ -153,11 +153,13 @@ EOF
 }
 
 rp_eng_fastflowlm_resolve() {
-    # PATH → BIN_DIR → instalación del preset (/opt/fastflowlm).
+    # PATH → BIN_DIR → FARM_DIR → instalación del preset (/opt/fastflowlm).
+    # El farm es ~/.local/share/ropero, donde `ropero install link` deja el
+    # enlace al motor.
     local cand ruta
     ruta="$(command -v flm 2>/dev/null)"
     [[ -n "$ruta" ]] && { printf '%s\n' "$ruta"; return 0; }
-    for cand in "$BIN_DIR/flm" /opt/fastflowlm/bin/flm; do
+    for cand in "$BIN_DIR/flm" "$FARM_DIR/flm" /opt/fastflowlm/bin/flm; do
         if [[ -x "$cand" ]]; then
             printf '%s\n' "$cand"
             return 0

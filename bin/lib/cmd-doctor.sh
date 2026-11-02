@@ -65,8 +65,10 @@ USO: ropero doctor
 
 Verifica la instalación: bash, python3>=3.8, binarios de setup (curl/wget,
 tar, git, uv, hf, jq, cmake, ninja), SO y paquetero, directorios de trabajo
-(GGUF/SAFETENSORS/LOG/STATE), API key, engines (compatibles, instalados y
-qué hay en el slot :$PORT) y modelos activos presentes en disco.
+(GGUF/SAFETENSORS/LOG/STATE), layout de instalación (symlink del entrypoint
+en ~/.local/bin y el farm ~/.local/share/ropero), API key, engines
+(compatibles, instalados y qué hay en el slot :$PORT) y modelos activos
+presentes en disco.
 
 Salida ✓ (bien) / ⚠ (aviso) / ✗ (crítico). Exit 0 si no hay críticos, 1 si
 hay. Crítico: python3, directorios, o que NINGÚN engine compatible esté
@@ -152,6 +154,48 @@ rp_cmd_doctor() {
     _rp_doctor_dir_ok SAFETENSORS_DIR "$SAFETENSORS_DIR"
     _rp_doctor_dir_ok LOG_DIR "$LOG_DIR"
     _rp_doctor_dir_ok STATE_DIR "$STATE_DIR"
+
+    # ── Layout de instalación (avisos; NUNCA crítico) ─────────────────────
+    # Contrato lasaca:
+    #   ~/.local/bin/ropero      → <repo>/bin/ropero   (lo único de ropero)
+    #   ~/.local/share/ropero/    farm: un symlink por entrada de primer
+    #                             nivel del repo + ropero.d → <repo>/bin/lib
+    #
+    # Nada de esto es crítico: ropero funciona igual desde el repo (sin
+    # instalar) que desde el symlink. Es información: si el enlace falta,
+    # `ropero` no está en el PATH.
+    if [[ -L "$BIN_DIR/ropero" ]]; then
+        _rp_doctor_ok "entrypoint: $BIN_DIR/ropero → $(readlink "$BIN_DIR/ropero")"
+        if [[ ! -e "$BIN_DIR/ropero" ]]; then
+            _rp_doctor_warn "el symlink $BIN_DIR/ropero está roto: $(readlink "$BIN_DIR/ropero")"
+        fi
+    elif [[ -e "$BIN_DIR/ropero" ]]; then
+        _rp_doctor_warn "$BIN_DIR/ropero existe y NO es un symlink (el instalador no lo toca)"
+    else
+        _rp_doctor_warn "ropero no está enlazado en $BIN_DIR (ropero install link)"
+    fi
+
+    if [[ -L "$FARM_DIR/ropero.d" ]]; then
+        _rp_doctor_ok "farm: $FARM_DIR/ropero.d → $(readlink "$FARM_DIR/ropero.d")"
+    elif [[ -d "$FARM_DIR" ]]; then
+        _rp_doctor_warn "el farm $FARM_DIR no tiene el alias ropero.d (ropero install link)"
+    else
+        _rp_doctor_warn "no hay farm en $FARM_DIR (ropero install link)"
+    fi
+
+    # R1: en ~/.local/bin sólo debería vivir el entrypoint de ropero. Lo que
+    # haya de más puede ser de otro programa (uv tool, hugo…) o de un engine
+    # instalado por `ropero install engines`: no es culpa de ropero, pero se
+    # dice para que nadie se confunde.
+    local extra="" e
+    for e in "$BIN_DIR"/* "$BIN_DIR"/.[!.]*; do
+        [[ -e "$e" || -L "$e" ]] || continue
+        [[ "${e##*/}" == "ropero" ]] && continue
+        extra="$extra ${e##*/}"
+    done
+    if [[ -n "$extra" ]]; then
+        _rp_doctor_warn "en $BIN_DIR hay más que el entrypoint de ropero:$extra"
+    fi
 
     # ── API key (aviso: el primer arranque la genera, §5.5) ──────────────
     if [[ -n "${LLAMA_API_KEY:-}" ]]; then

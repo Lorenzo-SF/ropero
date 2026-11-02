@@ -20,6 +20,23 @@
 # mensajes en español (spec §3).
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# ¿Nos están SOURCEANDO? (BASH_SOURCE[0] != $0)
+#
+# ropero es una CLI PURA: no es sourceable (a diferencia de tools o trus, que
+# exponen sus funciones). Sourcearlo no puede ser un requisito, pero tampoco
+# puede ser un problema: sin este cerrojo, `source ~/.local/bin/ropero`
+# ejecutaría el dispatcher con los argumentos de la shell de quien lo sourcea
+# y llegaría a `exit` — que MATARÍA esa shell.
+#
+# Decisión: sourceado, este fichero no hace NADA (no toca `set -u`, no define
+# funciones, no exporta nada y no sale con `exit`). Se devuelve con 0 y listo.
+# Quien quiera las funciones, sourcea bin/lib/*.sh directamente.
+# -----------------------------------------------------------------------------
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 # Guarda de versión (spec §3): bash >= 3.
 if (( BASH_VERSINFO[0] < 3 )); then
     printf 'ERROR: ropero necesita bash >= 3 (encontrado: %s)\n' "${BASH_VERSION:-?}" >&2
@@ -32,9 +49,14 @@ ROPERO_VERSION='1.0.0'
 
 # -----------------------------------------------------------------------------
 # ROPERO_ROOT: raíz de la instalación. $0 puede ser un symlink (install.sh
-# crea $BIN_DIR/ropero → <dir>/bin/ropero), así que se sigue la cadena con un
+# crea $BIN_DIR/ropero → <repo>/bin/ropero), así que se sigue la cadena con un
 # bucle de readlink + cd/pwd. SIN readlink -f: no existe en el bash 3.2 de
 # macOS (spec §2.1).
+#
+# OJO: el bucle sólo sigue symlinks del ÚLTIMO componente. Por eso, invocado
+# desde el farm (~/.local/share/ropero/bin/ropero, donde 'bin' es un symlink
+# al repo), ROPERO_ROOT es el farm — y da igual: a través de él se llega al
+# repo. Invocado por el symlink de ~/.local/bin, ROPERO_ROOT es el repo.
 # -----------------------------------------------------------------------------
 _rp_self="$0"
 _rp_hops=0

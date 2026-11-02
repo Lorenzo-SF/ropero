@@ -13,6 +13,14 @@
 # ROPERO_ROOT: lo resuelve el dispatcher (bin/ropero) siguiendo los symlinks
 # de $0. No se toca aquí: este fichero no ejecuta nada al sourcearse.
 
+# Farm: ~/.local/share/ropero — directorio REAL lleno de symlinks al repo
+# (una entrada por elemento de primer nivel) + el alias ropero.d → <repo>/bin/lib.
+# Es el mismo $DIR que usa install.sh (ROPERO_DIR): aquí se llama FARM_DIR
+# porque es la ruta que el runtime necesita, no la del instalador.
+: "${FARM_DIR:=${ROPERO_FARM_DIR:-$HOME/.local/share/ropero}}"
+# Módulos (.sh) que se sourcean: <repo>/bin/lib. El alias del farm
+# (<farm>/ropero.d) apunta aquí.
+: "${MODULES_DIR:=${ROPERO_ROOT:-.}/bin/lib}"
 # GGUFs del catálogo + auxiliares de cada modelo en $GGUF_DIR/<modelo>/
 : "${GGUF_DIR:=$HOME/models/gguf}"
 # Checkpoints safetensors (mlx, airllm, vllm)

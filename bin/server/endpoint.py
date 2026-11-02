@@ -259,24 +259,33 @@ def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
 def resolve_binary(engine: str, override: str = "") -> str:
     """Ruta al ejecutable del backend, o "" si no se encuentra.
 
-    El orden NO es arbitrario y es el mismo que usa bin/_engines.sh:
-    primero lo que ropero linkeó ($BIN_DIR), después las rutas largas
-    conocidas (venv de tensorrt, /opt/fastflowlm) y el PATH al final.
+    El orden NO es arbitrario y es el mismo que usa bin/lib/engines/*.sh:
+    primero lo que ropero linkeó ($BIN_DIR y el farm $FARM_DIR), después las
+    rutas largas conocidas (venv de tensorrt, /opt/fastflowlm) y el PATH al
+    final.
     """
     if override:
         return override
     bin_dir = os.environ.get("BIN_DIR") or os.path.expanduser("~/.local/bin")
+    farm_dir = (
+        os.environ.get("FARM_DIR")
+        or os.environ.get("ROPERO_FARM_DIR")
+        or os.path.expanduser("~/.local/share/ropero")
+    )
     candidates = {
         "tensorrt": [
             os.path.join(bin_dir, "trtllm-serve"),
+            os.path.join(farm_dir, "trtllm-serve"),
             os.path.expanduser("~/.venv-tensorrt/bin/trtllm-serve"),
         ],
         "flm": [
             "/opt/fastflowlm/bin/flm",
             os.path.join(bin_dir, "flm"),
+            os.path.join(farm_dir, "flm"),
         ],
         "mlx": [
             os.path.join(bin_dir, "mlx_lm.server"),
+            os.path.join(farm_dir, "mlx_lm.server"),
         ],
     }.get(engine, [])
     if engine == "mlx":

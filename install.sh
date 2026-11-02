@@ -1,51 +1,72 @@
 #!/usr/bin/env bash
 # =============================================================================
-# install.sh — instalador de una línea de ropero 1.0 (spec §9)
+# install.sh — instalador de ropero (contrato de instalación lasaca)
 # =============================================================================
-# USO:
-#   curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
-#   install.sh [--version <ref>] [--dir <ruta>] [--tarball <fichero>] [--local] [--help]
 #
-# SÓLO OBTIENE ROPERO. Nada de engines, modelos, opencode ni alaja: eso es
-# `ropero install ...` DESPUÉS (requiere GPU, compilaciones y GB de disco, y
-# un instalador que se come todo eso sin que nadie lo pide asusta a la
-# gente). Por qué existe aparte: para instalar ropero hace falta no tener
-# ropero; este script se apoya sólo en bash + curl/wget + tar (+ git como
-# fallback) y corre en una máquina desnuda.
+# LAYOUT CANÓNICO (idéntico en los 8 repos de lasaca)
 #
-# Obtención: tarball de codeload.github.com (o --tarball local, para
-# tests/offline); si la descarga falla, `git clone --depth 1` HTTPS. El token
-# (GITHUB_TOKEN/GH_TOKEN, repos privados) viaja SIEMPRE en cabecera, nunca
-# en la URL (no acaba en historiales ni logs).
+#   <repo>/                    fuente de verdad (en modo --local: el repo ya
+#                              clonado; NO se mueve, NO se copia)
+#     bin/ropero               entrypoint de la utilidad
+#     bin/lib/                 directorio con los módulos (.sh) que se sourcean
 #
-# SEGURIDAD:
-#   - sin sudo: todo va a --dir, $BIN_DIR y un tmp de descarga
-#   - el tarball se inspecciona ANTES de extraerlo: rutas absolutas o con
-#     ".." se rechazan (exit 1, no se extrae nada)
-#   - sustitución atómica: se extrae a un staging JUNTO a --dir (mismo
-#     filesystem) y se renombra; una instalación en curso nunca se rompe
-#   - si --dir ya existe y NO es ropero, se niega: nunca pisa otra cosa
-#   - el único código que se ejecuta tras instalar es
-#     `bash <dir>/bin/ropero --help`
+#   ~/.local/share/ropero/     "farm": directorio REAL lleno de symlinks
+#     <entrada de 1er nivel>   → <repo>/<entrada>   (una por elemento)
+#     ropero.d                 → <repo>/bin/lib      (alias de módulos)
 #
-# Si python3 es < 3.8 (o no existe): AVISO claro apuntando a
-# `ropero install setup`. Aquí no se instala nada más.
+#   ~/.local/bin/ropero        → <repo>/bin/ropero   (SÓLO esto)
 #
-# Exit: 0 · 1 (fetch, extracción, validación) · 2 (uso).
+# REGLAS DURAS
+#   R1  en ~/.local/bin queda SÓLO el entrypoint: ni <name>.d, ni módulos
+#       sueltos, ni common.sh, ni binarios auxiliares.
+#   R2  los ejecutables auxiliares de la utilidad viven en el farm.
+#   R3  el repo NO se mueve, NO se copia y NO pierde su .git. install.sh sólo
+#       crea symlinks (modo local) o descarga un árbol aparte (modo red).
+#   R4  si ~/.local/bin/<name> es un fichero REAL, se avisa y NO se toca: la
+#       decisión es del usuario.
+#   R5  nunca sudo, nunca compila, nunca descarga modelos, nunca arranca
+#       motores. Eso es `ropero install engines|models`.
+#   R6  todo el shell es bash 3.2 (macOS): sin readlink -f, sin mapfile,
+#       sin ${var^^}.
 #
-# bash 3.2 (ADR-1); comentarios y mensajes en español (spec §3).
+# USO
+#   install.sh [--install] [--local] [--dir <ruta>] [--bin-dir <ruta>]
+#              [--version <ref>] [--tarball <fichero>] [--check] [--help]
+#
+#   (sin flags)   instala (modo red)
+#   --install     instala
+#   --local       instala usando el repo donde vive este script como origen.
+#                 Es el modo que usa `lasaca.sh --install`.
+#   --check       verifica SIN instalar ni modificar nada. Exit 0/1.
+#   --help/-h     ayuda. Exit 0.
+#
+# Env: ROPERO_DIR (def ~/.local/share/ropero), ROPERO_BIN_DIR (def ~/.local/bin)
+# Exit: 0 ok · 1 fallo real · 2 uso.
+#
+# NOTA DE LECTURA DEL CONTRATO (modo red): en red no hay repo del usuario,
+# así que el árbol descargado se instala en $DIR y ÉSE es el farm (sus
+# entradas son ficheros reales, no symlinks: un symlink a sí mismo sería un
+# bucle). Lo que sí se mantiene en red es el alias <name>.d → <MODULES> y
+# el symlink del entrypoint en ~/.local/bin. En modo --local (el que usa
+# lasaca.sh) el farm es lo que dice el contrato: symlinks al repo.
+#
+# MIGRACIÓN: hoy ~/.local/share/ropero/ puede ser una COPIA real de una
+# instalación vieja (no un farm). Si $DIR contiene <ENTRY> pero NO es un
+# symlink, se migra: se aparta a un lado, se monta el farm y se borra la
+# copia. Si $DIR contiene otra cosa, se niega (exit 1): nunca se pisa.
+#
+# bootstrap: el script puede llegar por stdin (curl … | bash), donde $0 es
+# "bash" y no hay fichero legible. En ese caso se lee el script COMPLETO de
+# stdin y se re-ejecuta con los mismos argumentos. ROPERO_BOOTSTRAP es el
+# cerrojo: sin él, la segunda pasada re-leería un stdin ya en EOF.
 # =============================================================================
 
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Bootstrap: el script puede llegar por stdin (curl … | bash), donde $0 es
-# "bash" y no hay fichero legible. En ese caso se lee el script COMPLETO de
-# stdin y se re-ejecuta con los mismos argumentos, para que toda la lógica
-# corra con sus "$@" intactos. ROPERO_BOOTSTRAP es el cerrojo: sin él, la
-# segunda pasada re-leería un stdin ya en EOF (port del install.sh viejo).
+# Bootstrap: stdin → fichero legible, conservando "$@".
 # -----------------------------------------------------------------------------
-_rp_bootstrap() {
+_ropero_bootstrap() {
     [[ "${ROPERO_BOOTSTRAP:-0}" == "1" ]] && return 0
 
     local self="${BASH_SOURCE[0]:-$0}"
@@ -64,52 +85,66 @@ _rp_bootstrap() {
     export ROPERO_BOOTSTRAP=1
     exec bash -c "$script" -- "$@"
 }
-_rp_bootstrap "$@"
+_ropero_bootstrap "$@"
 
 # -----------------------------------------------------------------------------
-# Configuración. Flag > variable de entorno > default.
+# Parámetros del repo. Flag > variable de entorno > default.
 # -----------------------------------------------------------------------------
+NAME="ropero"
 REPO="Lorenzo-SF/ropero"
+ENTRY="bin/ropero"          # entrypoint de la utilidad
+MODULES="bin/lib"           # directorio de módulos (.sh) que se sourcean
 CODELOAD="https://codeload.github.com/${REPO}/tar.gz"
 CLONE_URL="https://github.com/${REPO}.git"
+
 DIR="${ROPERO_DIR:-${HOME:-}/.local/share/ropero}"
 BIN_DIR="${ROPERO_BIN_DIR:-${HOME:-}/.local/bin}"
 VERSION="main"
 TARBALL=""
 LOCAL=0
+CHECK=0
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 
-TMP_DIR=""      # temporal de descarga (se borra siempre)
-STAGE_DIR=""    # staging de extracción, JUNTO a --dir (se vuelve el install)
+ORIGIN=""        # raíz del árbol de verdad (repo local o árbol descargado)
+TMP_DIR=""       # temporal de descarga (se borra siempre)
+STAGE_DIR=""     # staging de extracción, JUNTO a $DIR (mismo filesystem)
+LINK_SKIPPED=0  # 1 si ~/.local/bin/<name> era un fichero real (R4)
 
 # -----------------------------------------------------------------------------
-# Salida (a stderr: es presentación humana; el instalador no tiene salida
-# máquina). Marcadores al estilo de ropero: [i] [✓] [!] [✗].
+# Salida: a stderr (presentación humana). Marcadores [i] [✓] [!] [✗].
+# Color sólo si stderr es tty y NO_COLOR no está.
 # -----------------------------------------------------------------------------
 if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-    C_OK=$'\033[1;32m'; C_WARN=$'\033[1;33m'; C_ERR=$'\033[0;31m'
+    C_OK=$'\033[1;32m'; C_WARN=$'\033[1;33m'; C_ERR=$'\033[1;31m'
     C_HEAD=$'\033[1m'; C_OFF=$'\033[0m'
 else
     C_OK=""; C_WARN=""; C_ERR=""; C_HEAD=""; C_OFF=""
 fi
 
+N_OK=0; N_WARN=0; N_FAIL=0
+
 info() { printf '  %s[i]%s %s\n' "$C_HEAD" "$C_OFF" "$*" >&2; }
-ok()   { printf '  %s[✓]%s %s\n' "$C_OK" "$C_OFF" "$*" >&2; }
-warn() { printf '  %s[!]%s %s\n' "$C_WARN" "$C_OFF" "$*" >&2; }
-err()  { printf '  %s[✗]%s %s\n' "$C_ERR" "$C_OFF" "$*" >&2; }
+ok()   { printf '  %s[✓]%s %s\n' "$C_OK" "$C_OFF" "$*" >&2; N_OK=$((N_OK+1)); }
+warn() { printf '  %s[!]%s %s\n' "$C_WARN" "$C_OFF" "$*" >&2; N_WARN=$((N_WARN+1)); }
+err()  { printf '  %s[✗]%s %s\n' "$C_ERR" "$C_OFF" "$*" >&2; N_FAIL=$((N_FAIL+1)); }
 phase() { printf '\n%s▸ %s%s\n' "$C_HEAD" "$*" "$C_OFF" >&2; }
 
-# die <msg>        — fallo real (fetch/extract/validación): exit 1.
-# die_uso <msg>    — error de uso: exit 2 (spec §9).
-die()     { err "$*"; exit 1; }
-die_uso() { err "$*"; exit 2; }
+resumen() {
+    printf '\n── Resumen ──\n' >&2
+    printf '  %s ok · %s avisos · %s fallos\n' "$N_OK" "$N_WARN" "$N_FAIL" >&2
+}
+
+# die <msg> — fallo real: exit 1.
+# die_uso <msg> — error de uso: exit 2.
+die()     { err "$*"; resumen; exit 1; }
+die_uso() { err "$*"; resumen; exit 2; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # -----------------------------------------------------------------------------
 # Limpieza: el temporal y el staging se borran en éxito, fallo y Ctrl-C. Si
-# el staging YA se movió a --dir, STAGE_DIR está vacío y no hay nada que
-# hacer (la instalación quedó atómica).
+# el staging YA se movió a $DIR, STAGE_DIR está vacío (la instalación quedó
+# atómica).
 # -----------------------------------------------------------------------------
 cleanup() {
     if [[ -n "$STAGE_DIR" && -d "$STAGE_DIR" ]]; then rm -rf "$STAGE_DIR" 2>/dev/null || true; fi
@@ -118,48 +153,118 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# -----------------------------------------------------------------------------
+# Utilidades de ruta (bash 3.2 / macOS: nada de readlink -f).
+# -----------------------------------------------------------------------------
+
+# real_dir <ruta> — directorio real (siguiendo symlinks) de una ruta.
+real_dir() {
+    local p="$1" dir base
+    while [[ -L "$p" ]]; do
+        dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+        base="$(readlink "$p")"
+        [[ "$base" != /* ]] && base="$dir/$base"
+        p="$base"
+    done
+    dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+    printf '%s\n' "$dir"
+}
+
+# real_path <ruta> — ruta absoluta real (siguiendo symlinks), sin readlink -f.
+real_path() {
+    local p="$1" dir base
+    while [[ -L "$p" ]]; do
+        dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+        base="$(readlink "$p")"
+        [[ "$base" != /* ]] && base="$dir/$base"
+        p="$base"
+    done
+    dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+    printf '%s\n' "$dir/$(basename "$p")"
+}
+
+# same_path <a> <b> — ¿a y b apuntan al mismo sitio?
+same_path() {
+    local a="$1" b="$2" ra rb
+    [[ -e "$a" && -e "$b" ]] || return 1
+    ra="$(real_path "$a")" || return 1
+    rb="$(real_path "$b")" || return 1
+    [[ "$ra" == "$rb" ]]
+}
+
+# entradas <dir> — una entrada de primer nivel por línea (sin .git).
+entradas() {
+    local d="$1" e base
+    for e in "$d"/* "$d"/.[!.]*; do
+        [[ -e "$e" || -L "$e" ]] || continue
+        base="${e##*/}"
+        [[ "$base" == ".git" ]] && continue
+        printf '%s\n' "$base"
+    done
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Uso
+# -----------------------------------------------------------------------------
 usage() {
     cat <<EOF
-install.sh — instalador de ropero (SÓLO obtiene ropero)
+install.sh — instalador de ropero (contrato lasaca)
 
 USO:
   curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash
-  install.sh [--version <ref>] [--dir <ruta>] [--tarball <fichero>] [--help]
+  install.sh [--install] [--local] [--dir <ruta>] [--bin-dir <ruta>]
+             [--version <ref>] [--tarball <fichero>] [--check] [--help]
 
 FLAGS:
-  --version <ref>   ref de GitHub a instalar (default: main). Sin valor,
-                    usa main
-  --dir <ruta>      dónde instalar (default: \${ROPERO_DIR:-\$HOME/.local/share/ropero})
-  --tarball <fich>  instala desde un tarball LOCAL (tests/offline)
-  --help, -h        esta ayuda
+  --install          instala (es lo que pasa si no se da ningún flag)
+  --local            instala usando el repo donde vive este script como
+                     origen. Es el modo que usa 'lasaca.sh --install'
+  --dir <ruta>       dónde vive el farm (default: \${ROPERO_DIR:-\$HOME/.local/share/ropero})
+  --bin-dir <ruta>   dónde vive el symlink del entrypoint
+                     (default: \${ROPERO_BIN_DIR:-\$HOME/.local/bin})
+  --version <ref>    ref de GitHub a instalar (default: main). Sólo modo red
+  --tarball <fich>   instala desde un tarball LOCAL (tests/offline)
+  --check            verifica SIN instalar ni modificar nada. Exit 0/1
+  --help, -h         esta ayuda
 
 VARIABLES DE ENTORNO:
-  ROPERO_DIR        igual que --dir        ROPERO_BIN_DIR   (\$HOME/.local/bin)
+  ROPERO_DIR         igual que --dir
+  ROPERO_BIN_DIR     igual que --bin-dir
   GITHUB_TOKEN / GH_TOKEN   sólo si el repositorio es privado (viaja en
-                            cabecera, nunca en la URL)
+                     cabecera, nunca en la URL)
 
-QUÉ HACE:
-  1. descarga el tarball de codeload (o usa --tarball); fallback git clone
-  2. valida las rutas del tarball (nada de absolutas ni "..") y extrae a un
-     staging junto a --dir
-  3. sustituye --dir atómicamente (si ya era ropero: actualiza; si es otra
-     cosa: se niega)
-  4. crea \$BIN_DIR/ropero → <dir>/bin/ropero y verifica que responde
+LAYOUT QUE DEJA:
+  ~/.local/share/ropero/   farm: un symlink por entrada de primer nivel del
+                           repo + ropero.d → <repo>/bin/lib
+  ~/.local/bin/ropero      → <repo>/bin/ropero   (y NADA más en ~/.local/bin)
 
-NO instala engines ni modelos: 'ropero install' (después) los gestiona.
-Exit: 0 · 1 (fetch/extracción/validación) · 2 (uso).
+Exit: 0 ok · 1 fallo real · 2 uso.
 EOF
 }
 
 # -----------------------------------------------------------------------------
-# parse_args — los flags pisan al entorno. Desconocido → exit 2 (§9).
-# --version acepta el valor OPCIONAL (sin él, main): así `install.sh
-# --version` en una máquina sin red falla LIMPIO en el fetch (exit 1) en
-# vez de morir por error de uso.
+# parse_args — los flags pisan al entorno. Flag desconocido → exit 2.
 # -----------------------------------------------------------------------------
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --install)
+                shift ;;
+            --local)
+                LOCAL=1; shift ;;
+            --check)
+                CHECK=1; shift ;;
+            --dir)
+                [[ $# -ge 2 ]] || die_uso "--dir necesita un directorio"
+                DIR="$2"; shift 2 ;;
+            --dir=*)
+                DIR="${1#*=}"; shift ;;
+            --bin-dir)
+                [[ $# -ge 2 ]] || die_uso "--bin-dir necesita un directorio"
+                BIN_DIR="$2"; shift 2 ;;
+            --bin-dir=*)
+                BIN_DIR="${1#*=}"; shift ;;
             --version)
                 if [[ $# -ge 2 && "$2" != -* && -n "$2" ]]; then
                     VERSION="$2"; shift 2
@@ -171,18 +276,11 @@ parse_args() {
                 VERSION="${1#*=}"
                 [[ -n "$VERSION" ]] || die_uso "--version necesita una referencia"
                 shift ;;
-            --dir)
-                [[ $# -ge 2 ]] || die_uso "--dir necesita un directorio"
-                DIR="$2"; shift 2 ;;
-            --dir=*)
-                DIR="${1#*=}"; shift ;;
             --tarball)
                 [[ $# -ge 2 ]] || die_uso "--tarball necesita un fichero"
                 TARBALL="$2"; shift 2 ;;
             --tarball=*)
                 TARBALL="${1#*=}"; shift ;;
-            --local)
-                LOCAL=1; shift ;;
             -h|--help)
                 usage; exit 0 ;;
             *)
@@ -191,12 +289,24 @@ parse_args() {
     done
 
     [[ -n "${HOME:-}" ]] || die "HOME no está definido: no hay dónde instalar"
-    [[ -n "$DIR" ]] || die "--dir vacío"
-    [[ -n "$VERSION" ]] || die "--version vacío"
+    [[ -n "$DIR" ]] || die_uso "--dir vacío"
+    [[ -n "$BIN_DIR" ]] || die_uso "--bin-dir vacío"
+    [[ -n "$VERSION" ]] || die_uso "--version vacío"
+
     DIR="${DIR%/}"
     [[ -n "$DIR" ]] || DIR="/"
+    BIN_DIR="${BIN_DIR%/}"
+    [[ -n "$BIN_DIR" ]] || BIN_DIR="/"
+
     if [[ -n "$TARBALL" && ! -f "$TARBALL" ]]; then
         die "el tarball local no existe: $TARBALL"
+    fi
+    if [[ "$LOCAL" == "1" && -n "$TARBALL" ]]; then
+        warn "--local ignora --tarball: el origen es el repo de este script"
+        TARBALL=""
+    fi
+    if [[ "$LOCAL" == "1" && "$VERSION" != "main" ]]; then
+        info "--local ignora --version ($VERSION): el origen es el repo local"
     fi
     return 0
 }
@@ -226,41 +336,19 @@ _dl() {
 }
 
 # -----------------------------------------------------------------------------
-# phase_check — herramientas imprescindibles. python3 sólo AVISA (aquí no
-# se instala nada: eso es `ropero install setup`, §9).
+# FASE 1 — preparar
 # -----------------------------------------------------------------------------
-phase_check() {
-    phase "comprobar herramientas"
-
-    have tar || die "falta 'tar', imprescindible para desempaquetar"
-    ok "tar disponible"
-
-    if [[ -n "$TARBALL" ]]; then
-        # Con tarball local no hay descarga: curl/wget/git son opcionales.
-        info "origen: tarball local $TARBALL (sin red)"
-        return 0
-    fi
-
-    if have curl; then
-        DL_TOOL="curl"
-    elif have wget; then
-        DL_TOOL="wget"
-    else
-        # git clone sigue siendo un plan B viable sin curl/wget.
-        if have git; then
-            warn "ni curl ni wget: se intentará git clone como fallback"
-            DL_TOOL=""
-            return 0
-        fi
-        die "falta 'curl' (o 'wget', o 'git'): no hay forma de obtener ropero"
-    fi
-    ok "descargador: ${DL_TOOL}"
+fase_preparar() {
+    phase "preparar"
+    mkdir -p "$BIN_DIR" 2>/dev/null || die "no se pudo crear $BIN_DIR"
+    ok "$BIN_DIR listo"
     return 0
 }
 
 # -----------------------------------------------------------------------------
-# phase_fetch — deja el origen en TMP_DIR/ropero.tar.gz (SRC_TAR) o decide
-# clonar (SRC_CLONE=1). Error limpio exit 1 si no hay red.
+# FASE 2 — obtener (sólo modo red)
+# Descarga el tarball (o usa --tarball), lo INSPECTA antes de extraer y lo
+# instala en $DIR con sustitución atómica.
 # -----------------------------------------------------------------------------
 SRC_TAR=""
 SRC_CLONE=0
@@ -277,138 +365,118 @@ make_tmp() {
     return 0
 }
 
-phase_fetch() {
-    if [[ "$LOCAL" == "1" ]]; then
-        STAGE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        SRC_CLONE=1
-        SRC_TAR="$STAGE_DIR"
-        ok "modo local: $STAGE_DIR"
-        return 0
-    fi
+fase_obtener() {
     phase "obtener ropero (ref: $VERSION)"
 
+    have tar || die "falta 'tar', imprescindible para desempaquetar"
+
     if [[ -n "$TARBALL" ]]; then
+        info "origen: tarball local $TARBALL (sin red)"
         SRC_TAR="$TARBALL"
-        return 0
-    fi
-
-    make_tmp
-    local out="$TMP_DIR/ropero.tar.gz"
-
-    if [[ -n "$DL_TOOL" ]]; then
-        info "descargando $CODELOAD/$VERSION"
-        # Sin ruido: el error de red se explica aquí, con contexto, y no con
-        # el volcado de curl.
-        if _dl "$CODELOAD/$VERSION" "$out" 2>/dev/null && [[ -s "$out" ]]; then
-            tar -tzf "$out" >/dev/null 2>&1 || die "el tarball descargado está corrupto"
-            ok "descargado ($(wc -c <"$out" | tr -d ' ') bytes)"
-            SRC_TAR="$out"
-            return 0
-        fi
-        rm -f "$out" 2>/dev/null || true
-        warn "la descarga del tarball falló (¿sin red? ¿ref '$VERSION' inexistente?)"
-    fi
-
-    # Fallback: clone poco profundo por HTTPS (token en cabecera, §9).
-    if have git; then
-        info "fallback: git clone --depth 1 $CLONE_URL"
-        local clone="$TMP_DIR/ropero-clone"
-        if [[ -n "$TOKEN" ]]; then
-            git -c "http.extraheader=Authorization: Bearer $TOKEN" \
-                clone --depth 1 "$CLONE_URL" "$clone" >/dev/null 2>&1 \
-                || die "no se pudo descargar '$VERSION' (tarball y clone fallaron)"
+    else
+        if have curl; then
+            DL_TOOL="curl"
+        elif have wget; then
+            DL_TOOL="wget"
+        elif have git; then
+            warn "ni curl ni wget: se intentará git clone como fallback"
+            DL_TOOL=""
         else
-            git clone --depth 1 "$CLONE_URL" "$clone" >/dev/null 2>&1 \
-                || die "no se pudo descargar '$VERSION' (tarball y clone fallaron)"
+            die "falta 'curl' (o 'wget', o 'git'): no hay forma de obtener ropero"
         fi
-        if [[ -z "$TOKEN" ]]; then
-            :
+
+        make_tmp
+        local out="$TMP_DIR/ropero.tar.gz"
+        info "descargando $CODELOAD/$VERSION"
+        if [[ -n "$DL_TOOL" ]]; then
+            if _dl "$CODELOAD/$VERSION" "$out" 2>/dev/null && [[ -s "$out" ]]; then
+                tar -tzf "$out" >/dev/null 2>&1 || die "el tarball descargado está corrupto"
+                ok "descargado ($(wc -c <"$out" | tr -d ' ') bytes)"
+                SRC_TAR="$out"
+            else
+                rm -f "$out" 2>/dev/null || true
+                warn "la descarga del tarball falló (¿sin red? ¿ref '$VERSION' inexistente?)"
+            fi
         fi
-        ok "clonado"
-        SRC_CLONE=1
-        SRC_TAR="$clone"   # el clone es el staging en sí (ver phase_extract)
-        return 0
+
+        if [[ -z "$SRC_TAR" ]]; then
+            have git || die "no se pudo obtener ropero (sin curl/wget no queda fallback de clone: falta git)"
+            info "fallback: git clone --depth 1 $CLONE_URL"
+            local clone="$TMP_DIR/ropero-clone"
+            if [[ -n "$TOKEN" ]]; then
+                git -c "http.extraheader=Authorization: Bearer $TOKEN" \
+                    clone --depth 1 "$CLONE_URL" "$clone" >/dev/null 2>&1 \
+                    || die "no se pudo descargar '$VERSION' (tarball y clone fallaron)"
+            else
+                git clone --depth 1 "$CLONE_URL" "$clone" >/dev/null 2>&1 \
+                    || die "no se pudo descargar '$VERSION' (tarball y clone fallaron)"
+            fi
+            ok "clonado"
+            SRC_CLONE=1
+            SRC_TAR="$clone"
+        fi
     fi
 
-    die "no se pudo obtener ropero (sin curl/wget no queda fallback de clone: falta git)"
-}
-
-# -----------------------------------------------------------------------------
-# phase_extract — valida las rutas del tarball, extrae a un staging JUNTO a
-# --dir y deja el árbol listo. Con origen=clone, el staging ES el clone.
-# -----------------------------------------------------------------------------
-phase_extract() {
-    phase "extraer"
-
+    # ── Extracción: a un staging JUNTO a $DIR (mismo filesystem → el rename
+    #    final es atómico).
     local padre
     padre="$(dirname "$DIR")"
     mkdir -p "$padre" 2>/dev/null || die "no se pudo crear $padre"
 
     if [[ "$SRC_CLONE" == "1" ]]; then
         STAGE_DIR="$SRC_TAR"
-        # El .git del clone no debe acabar en la instalación.
         rm -rf "$STAGE_DIR/.git" 2>/dev/null || true
-        [[ -f "$STAGE_DIR/bin/ropero" ]] || die "el clone no contiene bin/ropero"
+        [[ -f "$STAGE_DIR/$ENTRY" ]] || die "el clon no contiene $ENTRY"
         ok "staging (clone): $STAGE_DIR"
-        return 0
+    else
+        # ── Seguridad del tarball: nada de rutas absolutas ni ".." que salgan
+        #    del destino. Se revisa el listado ANTES de extraer nada.
+        local listado=""
+        listado="$(tar -tzf "$SRC_TAR" 2>/dev/null)" || die "no se pudo leer el tarball"
+        [[ -n "$listado" ]] || die "el tarball está vacío"
+
+        local e
+        while IFS= read -r e; do
+            [[ -n "$e" ]] || continue
+            case "$e" in
+                /*)               die "el tarball contiene una ruta absoluta ($e): no se extrae" ;;
+                ../*|*/../*|*/..) die "el tarball contiene una ruta fuera del destino ($e): no se extrae" ;;
+            esac
+        done <<<"$listado"
+
+        # --strip-components sólo si TODAS las entradas comparten el mismo
+        # directorio raíz (los tarballs de GitHub siempre: ropero-main/...).
+        local strip=0 tops ntops
+        tops="$(printf '%s\n' "$listado" | awk -F/ 'NF>1 {print $1}' | sort -u)"
+        ntops="$(printf '%s\n' "$tops" | grep -c . || true)"
+        [[ "$ntops" == "1" ]] && strip=1
+
+        STAGE_DIR="$(mktemp -d "$padre/.${NAME}-stage.XXXXXX" 2>/dev/null)" \
+            || die "no se pudo crear el staging junto a $DIR"
+
+        local -a tar_flags=(-xzf "$SRC_TAR" -C "$STAGE_DIR")
+        # --no-same-owner sólo existe en GNU tar; bsdtar no lo necesita.
+        if tar --version 2>/dev/null | head -n 1 | grep -q "GNU tar"; then
+            tar_flags+=(--no-same-owner)
+        fi
+        (( strip == 1 )) && tar_flags+=(--strip-components=1)
+
+        tar "${tar_flags[@]}" || die "falló la extracción del tarball"
+        [[ -f "$STAGE_DIR/$ENTRY" ]] || die "el tarball no contiene $ENTRY"
+        chmod +x "$STAGE_DIR/$ENTRY" 2>/dev/null || true
+        ok "extraído en staging: $STAGE_DIR"
     fi
 
-    # ── Seguridad del tarball: nada de rutas absolutas ni ".." que salgan
-    # del destino. Se revisa el listado ANTES de extraer nada.
-    local entradas=""
-    entradas="$(tar -tzf "$SRC_TAR" 2>/dev/null)" || die "no se pudo leer el tarball"
-    [[ -n "$entradas" ]] || die "el tarball está vacío"
-
-    local e
-    while IFS= read -r e; do
-        [[ -n "$e" ]] || continue
-        case "$e" in
-            /*)               die "el tarball contiene una ruta absoluta ($e): no se extrae" ;;
-            ../*|*/../*|*/..) die "el tarball contiene una ruta fuera del destino ($e): no se extrae" ;;
-        esac
-    done <<<"$entradas"
-
-    # --strip-components sólo si TODAS las entradas comparten el mismo
-    # directorio raíz (los tarballs de GitHub siempre: ropero-main/...).
-    local strip=0 tops ntops
-    tops="$(printf '%s\n' "$entradas" | awk -F/ 'NF>1 {print $1}' | sort -u)"
-    ntops="$(printf '%s\n' "$tops" | grep -c . || true)"
-    [[ "$ntops" == "1" ]] && strip=1
-
-    STAGE_DIR="$(mktemp -d "$padre/.rp-stage.XXXXXX" 2>/dev/null)" \
-        || die "no se pudo crear el staging junto a $DIR"
-
-    local -a tar_flags=(-xzf "$SRC_TAR" -C "$STAGE_DIR")
-    # --no-same-owner sólo existe en GNU tar; bsdtar no lo necesita (no se
-    # extrae nada como root).
-    if tar --version 2>/dev/null | head -n 1 | grep -q "GNU tar"; then
-        tar_flags+=(--no-same-owner)
-    fi
-    (( strip == 1 )) && tar_flags+=(--strip-components=1)
-
-    tar "${tar_flags[@]}" || die "falló la extracción del tarball"
-
-    # Fallo rápido: sin lanzador no hay instalación.
-    [[ -f "$STAGE_DIR/bin/ropero" ]] || die "el tarball no contiene bin/ropero"
-    chmod +x "$STAGE_DIR/bin/ropero" 2>/dev/null || true
-    ok "extraído en staging: $STAGE_DIR"
-    return 0
-}
-
-# -----------------------------------------------------------------------------
-# phase_install — sustitución atómica de --dir.
-# -----------------------------------------------------------------------------
-phase_install() {
-    phase "instalar en $DIR"
-
-    if [[ -e "$DIR" ]]; then
-        if [[ ! -f "$DIR/bin/ropero" ]]; then
-            # Nunca se pisa lo que no es ropero (§9): un --dir apuntando al
-            # home del usuario o a otro programa es error CLARO, no rm -rf.
+    # ── Sustitución atómica de $DIR.
+    if [[ -e "$DIR" || -L "$DIR" ]]; then
+        if [[ -L "$DIR" ]]; then
+            die "$DIR es un symlink (¿instalación local?): no lo sustituyo. Usa --local o quítalo tú"
+        fi
+        if [[ ! -f "$DIR/$ENTRY" ]]; then
+            # Nunca se pisa lo que no es ropero: un --dir apuntando al home del
+            # usuario o a otro programa es error CLARO, no rm -rf.
             die "$DIR ya existe y NO es una instalación de ropero: no lo toco"
         fi
-        # Ya era ropero: actualizar = apartar, poner el nuevo, borrar el
-        # viejo. El symlink de $BIN_DIR nunca queda colgando más de un rename.
         local old="$DIR.old.$$"
         mv "$DIR" "$old" || die "no se pudo apartar $DIR"
         if ! mv "$STAGE_DIR" "$DIR"; then
@@ -423,35 +491,171 @@ phase_install() {
         STAGE_DIR=""
         ok "instalado: $DIR"
     fi
-    # mktemp -d deja el staging en 700: la instalación debe tener permisos
-    # normales, como si se hubiera descomprimido a mano.
     chmod 755 "$DIR" 2>/dev/null || true
+
+    # En red el árbol descargado ES el farm: no hay repo del usuario al que
+    # enlazar, así que ORIGIN es el propio $DIR.
+    ORIGIN="$DIR"
     return 0
 }
 
 # -----------------------------------------------------------------------------
-# phase_link — symlink del lanzador en $BIN_DIR.
+# FASE 3 — origen local (sólo con --local)
+#
+#   origen = dirname de este script; se verifica que existe <origen>/<ENTRY>.
+#   El repo NO se mueve ni se copia: aquí sólo hay symlinks (R3).
 # -----------------------------------------------------------------------------
-LINK_SKIPPED=0
-phase_link() {
-    phase "enlazar"
+fase_origen_local() {
+    phase "origen local"
+    local self="${BASH_SOURCE[0]:-$0}"
+    if [[ ! -f "$self" ]]; then
+        die "--local necesita el repo en disco: install.sh llegó por stdin"
+    fi
+    ORIGIN="$(real_dir "$self")" || die "no se pudo resolver el directorio de este script"
+    [[ -n "$ORIGIN" ]] || die "no se pudo resolver el directorio de este script"
+    [[ -f "$ORIGIN/$ENTRY" ]] || die "el repo local no contiene $ENTRY: $ORIGIN/$ENTRY"
+    ok "origen: $ORIGIN"
+    return 0
+}
 
-    mkdir -p "$BIN_DIR" || die "no se pudo crear $BIN_DIR"
+# -----------------------------------------------------------------------------
+# FASE 4 — farm (~/.local/share/<name>)
+#
+#   Un symlink por entrada de primer nivel del ORIGEN + <name>.d → <MODULES>.
+#
+#   · Si el farm es un symlink (instalación local previa): no se escribe
+#     dentro, se avisa y se sigue.
+#   · Si es un directorio real con <ENTRY> (la copia de la instalación
+#     vieja): se MIGRA — se aparta a un lado, se monta el farm y se borra.
+#   · Si es un directorio real con otra cosa: se niega (nunca se pisa).
+# -----------------------------------------------------------------------------
+fase_farm() {
+    phase "farm: $DIR"
+    local farm="$DIR"
 
-    if [[ -e "$BIN_DIR/ropero" && ! -L "$BIN_DIR/ropero" ]]; then
-        # Un fichero REAL ahí (otro programa, un binario copiado a mano): no
-        # se pisa en silencio. El usuario decide.
-        warn "$BIN_DIR/ropero existe y NO es un symlink: no lo he tocado"
-        LINK_SKIPPED=1
+    if [[ -L "$farm" ]]; then
+        # Instalación local previa: el farm es un symlink. Escribir dentro
+        # escribiría en el repo del usuario: no se hace.
+        warn "$farm ya es un symlink (instalación local previa): no escribo dentro"
+        return 0
+    fi
+    if [[ -e "$farm" && ! -d "$farm" ]]; then
+        die "$farm existe y no es un directorio: no lo toco"
+    fi
+
+    if [[ "$ORIGIN" == "$farm" ]]; then
+        # Modo red: el árbol descargado ya vive en el farm. Sus entradas son
+        # ficheros reales (un symlink a sí mismo sería un bucle), así que
+        # sólo se añade el alias de módulos.
+        info "el árbol descargado es el farm: sus entradas son ficheros reales"
+        farm_alias "$farm"
         return 0
     fi
 
-    ln -sfn "$DIR/bin/ropero" "$BIN_DIR/ropero" || die "no se pudo crear el symlink $BIN_DIR/ropero"
-    ok "$BIN_DIR/ropero → $DIR/bin/ropero"
+    # ¿Es una copia real de una instalación anterior? → migrar a farm.
+    #
+    # OJO: se mira el 'bin' de PRIMER NIVEL, no $farm/bin/ropero. En un farm
+    # ya montado, 'bin' es un symlink al repo, así que $farm/bin/ropero es un
+    # fichero REAL a través de él: mirarlo por ahí detectaría "copia" en cada
+    # ejecución y reharía el farm entero (y perdería lo que hubiera dentro).
+    local antigua=""
+    local entry_dir="${ENTRY%/*}"
+    if [[ "$entry_dir" == "$ENTRY" ]]; then entry_dir=""; fi
+    if [[ -n "$entry_dir" && -d "$farm/$entry_dir" && ! -L "$farm/$entry_dir" \
+          && -e "$farm/$ENTRY" ]]; then
+        antigua="$farm.antigua.$$"
+        mv "$farm" "$antigua" || die "no se pudo apartar $farm"
+        ok "instalación anterior (copia real) apartada: $antigua"
+    fi
 
-    # ¿Está $BIN_DIR en el PATH? Se avisa; el PATH del usuario es suyo.
+    # Si el farm ya contiene cosas REALES que no son nuestras: no se pisa.
+    local e base reales=""
+    for e in "$farm"/* "$farm"/.[!.]*; do
+        [[ -e "$e" || -L "$e" ]] || continue
+        [[ -L "$e" ]] && continue
+        reales="$reales ${e##*/}"
+    done
+    if [[ -n "$reales" ]]; then
+        die "$farm contiene cosas que no son symlinks ($reales): no lo toco"
+    fi
+
+    mkdir -p "$farm" || die "no se pudo crear $farm"
+
+    local destino enlaces=0
+    while IFS= read -r base; do
+        [[ -n "$base" ]] || continue
+        destino="$ORIGIN/$base"
+        if [[ -L "$farm/$base" ]]; then
+            rm -f "$farm/$base" 2>/dev/null || true
+        fi
+        if ln -s "$destino" "$farm/$base" 2>/dev/null; then
+            enlaces=$((enlaces+1))
+        else
+            err "no se pudo enlazar $farm/$base"
+        fi
+    done < <(entradas "$ORIGIN")
+    (( enlaces > 0 )) && ok "farm: $enlaces entradas → $ORIGIN"
+
+    farm_alias "$farm"
+
+    # La copia antigua ya está sustituida: se borra.
+    if [[ -n "$antigua" ]]; then
+        rm -rf "$antigua" 2>/dev/null || true
+        ok "instalación anterior eliminada: $antigua"
+    fi
+    return 0
+}
+
+# farm_alias <farm> — <name>.d → <origin>/<MODULES>
+farm_alias() {
+    local farm="$1" alias="$farm/$NAME.d"
+    if [[ -L "$alias" ]]; then
+        rm -f "$alias" 2>/dev/null || true
+    elif [[ -e "$alias" ]]; then
+        warn "$alias existe y NO es un symlink: no lo he tocado"
+        return 0
+    fi
+    ln -s "$ORIGIN/$MODULES" "$alias" || die "no se pudo enlazar $alias"
+    ok "$alias → $ORIGIN/$MODULES"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# FASE 5 — enlazar (~/.local/bin/<name>)
+#
+#   El ÚNICO symlink que ropero deja en ~/.local/bin (R1). Si ahí hay un
+#   fichero REAL no se toca (R4): la decisión es del usuario.
+# -----------------------------------------------------------------------------
+fase_enlazar() {
+    phase "enlazar: $BIN_DIR/$NAME"
+    mkdir -p "$BIN_DIR" || die "no se pudo crear $BIN_DIR"
+
+    local link="$BIN_DIR/$NAME"
+    local target="$ORIGIN/$ENTRY"
+
+    if [[ -e "$link" && ! -L "$link" ]]; then
+        # R4: un fichero REAL ahí (otro programa, un binario copiado a mano):
+        # no se pisa en silencio. El usuario decide.
+        warn "$link existe y NO es un symlink: no lo he tocado"
+        LINK_SKIPPED=1
+    else
+        rm -f "$link" 2>/dev/null || true
+        ln -s "$target" "$link" || die "no se pudo crear el symlink $link"
+        ok "$link → $target"
+    fi
+
+    # R1: en ~/.local/bin sólo vive el entrypoint. El enlace heredado
+    # <name>.d (layout viejo) se retira; si es un fichero real, ni se toca.
+    local legacy="$BIN_DIR/$NAME.d"
+    if [[ -L "$legacy" ]]; then
+        rm -f "$legacy" 2>/dev/null || true
+        warn "enlace obsoleto eliminado: $legacy (el layout nuevo deja sólo el entrypoint)"
+    elif [[ -e "$legacy" ]]; then
+        warn "$legacy existe y NO es un symlink: no lo he tocado"
+    fi
+
     case ":$PATH:" in
-        *":$BIN_DIR:"*) ;;
+        *":$BIN_DIR:"*) ok "$BIN_DIR está en el PATH" ;;
         *)
             warn "$BIN_DIR no está en tu PATH"
             printf '       export PATH="%s:$PATH"\n' "$BIN_DIR" >&2
@@ -461,15 +665,16 @@ phase_link() {
 }
 
 # -----------------------------------------------------------------------------
-# phase_verify — el único código que se ejecuta tras instalar: --help.
+# FASE 6 — verificar
+# El único código que se ejecuta tras instalar: --help. NO compila nada, no
+# descarga modelos y no arranca motores (R5).
 # -----------------------------------------------------------------------------
-phase_verify() {
+fase_verificar() {
     phase "verificar"
+    local bin="$ORIGIN/$ENTRY"
+    [[ -f "$bin" ]] || die "no existe el entrypoint: $bin"
 
-    local bin="$DIR/bin/ropero"
-    [[ -x "$bin" ]] || die "el lanzador no es ejecutable: $bin"
-
-    local rc
+    local rc=0
     set +e
     bash "$bin" --help >/dev/null 2>&1 </dev/null
     rc=$?
@@ -483,29 +688,136 @@ phase_verify() {
 }
 
 # -----------------------------------------------------------------------------
-# phase_python — aviso (y SÓLO aviso) si python3 < 3.8 (§9).
+# --check: verifica SIN instalar ni modificar nada.
 # -----------------------------------------------------------------------------
-phase_python() {
-    local pyv=""
-    if have python3; then
-        # Un shim (asdf/pyenv) puede responder 0 y no ejecutar python: se
-        # parsea la salida, no el exit code.
-        pyv="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null | tail -n 1 || true)"
-    fi
-    if [[ "$pyv" =~ ^[0-9]+\.[0-9]+$ ]]; then
-        local pymaj="${pyv%%.*}" pymin="${pyv##*.}"
-        if (( pymaj > 3 || (pymaj == 3 && pymin >= 8) )); then
-            ok "python3 $pyv"
-            return 0
+fase_check() {
+    phase "comprobar el layout"
+
+    # ── El origen contra el que se compara. Si el symlink del entrypoint
+    #    existe, el origen es el repo al que apunta: así el check da igual
+    #    cómo se instalara (local o red). Si no, se deduce del modo.
+    local link="$BIN_DIR/$NAME"
+    local target dir rel=""
+    if [[ -L "$link" ]]; then
+        target="$(readlink "$link")"
+        case "$target" in
+            /*) ;;
+            *) target="$PWD/$target" ;;
+        esac
+        dir="$(real_path "$(dirname "$target")")" || dir=""
+        if [[ -n "$dir" ]]; then
+            rel="${ENTRY%/*}"
+            if [[ "$rel" == "$ENTRY" ]]; then
+                ORIGIN="$dir"
+            else
+                ORIGIN="$(cd -P "$dir/.." 2>/dev/null && pwd)" || ORIGIN=""
+            fi
         fi
-        warn "python3 $pyv es demasiado antiguo (ropero pide >= 3.8)"
-    else
-        warn "no se encuentra python3"
     fi
-    warn "ropero se ha instalado igualmente: el lanzador funciona sin él."
-    warn "Los modelos se configuran en TOML y se leen con python3 (>= 3.8):"
-    warn "'ropero install models' fallará hasta que lo resuelvas con:"
-    warn "    ropero install setup"
+
+    if [[ -z "$ORIGIN" ]]; then
+        if [[ "$LOCAL" == "1" ]]; then
+            local self="${BASH_SOURCE[0]:-$0}"
+            ORIGIN="$(real_dir "$self")" || ORIGIN=""
+            [[ -n "$ORIGIN" ]] || die "no se pudo resolver el directorio de este script"
+            [[ -f "$ORIGIN/$ENTRY" ]] || die "el repo local no contiene $ENTRY: $ORIGIN/$ENTRY"
+        else
+            ORIGIN="$DIR"
+            [[ -d "$ORIGIN" ]] || die "$DIR no existe: $NAME no está instalado"
+            [[ -f "$ORIGIN/$ENTRY" ]] || die "$DIR no contiene $ENTRY: $NAME no está instalado"
+        fi
+    fi
+    ok "origen: $ORIGIN"
+
+    # ── 1. El entrypoint en ~/.local/bin.
+    if [[ -L "$link" ]]; then
+        ok "$link → $(readlink "$link")"
+        if [[ -e "$link" ]]; then
+            ok "el symlink resuelve"
+        else
+            err "el symlink está roto: $(readlink "$link")"
+        fi
+        if same_path "$link" "$ORIGIN/$ENTRY"; then
+            ok "apunta al entrypoint: $ORIGIN/$ENTRY"
+        else
+            err "apunta a otra cosa (esperado: $ORIGIN/$ENTRY)"
+        fi
+    elif [[ -e "$link" ]]; then
+        err "$link existe y NO es un symlink"
+    else
+        err "$NAME NO está enlazado en $BIN_DIR"
+        printf '       → bash %s --local\n' "$ORIGIN/install.sh" >&2
+    fi
+
+    # ── 2. R1: en ~/.local/bin sólo el entrypoint.
+    if [[ -e "$BIN_DIR/$NAME.d" || -L "$BIN_DIR/$NAME.d" ]]; then
+        warn "$BIN_DIR/$NAME.d existe: el layout nuevo deja sólo el entrypoint en ~/.local/bin"
+    else
+        ok "$BIN_DIR sólo contiene el entrypoint de $NAME"
+    fi
+
+    # ── 3. El farm.
+    local farm="$DIR"
+    if [[ -L "$farm" ]]; then
+        warn "$farm es un symlink (instalación local previa): no se comprueba su contenido"
+    elif [[ ! -d "$farm" ]]; then
+        err "el farm no existe: $farm"
+    else
+        ok "farm: $farm"
+
+        local alias="$farm/$NAME.d"
+        if [[ -L "$alias" ]]; then
+            ok "$alias → $(readlink "$alias")"
+            if same_path "$alias" "$ORIGIN/$MODULES"; then
+                ok "el alias de módulos apunta a $ORIGIN/$MODULES"
+            else
+                err "el alias de módulos no apunta a $ORIGIN/$MODULES"
+            fi
+        elif [[ -e "$alias" ]]; then
+            err "$alias existe y NO es un symlink"
+        else
+            err "falta el alias de módulos: $alias"
+        fi
+
+        # Una entrada por cada elemento de primer nivel del origen.
+        local base destino faltan=0
+        while IFS= read -r base; do
+            [[ -n "$base" ]] || continue
+            destino="$ORIGIN/$base"
+            if [[ "$ORIGIN" == "$farm" ]]; then
+                # Modo red: el árbol está en el farm; sus entradas son reales.
+                [[ -e "$farm/$base" ]] || { err "falta $farm/$base"; faltan=$((faltan+1)); }
+            elif [[ -L "$farm/$base" ]]; then
+                if same_path "$farm/$base" "$destino"; then
+                    :
+                else
+                    err "$farm/$base no apunta a $destino"
+                    faltan=$((faltan+1))
+                fi
+            elif [[ -e "$farm/$base" ]]; then
+                err "$farm/$base existe y NO es un symlink"
+                faltan=$((faltan+1))
+            else
+                err "falta $farm/$base → $destino"
+                faltan=$((faltan+1))
+            fi
+        done < <(entradas "$ORIGIN")
+        if (( faltan == 0 )); then
+            ok "el farm tiene una entrada por cada elemento de primer nivel del origen"
+        fi
+    fi
+
+    # ── 4. El entrypoint responde.
+    if bash "$ORIGIN/$ENTRY" --help >/dev/null 2>&1 </dev/null; then
+        ok "el lanzador responde (ropero --help → salida 0)"
+    else
+        err "ropero --help NO responde: la instalación está rota"
+    fi
+
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ok "$BIN_DIR está en el PATH" ;;
+        *) warn "$BIN_DIR no está en tu PATH" ;;
+    esac
     return 0
 }
 
@@ -514,30 +826,47 @@ phase_python() {
 # -----------------------------------------------------------------------------
 main() {
     parse_args "$@"
-    phase_check
-    phase_fetch
-    phase_extract
-    phase_install
-    phase_link
-    phase_verify
-    phase_python
 
-    printf '\n%s══ ropero instalado ══%s\n' "$C_HEAD" "$C_OFF" >&2
-    printf '  versión:   %s\n' "$VERSION" >&2
-    printf '  instalado: %s\n' "$DIR" >&2
-    if [[ "$LINK_SKIPPED" == "1" ]]; then
-        printf '  symlink:   NO creado (había algo en %s/ropero que no era un symlink)\n' "$BIN_DIR" >&2
+    if [[ "$CHECK" == "1" ]]; then
+        fase_check
     else
-        printf '  symlink:   %s/ropero → %s/bin/ropero\n' "$BIN_DIR" "$DIR" >&2
+        fase_preparar
+        if [[ "$LOCAL" == "1" ]]; then
+            fase_origen_local
+        else
+            fase_obtener
+        fi
+        fase_farm
+        fase_enlazar
+        fase_verificar
     fi
-    printf '\n  Siguientes pasos:\n' >&2
-    printf '    ropero install setup     # dependencias base\n' >&2
-    printf '    ropero install engines   # engines compatibles\n' >&2
-    printf '    ropero install models    # baja o fabrica modelos\n' >&2
-    printf '    ropero list              # catálogo\n' >&2
-    printf '\n  Para actualizar:\n' >&2
-    printf '    curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash\n' "$REPO" >&2
-    return 0
+
+    resumen
+
+    if (( N_FAIL > 0 )); then
+        exit 1
+    fi
+
+    if [[ "$CHECK" != "1" ]]; then
+        printf '\n%s══ %s instalado ══%s\n' "$C_HEAD" "$NAME" "$C_OFF" >&2
+        printf '  origen:    %s\n' "$ORIGIN" >&2
+        printf '  farm:      %s\n' "$DIR" >&2
+        if [[ "$LINK_SKIPPED" == "1" ]]; then
+            printf '  symlink:   NO creado (había algo en %s/%s que no era un symlink)\n' \
+                "$BIN_DIR" "$NAME" >&2
+        else
+            printf '  symlink:   %s/%s → %s\n' "$BIN_DIR" "$NAME" "$ORIGIN/$ENTRY" >&2
+        fi
+        printf '  módulos:   %s/%s → %s\n' "$DIR" "$NAME.d" "$ORIGIN/$MODULES" >&2
+        printf '\n  Siguientes pasos:\n' >&2
+        printf '    ropero install setup     # dependencias base\n' >&2
+        printf '    ropero install engines   # engines compatibles\n' >&2
+        printf '    ropero install models    # baja o fabrica modelos\n' >&2
+        printf '    ropero list              # catálogo\n' >&2
+        printf '\n  Para actualizar:\n' >&2
+        printf '    curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash\n' "$REPO" >&2
+    fi
+    exit 0
 }
 
 main "$@"

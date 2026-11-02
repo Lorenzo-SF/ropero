@@ -234,11 +234,13 @@ rp_eng_llama-server_install() {
 }
 
 rp_eng_llama-server_resolve() {
-    # PATH → BIN_DIR → build del clon (spec §5.4).
+    # PATH → BIN_DIR → FARM_DIR → build del clon (spec §5.4).
+    # FARM_DIR es el farm de ropero (~/.local/share/ropero): allí queda el
+    # enlace al motor que crea `ropero install link`.
     local cand ruta
     ruta="$(command -v llama-server 2>/dev/null)"
     [[ -n "$ruta" ]] && { printf '%s\n' "$ruta"; return 0; }
-    for cand in "$BIN_DIR/llama-server" "$LLAMA_DIR/build/bin/llama-server"; do
+    for cand in "$BIN_DIR/llama-server" "$FARM_DIR/llama-server" "$LLAMA_DIR/build/bin/llama-server"; do
         if [[ -x "$cand" ]]; then
             printf '%s\n' "$cand"
             return 0

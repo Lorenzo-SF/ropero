@@ -53,7 +53,7 @@ hay modo unattended: usa los subcomandos por separado.
   install models [modelo...] [--download|--build|--prio download|build] [--force] [--dry-run]
         baja o fabrica modelos (ver `ropero models --help`).
   install link
-        recrea los symlinks de $BIN_DIR (ropero + binarios de engines).
+        deja el layout de instalación (farm + symlink del entrypoint).
   install opencode-plugin
         copia el plugin de opencode a ~/.config/opencode/plugins/.
 
@@ -517,23 +517,250 @@ rp_cmd_engines() {
 }
 
 # -----------------------------------------------------------------------------
-# install link — recrea los symlinks de $BIN_DIR
+# install link — deja el LAYOUT de instalación de ropero
+# -----------------------------------------------------------------------------
+#
+# LAYOUT (el mismo que deja install.sh, y el mismo en los repos de lasaca):
+#
+#   <repo>/                    fuente de verdad (NO se mueve, NO se copia)
+#     bin/ropero               entrypoint
+#     bin/lib/                 módulos (.sh) que se sourcean
+#   ~/.local/share/ropero/     "farm": directorio REAL lleno de symlinks
+#     <entrada de 1er nivel>   → <repo>/<entrada>   (una por elemento)
+#     ropero.d                 → <repo>/bin/lib      (alias de módulos)
+#   ~/.local/bin/ropero        → <repo>/bin/ropero   (SÓLO esto)
+#
+# DÓNDE VAN LOS "BINARIOS ADICIONALES"
+#
+# El código viejo enlazaba en ~/.local/bin el binario de cada engine
+# instalado (llama-server, llama-server-official, vllm, mlx-serve,
+# trtllm-serve, flm). Esos binarios son de TERCEROS (llama.cpp, vllm,
+# mlx-lm, tensorrt-llm, FastFlowLM), no ejecutables auxiliares de ropero, y
+# la regla R1 del contrato dice que en ~/.local/bin SÓLO vive el entrypoint de
+# la utilidad. Decisión: ropero NO los enlaza en ~/.local/bin; los enlaza en
+# el FARM (~/.local/share/ropero/<binario>), que es donde viven los
+# ejecutables de ropero.
+#
+# Consecuencias, y por qué compensa:
+#   · ~/.local/bin queda con una única entrada (ropero) → R1.
+#   · el motor deja de estar en el PATH del usuario: es lo correcto, el
+#     motor se usa a través de `ropero`, no suelto.
+#   · los engines siguen encontrándose: su cadena de resolve es
+#     PATH → $BIN_DIR → $FARM_DIR → rutas largas (build, venv, /opt), así que
+#     un motor enlazado en el farm se resuelve igual que antes.
+#   · NO se borra nada de ~/.local/bin: si `ropero install engines` dejó
+#     ahí un llama-server (o un `uv tool`), ese symlink es suyo y se queda.
+#     Sólo se retira el enlace heredado ~/.local/bin/ropero.d (layout viejo).
 # -----------------------------------------------------------------------------
 _rp_link_help() {
     cat <<'EOF'
 USO: ropero install link
      ropero link               (alias)
 
-Recrea los symlinks de $BIN_DIR (~/.local/bin): el de ropero mismo
-($ROPERO_ROOT/bin/ropero) y el binario de cada engine instalado
-(llama-server, vllm, mlx-serve, trtllm-serve, flm). airllm no lleva link:
-es una librería que sirve bin/server/endpoint.py desde su intérprete.
+Deja el layout de instalación de ropero (el mismo que install.sh):
+
+  ~/.local/share/ropero/   farm: un symlink por entrada de primer nivel del
+                           repo + ropero.d → <repo>/bin/lib
+  ~/.local/bin/ropero      → <repo>/bin/ropero   (y NADA más)
+
+Los binarios de los engines instalados (llama-server, llama-server-official,
+vllm, mlx-serve, trtllm-serve, flm) se enlazan en el FARM, no en ~/.local/bin:
+allí sólo vive el entrypoint de ropero. airllm no lleva link: es una librería
+que sirve bin/server/endpoint.py desde su intérprete.
 
 No acepta selección: enlaza TODO lo que encuentre instalado. Es el comando
 para reparar el PATH tras un cambio de máquina o de $HOME.
 
-Exit: 0 · 2 uso.
+Exit: 0 · 1 fallo · 2 uso.
 EOF
+}
+
+# _rp_link_entradas <dir> — una entrada de primer nivel por línea (sin .git).
+_rp_link_entradas() {
+    local d="$1" e base
+    for e in "$d"/* "$d"/.[!.]*; do
+        [[ -e "$e" || -L "$e" ]] || continue
+        base="${e##*/}"
+        [[ "$base" == ".git" ]] && continue
+        printf '%s\n' "$base"
+    done
+    return 0
+}
+
+# _rp_link_real <ruta> — ruta real (siguiendo symlinks). SIN readlink -f: no
+# existe en el bash 3.2 de macOS.
+_rp_link_real() {
+    local p="$1" dir base
+    while [[ -L "$p" ]]; do
+        dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+        base="$(readlink "$p")"
+        [[ "$base" != /* ]] && base="$dir/$base"
+        p="$base"
+    done
+    dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+    printf '%s\n' "$dir/$(basename "$p")"
+}
+
+# _rp_link_alias <farm> <modulos> — <farm>/ropero.d → <modulos>
+_rp_link_alias() {
+    local farm="$1" modulos="$2" alias="$1/ropero.d"
+    if [[ -L "$alias" ]]; then
+        rm -f "$alias" 2>/dev/null || true
+    elif [[ -e "$alias" ]]; then
+        rp_msg warn "$alias existe y NO es un symlink: no lo he tocado"
+        return 0
+    fi
+    ln -s "$modulos" "$alias" || { rp_msg error "no se pudo enlazar $alias"; return 1; }
+    rp_msg ok "$alias → $modulos"
+    return 0
+}
+
+# _rp_link_farm <repo> <farm> — monta el farm: un symlink por entrada de
+# primer nivel del repo + el alias ropero.d → <repo>/bin/lib.
+_rp_link_farm() {
+    local repo="$1" farm="$2"
+
+    if [[ -L "$farm" ]]; then
+        # Instalación local previa: el farm es un symlink. Escribir dentro
+        # escribiría en el repo del usuario: no se hace.
+        rp_msg warn "$farm ya es un symlink (instalación local previa): no escribo dentro"
+        return 0
+    fi
+    if [[ -e "$farm" && ! -d "$farm" ]]; then
+        rp_msg error "$farm existe y no es un directorio: no lo toco"
+        return 1
+    fi
+
+    if [[ "$repo" == "$farm" ]]; then
+        # Modo red: el árbol descargado ES el farm (sus entradas son ficheros
+        # reales: un symlink a sí mismo sería un bucle). Sólo el alias.
+        rp_msg info "el árbol descargado es el farm: sus entradas son ficheros reales"
+        _rp_link_alias "$farm" "$repo/bin/lib"
+        return $?
+    fi
+
+    # ¿Es una copia real de una instalación anterior? → migrar al farm.
+    #
+    # OJO: se mira el 'bin' de PRIMER NIVEL, no $farm/bin/ropero. En un farm
+    # ya montado, 'bin' es un symlink al repo, así que $farm/bin/ropero es un
+    # fichero REAL a través de él: mirarlo por ahí detectaría "copia" en cada
+    # ejecución y reharía el farm entero (y perdería lo que hubiera dentro,
+    # como los enlaces a los engines).
+    local antigua=""
+    if [[ -d "$farm/bin" && ! -L "$farm/bin" && -e "$farm/bin/ropero" ]]; then
+        antigua="$farm.antigua.$$"
+        if mv "$farm" "$antigua" 2>/dev/null; then
+            rp_msg ok "instalación anterior (copia real) apartada: $antigua"
+        else
+            antigua=""
+            rp_msg error "no se pudo apartar $farm"
+            return 1
+        fi
+    fi
+
+    # Si el farm ya contiene cosas REALES que no son nuestras: no se pisa.
+    local e base reales=""
+    for e in "$farm"/* "$farm"/.[!.]*; do
+        [[ -e "$e" || -L "$e" ]] || continue
+        [[ -L "$e" ]] && continue
+        reales="$reales ${e##*/}"
+    done
+    if [[ -n "$reales" ]]; then
+        rp_msg error "$farm contiene cosas que no son symlinks ($reales): no lo toco"
+        if [[ -n "$antigua" ]]; then
+            mv "$antigua" "$farm" 2>/dev/null || true
+        fi
+        return 1
+    fi
+
+    mkdir -p "$farm" || { rp_msg error "no se pudo crear $farm"; return 1; }
+
+    local destino enlaces=0
+    while IFS= read -r base; do
+        [[ -n "$base" ]] || continue
+        destino="$repo/$base"
+        if [[ -L "$farm/$base" ]]; then
+            rm -f "$farm/$base" 2>/dev/null || true
+        fi
+        if ln -s "$destino" "$farm/$base" 2>/dev/null; then
+            enlaces=$((enlaces+1))
+        else
+            rp_msg error "no se pudo enlazar $farm/$base"
+        fi
+    done < <(_rp_link_entradas "$repo")
+    (( enlaces > 0 )) && rp_msg ok "farm: $enlaces entradas → $repo"
+
+    _rp_link_alias "$farm" "$repo/bin/lib" || return 1
+
+    # La copia antigua ya está sustituida: se borra.
+    if [[ -n "$antigua" ]]; then
+        rm -rf "$antigua" 2>/dev/null || true
+        rp_msg ok "instalación anterior eliminada: $antigua"
+    fi
+    return 0
+}
+
+# _rp_link_entry <repo> — ~/.local/bin/ropero → <repo>/bin/ropero.
+# Es lo ÚNICO que ropero deja en ~/.local/bin (R1).
+_rp_link_entry() {
+    local repo="$1"
+    local link="$BIN_DIR/ropero"
+    local target="$repo/bin/ropero"
+
+    if [[ -e "$link" && ! -L "$link" ]]; then
+        # Un fichero REAL ahí (otro programa, un binario copiado a mano): no
+        # se pisa en silencio. El usuario decide (R4).
+        rp_msg warn "$link existe y NO es un symlink: no lo he tocado"
+    else
+        rm -f "$link" 2>/dev/null || true
+        if ln -s "$target" "$link" 2>/dev/null; then
+            rp_msg ok "$link → $target"
+        else
+            rp_msg error "no se pudo enlazar $link"
+            return 1
+        fi
+    fi
+
+    # El enlace heredado del layout viejo (~/.local/bin/ropero.d) se retira.
+    local legacy="$BIN_DIR/ropero.d"
+    if [[ -L "$legacy" ]]; then
+        rm -f "$legacy" 2>/dev/null || true
+        rp_msg ok "enlace obsoleto eliminado: $legacy (en ~/.local/bin sólo vive el entrypoint)"
+    elif [[ -e "$legacy" ]]; then
+        rp_msg warn "$legacy existe y NO es un symlink: no lo he tocado"
+    fi
+    return 0
+}
+
+# _rp_link_engines <farm> — enlaza el binario de cada engine instalado en el
+# FARM (no en ~/.local/bin: allí sólo vive el entrypoint de ropero).
+_rp_link_engines() {
+    local farm="$1"
+    local id bin real name dest
+
+    for id in llama-server llama-server-official vllm mlx-serve tensorrt-llm fastflowlm; do
+        if bin="$(rp_engine_call "$id" resolve 2>/dev/null)"; then
+            [[ -n "$bin" && -x "$bin" ]] || continue
+            name="${bin##*/}"
+            dest="$farm/$name"
+            if [[ -e "$dest" && ! -L "$dest" ]]; then
+                rp_msg warn "$dest existe y NO es un symlink: no lo he tocado"
+                continue
+            fi
+            # Se apunta al binario REAL (symlinks resueltos): así el enlace del
+            # farm no se rompe si ~/.local/bin se vacía.
+            real="$(_rp_link_real "$bin" 2>/dev/null || true)"
+            [[ -n "$real" ]] || real="$bin"
+            if ln -sfn "$real" "$dest" 2>/dev/null; then
+                rp_msg ok "$id → $dest"
+            else
+                rp_msg error "no se pudo enlazar $dest"
+            fi
+        else
+            rp_msg info "$id: no instalado, nada que enlazar"
+        fi
+    done
+    return 0
 }
 
 rp_cmd_link() {
@@ -545,43 +772,47 @@ rp_cmd_link() {
         esac
     done
 
-    mkdir -p "$BIN_DIR" || { rp_msg error "no se pudo crear $BIN_DIR"; return 1; }
-    rp_header "recreando symlinks en $BIN_DIR"
+    rp_header "dejando el layout de ropero"
 
-    # ropero mismo. Si ahí hay un fichero REAL (no un symlink), no se pisa:
-    # podría ser el ropero de otra instalación con dueño distinto.
-    local self="$ROPERO_ROOT/bin/ropero"
-    if [[ -e "$BIN_DIR/ropero" && ! -L "$BIN_DIR/ropero" ]]; then
-        rp_msg warn "$BIN_DIR/ropero existe y NO es un symlink: no lo toco"
-    else
-        ln -sfn "$self" "$BIN_DIR/ropero" || { rp_msg error "no se pudo enlazar $BIN_DIR/ropero"; return 1; }
-        rp_msg ok "$BIN_DIR/ropero → $self"
+    local repo="${ROPERO_ROOT:-}"
+    local farm="$FARM_DIR"
+    local rc=0
+
+    if [[ -z "$repo" || ! -f "$repo/bin/ropero" ]]; then
+        rp_msg error "no encuentro el entrypoint de ropero (ROPERO_ROOT=$repo)"
+        return 1
     fi
 
-    # Engines con binario propio. El nombre del symlink es el basename del
-    # binario que resuelve cada engine (llama-server, vllm, mlx-serve,
-    # trtllm-serve, flm).
-    local id bin
-    for id in llama-server llama-server-official vllm mlx-serve tensorrt-llm fastflowlm; do
-        if bin="$(rp_engine_call "$id" resolve 2>/dev/null)"; then
-            [[ -n "$bin" && -x "$bin" ]] || continue
-            if [[ -e "$BIN_DIR/${bin##*/}" && ! -L "$BIN_DIR/${bin##*/}" ]]; then
-                rp_msg warn "$BIN_DIR/${bin##*/} existe y no es un symlink: no lo toco"
-                continue
-            fi
-            ln -sfn "$bin" "$BIN_DIR/${bin##*/}" || { rp_msg error "no se pudo enlazar $id"; return 1; }
-            rp_msg ok "$id → $BIN_DIR/${bin##*/}"
-        else
-            rp_msg info "$id: no instalado, nada que enlazar"
-        fi
-    done
+    mkdir -p "$BIN_DIR" || { rp_msg error "no se pudo crear $BIN_DIR"; return 1; }
+
+    # 1) El farm (~/.local/share/ropero): symlinks al repo + alias ropero.d.
+    _rp_link_farm "$repo" "$farm" || rc=1
+
+    # 2) El entrypoint en ~/.local/bin: lo ÚNICO que vive ahí (R1).
+    _rp_link_entry "$repo" || rc=1
+
+    # 3) Los binarios de los engines → el FARM (nunca ~/.local/bin).
+    if [[ -L "$farm" ]]; then
+        rp_msg info "el farm es un symlink: los binarios de engines no se enlazan dentro"
+    else
+        _rp_link_engines "$farm" || rc=1
+    fi
 
     # ¿Está $BIN_DIR en el PATH? Se avisa; el PATH del usuario es suyo.
     case ":$PATH:" in
-        *":$BIN_DIR:"*) ;;
+        *":$BIN_DIR:"*) rp_msg ok "$BIN_DIR está en el PATH" ;;
         *) rp_msg warn "$BIN_DIR no está en tu PATH (export PATH=\"$BIN_DIR:\$PATH\")" ;;
     esac
-    return 0
+
+    # Comprobación final: el entrypoint responde.
+    if bash "$repo/bin/ropero" --help >/dev/null 2>&1 </dev/null; then
+        rp_msg ok "ropero --help responde"
+    else
+        rp_msg error "ropero --help NO responde: la instalación está rota"
+        rc=1
+    fi
+
+    return "$rc"
 }
 
 # -----------------------------------------------------------------------------

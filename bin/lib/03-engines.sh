@@ -8,7 +8,8 @@
 #   rp_eng_<id>_compatible   → 0 si el SO/hw lo soporta (razón por stderr)
 #   rp_eng_<id>_deps         → comandos externos, separados por espacio
 #   rp_eng_<id>_install      → [--force] instala SUS deps (rp_msg/rp_step)
-#   rp_eng_<id>_resolve      → ruta absoluta del binario (PATH→BIN_DIR→…)
+#   rp_eng_<id>_resolve      → ruta absoluta del binario
+#                              (PATH→BIN_DIR→FARM_DIR→rutas largas)
 #   rp_eng_<id>_probe <p>    → ok | down | missing (0 sólo si ok)
 #   rp_eng_<id>_native_auth  → yes | no
 #   rp_eng_<id>_launch <modelo> <puerto> <logfile> <argv...> → PID por stdout

@@ -101,11 +101,13 @@ rp_eng_tensorrt-llm_install() {
 }
 
 rp_eng_tensorrt-llm_resolve() {
-    # PATH → BIN_DIR → venv del engine (spec §5.4: PATH→BIN_DIR→rutas largas).
+    # PATH → BIN_DIR → FARM_DIR → venv del engine (spec §5.4:
+    # PATH→BIN_DIR→rutas largas). El farm es ~/.local/share/ropero, donde
+    # `ropero install link` deja el enlace al motor.
     local cand ruta
     ruta="$(command -v trtllm-serve 2>/dev/null)"
     [[ -n "$ruta" ]] && { printf '%s\n' "$ruta"; return 0; }
-    for cand in "$BIN_DIR/trtllm-serve" "$HOME/.venv-tensorrt/bin/trtllm-serve"; do
+    for cand in "$BIN_DIR/trtllm-serve" "$FARM_DIR/trtllm-serve" "$HOME/.venv-tensorrt/bin/trtllm-serve"; do
         if [[ -x "$cand" ]]; then
             printf '%s\n' "$cand"
             return 0

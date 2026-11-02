@@ -1,0 +1,81 @@
+# =============================================================================
+# nemotron — NVIDIA-Nemotron-3.5-Lightning-30B-A3B (MoE híbrido Mamba)
+# =============================================================================
+
+[model]
+name    = "nemotron"
+engine  = "llama-server-official"
+context = 524288
+# context = 266144
+# context = 131072
+
+[files]
+gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
+# El chat template va como AUXILIARIO descargado, no como una ruta escrita a
+# mano en los args. Motivo: NVIDIA publica el template oficial SÓLO como
+# "chat_template.jinja" aparte (nunca dentro del tokenizer_config.json), y
+# con el template de la comunidad el modelo responde en HTML y no razona
+# bien. Con el aux, ropero lo baja a la carpeta del modelo y ${chat_template}
+# apunta a él sin rutas absolutas: el mismo fichero en otra máquina.
+chat_template = "chat_template.jinja"
+
+[download]
+repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+size = "17.98 GB"
+
+[download.aux.chat_template]
+repo = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+file = "chat_template.jinja"
+name = "chat_template.jinja"
+size = "9.87 KB"
+use = "run"
+
+[build]
+repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
+quant        = "NVFP4"
+imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
+imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
+keep_source  = true
+size = "65.8 GB"
+
+[levels]
+list        = ["think", "instruct"]
+default     = "think"
+
+[args]
+base = [
+    "--n-gpu-layers", "54",
+    "--n-cpu-moe", "14",
+    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+	
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
+
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--n-predict", "8192",
+    "--keep", "16384",
+    "--chat-template-file", "${chat_template}",
+    "--reasoning-format", "deepseek",
+    "--reasoning-preserve",
+    "--reasoning-budget", "32768",
+    "--spec-default",
+]
+
+[args.level.think]
+base = [
+    "--temp", "0.6",
+    "--top-p", "0.9",
+    "--min-p", "0.01",
+    "--top-k", "5",
+    "--reasoning", "true",
+    # "--chat-template-kwargs", '{"enable_thinking": true}',
+]
+
+[args.level.instruct]
+base = [
+    "--temp", "0.2",
+    "--reasoning", "false",
+    # "--chat-template-kwargs", '{"enable_thinking": true}',
+]

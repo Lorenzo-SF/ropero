@@ -1,0 +1,73 @@
+# =============================================================================
+# gemma — gemma-4-26B-A4B-it (MoE, 30 capas: 5 globales + 25 sliding)
+# =============================================================================
+#
+#   - GGUF   : google_gemma-4-26B-A4B-it-IQ3_XS.gguf  (11.58 GiB)
+#   - repo   : bartowski/google_gemma-4-26B-A4B-it-GGUF
+#   - mmproj  : mmproj-google_gemma-4-26B-A4B-it-f16.gguf
+#
+# ── POR QUÉ ESTE GGUF ───────────────────────────────────────────────────────
+# El GGUF que habia (unsloth QAT UD-Q4_K_XL, 15,7 GB) no cabia ni de
+# lejos: 14,6 GiB de pesos + 1,19 del mmproj + 2,89 de KV q8_0 a 131072
+# = 20 GB. El de bartowski entra con el ctx nativo entero.
+# En bartowski estan, ademas, la cabeza MTP aparte (0,30 GiB) y el mmproj.
+# Ojo: el repo se llama google_gemma-4-26B-A4B-it-GGUF (con el prefijo
+# "google_"), por eso no aparecia al buscar "gemma-4-26B-A4B-it".
+#
+# OJO: en llama.cpp, un --n-gpu-layers FIJO (distinto de -1) hace que el
+# fitter ABORTE ("n_gpu_layers already set by user to N, abort"). Con -1 el
+# fitter reduce el CONTEXTO hasta que el modelo entero cabe. Aqui el ctx ya
+# esta calculado para que quepa, asi que va el numero EXACTO de capas (el
+# que sale de <arch>.block_count del GGUF, no de un README).
+#
+# SIN MTP: --spec-type draft-mtp crea un draft context con su propia VRAM
+# y su KV en f16, y el fitter lo mide junto al modelo principal. Con el
+# margen justo, el MTP se come la VRAM y el server no arranca.
+#
+# SIN --no-kv-offload: ese flag mete el KV en la CPU (el KV va al backend
+# de la capa; sin el flag, a la GPU).
+#
+# El override del contexto es el canónico ROPERO_GEMMA_CTX.
+
+[model]
+name    = "gemma"
+engine  = "llama-server-official"
+context = 262144
+
+[files]
+gguf   = "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+[download]
+repo = "unsloth/gemma-4-26B-A4B-it-qat-GGUF"
+file = "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf"
+size = "14.2 GB"
+
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "low"
+
+[args]
+base = [
+    "--n-gpu-layers", "31",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "64",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.5",
+    "--repeat-penalty", "1.0",
+    "--repeat-last-n", "64",
+    "--reasoning-budget", "4096",
+    "--keep", "1024",
+    "--n-predict", "8192",
+]
+
+[args.level.low]
+chat_template_kwargs = { enable_thinking = false }
+
+[args.level.medium]
+chat_template_kwargs = { enable_thinking = true }
+
+[args.level.high]
+chat_template_kwargs = { enable_thinking = true }

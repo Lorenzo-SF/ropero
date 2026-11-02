@@ -74,12 +74,17 @@ rp_eng_mlx-serve_install() {
 }
 
 rp_eng_mlx-serve_resolve() {
-    # PATH → BIN_DIR.
+    # PATH → BIN_DIR → FARM_DIR (el farm es ~/.local/share/ropero, donde
+    # `ropero install link` deja el enlace al motor).
     local ruta
     ruta="$(command -v mlx-serve 2>/dev/null)"
     [[ -n "$ruta" ]] && { printf '%s\n' "$ruta"; return 0; }
     if [[ -x "$BIN_DIR/mlx-serve" ]]; then
         printf '%s\n' "$BIN_DIR/mlx-serve"
+        return 0
+    fi
+    if [[ -x "$FARM_DIR/mlx-serve" ]]; then
+        printf '%s\n' "$FARM_DIR/mlx-serve"
         return 0
     fi
     return 1
