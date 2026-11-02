@@ -47,7 +47,7 @@ RP_MODELS_SEP=$'\x1f'
 
 _rp_models_help() {
     cat <<'EOF'
-USO: ropero models [modelo...] [--download|--build] [--force] [--dry-run]
+USO: ropero models [modelo...] [--download|--build|--prio download|build] [--force] [--dry-run]
      ropero install models ...   (idéntico)
 
 Consigue los artefactos de los modelos: los que tienen [download] se bajan
@@ -60,6 +60,7 @@ explícita es error de uso.
 Opciones:
   --download   fuerza el camino de descarga ([download])
   --build      fuerza el de fabricación ([build])
+  --prio X     equivale a --download (X=download) o --build (X=build)
   --force      re-descarga aunque el artefacto ya esté en disco
   --dry-run    sólo lista lo que haría, no toca disco
 
@@ -388,7 +389,21 @@ _rp_models_build() {
 rp_cmd_models() {
     local a camino="" dry=0 force=0
     local -a pedidos=()
+    local _next=0
     for a in "$@"; do
+        if (( _next == 1 )); then
+            case "$a" in
+                download) [[ -z "$camino" || "$camino" == "download" ]] || \
+                                rp_usage_error models "especifica --download O --build, no ambos"
+                            camino="download" ;;
+                build)    [[ -z "$camino" || "$camino" == "build" ]] || \
+                                rp_usage_error models "especifica --download O --build, no ambos"
+                            camino="build" ;;
+                *)        rp_usage_error models "--prio requiere 'download' o 'build'" ;;
+            esac
+            _next=0
+            continue
+        fi
         case "$a" in
             --help|-h) _rp_models_help; return 0 ;;
             --download) [[ -z "$camino" || "$camino" == "download" ]] || \
@@ -397,6 +412,17 @@ rp_cmd_models() {
             --build)    [[ -z "$camino" || "$camino" == "build" ]] || \
                             rp_usage_error models "especifica --download O --build, no ambos"
                         camino="build" ;;
+            --prio)     _next=1 ;;
+            --prio=*)   v="${a#--prio=}"
+                        case "$v" in
+                            download) [[ -z "$camino" || "$camino" == "download" ]] || \
+                                          rp_usage_error models "especifica --download O --build, no ambos"
+                                      camino="download" ;;
+                            build)    [[ -z "$camino" || "$camino" == "build" ]] || \
+                                          rp_usage_error models "especifica --download O --build, no ambos"
+                                      camino="build" ;;
+                            *)        rp_usage_error models "--prio requiere 'download' o 'build'" ;;
+                        esac ;;
             --force|-f) force=1 ;;
             --dry-run)  dry=1 ;;
             --*)        rp_usage_error models "opción desconocida: '$a'" ;;

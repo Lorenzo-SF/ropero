@@ -50,7 +50,7 @@ hay modo unattended: usa los subcomandos por separado.
         uv, hf, jq, cmake, ninja; brew/pacman según SO). Sólo lo que falte.
   install engines [engine...] [--force]
         instala los engines compatibles elegidos (sus propias deps).
-  install models [modelo...] [--download|--build] [--force] [--dry-run]
+  install models [modelo...] [--download|--build|--prio download|build] [--force] [--dry-run]
         baja o fabrica modelos (ver `ropero models --help`).
   install link
         recrea los symlinks de $BIN_DIR (ropero + binarios de engines).
@@ -80,9 +80,13 @@ _rp_install_models() {
 rp_cmd_install() {
     local sub="" a
     local -a flags=() sel=()
+    local _skip=0
     for a in "$@"; do
-        # El destino puede ir antes o después de --help: se procesa toda la
-        # línea antes de responder (port de cmd_install del legado).
+        if (( _skip == 1 )); then
+            flags+=("--prio=$a")
+            _skip=0
+            continue
+        fi
         case "$a" in
             --help|-h)
                 _rp_install_help "${sub:-install}"
@@ -92,6 +96,10 @@ rp_cmd_install() {
                     rp_usage_error install "destino repetido: '$a' (ya tenía '$sub')"
                 sub="$a" ;;
             --force|-f|--yes|-y|--dry-run|--download|--build)
+                flags+=("$a") ;;
+            --prio)
+                _skip=1 ;;
+            --prio=*|--prio)
                 flags+=("$a") ;;
             --*)
                 rp_usage_error install "opción desconocida: '$a'" ;;
