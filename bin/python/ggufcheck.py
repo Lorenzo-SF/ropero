@@ -258,7 +258,7 @@ def main(argv):
         return 1
     # --nombres y --bloque solo necesitan la cabecera: leer el GGUF entero
     # (10 GB) para listar nombres era inviable.
-    solo_cabecera = ("--nombres" in argv) or ("--bloque" in argv)
+    solo_cabecera = ("--nombres" in argv) or ("--bloque" in argv) or ("--tipo-predominante" in argv)
     try:
         g = Gguf(path, libs, solo_cabecera=solo_cabecera)
     except GgufError as e:
