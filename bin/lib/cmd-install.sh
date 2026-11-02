@@ -356,7 +356,7 @@ sin TTY y sin selección explícita es error de uso.
 Opciones:
   --force   reinstala aunque ya estén instalados
 
-Engines: llama-server · vllm · mlx-serve · airllm · tensorrt-llm ·
+Engines: llama-server · llama-server-official · vllm · mlx-serve · airllm · tensorrt-llm ·
          fastflowlm
 
 Exit: 0 (aunque haya omitidos) · 1 si algún engine falla · 2 uso.
@@ -562,7 +562,7 @@ rp_cmd_link() {
     # binario que resuelve cada engine (llama-server, vllm, mlx-serve,
     # trtllm-serve, flm).
     local id bin
-    for id in llama-server vllm mlx-serve tensorrt-llm fastflowlm; do
+    for id in llama-server llama-server-official vllm mlx-serve tensorrt-llm fastflowlm; do
         if bin="$(rp_engine_call "$id" resolve 2>/dev/null)"; then
             [[ -n "$bin" && -x "$bin" ]] || continue
             if [[ -e "$BIN_DIR/${bin##*/}" && ! -L "$BIN_DIR/${bin##*/}" ]]; then

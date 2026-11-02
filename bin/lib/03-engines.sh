@@ -29,7 +29,7 @@ if ! declare -F rp_mc_load >/dev/null 2>&1; then
 fi
 
 # Ids canónicos (§6). El orden es el de la tabla de la spec.
-RP_ENGINE_IDS="llama-server vllm mlx-serve airllm tensorrt-llm fastflowlm"
+RP_ENGINE_IDS="llama-server llama-server-official vllm mlx-serve airllm tensorrt-llm fastflowlm"
 
 # Los ocho hooks que TODO engine debe definir (spec §5.4).
 RP_ENGINE_HOOKS="label compatible deps install resolve probe native_auth launch"
@@ -39,6 +39,7 @@ RP_ENGINE_HOOKS="label compatible deps install resolve probe native_auth launch"
 rp_engine_canonical() {
     case "${1:-}" in
         llama-server|llama|llamacpp|llama-cpp|llama_cpp) printf 'llama-server' ;;
+        llama-server-official|llama-official|llama.cpp-official) printf 'llama-server-official' ;;
         vllm)                                            printf 'vllm' ;;
         mlx-serve|mlx_lm|mlx|mlx-lm)                     printf 'mlx-serve' ;;
         airllm)                                          printf 'airllm' ;;

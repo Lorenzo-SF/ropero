@@ -23,6 +23,7 @@
 : "${STATE_DIR:=$HOME/.local/state/ropero}"
 # Clone del fork del motor llama (llama-server)
 : "${LLAMA_DIR:=$HOME/llama.cpp}"
+: "${LLAMA_OFFICIAL_DIR:=$HOME/llama.cpp-official}"
 # Symlinks de binarios (ropero, llama-server, ...)
 : "${BIN_DIR:=$HOME/.local/bin}"
 
@@ -49,7 +50,7 @@
 # (directorio sin permisos es error real, no algo que tragarse en silencio).
 rp_env_setup() {
     mkdir -p "$GGUF_DIR" "$SAFETENSORS_DIR" "$LOG_DIR" "$STATE_DIR" \
-        "$LLAMA_DIR" "$BIN_DIR" || return 1
+        "$LLAMA_DIR" "$LLAMA_OFFICIAL_DIR" "$BIN_DIR" || return 1
 }
 
 # rp_detect_os — macos | cachyos | arch | linux | otro (spec §4).

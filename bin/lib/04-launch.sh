@@ -690,12 +690,12 @@ rp_start_model() {
     # llama-server necesita el artefacto en argv: el TOML declara flags, no
     # la ruta del GGUF (esa la resuelve ropero). Sin esto arranca en router
     # mode y no carga nada.
-    if [[ "$fmt" == "gguf" && "$engine" == "llama-server" && -n "$gguf_path" ]]; then
+    if [[ "$fmt" == "gguf" && ( "$engine" == "llama-server" || "$engine" == "llama-server-official" ) && -n "$gguf_path" ]]; then
         argv=("--model" "$gguf_path" ${argv[@]+"${argv[@]}"})
     fi
     # --cpu se añade AL FINAL (como el monolito): tiene que ganar a los
     # --n-gpu-layers / --threads que declare el TOML.
-    if [[ "$cpu" == "1" && "$engine" == "llama-server" ]]; then
+    if [[ "$cpu" == "1" && ( "$engine" == "llama-server" || "$engine" == "llama-server-official" ) ]]; then
         local nproc_n
         nproc_n="$(command -v nproc >/dev/null 2>&1 && nproc || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 8)"
         argv+=(--n-gpu-layers 0 --threads "$nproc_n")
