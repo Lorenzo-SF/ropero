@@ -981,6 +981,7 @@ _gguffer_diagnostico() {
 rp_cmd_gguffer() {
     local path="" repo="" out_name="" imatrix="" from_subdir="" include=""
     local gguf_origen="" gguf_file=""
+    local chat_template="" tokenizer_extra=""
     local -a quants=()
     local imatrix_repo="" imatrix_file=""
     local force=0 keep_source=0 keep_inter=0 list_only=0 no_mtp=0 diagnostico=0
