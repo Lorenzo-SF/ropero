@@ -170,6 +170,10 @@ fi
 
 log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
+# De qué checkout se está midiendo, y de qué motores. Sin esto, un A/B con
+# dos binariosunknown se parece a cualquier otro y no se puede auditar.
+log "ropero en: $ROPERO_ROOT ($(git -C "$ROPERO_ROOT" rev-parse --short HEAD 2>/dev/null || echo 'sin git') $(git -C "$ROPERO_ROOT" log -1 --format=%cd --date=short 2>/dev/null || echo ''))"
+
 mkdir -p "$OUT"
 
 # contexto_catalogo — el contexto que declara el catálogo (campo 6 del dump).
@@ -195,6 +199,8 @@ preparar_flags_comunes() {
     fa="$OUT/flags-A.txt"; fb="$OUT/flags-B.txt"; tmp="$OUT/flags-tmp.txt"
     "$MOTOR_A" --help >"$fa" 2>&1 || true
     "$MOTOR_B" --help >"$fb" 2>&1 || true
+    log "A: $MOTOR_A → $("$MOTOR_A" --version 2>&1 | head -1)"
+    log "B: $MOTOR_B → $("$MOTOR_B" --version 2>&1 | head -1)"
     grep -oE '(^|[[:space:]])--[a-z0-9][a-z0-9-]*' "$fa" | tr -d ' \t' | sort -u >"$tmp" 2>/dev/null || true
     grep -oE '(^|[[:space:]])--[a-z0-9][a-z0-9-]*' "$fb" | tr -d ' \t' | sort -u | comm -12 "$tmp" - >"$OUT/flags-comunes.txt" 2>/dev/null || true
     local n
@@ -351,10 +357,23 @@ arrancar() {
             fi
             argv+=("${filtrados[@]}")
             log "  args: ${#cat[@]} -> ${#filtrados[@]} (modo $MODO_ARGS)"
+            # Lo que se ha caído: sin esto no se sabe qué se midió de verdad.
+            local -a caidos=() flag v
+            while IFS= read -r flag; do
+                [[ -n "$flag" ]] || continue
+                if ! printf '%s\n' "${filtrados[@]}" | grep -qx -- "$flag"; then
+                    caidos+=("$flag")
+                fi
+            done <<< "$ARGV_MODELO"
+            if (( ${#caidos[@]} )); then
+                log "  flags que este motor NO entiende (se caen): ${caidos[*]}"
+            fi
         fi
     else
         argv+=(--n-gpu-layers "$NGPU")
     fi
+    # El argv, a disco: para poder auditar la medición después.
+    printf '%s\n' "${argv[@]}" >"$OUT/argv-$(basename "$motor").txt"
     "$motor" "${argv[@]}" \
         >>"$OUT/arranque-$(basename "$motor").txt" 2>&1 &
     local pid=$!

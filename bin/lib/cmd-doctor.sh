@@ -35,6 +35,7 @@ RP_DOCTOR_BAD=0      # críticos: deciden el exit
 RP_DOCTOR_WARN=0     # avisos
 
 _rp_doctor_ok()   { rp_msg ok "$*"; }
+_rp_doctor_info() { rp_msg info "$*"; }
 _rp_doctor_warn() { RP_DOCTOR_WARN=$((RP_DOCTOR_WARN + 1)); rp_msg warn "$*"; }
 _rp_doctor_bad()  { RP_DOCTOR_BAD=$((RP_DOCTOR_BAD + 1)); rp_msg error "$*"; }
 
@@ -182,6 +183,40 @@ rp_cmd_doctor() {
         _rp_doctor_warn "$BIN_DIR/ropero existe y NO es un symlink (el instalador no lo toca)"
     else
         _rp_doctor_warn "ropero no está enlazado en $BIN_DIR (ropero install link)"
+    fi
+
+    # ¿El checkout está al día? Sin esto se ejecutan scripts viejos sin
+    # saberlo: el banco A/B se lanzaba con la versión vieja (401 en todas las
+    # peticiones) dos veces seguidas, y parecía un problema del motor.
+    local gitdir faltan propios
+    gitdir="$(git -C "$ROPERO_ROOT" rev-parse --git-dir 2>/dev/null || true)"
+    if [[ -n "$gitdir" ]]; then
+        local rama
+        rama="$(git -C "$ROPERO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+        local local_sha fecha
+        local_sha="$(git -C "$ROPERO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+        fecha="$(git -C "$ROPERO_ROOT" log -1 --format=%cd --date=short 2>/dev/null || echo '?')"
+        _rp_doctor_ok "checkout: $local_sha ($fecha, rama $rama)"
+        # El fetch puede fallar (sin red): no es un fallo del doctor. Si la
+        # ref local existe, se compara contra ella (puede estar.old, pero mejor
+        # que no saber nada).
+        git -C "$ROPERO_ROOT" fetch --quiet origin "$rama" 2>/dev/null || true
+        if git -C "$ROPERO_ROOT" rev-parse --verify --quiet "origin/$rama" >/dev/null 2>&1; then
+            # faltan = los commits de origin que NO están en HEAD (los que
+            # te faltan); propios = los commits tuyos que no están en origin.
+            faltan="$(git -C "$ROPERO_ROOT" rev-list --count "HEAD..origin/$rama" 2>/dev/null || echo 0)"
+            propios="$(git -C "$ROPERO_ROOT" rev-list --count "origin/$rama..HEAD" 2>/dev/null || echo 0)"
+            if [[ "${faltan:-0}" =~ ^[0-9]+$ ]] && (( faltan > 0 )); then
+                _rp_doctor_warn "el checkout está $faltan commit(s) POR DETRÁS de origin/$rama: git pull"
+                _rp_doctor_warn "  (un script viejo puede fallar por cosas ya arregladas)"
+            elif [[ "${propios:-0}" =~ ^[0-9]+$ ]] && (( propios > 0 )); then
+                _rp_doctor_info "el checkout tiene $propios commit(s) propios (no están en origin/$rama)"
+            else
+                _rp_doctor_ok "el checkout está al día con origin/$rama"
+            fi
+        else
+            _rp_doctor_info "no se puede comprobar origin/$rama (sin esa ref): no se sabe si está al día"
+        fi
     fi
 
     if [[ -L "$FARM_DIR/ropero.d" ]]; then
