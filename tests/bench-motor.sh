@@ -65,6 +65,35 @@ DESCANSO="${DESCANSO:-0}"
 OUT="${OUT:-/tmp/bench-motor}"
 PROMPT="${PROMPT:-Explica en un párrafo por qué el mar es salado.}"
 API_KEY="sk-bench-local"
+LISTAR=0
+
+# ── Dónde está el motor ─────────────────────────────────────────────────────
+#
+# ropero lo resuelve por: PATH → $BIN_DIR → $FARM_DIR → $LLAMA_DIR/build/bin.
+# Si no lo encuentra, el motor NO está instalado para ropero (por eso el
+# doctor dice "engine llama-server no está instalado"), y el banco tiene que
+# decirlo claro en vez de "el motor no es ejecutable".
+candidatos_motor() {
+    local shopt_save
+    shopt_save="$(shopt -p nullglob)"
+    shopt -s nullglob
+    printf '%s\n' \
+        "$(command -v llama-server 2>/dev/null || true)" \
+        "$HOME/.local/bin/llama-server" \
+        "$HOME/.local/share/ropero/llama-server" \
+        "$HOME/llama.cpp/build/bin/llama-server" \
+        "$HOME"/atomic*/llama.cpp/build/bin/llama-server \
+        "$HOME"/llama*/build/bin/llama-server
+    eval "$shopt_save"
+}
+
+resolver_motor() {
+    local c
+    while IFS= read -r c; do
+        [[ -n "$c" && -x "$c" ]] && { printf '%s' "$c"; return 0; }
+    done < <(candidatos_motor)
+    return 1
+}
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -77,11 +106,17 @@ while [[ $# -gt 0 ]]; do
         --repeticiones) REPETICIONES="$2"; shift 2 ;;
         --descanso)    DESCANSO="$2"; shift 2 ;;
         --out)         OUT="$2"; shift 2 ;;
+        --listar)      LISTAR=1; shift ;;
         --help|-h)     sed -n '2,60p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "opción desconocida: $1" >&2; exit 2 ;;
     esac
 done
 
+if (( LISTAR == 1 )); then
+    echo "candidatos de llama-server:"
+    candidatos_motor | sed 's/^/    /'
+    exit 0
+fi
 [[ -n "$MODELO" ]] || { echo "falta --modelo" >&2; exit 2; }
 [[ "$REPETICIONES" =~ ^[0-9]+$ ]] || { echo "--repeticiones debe ser un número" >&2; exit 2; }
 
@@ -102,10 +137,14 @@ fi
 log "modelo: $MODELO"
 log "gguf:   $GGUF"
 
-# El motor A por defecto: el que ropero usaría.
+if [[ -z "$MOTOR_A" || "$MOTOR_A" == "auto" ]]; then
+    MOTOR_A="$(resolver_motor || true)"
+fi
 if [[ -z "$MOTOR_A" ]]; then
-    MOTOR_A="$(command -v llama-server 2>/dev/null || true)"
-    [[ -n "$MOTOR_A" ]] || MOTOR_A="$ROPERO_ROOT/bin/llama-server"
+    log "no encuentro ningún llama-server. Se ha buscado en:"
+    candidatos_motor | sed 's/^/    /' | while IFS= read -r l; do log "$l"; done
+    log "instálalo con 'ropero install engines llama-server' o pásalo con --motor-a <ruta>"
+    exit 1
 fi
 [[ -n "$MOTOR_B" ]] || MOTOR_B="$MOTOR_A"
 
@@ -161,7 +200,16 @@ print("%s\t%s\t%s" % (
 arrancar() {
     local motor="$1" puerto="$2" dir
     dir="$(dirname "$motor")"
-    [[ -x "$motor" ]] || { log "el motor no es ejecutable: $motor"; return 1; }
+    if [[ ! -e "$motor" ]]; then
+        log "no existe el motor: $motor"
+        log "  candidatos:"
+        candidatos_motor | sed 's/^/    /' | while IFS= read -r l; do log "$l"; done
+        return 1
+    fi
+    if [[ ! -x "$motor" ]]; then
+        log "el motor no es ejecutable: $motor (chmod +x)"
+        return 1
+    fi
     PATH="$dir:$PATH" \
     ROPERO_START_TIMEOUT="${ROPERO_START_TIMEOUT:-600}" \
         bash "$ROPERO_ROOT/bin/ropero" "$MODELO" --port "$puerto" --background \

@@ -71,19 +71,28 @@ check_sistema() {
 
     # sysctl: cada clave con su valor esperado
     check_sysctl vm.max_map_count 1048576
-    check_sysctl vm.numa_balancing 0
+    if [[ -e /proc/sys/kernel/numa_balancing ]]; then
+        check_sysctl kernel.numa_balancing 0
+    else
+        check_sysctl vm.numa_balancing 0
+    fi
     check_sysctl vm.page-cluster 0
     check_sysctl kernel.nmi_watchdog 0
     check_sysctl vm.compaction_proactiveness 0
     check_sysctl vm.swappiness 5
 
     # min_free_kbytes (el colchón anti-OOM)
-    local mfk
+    local mfk cfg_mfk
     mfk="$(cat /proc/sys/vm/min_free_kbytes 2>/dev/null || echo 0)"
     if (( mfk >= 1048576 )); then
         ok "min_free_kbytes = $(( mfk / 1024 )) MiB (colchón anti-OOM)"
     else
         falta "min_free_kbytes = $(( mfk / 1024 )) MiB (bajo 1 GiB: el OOM killer puede matar al server)"
+    fi
+    cfg_mfk="$(grep -hoE 'vm\.min_free_kbytes[[:space:]]*=[[:space:]]*[0-9]+' \
+        /etc/sysctl.d/*.conf 2>/dev/null | grep -oE '[0-9]+$' | head -1)"
+    if [[ -n "$cfg_mfk" && "$cfg_mfk" != "$mfk" ]]; then
+        falta "  el fichero dice $(( cfg_mfk / 1024 )) MiB pero el kernel tiene $(( mfk / 1024 )) MiB: falta 'sudo sysctl --system'"
     fi
 
     # THP: el formato es "always [madvise] never" — lo activo va entre
@@ -168,11 +177,13 @@ check_sysctl() {
 check_memoria() {
     tit "Memoria (el GGUF se mmapea: vive en el page cache)"
     local total avail cached swap_t swap_f sw
-    total="$(awk '/^MemTotal:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
-    avail="$(awk '/^MemAvailable:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
-    cached="$(awk '/^Cached:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
-    swap_t="$(awk '/^SwapTotal:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
-    swap_f="$(awk '/^SwapFree:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
+    # LC_ALL=C: con el locale español awk imprime "18,0" y la aritmética de
+    # bash (que espera punto) se rompe con "printf: número inválido".
+    total="$(LC_ALL=C awk '/^MemTotal:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
+    avail="$(LC_ALL=C awk '/^MemAvailable:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
+    cached="$(LC_ALL=C awk '/^Cached:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
+    swap_t="$(LC_ALL=C awk '/^SwapTotal:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
+    swap_f="$(LC_ALL=C awk '/^SwapFree:/{printf "%.1f", $2/1048576}' /proc/meminfo 2>/dev/null)"
     sw="$(cat /proc/sys/vm/swappiness 2>/dev/null || echo '?')"
     printf '  RAM total %s GiB · disponible %s GiB · page cache %s GiB\n' "${total:-?}" "${avail:-?}" "${cached:-?}"
     printf '  swap %s GiB (libre %s GiB) · swappiness %s\n' "${swap_t:-?}" "${swap_f:-?}" "$sw"
@@ -188,8 +199,8 @@ check_memoria() {
         (( sz > mayor )) && mayor="$sz"
     done
     if (( mayor > 0 )); then
-        printf '  mayor GGUF en disco: %.1f GiB\n' "$(awk -v b="$mayor" 'BEGIN{printf "%.1f", b/1073741824}')"
-        if awk -v m="$mayor" -v c="${cached:-0}" -v t="${total:-0}" \
+        printf '  mayor GGUF en disco: %s GiB\n' "$(LC_ALL=C awk -v b="$mayor" 'BEGIN{printf "%.1f", b/1073741824}')"
+        if LC_ALL=C awk -v m="$mayor" -v c="${cached:-0}" -v t="${total:-0}" \
              'BEGIN{exit (c + t) < m ? 0 : 1}'; then
             mal "el GGUF más grande NO cabe en RAM+cache: cada token va al NVMe"
         else
@@ -229,10 +240,16 @@ check_gpu() {
 
     # El techo de potencia: si oscila, algo lo está reescribiendo.
     local ceil req
-    ceil="$(nvidia-smi -q -d POWER 2>/dev/null | grep -iE "GPU Ceiling Power Limit" | head -2 | tr -s ' ')"
-    req="$(nvidia-smi -q -d POWER 2>/dev/null | grep -iE "Requested Power Limit" | head -1 | tr -s ' ')"
-    printf '\n  %s\n' "${ceil:-ceiling power limit: ?}"
-    printf '  %s\n' "${req:-requested power limit: ?}"
+    ceil="$(nvidia-smi -q -d POWER 2>/dev/null | grep -iA 1 "GPU Ceiling Power Limit" \
+        | grep -iE "W$|N/A" | head -1 | tr -s ' ')"
+    req="$(nvidia-smi -q -d POWER 2>/dev/null | grep -iA 1 "Requested Power Limit" \
+        | grep -iE "W$|N/A" | head -1 | tr -s ' ')"
+    printf '\n  techo de potencia: %s\n' "${ceil:-?}"
+    printf '  potencia pedida:   %s\n' "${req:-?}"
+    if [[ "$req" == *N/A* ]]; then
+        printf '  (N/A = TGP dinámico del firmware: el techo lo negocia el portátil,\n'
+        printf '   y por eso NO se automatiza nvidia-smi -pl)\n'
+    fi
 
     # Persistencia
     local pm
