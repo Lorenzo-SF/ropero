@@ -3,6 +3,29 @@
 ## Sin publicar
 
 ### Añadido
+- **`bin/setup-performance.sh`**: el modo `performance` del setup, **completo y
+  arreglado**, y además autónomo (`--check` / `--rollback`). Antes el script
+  se paraba a mitad (sin `set -e`, cada paso va en su función) y todo lo que
+  venía después se quedaba sin aplicar **sin decir nada**: swappiness en 100,
+  sin DPM de NVIDIA, sin colchón de RAM. Ahora:
+  - cada ajuste dice si se **aplicó**, si **ya estaba** o si **no aplica**, y
+    al final hay un **resumen** con las tres listas;
+  - el **backup registra de verdad** (los valores anteriores y los ficheros
+    creados) y el manifest.json tiene contenido, así que el rollback
+    funciona;
+  - el **cmdline del kernel** se busca en el bootloader que haya:
+    `/etc/kernel/cmdline` (systemd-boot) **o** `/etc/default/grub` (GRUB);
+    antes sólo se miraba el primero y en un portátil con GRUB el
+    `rcutree.enable_rcu_lazy=1` se saltaba en silencio;
+  - cubre lo que faltaba: **swappiness=5** (en su propio fichero, sin pisar
+    el 99-energy.conf de CachyOS), **min_free_kbytes ≥ 1 GiB**, **THP
+    [always]** (el GGUF se mmapea entero: con [madvise] el mapping no usa
+    páginas enormes), **DPM fine-grained de NVIDIA**, ananicy con
+    `oom_score_adj=-500` y nvidia-persistenced;
+  - el PowerMizer en un portátil con TGP dinámico se informa, no se卖家 como
+    error: lo negocia el firmware y no afecta al decode;
+  - una sola contraseña (`sudo -v` al principio) y, si ya eres root, ni
+    siquiera eso.
 - **`tests/bench-motor.sh`**: banco A/B de motores. El mismo modelo, el mismo
   argv del catálogo y el mismo prompt, cambiando **sólo el binario** de
   llama-server (se resuelve por `PATH`, así que la comparación es limpia por
