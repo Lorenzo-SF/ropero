@@ -3,45 +3,24 @@
 ## Sin publicar
 
 ### Añadido
-- **`bin/setup-performance.sh`**: el modo `performance` del setup, **completo y
-  arreglado**, y además autónomo (`--check` / `--rollback`). Antes el script
-  se paraba a mitad (sin `set -e`, cada paso va en su función) y todo lo que
-  venía después se quedaba sin aplicar **sin decir nada**: swappiness en 100,
-  sin DPM de NVIDIA, sin colchón de RAM. Ahora:
-  - cada ajuste dice si se **aplicó**, si **ya estaba** o si **no aplica**, y
-    al final hay un **resumen** con las tres listas;
-  - el **backup registra de verdad** (los valores anteriores y los ficheros
-    creados) y el manifest.json tiene contenido, así que el rollback
-    funciona;
-  - el **cmdline del kernel** se busca en el bootloader que haya:
-    `/etc/kernel/cmdline` (systemd-boot) **o** `/etc/default/grub` (GRUB);
-    antes sólo se miraba el primero y en un portátil con GRUB el
-    `rcutree.enable_rcu_lazy=1` se saltaba en silencio;
-  - cubre lo que faltaba: **swappiness=5** (en su propio fichero, sin pisar
-    el 99-energy.conf de CachyOS), **min_free_kbytes ≥ 1 GiB**, **THP
-    [always]** (el GGUF se mmapea entero: con [madvise] el mapping no usa
-    páginas enormes), **DPM fine-grained de NVIDIA**, ananicy con
-    `oom_score_adj=-500` y nvidia-persistenced;
-  - el PowerMizer en un portátil con TGP dinámico se informa, no se卖家 como
-    error: lo negocia el firmware y no afecta al decode;
-  - una sola contraseña (`sudo -v` al principio) y, si ya eres root, ni
-    siquiera eso.
-- **`tests/bench-motor.sh`**: banco A/B de motores. El mismo modelo, el mismo
-  argv del catálogo y el mismo prompt, cambiando **sólo el binario** de
-  llama-server (se resuelve por `PATH`, así que la comparación es limpia por
-  construcción). Mide el decode con los timings que devuelve el propio server
-  (`timings.predicted_per_second`), repite rondas para ver si el rendimiento
-  **se degrada con el tiempo en uso**, y captura el estado de la GPU en cada
-  ronda (relojes, potencia, temperatura y **razones de throttle**). Es la
-  herramienta para responder "¿el merge me quitó rendimiento?" sin meter a
-  opencode ni a un juez en el medio.
-- **`bin/perf-check.sh`**: el estado REAL de los ajustes de rendimiento de la
-  máquina, con el valor que importa de cada uno (no si el fichero existe):
-  limits.d, sysctl, min_free_kbytes, THP, read-ahead del NVMe, DPM de NVIDIA,
-  persistencia y dónde vive el cmdline del kernel (systemd-boot o GRUB). A
- parte, la memoria (si el GGUF cabe en el page cache, si hay swap) y la GPU
-  con sus razones de throttle y su techo de potencia. Es lo que hay que
-  mirar **después de un rato de trabajo** cuando el rendimiento baja.
+- **`bin/diagnostico.sh`**: un solo script que recoge TODO en un fichero
+  (ropero, el motor y sus flags de compilación, los procesos vivos con su
+  cmdline real, los logs con las marcas clave, los TOML, los ajustes del
+  sistema, la GPU, el `setup.sh` entero y el kernel/OOM). No pide sudo, no
+  para nada, y cada comando va con `timeout 25`.
+- **`tests/bench-motor.sh`**: banco A/B de motores. Mismo modelo, mismo argv
+  del catálogo y mismo prompt; lo único que cambia es el binario (vía `PATH`).
+  Mide `timings.predicted_per_second` y captura el estado de la GPU con sus
+  throttle reasons.
+
+### Fuera de ropero (esto vive en `Lorenzo-SF/setup`)
+- El **tuning del sistema** (`swappiness`, THP, min_free, DPM, el cmdline del
+  kernel, ananicy, el colchón de RAM) es del repo `setup`, no de ropero:
+  está en `setup.sh performance` y se verifica con `setup.sh perf-check`.
+  Aquí no queda ni un comando suelto.
+- `bin/setup-performance.sh` y `bin/perf-check.sh` se han quitado de ropero
+  (duplicaban lo de setup y se podían desincronizar). Lo que ropero sabe
+  medir de sí mismo sigue aquí: el banco de motores y el diagnóstico.
 
 ### Arreglado
 - **Un engine que no publica `/v1/models` ya no hace esperar 300 s.** El
