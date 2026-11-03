@@ -17,16 +17,23 @@
 #
 # Y COMO SE HACE QUE SOLO CAMBIE EL BINARIO
 #
-# El launcher resuelve el motor por PATH primero (rp_eng_llama-server_resolve
-# → `command -v llama-server`), así que basta con poner el binario que se
-# quiere medir al frente del PATH y arrancar con ropero NORMAL. El argv, el
-# modelo, el puerto y el resto de la configuración son los del catálogo: la
-# comparación es limpia por construcción, no por promesa.
+# Arrancando con ropero NO vale: el argv sale del catálogo, y el catálogo
+# pasa flags que sólo entiende el fork (--moe-cache, --cache-type-k/v
+# turbo3). El motor OFICIAL abortaría al arrancar y la comparación sería
+# imposible (o, peor, mediría dos veces el mismo motor).
+#
+# Así que el banco arranca el binario DIRECTO, con el argv MÍNIMO y COMÚN
+# a los dos: --model, --host, --port, --api-key, -c y --n-gpu-layers. El
+# resto son los defaults de cada motor. Lo único que cambia entre A y B es
+# el binario: la comparación es limpia por construcción, no por promesa.
 #
 # USO
-#   tests/bench-motor.sh --modelo nemotron \
+#   tests/bench-motor.sh --modelo agenta-tiny \
 #       --motor-a ~/.local/bin/llama-server \
 #       --motor-b ~/atomic/llama.cpp/build/bin/llama-server
+#
+#   (agenta-tiny es el mejor sujeto para el A/B: 4B, cabe entero en la
+#    VRAM, carga en segundos y su decode es un número limpio.)
 #
 #   tests/bench-motor.sh --modelo nemotron --repeticiones 8 --descanso 30
 #       (8 rondas con 30 s entre medias: sirve para ver si el rendimiento SE
@@ -38,6 +45,10 @@
 #   --motor-b <ruta>    binario B (por defecto: el mismo que A; útil para
 #                       medir la varianza del propio banco)
 #   --puerto <n>        puerto base (por defecto 19980; cada motor usa uno)
+#   --ctx <n>           contexto para los dos motores (por defecto 8192:
+#                       el banco mide el decode con contexto CORTO; el
+#                       contexto enorme es otro problema, con otro banco)
+#   --ngpu <n>          capas a la GPU para los dos motores (por defecto 99)
 #   --n-predict <n>     tokens a generar (por defecto 256)
 #   --prompt <texto>    prompt (por defecto: un texto fijo)
 #   --repeticiones <n>  rondas por motor (por defecto 3)
@@ -77,6 +88,15 @@ PROMPT="${PROMPT:-Explica en un párrafo por qué el mar es salado.}"
 # bench manda la misma.
 export LLAMA_API_KEY="${LLAMA_API_KEY:-sk-bench-local}"
 API_KEY="$LLAMA_API_KEY"
+# El banco compara MOTORES, no configuraciones de catálogo. El catálogo de
+# ropero pasa flags que sólo entiende el fork (--moe-cache, --cache-type-k/v
+# turbo3): si el banco arrancara con ellos, el motor OFICIAL abortaría al
+# arrancar y la comparación sería imposible. Por eso aquí se arranca el
+# binario DIRECTO con lo mínimo y COMÚN, y la diferencia que se mide es la
+# del motor.
+GGUF_DIR="${GGUF_DIR:-$HOME/models/gguf}"
+CTX="${CTX:-8192}"
+NGPU="${NGPU:-99}"
 LISTAR=0
 
 # ── Dónde está el motor ─────────────────────────────────────────────────────
@@ -118,6 +138,8 @@ while [[ $# -gt 0 ]]; do
         --repeticiones) REPETICIONES="$2"; shift 2 ;;
         --descanso)    DESCANSO="$2"; shift 2 ;;
         --out)         OUT="$2"; shift 2 ;;
+        --ctx)         CTX="$2"; shift 2 ;;
+        --ngpu)        NGPU="$2"; shift 2 ;;
         --listar)      LISTAR=1; shift ;;
         --help|-h)     sed -n '2,60p' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) echo "opción desconocida: $1" >&2; exit 2 ;;
@@ -223,7 +245,36 @@ print("%s\t%s\t%s" % (
 ' 2>/dev/null
 }
 
-# arrancar <binario> <puerto> — arranca el server con ropero (PATH al frente).
+# resolver_gguf — la ruta del GGUF del modelo pedido.
+#
+# El directorio del modelo es $GGUF_DIR/<nombre real en el catálogo>: el
+# alias ("llama") no es un directorio. Se pregunta al catálogo (con los
+# modelos "fired" incluidos: agenta-tiny vive ahí) y si no hay respuesta se
+# cae al directorio homónimo.
+resolver_gguf() {
+    local dump nombre gguf dir
+    dump="$(python3 "$ROPERO_ROOT/bin/python/modelconf.py" dump \
+        --root "$ROPERO_ROOT/models" --include-fired 2>/dev/null || true)"
+    # El dump separa los campos con 0x1F (unit separator), NO con un tab:
+    # con "\t" la línea salía entera y el GGUF salía vacío.
+    local sep=$'\x1f'
+    nombre="$(grep -m1 "^${MODELO}" <<< "$dump" | cut -d"$sep" -f1)"
+    gguf="$(grep -m1 "^${MODELO}" <<< "$dump" | cut -d"$sep" -f10)"
+    [[ -n "$nombre" ]] || nombre="$MODELO"
+    dir="$GGUF_DIR/$nombre"
+    if [[ -n "$gguf" && -f "$dir/$gguf" ]]; then
+        printf '%s' "$dir/$gguf"
+        return 0
+    fi
+    # Fallback: el GGUF más grande del directorio del modelo.
+    local f
+    f="$(find "$dir" -maxdepth 1 -type f -name '*.gguf' -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -1 | cut -f2)"
+    [[ -n "$f" ]] && { printf '%s' "$f"; return 0; }
+    return 1
+}
+
+# arrancar <binario> <puerto> — arranca el motor DIRECTO (mismo argv para
+# todos: lo que se compara es el motor, no el catálogo).
 arrancar() {
     local motor="$1" puerto="$2" dir
     dir="$(dirname "$motor")"
@@ -237,16 +288,35 @@ arrancar() {
         log "el motor no es ejecutable: $motor (chmod +x)"
         return 1
     fi
-    PATH="$dir:$PATH" \
-    ROPERO_START_TIMEOUT="${ROPERO_START_TIMEOUT:-600}" \
-        bash "$ROPERO_ROOT/bin/ropero" "$MODELO" --port "$puerto" --background \
-        >>"$OUT/arranque-$(basename "$motor").txt" 2>&1
+    local gguf
+    if ! gguf="$(resolver_gguf)"; then
+        log "no encuentro el GGUF de '$MODELO' (mira $GGUF_DIR/$MODELO)"
+        return 1
+    fi
+    log "  modelo: $gguf"
+    # El "&" va AQUÍ (no dentro de un $(...)): así el proceso es hijo de
+    # este shell y su PID sirve para pararlo. En un subshell quedaría
+    # huérfano.
+    "$motor" --model "$gguf" --host 127.0.0.1 --port "$puerto" \
+        --api-key "$API_KEY" -c "$CTX" --n-gpu-layers "$NGPU" \
+        >>"$OUT/arranque-$(basename "$motor").txt" 2>&1 &
+    local pid=$!
+    printf '%s' "$pid" >"$OUT/pid-$(basename "$motor").txt"
+    log "  pid: $pid"
 }
 
-# parar <puerto>
+# parar <puerto> [motor]
 parar() {
-    local puerto="$1"
-    bash "$ROPERO_ROOT/bin/ropero" stop all >>"$OUT/stop.txt" 2>&1 || true
+    local puerto="$1" motor="${2:-}"
+    # El PID que arrancó este bench (nunca un pkill global).
+    local pf pid
+    pf=""
+    [[ -n "$motor" ]] && pf="$OUT/pid-$(basename "$motor").txt"
+    if [[ -r "$pf" ]]; then
+        pid="$(cat "$pf")"
+        [[ -n "$pid" ]] && { kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true; }
+        rm -f "$pf"
+    fi
     # Por si acaso: matar lo que escuche en el puerto (nunca pkill global).
     # lsof NO está en todas las máquinas (en la del usuario no lo hay, y
     # el "kill" se comía el error en silencio): ss → fuser.
@@ -281,11 +351,12 @@ medir_motor() {
     if ! arrancar "$motor" "$puerto"; then
         log "$etiq: el arranque falló (ver $OUT/arranque-*.txt)"
         printf 'ERROR\tarranque falló\n' >>"$fich"
+        parar "$puerto" "$motor"
         return 1
     fi
     if ! esperar_listo "$puerto"; then
         log "$etiq: el server no llegó a estar listo"
-        parar "$puerto"
+        parar "$puerto" "$motor"
         printf 'ERROR\tno estuvo listo\n' >>"$fich"
         return 1
     fi
@@ -308,7 +379,7 @@ medir_motor() {
         (( DESCANSO > 0 )) && sleep "$DESCANSO"
     done
 
-    parar "$puerto"
+    parar "$puerto" "$motor"
     return 0
 }
 
