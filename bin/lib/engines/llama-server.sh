@@ -35,7 +35,7 @@
 # =============================================================================
 
 rp_eng_llama-server_label() {
-    printf 'llama-server · fork turboquant (Lorenzo-SF)\n'
+    printf 'llama-server · motor turboquant propio (Lorenzo-SF/ropero-llama-turboquant)\n'
 }
 
 rp_eng_llama-server_compatible() {
