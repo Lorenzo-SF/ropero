@@ -49,6 +49,10 @@
 #                       el banco mide el decode con contexto CORTO; el
 #                       contexto enorme es otro problema, con otro banco)
 #   --ngpu <n>          capas a la GPU para los dos motores (por defecto 99)
+#   --args <modo>       comun (por defecto: la intersección de flags de A y B,
+#                       el mismo argv para los dos) | catalogo (el argv del
+#                       catálogo tal cual, sin filtrar: para medir un motor
+#                       solo) | minimos (sólo lo común)
 #   --n-predict <n>     tokens a generar (por defecto 256)
 #   --prompt <texto>    prompt (por defecto: un texto fijo)
 #   --repeticiones <n>  rondas por motor (por defecto 3)
@@ -95,8 +99,16 @@ API_KEY="$LLAMA_API_KEY"
 # binario DIRECTO con lo mínimo y COMÚN, y la diferencia que se mide es la
 # del motor.
 GGUF_DIR="${GGUF_DIR:-$HOME/models/gguf}"
-CTX="${CTX:-8192}"
+CTX="${CTX:-}"
 NGPU="${NGPU:-99}"
+NIVEL="${NIVEL:-}"
+# Los args del motor:
+#   comun    (por defecto) la intersección de los flags que entienden A y B:
+#            mismo argv para los dos → la comparación es justa por construcción
+#   catalogo el argv del catálogo TAL CUAL (sin filtrar): para medir UN motor
+#            (p. ej. el coste de la moe-cache, que el fork de Atomic no tiene)
+#   minimos  sólo --model --host --port --api-key -c: la línea de base
+MODO_ARGS="${MODO_ARGS:-comun}"
 LISTAR=0
 
 # ── Dónde está el motor ─────────────────────────────────────────────────────
@@ -139,6 +151,8 @@ while [[ $# -gt 0 ]]; do
         --descanso)    DESCANSO="$2"; shift 2 ;;
         --out)         OUT="$2"; shift 2 ;;
         --ctx)         CTX="$2"; shift 2 ;;
+        --nivel)       NIVEL="$2"; shift 2 ;;
+        --args)        MODO_ARGS="$2"; shift 2 ;;
         --ngpu)        NGPU="$2"; shift 2 ;;
         --listar)      LISTAR=1; shift ;;
         --help|-h)     sed -n '2,60p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -158,6 +172,58 @@ log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
 mkdir -p "$OUT"
 
+# contexto_catalogo — el contexto que declara el catálogo (campo 6 del dump).
+#
+# Es el MISMO que usa ropero, y importa: el KV come VRAM y la VRAM decide
+# cuánto puede usar la moe-cache. Medir con otro contexto es medir otra cosa.
+contexto_catalogo() {
+    local dump sep
+    dump="$(python3 "$ROPERO_ROOT/bin/python/modelconf.py" dump \
+        --root "$ROPERO_ROOT/models" --include-fired 2>/dev/null || true)"
+    sep=$'\x1f'
+    grep -m1 "^${MODELO}" <<< "$dump" | cut -d"$sep" -f6
+}
+
+# flags_comunes — los flags que ENTIENDEN LOS DOS motores (la intersección).
+#
+# Se usa el mismo argv para A y B, así que la comparación es justa por
+# construcción. Y de paso reproduce el "antes": el fork de Atomic no
+# conoce --moe-cache, así que ese flag se cae de los dos → los dos se
+# miden sin moe-cache, que es como estaba antes del merge.
+preparar_flags_comunes() {
+    local fa fb tmp
+    fa="$OUT/flags-A.txt"; fb="$OUT/flags-B.txt"; tmp="$OUT/flags-tmp.txt"
+    "$MOTOR_A" --help >"$fa" 2>&1 || true
+    "$MOTOR_B" --help >"$fb" 2>&1 || true
+    grep -oE '(^|[[:space:]])--[a-z0-9][a-z0-9-]*' "$fa" | tr -d ' \t' | sort -u >"$tmp" 2>/dev/null || true
+    grep -oE '(^|[[:space:]])--[a-z0-9][a-z0-9-]*' "$fb" | tr -d ' \t' | sort -u | comm -12 "$tmp" - >"$OUT/flags-comunes.txt" 2>/dev/null || true
+    local n
+    n="$(grep -c . "$OUT/flags-comunes.txt" 2>/dev/null || echo 0)"
+    log "flags que entienden los dos motores: $n"
+}
+
+soporta_flag() {
+    local flag="$1"
+    grep -q -- "--$flag" "$OUT/flags-comunes.txt" 2>/dev/null
+}
+
+# filtrar_args <motor> <args...> — deja sólo lo que el motor entiende.
+filtrar_args() {
+    local out=() flag
+    while (( $# )); do
+        flag="$1"; shift
+        if [[ "$flag" == --* ]]; then
+            if ! soporta_flag "${flag#--}"; then
+                # el flag no existe en este binario: se cae él y su valor
+                if (( $# )) && [[ "$1" != --* ]]; then shift; fi
+                continue
+            fi
+        fi
+        out+=("$flag")
+    done
+    printf '%s\n' "${out[@]+"${out[@]}"}"
+}
+
 # ── El modelo y su argv (los del catálogo: la config es la de siempre) ───────
 if ! ARGV_MODELO="$(cd "$ROPERO_ROOT" && bash bin/ropero args "$MODELO" 2>/dev/null)"; then
     log "no se pudo obtener el argv de '$MODELO' (¿existe en el catálogo?)"
@@ -170,6 +236,10 @@ if [[ -z "$GGUF" || ! -f "$GGUF" ]]; then
 fi
 log "modelo: $MODELO"
 log "gguf:   $GGUF"
+if [[ -z "$CTX" ]]; then
+    CTX="$(contexto_catalogo)"
+    [[ -n "$CTX" ]] && log "contexto: $CTX (el del catálogo)"
+fi
 
 if [[ -z "$MOTOR_A" || "$MOTOR_A" == "auto" ]]; then
     MOTOR_A="$(resolver_motor || true)"
@@ -181,6 +251,7 @@ if [[ -z "$MOTOR_A" ]]; then
     exit 1
 fi
 [[ -n "$MOTOR_B" ]] || MOTOR_B="$MOTOR_A"
+preparar_flags_comunes
 
 # ── Utilidades ───────────────────────────────────────────────────────────────
 
@@ -245,34 +316,6 @@ print("%s\t%s\t%s" % (
 ' 2>/dev/null
 }
 
-# resolver_gguf — la ruta del GGUF del modelo pedido.
-#
-# El directorio del modelo es $GGUF_DIR/<nombre real en el catálogo>: el
-# alias ("llama") no es un directorio. Se pregunta al catálogo (con los
-# modelos "fired" incluidos: agenta-tiny vive ahí) y si no hay respuesta se
-# cae al directorio homónimo.
-resolver_gguf() {
-    local dump nombre gguf dir
-    dump="$(python3 "$ROPERO_ROOT/bin/python/modelconf.py" dump \
-        --root "$ROPERO_ROOT/models" --include-fired 2>/dev/null || true)"
-    # El dump separa los campos con 0x1F (unit separator), NO con un tab:
-    # con "\t" la línea salía entera y el GGUF salía vacío.
-    local sep=$'\x1f'
-    nombre="$(grep -m1 "^${MODELO}" <<< "$dump" | cut -d"$sep" -f1)"
-    gguf="$(grep -m1 "^${MODELO}" <<< "$dump" | cut -d"$sep" -f10)"
-    [[ -n "$nombre" ]] || nombre="$MODELO"
-    dir="$GGUF_DIR/$nombre"
-    if [[ -n "$gguf" && -f "$dir/$gguf" ]]; then
-        printf '%s' "$dir/$gguf"
-        return 0
-    fi
-    # Fallback: el GGUF más grande del directorio del modelo.
-    local f
-    f="$(find "$dir" -maxdepth 1 -type f -name '*.gguf' -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -1 | cut -f2)"
-    [[ -n "$f" ]] && { printf '%s' "$f"; return 0; }
-    return 1
-}
-
 # arrancar <binario> <puerto> — arranca el motor DIRECTO (mismo argv para
 # todos: lo que se compara es el motor, no el catálogo).
 arrancar() {
@@ -288,17 +331,31 @@ arrancar() {
         log "el motor no es ejecutable: $motor (chmod +x)"
         return 1
     fi
-    local gguf
-    if ! gguf="$(resolver_gguf)"; then
-        log "no encuentro el GGUF de '$MODELO' (mira $GGUF_DIR/$MODELO)"
-        return 1
-    fi
+    local gguf="$GGUF"
     log "  modelo: $gguf"
     # El "&" va AQUÍ (no dentro de un $(...)): así el proceso es hijo de
     # este shell y su PID sirve para pararlo. En un subshell quedaría
     # huérfano.
-    "$motor" --model "$gguf" --host 127.0.0.1 --port "$puerto" \
-        --api-key "$API_KEY" -c "$CTX" --n-gpu-layers "$NGPU" \
+    local -a argv
+    argv=(--model "$gguf" --host 127.0.0.1 --port "$puerto" --api-key "$API_KEY")
+    if [[ -n "$CTX" ]]; then argv+=(-c "$CTX"); fi
+    if [[ "$MODO_ARGS" != "minimos" ]]; then
+        # Sin mapfile: el repo declara bash 3.2 como soportado.
+        local -a cat=() filtrados=() a
+        while IFS= read -r a; do cat+=("$a"); done <<< "$ARGV_MODELO"
+        if (( ${#cat[@]} )); then
+            if [[ "$MODO_ARGS" == "catalogo" ]]; then
+                filtrados=("${cat[@]}")
+            else
+                while IFS= read -r a; do filtrados+=("$a"); done < <(filtrar_args "${cat[@]}")
+            fi
+            argv+=("${filtrados[@]}")
+            log "  args: ${#cat[@]} -> ${#filtrados[@]} (modo $MODO_ARGS)"
+        fi
+    else
+        argv+=(--n-gpu-layers "$NGPU")
+    fi
+    "$motor" "${argv[@]}" \
         >>"$OUT/arranque-$(basename "$motor").txt" 2>&1 &
     local pid=$!
     printf '%s' "$pid" >"$OUT/pid-$(basename "$motor").txt"
