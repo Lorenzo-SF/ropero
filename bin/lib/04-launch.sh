@@ -381,6 +381,26 @@ rp_model_on_port() {
 
 # ── Parada por puerto ────────────────────────────────────────────────────────
 
+# _rp_state_pid_is_engine <pid> <engine> — ¿ese PID es el engine de ropero?
+#
+# El estado guarda el PID de un arranque. Si ese arranque murió, el SO
+# RECICLA el PID: el estado pasa a apuntar a un proceso cualquiera, y
+# "ropero stop" mataría a un inocente (un navegador, un editor). Se comprueba
+# que /proc/<pid>/cmdline mencione el binario del engine.
+#
+# Sin /proc (no es Linux) no se puede comprobar: se asume que sí.
+_rp_state_pid_is_engine() {
+    local pid="$1" engine="$2"
+    [[ -n "$pid" ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    [[ -r "/proc/$pid/cmdline" ]] || return 0
+    local bin base
+    bin="$(rp_engine_call "$engine" resolve 2>/dev/null)" || bin=""
+    base="${bin##*/}"
+    [[ -n "$base" ]] || return 0
+    tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null | grep -qF "$base"
+}
+
 # rp_stop_port <puerto> — apaga lo que vive en <puerto> (árbol del PID del
 # estado + el que escucha + sus hijos directos) y limpia el estado.
 #
@@ -406,6 +426,17 @@ rp_stop_port() {
     local p hijo visto=""
     p="$(rp_state_read "$puerto" PID)" || p=""
     if [[ -n "$p" ]] && kill -0 "$p" 2>/dev/null; then
+        # El PID del estado puede estar RECICLADO (el arranque murió y el SO
+        # lo dio a otro proceso). Matarlo sería matar a un inocente, así que
+        # se comprueba que sea el engine de ropero.
+        local eng_del_estado=""
+        eng_del_estado="$(rp_state_read "$puerto" ENGINE)" || eng_del_estado=""
+        if [[ -n "$eng_del_estado" ]] && ! _rp_state_pid_is_engine "$p" "$eng_del_estado"; then
+            rp_msg warn ":$puerto tiene el pid $p en el estado, pero no es el engine ($eng_del_estado): PID reciclado, no se mata"
+            p=""
+        fi
+    fi
+    if [[ -n "$p" ]]; then
         objetivos+=("$p"); visto=" $p "
     fi
     while IFS= read -r p; do
@@ -541,8 +572,50 @@ _rp_launch_check_limits() {
 
 # ── Espera de readiness ──────────────────────────────────────────────────────
 
+# _rp_kill_tree <pid> — mata un árbol de procesos (TERM, margen, KILL).
+_rp_kill_tree() {
+    local p="$1" hijo
+    [[ -n "$p" ]] || return 0
+    kill -0 "$p" 2>/dev/null || return 0
+    local -a arbol=("$p")
+    while IFS= read -r hijo; do
+        [[ -n "$hijo" ]] && arbol+=("$hijo")
+    done < <(pgrep -P "$p" 2>/dev/null)
+    local q
+    for q in ${arbol[@]+"${arbol[@]}"}; do
+        kill -TERM "$q" 2>/dev/null || true
+    done
+    local esperado=0
+    while (( esperado < 10 )); do
+        local vivo=0
+        for q in ${arbol[@]+"${arbol[@]}"}; do
+            kill -0 "$q" 2>/dev/null && vivo=1
+        done
+        (( vivo == 0 )) && break
+        sleep 1
+        esperado=$((esperado + 1))
+    done
+    for q in ${arbol[@]+"${arbol[@]}"}; do
+        kill -0 "$q" 2>/dev/null && kill -9 "$q" 2>/dev/null
+    done
+    return 0
+}
+
 # _rp_wait_fail <puerto> <modelo> <motivo> — error de espera + últimas líneas
 # del log del arranque (es donde está la causa, no en el mensaje).
+#
+# Y MATA AL PROCESO QUE ARRANcamos.
+#
+# Antes avisaba y dejaba el server vivo. Un arranque que no llega a tiempo
+# (el modelo tarda en cargar, o peta a mitad) se quedaba cargando en segundo
+# plano: ropero decía "no responde" y, cuando el server terminaba de
+# cargar, se ponía a servir peticiones. El puerto quedaba ocupado por un
+# zombi que ropero mismo había abandonado, y el siguiente arranque moría con
+# "puerto ocupado" o con "address already in use" → "los modelos no
+# arrancan" y "no veo los cambios".
+#
+# Se mata al PID del ESTADO (el que arrancó ropero), no al que escucha en el
+# puerto: si el puerto lo ocupaba otro, ese no es nuestro y no se toca.
 _rp_wait_fail() {
     local puerto="$1" modelo="$2" motivo="$3"
     rp_msg error "$motivo"
@@ -551,6 +624,13 @@ _rp_wait_fail() {
     if [[ -n "$log" && -f "$log" ]]; then
         rp_msg info "  últimas líneas de $log:"
         tail -n 15 "$log" 2>/dev/null | sed 's/^/    /' >&2
+    fi
+    local pid=""
+    pid="$(rp_state_read "$puerto" PID)" || pid=""
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        rp_msg warn "  el proceso que arrancó (pid $pid) sigue vivo: se para para no dejar un zombi en :$puerto"
+        _rp_kill_tree "$pid"
+        rp_state_clear "$puerto"
     fi
     return 0
 }

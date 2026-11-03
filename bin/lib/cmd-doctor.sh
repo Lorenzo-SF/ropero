@@ -21,6 +21,15 @@ if ! declare -F rp_engine_list >/dev/null 2>&1; then
     . "${ROPERO_ROOT}/bin/lib/03-engines.sh"
 fi
 
+# El doctor también mira el ESTADO de los puertos gestionados (zombis,
+# huérfanos, sellos), y eso vive en 04-launch.sh. Sin esta carga, el doctor
+# se quejaba de "rp_managed_ports: command not found" y se saltaba la
+# comprobación entera sin avisar.
+if ! declare -F rp_managed_ports >/dev/null 2>&1; then
+    # shellcheck source=/dev/null
+    . "${ROPERO_ROOT}/bin/lib/04-launch.sh"
+fi
+
 # ── Contadores del doctor ────────────────────────────────────────────────────
 RP_DOCTOR_BAD=0      # críticos: deciden el exit
 RP_DOCTOR_WARN=0     # avisos
@@ -265,6 +274,54 @@ rp_cmd_doctor() {
         fi
     else
         _rp_doctor_warn "no se pudo cargar el catálogo de modelos"
+    fi
+
+    # ── Puertos gestionados: el estado vs la realidad ─────────────────────
+    #
+    # La familia de bugs más cara de ropero: el ESTADO dice una cosa y la
+    # MÁQUINA otra. Cuatro casos, y todos se leen como "los modelos no
+    # arrancan" o "no veo los cambios":
+    #
+    #   · ZOMBI: el PID del estado sigue vivo pero el puerto no escucha
+    #     (el server se quedó cargando, o colgado). Es el que ocupa el
+    #     puerto y hace que el arranque siguiente muera.
+    #   · HUÉRFANO: el estado apunta a un PID que ya no existe.
+    #   · AJENO: el puerto está ocupado y no hay estado (otro programa, o un
+    #     server de una sesión anterior).
+    #   · SIN SELLO: hay estado pero sin sello de configuración → ropero no
+    #     puede probar que la config sea la misma → el próximo arranque
+    #     reinicia (y avisa).
+    local p pid modelo stamp
+    while IFS= read -r p; do
+        [[ -n "$p" ]] || continue
+        pid="$(rp_state_read "$p" PID 2>/dev/null)" || pid=""
+        modelo="$(rp_state_read "$p" MODEL 2>/dev/null)" || modelo=""
+        stamp="$(rp_state_read "$p" STAMP 2>/dev/null)" || stamp=""
+        if [[ -n "$pid" ]]; then
+            if kill -0 "$pid" 2>/dev/null; then
+                if ! rp_port_listening "$p"; then
+                    _rp_doctor_warn ":$p tiene el proceso ${modelo:-?}(pid $pid) VIVO pero no escucha: está cargando o colgado — 'ropero stop ${modelo:-all}' lo para"
+                fi
+                local eng=""
+                eng="$(rp_state_read "$p" ENGINE 2>/dev/null)" || eng=""
+                if [[ -n "$eng" ]] && ! _rp_state_pid_is_engine "$pid" "$eng"; then
+                    _rp_doctor_warn ":$p apunta a un pid $pid que NO es el engine ($eng): PID reciclado — el estado se limpia con 'ropero stop all'"
+                fi
+                if [[ -z "$stamp" ]]; then
+                    _rp_doctor_warn ":$p sin sello de configuración: ropero no puede probar que la config sea la misma y reiniciará en el próximo arranque"
+                fi
+            else
+                _rp_doctor_warn ":$p tiene estado huérfano (pid $pid ya no existe): 'ropero stop all' lo limpia"
+            fi
+        elif rp_port_listening "$p"; then
+            _rp_doctor_warn ":$p está ocupado por un proceso que NO es de ropero (no hay estado): puede ser otro programa o un server de una sesión anterior"
+        fi
+    done < <(rp_managed_ports)
+
+    # lsof no es obligatorio (hay fallback a ss/fuser//proc), pero si falta
+    # es bueno saberlo: el fallback es más lento.
+    if ! command -v lsof >/dev/null 2>&1; then
+        rp_msg info "sin lsof: la detección de puertos usa ss/fuser//proc (más lenta, pero funciona)"
     fi
 
     # ── Resumen y veredicto ──────────────────────────────────────────────
