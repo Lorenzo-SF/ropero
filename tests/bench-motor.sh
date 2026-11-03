@@ -64,7 +64,19 @@ REPETICIONES="${REPETICIONES:-3}"
 DESCANSO="${DESCANSO:-0}"
 OUT="${OUT:-/tmp/bench-motor}"
 PROMPT="${PROMPT:-Explica en un párrafo por qué el mar es salado.}"
-API_KEY="sk-bench-local"
+# La clave de la API.
+#
+# ropero arranca el server CON `--api-key` (auth nativa): el launcher la
+# resuelve por env > $STATE_DIR/api_key > generada (sk-ropero-<hex>). Si el
+# bench manda una clave distinta, el server responde 401 y TODAS las
+# peticiones fallan con "la petición falló" (que es lo que pasaba: 8/8
+# errores con los dos motores, y la GPU al 0 % el tiempo entero).
+#
+# La solución: el bench FIJA LLAMA_API_KEY en el entorno antes de arrancar
+# los servers. Así ropero usa esa misma (env > fichero > generada) y el
+# bench manda la misma.
+export LLAMA_API_KEY="${LLAMA_API_KEY:-sk-bench-local}"
+API_KEY="$LLAMA_API_KEY"
 LISTAR=0
 
 # ── Dónde está el motor ─────────────────────────────────────────────────────
@@ -171,17 +183,32 @@ gpu_estado() {
         "$etiq" "${clocks:-?}" "${power:-?}" "${temp:-?}" "${util:-?}" "${throttle:-sin reasons}"
 }
 
+# _bench_error <mensaje> — el motivo del fallo (visible en la tabla).
+_bench_error() {
+    printf 'ERROR\t%s\n' "${1:-la petición falló}" >&2
+}
+
 # pedir <puerto> <n_predict> — una completion y sus timings.
 pedir() {
     local puerto="$1" n="$2" cuerpo resp
     cuerpo="$(printf '{"prompt":%s,"n_predict":%s,"stream":false,"cache_prompt":false}' \
         "$(printf '%s' "$PROMPT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')" "$n")"
-    resp="$(curl -fsS --max-time 600 \
+    # -w para saber el código HTTP: "la petición falló" sin más no dice si
+    # fue un 401 (clave), un 404 (modelo) o un 503 (el server aún no está).
+    local codigo
+    resp="$(curl -sS --max-time 600 \
+        -w '\n%{http_code}' \
         -H "Authorization: Bearer $API_KEY" \
         -H "Content-Type: application/json" \
         -d "$cuerpo" \
         "http://127.0.0.1:$puerto/v1/completion" 2>/dev/null)"
-    [[ -n "$resp" ]] || return 1
+    codigo="${resp##*$'\n'}"
+    resp="${resp%$'\n'*}"
+    if [[ "$codigo" != "200" ]]; then
+        _bench_error "HTTP $codigo${resp:+ · $(printf '%s' "$resp" | head -c 160)}"
+        return 1
+    fi
+    [[ -n "$resp" ]] || { _bench_error "respuesta vacía"; return 1; }
     printf '%s' "$resp" | python3 -c '
 import json, sys
 try:
@@ -262,7 +289,8 @@ medir_motor() {
     for rep in $(seq 1 "$REPETICIONES"); do
         gpu_estado "$etiq-ronda$rep-antes" >>"$OUT/gpu.txt"
         if ! out="$(pedir "$puerto" "$N_PREDICT")"; then
-            printf 'ERROR\tla petición falló\n' >>"$fich"
+            # el motivo va en el stderr de pedir(); aquí se deja el hueco
+            printf 'ERROR\tla petición falló (mira el stderr: HTTP)\n' >>"$fich"
             gpu_estado "$etiq-ronda$rep-despues" >>"$OUT/gpu.txt"
             continue
         fi
