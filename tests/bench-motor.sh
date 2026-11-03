@@ -248,8 +248,13 @@ parar() {
     local puerto="$1"
     bash "$ROPERO_ROOT/bin/ropero" stop all >>"$OUT/stop.txt" 2>&1 || true
     # Por si acaso: matar lo que escuche en el puerto (nunca pkill global).
+    # lsof NO está en todas las máquinas (en la del usuario no lo hay, y
+    # el "kill" se comía el error en silencio): ss → fuser.
     local pids
-    pids="$(lsof -t -iTCP:"$puerto" -sTCP:LISTEN 2>/dev/null || true)"
+    pids="$(fuser -n tcp "$puerto" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true)"
+    if [[ -z "$pids" ]]; then
+        pids="$(ss -lptnH "sport = :$puerto" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
+    fi
     for p in $pids; do kill -9 "$p" 2>/dev/null || true; done
 }
 
