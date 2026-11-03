@@ -43,6 +43,8 @@
 # decisión de diseño: --cpu en macOS es error de uso, ver §5.5).
 : "${CPU_PORT:=9998}"
 
+
+: "${OPENAI_API_KEY:=sk-local-dev-key}"
 # Timeout de arranque/espera de modelo, en segundos.
 : "${ROPERO_START_TIMEOUT:=300}"
 

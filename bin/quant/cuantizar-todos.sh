@@ -45,7 +45,9 @@
 # Lo que hace cada tirada queda en $LOG_DIR/<modelo>.log, y al final un
 # resumen con lo que se hizo y lo que fallo.
 # =============================================================================
-set -uo pipefail
+# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
+# sourcea. Los abortos críticos son explícitos (`exit 1`).
+set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TABLA="${TABLA:-$AQUI/modelos.tsv}"

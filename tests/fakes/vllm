@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-# fake vllm: ignora argv salvo --port; sirve /health y /v1/models
-exec python3 "$(dirname "$0")/_fake_openai.py" "$@"

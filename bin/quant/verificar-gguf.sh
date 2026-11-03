@@ -11,7 +11,9 @@
 #
 # CODIGO DE SALIDA: 0 si esta bien, 1 si no.
 # =============================================================================
-set -uo pipefail
+# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
+# sourcea. Los abortos críticos son explícitos (`exit 1`).
+set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROPERO="$(cd "$AQUI/../.." && pwd)"

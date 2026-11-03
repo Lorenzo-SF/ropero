@@ -9,9 +9,10 @@
 # POR QUÉ ARRAYS PARALELAS Y NO ASSOCIATIVAS
 #   bash 3.2 (ADR-1) no tiene `declare -A`. El índice es la POSICIÓN en
 #   MODEL_NAMES y las filas son densas (sólo se añaden por el final), así que
-#   un bucle C `for ((i=0; i<${#MODEL_NAMES[@]}; i++))` es seguro incluso con
-#   `set -u` (la expansión de array vacío es lo que aborta en 3.2, y aquí no
-#   se da: se comprueba la longitud antes de expandir).
+#   un bucle C `for ((i=0; i<${#MODEL_NAMES[@]}; i++))` es seguro: en bash 3.2
+#   expandir un array vacío aborta la shell, y aquí no se da (se comprueba la
+#   longitud antes de expandir). La precaution se mantiene aunque no haya
+#   `nounset` activo: no depende del contexto, es buena practica.
 #
 # CONTRATO (spec §5.3):
 #   rp_mc_load                        carga el catálogo (idempotente)

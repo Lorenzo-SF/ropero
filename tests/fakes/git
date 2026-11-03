@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-echo "git $*" >> "${FAKE_LOG:-/dev/null}"
-exit 0

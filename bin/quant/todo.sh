@@ -20,7 +20,9 @@
 #   ./todo.sh --sin-subir     -> cuantiza y verifica, pero no sube
 #   ./todo.sh --solo-subir    -> no cuantiza: solo sube lo pendiente
 # =============================================================================
-set -uo pipefail
+# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
+# sourcea. Los abortos críticos son explícitos (`|| exit 1`).
+set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GGUF_DIR="${GGUF_DIR:-$HOME/models/gguf}"

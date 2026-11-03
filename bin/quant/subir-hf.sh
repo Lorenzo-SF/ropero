@@ -22,7 +22,10 @@
 #
 # El usuario de HF sale de quant/hf.env (HF_USER=...) o del entorno.
 # =============================================================================
-set -uo pipefail
+
+# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
+# sourcea. Los abortos críticos son explícitos (`exit 1`).
+set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROPERO="$(cd "$AQUI/../.." && pwd)"
@@ -44,9 +47,15 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --subir)  ACCION="subir"; shift ;;
         --listar) ACCION="listar"; shift ;;
-        --user)   HF_USER="$2"; shift 2 ;;
+        --user)
+            [[ $# -ge 2 ]] || { echo "ERROR: --user necesita el usuario de HuggingFace" >&2; exit 2; }
+            HF_USER="$2"; shift 2 ;;
         -h|--help)
-            sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            # La cabecera de uso es el bloque de comentarios inicial: se corta
+            # en la primera línea que no sea comentario (la línea en blanco de
+            # arriba también corta, y por eso marca dónde acaba la cabecera).
+            # Así no hay ningún rango de líneas que ajustar al tocarla.
+            awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^#[ ]?/, ""); print }' "${BASH_SOURCE[0]}"
             exit 0 ;;
         *)  FICHERO="$1"; ACCION="subir"; shift ;;
     esac
@@ -96,9 +105,10 @@ nombre_modelo() {
     base="$(basename "$f" .gguf)"
     # el quant va como sufijo: "fable-coder-35B-A3B.Q2_K" -> "fable-coder-35B-A3B"
     #
-    # OJO: "sufijo" se DECLARA FUERA del if. Con `set -u`, declarada dentro
-    # de un bloque, la variable no llega a existir al usarla, y bash dice
-    # "sufijo: unbound variable" sin senalar que el problema es el `local`.
+    # OJO: "sufijo" se DECLARA FUERA del if. Si la declaración viviera dentro
+    # del bloque y la condición no se cumpliera, la variable no existiría y
+    # "es_quant" recibiría una cadena vacía: el recorte del quant no
+    # ocurriría, en silencio, y el nombre del modelo saldría mal.
     sufijo="${base##*.}"
     if [[ "$base" == *.* ]] && es_quant "$sufijo"; then
         base="${base%.*}"

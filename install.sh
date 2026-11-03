@@ -61,7 +61,18 @@
 # cerrojo: sin él, la segunda pasada re-leería un stdin ya en EOF.
 # =============================================================================
 
-set -euo pipefail
+# -----------------------------------------------------------------------------
+# Opciones de shell: SÓLO `pipefail`.
+#
+# SIN `errexit` (-e) NI `nounset` (-u), a propósito: este script se ejecuta (y
+# se sourcea) desde la shell del usuario, así que errexit la MATARÍA ante un
+# fallo y nounset le dejaría la shell en modo estricto (en bash 3.2, además,
+# aborta al expandir un array vacío). Por eso los abortos son EXPLICÍTOS y
+# locales (`|| die "..."`) en cada ruta crítica, nunca implícitos.
+#
+# NO reintroducir errexit ni nounset: rompe ese contrato.
+# -----------------------------------------------------------------------------
+set -o pipefail
 
 # -----------------------------------------------------------------------------
 # Bootstrap: stdin → fichero legible, conservando "$@".
@@ -162,7 +173,7 @@ real_dir() {
     local p="$1" dir base
     while [[ -L "$p" ]]; do
         dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
-        base="$(readlink "$p")"
+        base="$(readlink "$p")" || return 1
         [[ "$base" != /* ]] && base="$dir/$base"
         p="$base"
     done
@@ -175,7 +186,7 @@ real_path() {
     local p="$1" dir base
     while [[ -L "$p" ]]; do
         dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
-        base="$(readlink "$p")"
+        base="$(readlink "$p")" || return 1
         [[ "$base" != /* ]] && base="$dir/$base"
         p="$base"
     done
@@ -675,10 +686,11 @@ fase_verificar() {
     [[ -f "$bin" ]] || die "no existe el entrypoint: $bin"
 
     local rc=0
-    set +e
+    # Sin errexit: el estado se captura a mano y se decide aquí abajo. El
+    # toggle de errexit de antes sólo servía para que este comando NO
+    # abortara el script; ahora no hace falta porque no hay errexit.
     bash "$bin" --help >/dev/null 2>&1 </dev/null
     rc=$?
-    set -e
     if (( rc == 0 )); then
         ok "el lanzador responde (ropero --help → salida 0)"
     else

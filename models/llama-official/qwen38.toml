@@ -3,7 +3,7 @@
 # =============================================================================
 
 [model]
-name    = "qwen38"
+name    = "qwen38-o"
 engine  = "llama-server-official"
 context = 133072
 

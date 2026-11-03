@@ -545,3 +545,23 @@ rp_cmd_models() {
     fi
     return "$rc"
 }
+
+# -----------------------------------------------------------------------------
+# _rp_models_gguf_first — listado GGUF → modelos que lo usan (campo 14)
+# -----------------------------------------------------------------------------
+# Para usar: reemplazar la llamada a _rp_models_menu por esta lógica,
+# o insertar como opción en el menú. Orden: GGUF primero, luego mapeo.
+_rp_models_gguf_first() {
+    rp_header "gguf → modelos (campo 14 del dump, orden GGUF-first)"
+    # Extraer GGUF únicos de los modelos activos compatibles
+    local gguf modelos_que_usn gguf_file
+    # Implementación: iterar MODEL_NAMES (ya filtrados por engine_ok en menú)
+    for (( i = 0; i < ${#MODEL_NAMES[@]}; i++ )); do
+        [[ "${MODEL_ISALIAS[$i]}" == "0" ]] || continue
+        [[ "${MODEL_ORIGIN[$i]}" == "active" ]] || continue
+        # Aquí se extraería campo 14 del dump; por ahora preserva orden existente
+        :
+    done
+    printf '  (modo GGUF-first: listar cada GGUF del campo 14, luego ropero <modelo> → GGUF)\n' >&2
+    printf '  ver spec: cmd-models.sh línea ~131 (menú original), campo 14 = file (GGUF)\n' >&2
+}

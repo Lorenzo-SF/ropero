@@ -3,7 +3,7 @@
 # =============================================================================
 
 [model]
-name    = "gptoss"
+name    = "gptoss-o"
 engine  = "llama-server-official"
 context = 131072
 

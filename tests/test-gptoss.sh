@@ -1,70 +1,63 @@
-cd ~/test/gptoss
+#!/usr/bin/env bash
+# =============================================================================
+# tests/test-MODELO.sh — test mantenible (refactor) con recopilación
+# =============================================================================
+# bash 3.2 (macOS): sin namerefs, sin arrays asociativos.
+# Usa tests/lib/test-common.sh para funciones reutilizables.
+# =============================================================================
+TEST_MODEL="gptoss"
+TEST_DOCS_DIR="${ROPERO_ROOT:-.}/docs"
+TEST_LOG_FILE="$HOME/.logs/ropero/gptoss.log"
+if [[ -f "\${ROPERO_ROOT:-.}/tests/lib/test-common.sh" ]]; then . "\${ROPERO_ROOT:-.}/tests/lib/test-common.sh"; fi
+
+cd ~/test/$TEST_MODEL || exit 2
 
 # -----------------------------------------------------------------
-pkill -9 opencode ; pkill -9 mcode; pkill -9 python; pkill -9 llama-server
-rm /home/lorenzo/.logs/ropero/gptoss.log
-ropero gptoss --background
-sleep 20
-mkdir -p ~/test/gptoss/prueba1
-cd ~/test/gptoss/prueba1
-opencode run "$(</home/lorenzo/workspace/github/lasaca/ropero/tests/prueba1.md)" --agent build --model "marichocho/Puertourraco-256k" --format json  > prueba1.json
-session1=$(cat prueba1.json | jq -r 'select(.sessionID or .session_id) | (.sessionID // .session_id)' | sort | uniq )
-opencode session export $session1 > sesion-prueba1.md
-cp /home/lorenzo/.logs/ropero/gptoss.log log-llama-sesion-prueba1.txt
-# -----------------------------------------------------------------
+for sufijo in "" "largo" "gorda"; do
+    case "$sufijo" in largo) num="larga";; gorda) num="gorda";; *) num="";; esac
+    for i in $(seq 1 3); do
+        [[ -n "$sufijo" ]] && break
+        pkill -9 opencode 2>/dev/null; pkill -9 mcode 2>/dev/null; pkill -9 python 2>/dev/null; pkill -9 llama-server 2>/dev/null
+        rm -f "$TEST_LOG_FILE"
+        ropero $TEST_MODEL --background
+        sleep 20
+        prueba_dir="$HOME/test/$TEST_MODEL/prueba${i}"
+        mkdir -p "$prueba_dir" || exit 2
+        cd "$prueba_dir"
+        opencode run "$(</home/merendandum/workspace/github/lasaca/ropero/docs/prueba${i}.md)" --agent build --model "marichocho/Puertourraco-256k" --format json > prueba${i}.json 2>/dev/null || printf "AVISO: opencode run prueba${i} falló
+" >&2
+        session${i}=$(cat prueba${i}.json 2>/dev/null | jq -r "select(.sessionID or .session_id) | (.sessionID // .session_id)" | sort | uniq | head -1)
+        [[ -n "$session${i}" ]] && opencode session export "$session${i}" > sesion-prueba${i}.md 2>/dev/null || printf "AVISO: export session${i} falló
+" >&2
+        cp -f "$TEST_LOG_FILE" log-llama-sesion-prueba${i}.txt 2>/dev/null || printf "AVISO: no hay log para prueba${i}
+" >&2
+    done
+done
 
+# Recopilación final: archivo único con toda la recopilación
+TEST_RESUMEN="$HOME/test/$TEST_MODEL/recopilacion-completa.md"
+mkdir -p "$(dirname "$TEST_RESUMEN")" || exit 2
+_test_generate_summary "$TEST_RESUMEN"
+# Añadir recopilación de cada prueba al archivo final
+for sufijo in "" "largo" "gorda"; do
+    case "$sufijo" in largo) num="larga";; gorda) num="gorda";; *) num="";; esac
+    for i in $(seq 1 3); do
+        [[ -n "$sufijo" ]] && break
+        printf "---
+" >> "$TEST_RESUMEN"
+        printf "PRUEBA %s (%s)
+" "$i" "${sufijo:-normal}" >> "$TEST_RESUMEN"
+        printf "Directorio: $HOME/test/$TEST_MODEL/prueba${i}
+" >> "$TEST_RESUMEN"
+        printf "Log: %s
+" "$TEST_LOG_FILE" >> "$TEST_RESUMEN"
+        printf "JSON: $HOME/test/$TEST_MODEL/prueba${i}/prueba${i}.json
+" >> "$TEST_RESUMEN"
+        printf "Sesión: $HOME/test/$TEST_MODEL/prueba${i}/sesion-prueba${i}.md
+" >> "$TEST_RESUMEN"
+    done
+done
+printf "
+Recopilación completa generada: %s
+" "$TEST_RESUMEN"
 
-# -----------------------------------------------------------------
-pkill -9 opencode ; pkill -9 mcode; pkill -9 python; pkill -9 llama-server
-rm /home/lorenzo/.logs/ropero/gptoss.log
-ropero gptoss --background
-sleep 20
-mkdir -p ~/test/gptoss/prueba2
-cd ~/test/gptoss/prueba2
-opencode run "$(</home/lorenzo/workspace/github/lasaca/ropero/tests/prueba2.md)" --agent build --model "marichocho/Puertourraco-256k" --format json  > prueba2.json
-session2=$(cat prueba2.json | jq -r 'select(.sessionID or .session_id) | (.sessionID // .session_id)' | sort | uniq )
-opencode session export $session2 > sesion-prueba2.md
-cp /home/lorenzo/.logs/ropero/gptoss.log log-llama-sesion-prueba2.txt
-# -----------------------------------------------------------------
-
-
-# -----------------------------------------------------------------
-pkill -9 opencode ; pkill -9 mcode; pkill -9 python; pkill -9 llama-server
-rm /home/lorenzo/.logs/ropero/gptoss.log
-ropero gptoss --background
-sleep 20
-mkdir -p ~/test/gptoss/prueba3
-cd ~/test/gptoss/prueba3
-opencode run "$(</home/lorenzo/workspace/github/lasaca/ropero/tests/prueba3.md)" --agent build --model "marichocho/Puertourraco-256k" --format json  > prueba3.json
-session3=$(cat prueba3.json | jq -r 'select(.sessionID or .session_id) | (.sessionID // .session_id)' | sort | uniq )
-opencode session export $session3 > sesion-prueba3.md
-cp /home/lorenzo/.logs/ropero/gptoss.log log-llama-sesion-prueba3.txt
-# -----------------------------------------------------------------
-
-
-# -----------------------------------------------------------------
-pkill -9 opencode ; pkill -9 mcode; pkill -9 python; pkill -9 llama-server
-rm /home/lorenzo/.logs/ropero/gptoss.log
-ropero gptoss --background
-sleep 20
-mkdir -p ~/test/gptoss/prueba_larga
-cd ~/test/gptoss/prueba_larga
-opencode run "$(</home/lorenzo/workspace/github/lasaca/ropero/tests/prueba_larga.md)" --agent build --model "marichocho/Puertourraco-256k" --format json  > prueba_larga.json
-session_larga=$(cat prueba_larga.json | jq -r 'select(.sessionID or .session_id) | (.sessionID // .session_id)' | sort | uniq )
-opencode session export $session_larga > sesion-prueba_larga.md
-cp /home/lorenzo/.logs/ropero/gptoss.log log-llama-sesion-prueba_larga.txt
-# -----------------------------------------------------------------
-
-
-# -----------------------------------------------------------------
-pkill -9 opencode ; pkill -9 mcode; pkill -9 python; pkill -9 llama-server
-rm /home/lorenzo/.logs/ropero/gptoss.log
-ropero gptoss --background
-sleep 20
-mkdir -p ~/test/gptoss/prueba_gorda
-cd ~/test/gptoss/prueba_gorda
-opencode run "$(</home/lorenzo/workspace/github/lasaca/ropero/tests/prueba_gorda.md)" --agent build --model "marichocho/Puertourraco-256k" --format json  > prueba_gorda.json
-session_gorda=$(cat prueba_gorda.json | jq -r 'select(.sessionID or .session_id) | (.sessionID // .session_id)' | sort | uniq )
-opencode session export $session_gorda > sesion-prueba_gorda.md
-cp /home/lorenzo/.logs/ropero/gptoss.log log-llama-sesion-prueba_gorda.txt
-# -----------------------------------------------------------------

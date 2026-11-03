@@ -64,7 +64,7 @@ rp_eng_llama-server-official_install() {
             rp_msg warn "sustituyo ${LLAMA_OFFICIAL_DIR:-$HOME/llama.cpp-official} por un clon limpio del fork"
             rm -rf "${LLAMA_OFFICIAL_DIR:-$HOME/llama.cpp-official}" || return 1
         fi
-        rp_step 1 5 "clonando AtomicBot-ai/atomic-llama-cpp-turboquant (HTTPS)..."
+        rp_step 1 5 "clonando ggml-org/llama.cpp (HTTPS)..."
         git clone -q https://github.com/ggml-org/llama.cpp.git \
             "${LLAMA_OFFICIAL_DIR:-$HOME/llama.cpp-official}" || {
             rp_msg error "falló el clone del motor"

@@ -5,7 +5,7 @@
 [model]
 name    = "qwen38"
 engine  = "llama-server"
-context = 133072
+context = 266144
 
 [files]
 gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf"
@@ -25,7 +25,7 @@ size = "4.48 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
-default = "xhigh"
+default = "low"
 
 [args]
 base = [

@@ -1,5 +1,5 @@
 [model]
-name    = "groot"
+name    = "groot-o"
 engine  = "llama-server-official"
 # context = 524288 
 context = 266144 

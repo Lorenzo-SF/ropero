@@ -43,7 +43,9 @@
 #
 # El clon del motor se toma de $LLAMA_DIR (o del primer argumento).
 # =============================================================================
-set -uo pipefail
+# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
+# sourcea. Los abortos críticos son explícitos (`exit 1`).
+set -o pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATCHES_DIR="$HERE/patches"
