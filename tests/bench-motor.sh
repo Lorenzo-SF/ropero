@@ -230,6 +230,23 @@ filtrar_args() {
     printf '%s\n' "${out[@]+"${out[@]}"}"
 }
 
+# resolver_motor_binario <ruta> — si es un directorio, busca el binario
+# dentro. Con el banco viejo esto era una trampa silenciosa: se metía el
+# directorio en el PATH, ropero NO encontraba llama-server ahí y acababa
+# usando el motor de siempre → los dos "motores" comparados eran el MISMO
+# binario, y el A/B no midía nada.
+resolver_motor_binario() {
+    local motor="$1" cand
+    if [[ ! -d "$motor" ]]; then
+        printf '%s' "$motor"
+        return 0
+    fi
+    for cand in "$motor/build/bin/llama-server" "$motor/bin/llama-server" "$motor/llama-server"; do
+        [[ -x "$cand" ]] && { printf '%s' "$cand"; return 0; }
+    done
+    return 1
+}
+
 # ── El modelo y su argv (los del catálogo: la config es la de siempre) ───────
 if ! ARGV_MODELO="$(cd "$ROPERO_ROOT" && bash bin/ropero args "$MODELO" 2>/dev/null)"; then
     log "no se pudo obtener el argv de '$MODELO' (¿existe en el catálogo?)"
@@ -257,6 +274,22 @@ if [[ -z "$MOTOR_A" ]]; then
     exit 1
 fi
 [[ -n "$MOTOR_B" ]] || MOTOR_B="$MOTOR_A"
+# Se resuelven UNA VEZ (un directorio → el binario que hay dentro). Si no,
+# la lista de flags se calcularía sobre un directorio y saldría vacía.
+if [[ -d "$MOTOR_A" ]]; then
+    _res="$(resolver_motor_binario "$MOTOR_A")" && MOTOR_A="$_res" || {
+        log "$MOTOR_A es un directorio y no tiene build/bin/llama-server dentro"
+        find "$MOTOR_A" -maxdepth 3 -type f -name 'llama-server' -perm -u+x 2>/dev/null | head -5 | while IFS= read -r l; do log "    $l"; done
+        exit 1
+    }
+fi
+if [[ -d "$MOTOR_B" ]]; then
+    _res="$(resolver_motor_binario "$MOTOR_B")" && MOTOR_B="$_res" || {
+        log "$MOTOR_B es un directorio y no tiene build/bin/llama-server dentro"
+        find "$MOTOR_B" -maxdepth 3 -type f -name 'llama-server' -perm -u+x 2>/dev/null | head -5 | while IFS= read -r l; do log "    $l"; done
+        exit 1
+    }
+fi
 preparar_flags_comunes
 
 # ── Utilidades ───────────────────────────────────────────────────────────────
@@ -326,6 +359,14 @@ print("%s\t%s\t%s" % (
 # todos: lo que se compara es el motor, no el catálogo).
 arrancar() {
     local motor="$1" puerto="$2" dir
+    local resuelto
+    if ! resuelto="$(resolver_motor_binario "$motor")"; then
+        log "  $motor es un directorio y no tiene build/bin/llama-server dentro"
+        log "    candidatos:"
+        find "$motor" -maxdepth 3 -type f -name 'llama-server' -perm -u+x 2>/dev/null | head -5 | while IFS= read -r l; do log "      $l"; done
+        return 1
+    fi
+    motor="$resuelto"
     dir="$(dirname "$motor")"
     if [[ ! -e "$motor" ]]; then
         log "no existe el motor: $motor"
