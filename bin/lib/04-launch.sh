@@ -708,6 +708,20 @@ rp_wait_ready() {
                 if [[ "$casa" == "1" ]]; then
                     return 0
                 fi
+            fi
+            # FALLBACK, FUERA del "if de los ids".
+            #
+            # El engine está vivo y escuchando, pero no publica /v1/models
+            # con ids (o publica otros nombres). ropero sabe a quién arrancó
+            # en ese puerto: si el estado lo dice y el proceso vive, el
+            # modelo está listo.
+            #
+            # Antes este fallback estaba DENTRO del if de ids, así que un
+            # engine que no publica ids NUNCA llegaba a estar listo: ropero
+            # se comía los 300s del timeout y luego mataba a un server
+            # perfectamente sano ("se queda esperando y luego dice que no
+            # responde").
+            if [[ -n "$esperado" ]]; then
                 modelo="$(rp_state_read "$puerto" MODEL)" || modelo=""
                 if [[ "$modelo" == "$esperado" && -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
                     return 0

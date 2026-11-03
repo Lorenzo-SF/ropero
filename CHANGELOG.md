@@ -3,6 +3,12 @@
 ## Sin publicar
 
 ### Arreglado
+- **Un engine que no publica `/v1/models` ya no hace esperar 300 s.** El
+  fallback "ropero sabe a quién arrancó en este puerto" estaba **dentro**
+  del `if` que comprueba que haya ids: si el engine no publica ids, la
+  readiness no se cumplía nunca, ropero se comía el timeout y luego mataba
+  a un server sano ("se queda esperando y luego dice que no responde"). El
+  fallback ahora está fuera de ese `if`.
 - **Dos `ropero` a la vez ya no se pisan.** No había bloqueo por puerto:
   los dos veían el puerto libre y los dos arrancaban, y el loser moría con
   "address already in use" sin decir de quién era el fallo. Ahora hay un
