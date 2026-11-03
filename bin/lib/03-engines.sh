@@ -211,8 +211,29 @@ _rp_engine_http_ok() {
 }
 
 # _rp_engine_port_listening <puerto> — 0 si algo escucha en el puerto.
+#
+# Sin lsof no se puede saber... salvo por ss/fuser//proc. Se reusa el helper
+# de 04-launch.sh si ya está cargado; si no, se pregunta a ss y a /proc.
 _rp_engine_port_listening() {
-    lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+    if declare -F _rp_port_pids >/dev/null 2>&1; then
+        local pids
+        pids="$(_rp_port_pids "$1")"
+        [[ -n "$pids" ]] && return 0
+        return 1
+    fi
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -lptnH "sport = :$1" 2>/dev/null | grep -q . && return 0
+        return 1
+    fi
+    local hex
+    hex="$(printf '%04X' "$1" 2>/dev/null)"
+    [[ -n "$hex" ]] || return 1
+    awk -v p="$hex" 'NR > 1 { split($2, a, ":"); if (a[2] == p && $4 == "0A") { found = 1 } } END { exit(found ? 0 : 1) }' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
 
 # _rp_engine_model_path <modelo> — ruta del checkpoint bajo $SAFETENSORS_DIR

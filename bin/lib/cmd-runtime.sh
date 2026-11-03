@@ -335,9 +335,12 @@ rp_cmd_stop() {
     if [[ "$target" == "all" ]]; then
         while IFS= read -r p; do
             [[ -n "$p" ]] || continue
-            if rp_port_listening "$p"; then
-                actual="$(rp_model_on_port "$p" 2>/dev/null)" || actual=""
-                rp_stop_port "$p" || true
+            actual="$(rp_model_on_port "$p" 2>/dev/null)" || actual=""
+            # rp_stop_port mata al PID del estado AUNQUE el puerto no esté
+            # escuchando: un server que se está cargando todavía no escucha,
+            # y antes se le borraba el estado y se le dejaba vivo (luego
+            # terminaba de cargar y se ponía a servir).
+            if rp_stop_port "$p"; then
                 rp_msg ok ":$p detenido ('${actual:-?}')"
                 detenidos=$((detenidos + 1))
             else
@@ -356,11 +359,18 @@ rp_cmd_stop() {
 
     # stop <modelo>: iterar TODOS los gestionados (un --port ad-hoc o un
     # [model].port pineado pueden estar fuera de los slots base).
+    #
+    # Se busca por el estado (MODEL) y por lo que responde el puerto. El
+    # estado es lo que salva al server que TODAVÍA SE ESTÁ CARGANDO: no
+    # escucha, así que "rp_port_listening" lo declaraba inexistente y el
+    # stop decía "no se está sirviendo" mientras el proceso vivía y luego
+    # servía peticiones.
+    local estado_modelo
     while IFS= read -r p; do
         [[ -n "$p" ]] || continue
-        rp_port_listening "$p" || continue
         actual="$(rp_model_on_port "$p" 2>/dev/null)" || actual=""
-        if [[ "$actual" == "$real" ]]; then
+        estado_modelo="$(rp_state_read "$p" MODEL)" || estado_modelo=""
+        if [[ "$actual" == "$real" || "$estado_modelo" == "$real" ]]; then
             rp_stop_port "$p" || {
                 rp_msg error "no se pudo parar :$p"
                 return 1

@@ -47,19 +47,96 @@ RP_LAUNCH_SEP=$'\x1f'
 
 # ── Puertos y procesos ───────────────────────────────────────────────────────
 
+# ── Puertos y procesos ───────────────────────────────────────────────────────
+#
+# POR QUÉ HAY TRES FORMAS DE PREGUNTAR "¿QUIÉN ESCUCHA EN ESTE PUERTO?"
+#
+# Todo el arranque depende de esta pregunta: si el puerto está libre se
+# arranca, si está ocupado por otro modelo se avisa, y el "stop" mata a quien
+# escuche. Con lsof ausente, `lsof -iTCP:... -sTCP:LISTEN` devuelve error y
+# SIEMPRE sale "libre": ropero arranca un server encima del que ya está
+# (que muere con "address already in use"), el "stop" no mata nada (borra el
+# estado y se da por satisfecho) y el "puerto ocupado" nunca salta. Es un
+# fallo SILENCIOSO que se lee como "los modelos no arrancan".
+#
+# Por eso: lsof si está; si no, ss (iproute2); si no, fuser (psmisc); y como
+# último recurso, /proc/net/tcp, que siempre está en Linux. El PID se busca
+# en /proc/*/fd por el inode del socket.
+#
+# _rp_port_inodes <puerto> — los inodes de los sockets en LISTEN del puerto.
+_rp_port_inodes() {
+    local port="$1" hex
+    hex="$(printf '%04X' "$port" 2>/dev/null)" || return 0
+    [[ -n "$hex" ]] || return 0
+    awk -v p=":$hex" '
+        NR > 1 {
+            split($2, a, ":")
+            if (a[2] == substr(p, 2) && $4 == "0A") { print $10 }
+        }
+    ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
+}
+
+# _rp_port_pids_proc <puerto> — PIDs que escuchan, leídos de /proc/*/fd.
+_rp_port_pids_proc() {
+    local port="$1" ino pid fd link n i ya
+    local -a inodes=()
+    while IFS= read -r ino; do
+        [[ -n "$ino" ]] && inodes+=("$ino")
+    done < <(_rp_port_inodes "$port")
+    (( ${#inodes[@]} > 0 )) || return 0
+    for pid in /proc/[0-9]*; do
+        pid="${pid#/proc/}"
+        ya=0
+        for fd in /proc/"$pid"/fd/*; do
+            link="$(readlink "$fd" 2>/dev/null)" || continue
+            case "$link" in
+                socket:\[*\]) n="${link#socket:[}"; n="${n%]}" ;;
+                *) continue ;;
+            esac
+            for i in ${inodes[@]+"${inodes[@]}"}; do
+                if [[ "$n" == "$i" ]]; then ya=1; break; fi
+            done
+            (( ya )) && break
+        done
+        (( ya )) && printf '%s\n' "$pid"
+    done
+    return 0
+}
+
+# _rp_port_pids <puerto> — TODOS los PIDs que escuchan, uno por línea.
+_rp_port_pids() {
+    local port="$1" out=""
+    if command -v lsof >/dev/null 2>&1; then
+        out="$(lsof -t -iTCP:"$port" -sTCP:LISTEN 2>/dev/null)"
+    fi
+    if [[ -z "$out" ]] && command -v ss >/dev/null 2>&1; then
+        out="$(ss -lptnH "sport = :$port" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)"
+    fi
+    if [[ -z "$out" ]] && command -v fuser >/dev/null 2>&1; then
+        out="$(fuser -n tcp "$port" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$')"
+    fi
+    if [[ -z "$out" ]]; then
+        out="$(_rp_port_pids_proc "$port")"
+    fi
+    [[ -n "$out" ]] && printf '%s\n' "$out"
+    return 0
+}
+
 # rp_port_listening <puerto> — 0 si algo escucha en el puerto (spec §5.5).
 rp_port_listening() {
-    lsof -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+    local pids
+    pids="$(_rp_port_pids "$1")"
+    [[ -n "$pids" ]]
 }
 
 # rp_pid_for_port <puerto> — primer PID que escucha (vacío si nadie).
 rp_pid_for_port() {
-    lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1
+    _rp_port_pids "$1" | head -1
 }
 
 # _rp_launch_pids_for_port <puerto> — TODOS los PIDs que escuchan, uno por línea.
 _rp_launch_pids_for_port() {
-    lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null
+    _rp_port_pids "$1"
 }
 
 # _rp_launch_valid_port <valor> — 0 si es un puerto TCP usable.
@@ -311,12 +388,17 @@ rp_model_on_port() {
 # los slots paralelos. SIGTERM primero (deja que el proceso apague a sus
 # hijos y suelte puertos internos), ≤10s de margen, SIGKILL de red de
 # seguridad. rc 1 si el puerto ya estaba libre (no había nada que parar).
+#
+# EL PID DEL ESTADO SE MATA AUNQUE EL PUERTO NO ESCUCHE TODAVÍA.
+#
+# Antes, si el puerto no estaba en LISTEN, la función borraba el estado y
+# devolvía 1 sin matar nada. Pero un server que está CARGANDO el modelo
+# todavía no escucha: un "stop" en ese momento lo dejaba vivo, y cuando
+# terminaba de cargar se ponía a servir peticiones ("el server sigue
+# recibiendo llamadas"). Ahora se mata al PID del estado siempre, y la
+# espera mira a ese PID y no sólo al puerto.
 rp_stop_port() {
     local puerto="$1"
-    if ! rp_port_listening "$puerto"; then
-        rp_state_clear "$puerto"
-        return 1
-    fi
 
     # Recoger el árbol: PID del estado, PIDs que escuchan, hijos directos.
     # Dedup por string: el PID del estado suele ser también el que escucha.
@@ -340,25 +422,39 @@ rp_stop_port() {
         done < <(pgrep -P "$p" 2>/dev/null)
     done
 
+    # No hay nada que parar: ni proceso conocido ni puerto ocupado.
+    if (( ${#arbol[@]} == 0 )) && ! rp_port_listening "$puerto"; then
+        rp_state_clear "$puerto"
+        return 1
+    fi
+
     # SIGTERM a todo el árbol.
     for p in ${arbol[@]+"${arbol[@]}"}; do
         kill -TERM "$p" 2>/dev/null || true
     done
 
-    # Margen de cortesía: hasta 10s esperando a que el puerto se libere.
+    # Margen de cortesía: hasta 10s esperando a que se mueran. Se mira el
+    # PUERTO y los PIDs: un server que se está cargando no escucha, y aun
+    # así tiene que morir.
     local esperado=0
-    while (( esperado < 10 )) && rp_port_listening "$puerto"; do
+    while (( esperado < 10 )); do
+        local vivo=0
+        rp_port_listening "$puerto" && vivo=1
+        for p in ${arbol[@]+"${arbol[@]}"}; do
+            kill -0 "$p" 2>/dev/null && vivo=1
+        done
+        (( vivo == 0 )) && break
         sleep 1
         esperado=$((esperado + 1))
     done
 
     # Red de seguridad: lo que ignore el TERM se lleva por delante el KILL.
-    if rp_port_listening "$puerto"; then
-        for p in ${arbol[@]+"${arbol[@]}"}; do
+    for p in ${arbol[@]+"${arbol[@]}"}; do
+        if kill -0 "$p" 2>/dev/null; then
             kill -9 "$p" 2>/dev/null || true
-        done
-        sleep 1
-    fi
+        fi
+    done
+    sleep 1
     rp_state_clear "$puerto"
     return 0
 }
@@ -693,6 +789,29 @@ rp_start_model() {
     if [[ "$fmt" == "gguf" && ( "$engine" == "llama-server" || "$engine" == "llama-server-official" ) && -n "$gguf_path" ]]; then
         argv=("--model" "$gguf_path" ${argv[@]+"${argv[@]}"})
     fi
+    # EL CONTEXTO TIENE QUE LLEGAR AL MOTOR.
+    #
+    # [model].context (o ROPERO_<NOMBRE>_CTX) estaba en el catálogo, en el
+    # dump y en el "ropero config"… y NUNCA se pasaba. Sin esto llama-server
+    # arranca con el contexto NATIVO del modelo (262144 en flint, 266144 en
+    # nemotron) y el efecto se nota en tres sitios:
+    #
+    #   · la KV cache se come la VRAM (2,3 GiB en flint) y no queda sitio
+    #     para los expertos ni para la moe-cache → flint aborta al arrancar;
+    #   · los expertos se quedan en la CPU → el modelo va a la mitad de
+    #     velocidad (nemotron: 60 t/s en vez de 100-120);
+    #   · el contexto no está en el argv, así que tampoco está en el SELLO
+    #     (§4-launch) → cambiar "context =" en el TOML no reinicia nada y
+    #     el server viejo sigue sirviendo con el contexto viejo.
+    #
+    # Va ANTES de los args del TOML, como el resto de los defaults del
+    # launcher: si el TOML declara su propio -c, ése gana.
+    if [[ "$engine" == "llama-server" || "$engine" == "llama-server-official" ]]; then
+        local ctx="${MODEL_CONTEXT[$idx]}"
+        if [[ "$ctx" =~ ^[0-9]+$ ]] && (( ctx > 0 )); then
+            argv=(-c "$ctx" ${argv[@]+"${argv[@]}"})
+        fi
+    fi
     # --cpu se añade AL FINAL (como el monolito): tiene que ganar a los
     # --n-gpu-layers / --threads que declare el TOML.
     if [[ "$cpu" == "1" && ( "$engine" == "llama-server" || "$engine" == "llama-server-official" ) ]]; then
@@ -729,13 +848,23 @@ rp_start_model() {
             # ¿corre con la config de AHORA? El sello son los args del TOML:
             # si cambió, "ya está corriendo" dejaría la config vieja para
             # siempre y sin avisar (port del sello del legado).
+            #
+            # Si el estado NO tiene sello (lo escribió otra versión, o se
+            # perdió), no se puede PROBAR que la config sea la misma: se
+            # reinicia. Antes, un estado sin sello contaba como "igual" y
+            # ropero se callaba → el usuario cambiaba el TOML y el server
+            # viejo seguía sirviendo ("no veo los cambios").
             local sello_viejo=""
             sello_viejo="$(rp_state_read "$puerto" STAMP)" || sello_viejo=""
-            if [[ -z "$sello" || "$sello_viejo" == "$sello" ]]; then
+            if [[ -n "$sello" && -n "$sello_viejo" && "$sello_viejo" == "$sello" ]]; then
                 rp_msg ok "'$real' ya está corriendo en :$puerto"
                 return 0
             fi
-            rp_msg warn "'$real' corre en :$puerto con una configuración anterior; se reinicia"
+            if [[ -z "$sello_viejo" ]]; then
+                rp_msg warn "'$real' corre en :$puerto sin sello de configuración; se reinicia para no servir una config vieja"
+            else
+                rp_msg warn "'$real' corre en :$puerto con una configuración anterior; se reinicia"
+            fi
             rp_stop_port "$puerto" || true
         elif [[ "$force" == "1" ]]; then
             rp_msg warn "--force: parando '${actual:-?}' en :$puerto"
@@ -842,6 +971,26 @@ rp_start_model() {
     # bloqueado en inotify (medido en el monolito 1.0).
     trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; exit 130' INT
     trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; exit 130' TERM
+    # ESPERA ACTIVA, NO "wait".
+    #
+    # "wait" y los traps no se llevan bien: bash APLAZA el trap INT hasta que
+    # el comando esperado acaba, y el comando esperado es el engine. Si el
+    # engine no muere, el trap no corre nunca y el Ctrl-C no hace nada.
+    #
+    # Y el engine NO muere con el Ctrl-C: lo arranca "nohup ... &", y bash
+    # pone SIGINT (y SIGQUIT) en SIG_IGN en los comandos en background de un
+    # shell sin job control; esa disposición hereda el exec, así que
+    # llama-server ignora el SIGINT para siempre (medido: SigIgn 0x7 = HUP+INT+QUIT).
+    # Ni el Ctrl-C de la terminal (que manda SIGINT al grupo) ni un "kill -INT"
+    # posterior lo matan: un SIG_IGN no se puede "des-ignorar" con kill.
+    #
+    # Por eso la espera es un bucle con "kill -0": el trap corre en cuanto
+    # llega la señal (interrumpe el sleep), y es el trap quien mata al engine
+    # con SIGTERM (que sí atiende). Después, "wait" ya no bloquea: el hijo
+    # terminó y bash devuelve su código de salida.
+    while kill -0 "$pid" 2>/dev/null; do
+        sleep 0.2
+    done
     wait "$pid"
     local rc_proceso=$?
     trap - INT TERM
