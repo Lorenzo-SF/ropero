@@ -407,11 +407,26 @@ EOF
 _rp_status_tabla() {
     rp_header "puertos gestionados de ropero"
     printf '%-8s %-15s %-18s %s\n' 'PUERTO' 'ENGINE' 'MODELO' 'ESTADO' >&2
-    local p modelo engine estado
+    local p modelo engine estado pid
     while IFS= read -r p; do
         [[ -n "$p" ]] || continue
+        # Un server que está CARGANDO el modelo todavía no escucha: sin esto
+        # la tabla decía "libre" mientras el proceso vivía (y luego se
+        # ponía a servir sin que nadie supiera por qué).
+        pid="$(rp_state_read "$p" PID 2>/dev/null)" || pid=""
+        local vivo=0
+        [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null && vivo=1
         if ! rp_port_listening "$p"; then
-            printf '%-8s %-15s %-18s %s\n' ":$p" '-' '-' 'libre' >&2
+            if (( vivo == 1 )); then
+                modelo="$(rp_state_read "$p" MODEL 2>/dev/null)" || modelo='?'
+                engine="$(rp_state_read "$p" ENGINE 2>/dev/null)" || engine='?'
+                estado="arrancando (pid $pid, aún no escucha)"
+            else
+                estado='libre'
+                modelo='-'
+                engine='-'
+            fi
+            printf '%-8s %-15s %-18s %s\n' ":$p" "$engine" "$modelo" "$estado" >&2
             continue
         fi
         modelo="$(rp_model_on_port "$p" 2>/dev/null)" || modelo="?"
@@ -420,6 +435,8 @@ _rp_status_tabla() {
         if [[ "$engine" != "?" ]] && \
            [[ "$(rp_engine_call "$engine" probe "$p" 2>/dev/null)" == "ok" ]]; then
             estado='sirviendo'
+        elif (( vivo == 1 )); then
+            estado='arrancando (el puerto escucha, el modelo aún no)'
         fi
         printf '%-8s %-15s %-18s %s\n' ":$p" "$engine" "$modelo" "$estado" >&2
     done < <(rp_managed_ports)

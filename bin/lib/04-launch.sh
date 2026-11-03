@@ -200,6 +200,39 @@ rp_api_key() {
     return 0
 }
 
+# ── Bloqueo por puerto durante el arranque ───────────────────────────────────
+#
+# Dos "ropero <modelo>" a la vez (una terminal con el CLI, otra con el
+# editor) comprueban el puerto, lo ven libre y los dos arrancan: uno muere
+# con "address already in use" y el error no dice de quién fue. mkdir es
+# atómico, así que el bloqueo es el directorio en sí.
+#
+# El lock caduca si el ropero que lo tenía muere (mira el PID de dentro):
+# un "kill -9" no debe dejar el puerto bloqueado para siempre.
+_rp_lock_port() {
+    local d="$STATE_DIR/ports/.$1.lock" holder
+    mkdir -p "$(dirname "$d")" 2>/dev/null || return 1
+    if mkdir "$d" 2>/dev/null; then
+        printf '%s\n' "$$" >"$d/pid" 2>/dev/null
+        return 0
+    fi
+    holder="$(cat "$d/pid" 2>/dev/null)" || holder=""
+    if [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
+        return 1
+    fi
+    rm -rf "$d" 2>/dev/null
+    if mkdir "$d" 2>/dev/null; then
+        printf '%s\n' "$$" >"$d/pid" 2>/dev/null
+        return 0
+    fi
+    return 1
+}
+
+_rp_unlock_port() {
+    rm -rf "$STATE_DIR/ports/.$1.lock" 2>/dev/null
+    return 0
+}
+
 # ── Estado por puerto ────────────────────────────────────────────────────────
 
 # _rp_state_path <puerto> — fichero de estado del puerto.
@@ -987,6 +1020,15 @@ rp_start_model() {
 
     rp_msg info "arrancando '$real' ($engine) en :$puerto — log: $logfile"
 
+    # Bloqueo del puerto durante el arranque: si otro ropero está arrancando
+    # este mismo puerto, no se arranca encima (el loser moría con "address
+    # already in use" sin decir de quién era el fallo).
+    if ! _rp_lock_port "$puerto"; then
+        rp_msg error "otro ropero está arrancando en :$puerto (bloqueo activo)"
+        rp_msg info "  espera a que termine, o 'ropero stop all' si crees que se quedó colgado"
+        return 1
+    fi
+
     # EL PID SE CAPTURA SIN SUSTITUCIÓN DE COMANDOS.
     #
     # El engine arranca con "nohup ... &". Si la llamada va dentro de $( ),
@@ -1007,12 +1049,14 @@ rp_start_model() {
         cat "$pidfile" >&2
         rm -f "$pidfile"
         rp_msg error "falló el lanzamiento de '$engine'"
+        _rp_unlock_port "$puerto"
         return 1
     fi
     pid="$(head -n 1 "$pidfile")"
     rm -f "$pidfile"
     if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
         rp_msg error "el engine no devolvió un PID válido (recibido: '${pid:-vacío}')"
+        _rp_unlock_port "$puerto"
         return 1
     fi
 
@@ -1026,12 +1070,14 @@ rp_start_model() {
     if [[ "$bg" == "1" ]]; then
         if rp_wait_ready "$puerto" "$engine" "" "$real"; then
             rp_msg ok "'$real' responde en :$puerto"
+            _rp_unlock_port "$puerto"
             return 0
         fi
         # Si el proceso murió por el camino, el estado ya no describe nada.
         if ! kill -0 "$pid" 2>/dev/null; then
             rp_state_clear "$puerto"
         fi
+        _rp_unlock_port "$puerto"
         return 1
     fi
 
@@ -1049,8 +1095,8 @@ rp_start_model() {
     local tail_pid="$RP_COLOR_TAIL_PID" color_pid="$RP_COLOR_PID"
     # El trap mata los dos: sin esto, con Ctrl-C el tail se quedaba vivo
     # bloqueado en inotify (medido en el monolito 1.0).
-    trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; exit 130' INT
-    trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; exit 130' TERM
+    trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; _rp_unlock_port "$puerto"; exit 130' INT
+    trap 'rp_stop_port "$puerto"; _rp_launch_kill_follow "$tail_pid" "$color_pid"; _rp_unlock_port "$puerto"; exit 130' TERM
     # ESPERA ACTIVA, NO "wait".
     #
     # "wait" y los traps no se llevan bien: bash APLAZA el trap INT hasta que
@@ -1076,6 +1122,7 @@ rp_start_model() {
     trap - INT TERM
     _rp_launch_kill_follow "$tail_pid" "$color_pid"
     rp_state_clear "$puerto"
+    _rp_unlock_port "$puerto"
     # El Ctrl-C lo mata la terminal, que manda SIGINT al GRUPO de procesos:
     # el engine y ropero. El engine muere con 130 y bash difiere el trap
     # INT hasta que el comando esperado acaba (por eso el trap puede no

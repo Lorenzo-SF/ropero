@@ -3,6 +3,36 @@
 ## Sin publicar
 
 ### Arreglado
+- **Dos `ropero` a la vez ya no se pisan.** No había bloqueo por puerto:
+  los dos veían el puerto libre y los dos arrancaban, y el loser moría con
+  "address already in use" sin decir de quién era el fallo. Ahora hay un
+  bloqueo por puerto durante la ventana de arranque ("otro ropero está
+  arrancando en :N"), y caduca solo si el ropero que lo tenía muere.
+- **`status` distingue "arrancando" de "libre".** Un server que está
+  cargando el modelo todavía no escucha: la tabla decía "libre" mientras el
+  proceso vivía, y luego "sirviendo" sin explicación.
+- **Un arranque fallido ya no deja un zombi.** Si el engine no llegaba a
+  estar listo (el modelo tarda en cargar, o peta a mitad), `ropero` avisaba
+  "no responde tras Ns" y **dejaba el proceso vivo**: el server seguía
+  cargando en segundo plano, terminaba y se ponía a servir peticiones
+  ("el server sigue recibiendo llamadas"), con el puerto ocupado. El
+  siguiente arranque moría con "puerto ocupado" o "address already in use".
+  Ahora, al fallar la espera, se mata el proceso que arrancó ropero (el PID
+  del estado, no el que escucha en el puerto: si el puerto lo ocupaba otro,
+  ese no es nuestro) y se limpia el estado.
+- **El doctor mira el estado de los puertos** (antes no cargaba
+  `04-launch.sh`, así que la comprobación entera se saltaba en silencio con
+  un "command not found"). Ahora avisa de los cuatro casos en los que el
+  estado y la máquina no cuadran: el proceso del estado **vivo pero sin
+  escuchar** (cargando o colgado), el **estado huérfano** (el PID ya no
+  existe), el **puerto ocupado por alguien que no es de ropero** (no hay
+  estado) y el **estado sin sello** (ropero no puede probar que la config
+  sea la misma, así que el próximo arranque reinicia y avisa).
+- **Un PID reciclado ya no se mata por error.** El estado guarda el PID de
+  un arranque; si ese arranque murió, el SO lo recicla y el estado pasa a
+  apuntar a un proceso cualquiera. `ropero stop` lo mataba sin mirar. Ahora
+  se comprueba que `/proc/<pid>/cmdline` mencione el binario del engine, y
+  si no, se avisa y no se toca.
 - **El contexto del modelo ya llega al motor.** `[model].context` (o
   `ROPERO_<NOMBRE>_CTX`) estaba en el catálogo, en el dump y en `ropero
   config`, y **nunca se pasaba**: llama-server arrancaba con el contexto
