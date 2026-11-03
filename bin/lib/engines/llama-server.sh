@@ -9,17 +9,23 @@
 # motor.sh — NVFP4 de expertos + patterns sin anclar), compila y enlaza el
 # binario en $BIN_DIR.
 #
-# EL MOTOR: Lorenzo-SF/atomic-llama-cpp-turboquant
+# EL MOTOR: Lorenzo-SF/ropero-llama-turboquant (PRIVADO)
 # ─────────────────────────────────────────────────
 # Antes era AtomicBot-ai/atomic-llama-cpp-turboquant (el fork de turboquant
-# con MTP/NextN). Ahora es NUESTRO fork de ese repo, con:
+# con MTP/NextN). Ahora es NUESTRO motor, un repo independiente y privado
+# (un fork de un repo público no puede ser privado: GitHub responde 422
+# "Public forks can't be made private"), con:
 #   - turbo5/turbo6 (los tipos de KV TQ5_0/TQ6_0), tomados de TheTom
 #   - flint (la arquitectura nueva de upstream), por el PR #30928
 #   - los parches de ropero YA HORNEADOS en el motor (la regla del NVFP4 y
-#     los patterns sin anclar): el script de parches los detecta y no hace
+#     los patterns sin ancar): el script de parches los detecta y no hace
 #     nada, pero sigue siendo el que los aplica si alguien clona otro motor
 #   - el motor de TheTom (routing nativo en CUDA, FA en CPU con KV
 #     cuantizado, kv-stream) y el skip de las capas turbo en el context-shift
+#
+# Al ser privado, el clone necesita credenciales: va por SSH si hay clave, o
+# por HTTPS con el token del entorno (sin escribirlo en disco). Ver
+# rp_eng_llama-server_clone.
 #
 # ORDEN de install (importante): clone → cmake configure → parches → build.
 # El script de parches COMPILA al final dentro de build/, así que build/
@@ -49,6 +55,67 @@ rp_eng_llama-server_deps() {
     printf 'git cmake ninja curl cc\n'
 }
 
+# rp_eng_llama-server_clone <destino> — clona el motor.
+#
+# EL MOTOR: Lorenzo-SF/ropero-llama-turboquant, PRIVADO.
+#
+# No puede ser un fork: GitHub rechaza con 422 "Public forks can't be made
+# private" (un fork de un repo público es siempre público). Así que este repo
+# es INDEPENDIENTE, con el mismo contenido y la misma rama 'dev'.
+#
+# Clonar un repo privado pide credenciales, y no queremos que ningun token
+# acabe escrito en disco. Se prueban dos vías, en este orden:
+#
+#   1) SSH — la clave vive en ~/.ssh, no se toca el repo ni el entorno.
+#   2) HTTPS con el token del entorno (ROPERO_GITHUB_TOKEN o GITHUB_TOKEN),
+#      pasado como credential helper de UN solo comando via GIT_CONFIG_*: el
+#      token no se escribe en el .git/config del clon ni en ningun fichero
+#      (y no va en los argumentos del proceso, que son legibles por otros).
+#
+# Si ninguna funciona, se avisa (bien claro) y se cae al fork PUBLICO, que
+# tiene el mismo contenido y se clona sin credenciales.
+rp_eng_llama-server_clone() {
+    local dest="${1:-$LLAMA_DIR}"
+    local ssh_url="git@github.com:Lorenzo-SF/ropero-llama-turboquant.git"
+    local https_url="https://github.com/Lorenzo-SF/ropero-llama-turboquant.git"
+    local public_url="https://github.com/Lorenzo-SF/atomic-llama-cpp-turboquant.git"
+    local tok="${ROPERO_GITHUB_TOKEN:-${GITHUB_TOKEN:-}}"
+
+    # 1) SSH. BatchMode para que no se quede esperando una passphrase, y
+    #    accept-new para que no pare preguntando por la clave del host.
+    if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+        git clone -q --depth 1 "$ssh_url" "$dest" 2>/dev/null; then
+        rp_msg ok "motor clonado por SSH (repo privado)"
+        return 0
+    fi
+    rm -rf "$dest"
+
+    # 2) HTTPS con el token del entorno.
+    if [[ -n "$tok" ]]; then
+        if GIT_CONFIG_COUNT=1 \
+           GIT_CONFIG_KEY_0="credential.helper" \
+           GIT_CONFIG_VALUE_0="!f() { echo username=x-access-token; echo password=${tok}; }; f" \
+           git clone -q --depth 1 "$https_url" "$dest" 2>/dev/null; then
+            rp_msg ok "motor clonado por HTTPS con el token del entorno (repo privado)"
+            return 0
+        fi
+        rm -rf "$dest"
+    fi
+
+    # 3) sin credenciales: al fork publico (mismo contenido), avisando.
+    rp_msg warn "no puedo clonar el repo PRIVADO del motor:"
+    rp_msg warn "  · ni hay clave SSH con acceso (prueba: ssh -T git@github.com)"
+    rp_msg warn "  · ni hay token en el entorno (exporta ROPERO_GITHUB_TOKEN=<PAT de lectura>)"
+    rp_msg warn "  cae al fork PUBLICO, que tiene el mismo contenido:"
+    rp_msg warn "  $public_url"
+    if git clone -q --depth 1 "$public_url" "$dest"; then
+        rp_msg warn "ATENCIÓN: motor clonado del fork PÚBLICO, no del repo privado"
+        return 0
+    fi
+    rm -rf "$dest"
+    return 1
+}
+
 rp_eng_llama-server_install() {
     local force=0 a
     for a in "$@"; do
@@ -68,17 +135,16 @@ rp_eng_llama-server_install() {
         rp_msg info "reinstalación forzada (--force)"
     fi
 
-    # ── 1. clone del fork (HTTPS, spec §6) ───────────────────────────────
+    # ── 1. clone del motor ───────────────────────────────────────────────
     if [[ -d "$LLAMA_DIR/.git" && "$force" != "1" ]]; then
         rp_msg info "reutilizo el clon existente: $LLAMA_DIR"
     else
         if [[ -e "$LLAMA_DIR" ]]; then
-            rp_msg warn "sustituyo $LLAMA_DIR por un clon limpio del fork"
+            rp_msg warn "sustituyo $LLAMA_DIR por un clon limpio del motor"
             rm -rf "$LLAMA_DIR" || return 1
         fi
-        rp_step 1 5 "clonando Lorenzo-SF/atomic-llama-cpp-turboquant (HTTPS)..."
-        git clone -q https://github.com/Lorenzo-SF/atomic-llama-cpp-turboquant.git \
-            "$LLAMA_DIR" || {
+        rp_step 1 5 "clonando el motor (Lorenzo-SF/ropero-llama-turboquant)..."
+        rp_eng_llama-server_clone "$LLAMA_DIR" || {
             rp_msg error "falló el clone del motor"
             return 1
         }

@@ -4,8 +4,11 @@
 
 ### Cambiado
 - El motor principal pasa de `AtomicBot-ai/atomic-llama-cpp-turboquant` a
-  **nuestro propio fork**, `Lorenzo-SF/atomic-llama-cpp-turboquant`, que
-  además de TurboQuant y MTP/NextN trae:
+  **nuestro motor**, `Lorenzo-SF/ropero-llama-turboquant`, que es **privado**:
+  un fork de un repo público no puede ser privado (GitHub responde 422
+  *"Public forks can't be made private"*), así que este repo es independiente
+  del fork, con el mismo contenido y la misma rama `dev`. Además de TurboQuant
+  y MTP/NextN trae:
   - **turbo5/turbo6** (los tipos de KV `TQ5_0`/`TQ6_0`), tomados del motor de
     TheTom;
   - **flint** (la arquitectura nueva de upstream, PR #30928): el `models/llama/flint.toml`
@@ -14,6 +17,13 @@
     patterns sin anclar): `bin/quant/aplicar-parche-motor.sh` los detecta y no
     hace nada, pero sigue siendo el que los aplica si el clon es de otro
     dueño (el oficial).
+- Como el motor es privado, su clone necesita credenciales. Se prueban dos
+  vías: **SSH** (la clave vive en `~/.ssh`) y **HTTPS con el token del
+  entorno** (`ROPERO_GITHUB_TOKEN` o `GITHUB_TOKEN`), pasado como credential
+  helper de un solo comando — **el token no se escribe en ningún fichero**
+  (ni en el `.git/config` del clon). Si no hay ninguna de las dos, se avisa
+  con las dos instrucciones y se cae al fork público (mismo contenido), que se
+  clona sin credenciales.
 - Engine `llama-server-official` **oculto**: no se anuncia, no se instala con
   `install engines` y el doctor no lo comprueba. Se puede instalar a mano
   (`install engines llama-official`). Los cuatro modelos que lo usaban

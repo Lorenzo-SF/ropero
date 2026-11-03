@@ -37,7 +37,7 @@ RP_ENGINE_IDS="llama-server vllm mlx-serve airllm tensorrt-llm fastflowlm"
 #
 # llama-server-official (el llama.cpp de upstream sin turboquant) se ocultó
 # cuando el motor principal pasó a ser NUESTRO fork
-# (Lorenzo-SF/atomic-llama-cpp-turboquant), que ya trae flint, turbo5/turbo6
+# (Lorenzo-SF/ropero-llama-turboquant), que ya trae flint, turbo5/turbo6
 # y los parches de ropero. Los modelos que usaban ese engine pasaron a
 # models/llama-official/fired/ ("retirado"): flint, gptoss, groot y qwen38
 # se arrancan con el motor principal.

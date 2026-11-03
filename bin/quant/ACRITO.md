@@ -272,7 +272,7 @@ Este es el caso quecostó una noche entera, así que va entero.
 3. El conversor debe remapearlos al bloque 64 (`model.layers.64.*`), que es
    lo que hace `_QwenMtpMixin.filter_tensors` en `conversion/qwen.py`.
 4. **La clase que se usa no lo hace.** En el fork que usa ropero
-   (`AtomicBot-ai/atomic-llama-cpp-turboquant`, que es el que clona
+   (`Lorenzo-SF/ropero-llama-turboquant`, que es el que clona
    `ropero`), la clase `Qwen3_5TextModel` (en `conversion/qwen.py`) **no usa
    `_QwenMtpMixin`**: el mixin existe, pero la clase no lo lleva. Los 15
    tensores `mtp.*` no se pueden mapear a ningún tensor del mapa (que tiene

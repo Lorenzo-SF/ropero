@@ -170,7 +170,7 @@ _gguffer_bloque_nextn() {
 # convertir un modelo. El caso real es el Qwen3.8-27B, que es multimodal
 # (Qwen3_5ForConditionalGeneration) y lleva la cabeza MTP. Los tensores de
 # la MTP se llaman "mtp.*" y el conversor los remapea a "model.layers.64.*"
-# (el bloque 64). En el fork que usa ropero (atomic-llama-cpp-turboquant) la
+# (el bloque 64). En el motor que usa ropero (ropero-llama-turboquant) la
 # clase Qwen3_5TextModel NO usa el mixin de la MTP, asi que esos 15 tensores
 # no se pueden mapear y la conversion aborta:
 #     ValueError: Can not map tensor 'mtp.layers.0.attn_k.weight'

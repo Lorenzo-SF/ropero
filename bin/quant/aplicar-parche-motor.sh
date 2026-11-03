@@ -10,7 +10,7 @@
 # push ahi (ni admin), asi que los parches se delivering COMO FICHEROS y se
 # aplican aqui, en la maquina de cada uno.
 #
-# NUESTRO MOTOR (Lorenzo-SF/atomic-llama-cpp-turboquant) YA LOS TIENE
+# NUESTRO MOTOR (Lorenzo-SF/ropero-llama-turboquant) YA LOS TIENE
 # HORNEADOS: los dos parches son commits del propio fork. Ahi este script no
 # hace nada (lo dice: "los dos parches ya estan aplicados") y el binario que
 # se compila ya sale con ellos. Se sigue invocando por dos razones: que el
