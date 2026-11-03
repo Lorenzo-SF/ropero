@@ -43,8 +43,8 @@ base = [
     "--spec-default",
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "mtp",
-    "--spec-draft-type-v", "mtp",
+    "--spec-draft-type-k", "q8_0",
+    "--spec-draft-type-v", "q8_0",
 ]
 
 [args.level.low]
