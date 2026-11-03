@@ -2,6 +2,24 @@
 
 ## Sin publicar
 
+### Añadido
+- **`tests/bench-motor.sh`**: banco A/B de motores. El mismo modelo, el mismo
+  argv del catálogo y el mismo prompt, cambiando **sólo el binario** de
+  llama-server (se resuelve por `PATH`, así que la comparación es limpia por
+  construcción). Mide el decode con los timings que devuelve el propio server
+  (`timings.predicted_per_second`), repite rondas para ver si el rendimiento
+  **se degrada con el tiempo en uso**, y captura el estado de la GPU en cada
+  ronda (relojes, potencia, temperatura y **razones de throttle**). Es la
+  herramienta para responder "¿el merge me quitó rendimiento?" sin meter a
+  opencode ni a un juez en el medio.
+- **`bin/perf-check.sh`**: el estado REAL de los ajustes de rendimiento de la
+  máquina, con el valor que importa de cada uno (no si el fichero existe):
+  limits.d, sysctl, min_free_kbytes, THP, read-ahead del NVMe, DPM de NVIDIA,
+  persistencia y dónde vive el cmdline del kernel (systemd-boot o GRUB). A
+ parte, la memoria (si el GGUF cabe en el page cache, si hay swap) y la GPU
+  con sus razones de throttle y su techo de potencia. Es lo que hay que
+  mirar **después de un rato de trabajo** cuando el rendimiento baja.
+
 ### Arreglado
 - **Un engine que no publica `/v1/models` ya no hace esperar 300 s.** El
   fallback "ropero sabe a quién arrancó en este puerto" estaba **dentro**
