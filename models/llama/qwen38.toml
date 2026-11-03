@@ -4,33 +4,33 @@
 [model]
 name    = "qwen38"
 engine  = "llama-server"
-context = 32768
+context = 131072
 
 [files]
-gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf"
+gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf"
 
 [download]
 repo = "ISTA-DASLab/Qwen3.8-27B-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" # con mtp, IQ3_XXS, sin mtp, entra el 
+file = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf"
 size = "4.48 GB"
 
-# [build]
-# repo         = "nvidia/Qwen3.8-27B-NVFP4"
-# quant        = "NVFP4"
-# imatrix_repo = "unsloth/Qwen3.8-27B-GGUF"
-# imatrix_file = "imatrix_unsloth.gguf"
-# keep_source  = true
-# size = "55.6 GB"
+[build]
+repo         = "nvidia/Qwen3.8-27B-NVFP4"
+quant        = "NVFP4"
+imatrix_repo = "unsloth/Qwen3.8-27B-GGUF"
+imatrix_file = "imatrix_unsloth.gguf"
+keep_source  = true
+size = "55.6 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
-default = "medium"
+default = "low"
 
 [args]
 base = [
-    "--n-gpu-layers", "56",
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
+    "--n-gpu-layers", "66",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
@@ -40,11 +40,17 @@ base = [
     "--reasoning-preserve",
     "--reasoning-budget", "8192",
     "--checkpoint-min-step","256",
+
     "--spec-default",
     "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "mtp",
-    "--spec-draft-type-v", "mtp",
+    "--spec-draft-n-max","3",
+    "--spec-draft-n-min", "1",
+    "--spec-chain","1",
+    "--spec-draft-type-k", "turbo3",
+    "--spec-draft-type-v", "turbo3",
+    "--no-spec-draft-backend-sampling",
+
+
 ]
 
 [args.level.low]

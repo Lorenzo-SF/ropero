@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# =============================================================================
+# test/fakes/curl — fake de curl para la suite de test
+# =============================================================================
+# Sustituye al curl REAL en las pruebas con fakes, para que el probe del
+# engine (GET /v1/models con Authorization: Bearer <key>) se pueda ejercitar
+# sin levantar ningún servidor ni tocar la red.
+#
+#   · GET .../v1/models con cabecera de autorización → 200 con la lista de
+#     modelos (y registra que la key no estaba vacía).
+#   · GET .../v1/models SIN cabecera o con key vacía → 401 (como el engine).
+#   · cualquier otra URL → error de conexión (7).
+#
+# En el uso normal (sin test/fakes en el PATH) el curl de verdad es el que se
+# usa: el probe es el mismo.
+# =============================================================================
+set -u
+
+FAKE_LOG="${FAKE_LOG:-$HOME/.fake-curl.log}"
+mkdir -p "$(dirname "$FAKE_LOG")" 2>/dev/null || true
+printf '%s | %s\n' "$(date '+%H:%M:%S')" "$*" >>"$FAKE_LOG" 2>/dev/null || true
+
+url=""
+auth=""
+while (( $# > 0 )); do
+    case "$1" in
+        -H|--header)
+            if (( $# >= 2 )); then
+                auth="$2"
+                shift
+            fi
+            ;;
+        -H*)
+            auth="${1#-H}"
+            ;;
+        http://*|https://*)
+            url="$1"
+            ;;
+    esac
+    shift || break
+done
+
+case "$url" in
+    */v1/models)
+        key="${auth##*Bearer }"
+        if [[ "$auth" != Authorization:*Bearer* ]] || [[ -z "$key" ]]; then
+            printf 'curl: (22) The requested URL returned error: 401\n' >&2
+            exit 22
+        fi
+        printf '{"object":"list","data":[{"id":"ropero-local/groot","object":"model"}]}\n'
+        exit 0
+        ;;
+esac
+
+printf 'curl: (7) Failed to connect to 127.0.0.1 port: el fake de curl sólo responde en /v1/models\n' >&2
+exit 7

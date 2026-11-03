@@ -320,6 +320,25 @@ _bench_error() {
     printf 'ERROR\t%s\n' "${1:-la petición falló}" >&2
 }
 
+# tag_motor <ruta del binario> — una etiqueta única por binario.
+#
+# Los tres motores se llaman igual (llama-server): con sólo el basename los
+# ficheros de A y B se pisan (arranque-llama-server.txt, pid-...) y sus logs
+# quedan entremezclados, sin poder atribuir un arranque a un motor.
+#
+# El discriminante es el CHECKOUT, no la carpeta donde vive el binario: los
+# motores están en <checkout>/build/bin, así que se suben las carpetas
+# genéricas (bin/, build/) hasta llegar al checkout: llama-server@llama.cpp,
+# llama-server@llama.cpp.TURBO, llama-server@llama.cpp-official.
+tag_motor() {
+    local m="$1" d
+    d="$(dirname "$m")"
+    while [[ "$(basename "$d")" == "bin" || "$(basename "$d")" == "build" ]]; do
+        d="$(dirname "$d")"
+    done
+    printf '%s' "$(basename "$m")@$(basename "$d")"
+}
+
 # pedir <puerto> <n_predict> — una completion y sus timings.
 pedir() {
     local puerto="$1" n="$2" cuerpo resp
@@ -328,12 +347,14 @@ pedir() {
     # -w para saber el código HTTP: "la petición falló" sin más no dice si
     # fue un 401 (clave), un 404 (modelo) o un 503 (el server aún no está).
     local codigo
+    # La ruta es /completion (legacy): /v1/completion NO existe en estos
+    # builds de llama-server y devuelve HTTP 404 ("File Not Found").
     resp="$(curl -sS --max-time 600 \
         -w '\n%{http_code}' \
         -H "Authorization: Bearer $API_KEY" \
         -H "Content-Type: application/json" \
         -d "$cuerpo" \
-        "http://127.0.0.1:$puerto/v1/completion" 2>/dev/null)"
+        "http://127.0.0.1:$puerto/completion" 2>/dev/null)"
     codigo="${resp##*$'\n'}"
     resp="${resp%$'\n'*}"
     if [[ "$codigo" != "200" ]]; then
@@ -414,11 +435,11 @@ arrancar() {
         argv+=(--n-gpu-layers "$NGPU")
     fi
     # El argv, a disco: para poder auditar la medición después.
-    printf '%s\n' "${argv[@]}" >"$OUT/argv-$(basename "$motor").txt"
+    printf '%s\n' "${argv[@]}" >"$OUT/argv-$(tag_motor "$motor").txt"
     "$motor" "${argv[@]}" \
-        >>"$OUT/arranque-$(basename "$motor").txt" 2>&1 &
+        >>"$OUT/arranque-$(tag_motor "$motor").txt" 2>&1 &
     local pid=$!
-    printf '%s' "$pid" >"$OUT/pid-$(basename "$motor").txt"
+    printf '%s' "$pid" >"$OUT/pid-$(tag_motor "$motor").txt"
     log "  pid: $pid"
 }
 
@@ -428,7 +449,7 @@ parar() {
     # El PID que arrancó este bench (nunca un pkill global).
     local pf pid
     pf=""
-    [[ -n "$motor" ]] && pf="$OUT/pid-$(basename "$motor").txt"
+    [[ -n "$motor" ]] && pf="$OUT/pid-$(tag_motor "$motor").txt"
     if [[ -r "$pf" ]]; then
         pid="$(cat "$pf")"
         [[ -n "$pid" ]] && { kill "$pid" 2>/dev/null || true; sleep 1; kill -9 "$pid" 2>/dev/null || true; }

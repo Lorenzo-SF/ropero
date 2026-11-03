@@ -5,10 +5,10 @@
 [model]
 name    = "gptoss"
 engine  = "llama-server"
-context = 131072
+context = 266144
 
 [files]
-gguf = "gpt-oss-20b-MXFP4_MOE.gguf"
+gguf = "gpt-oss-20b-nvfp4.gguf"
 
 [download]
 repo = "FreedomAISVR/gpt-oss-20B-NVFP4-GGUF"
@@ -22,8 +22,9 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "99",
-    "--moe-cache","soft",
-
+    # "--n-cpu-moe", "14",
+    "--moe-cache","soft",  
+	
     "--temp", "0.8",
     "--top-k", "40",
     "--min-p", "0.05",

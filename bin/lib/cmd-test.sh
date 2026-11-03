@@ -2,7 +2,7 @@
 # =============================================================================
 # bin/lib/cmd-test.sh — `ropero test <modelo>` (spec §8.14)
 #
-# Prueba UN modelo contra las baterías de tests/prueba*.md usando opencode,
+# Prueba UN modelo contra las baterías de docs/prueba*.md usando opencode,
 # en un directorio temporal, y deja en el directorio desde el que se lanzó un
 # único markdown AUTOCONTENIDO (juez + prueba + log del engine + JSON de
 # opencode + sesión exportada) listo para pasárselo a otra IA.
@@ -79,8 +79,8 @@ _rp_test_informe() {
 # _rp_test_una <modelo> <prueba> <origen_pwd> <tmp> <puerto_de_arranque>
 _rp_test_una() {
     local modelo="$1" prueba="$2" origen="$3" tmp="$4" puerto="$5"
-    local prompt="$ROPERO_ROOT/tests/$prueba.md"
-    local juez="$ROPERO_ROOT/tests/juez.md"
+    local prompt="$ROPERO_ROOT/docs/$prueba.md"
+    local juez="$ROPERO_ROOT/docs/juez.md"
     local pjson="$tmp/$prueba.json" sesion="$tmp/$prueba.session.json"
     local log="$LOG_DIR/$modelo.log"
     local ts destino
@@ -153,7 +153,7 @@ rp_cmd_test() {
     fi
     local p
     for p in ${pruebas[@]+"${pruebas[@]}"}; do
-        [[ -f "$ROPERO_ROOT/tests/$p.md" ]] || rp_usage_error test "prueba desconocida: '$p'"
+        [[ -f "$ROPERO_ROOT/docs/$p.md" ]] || rp_usage_error test "prueba desconocida: '$p'"
     done
 
     if (( yes == 0 )); then

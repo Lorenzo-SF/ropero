@@ -5,8 +5,8 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-context = 524288
-# context = 266144
+# context = 524288
+context = 266144
 # context = 131072
 
 [files]
