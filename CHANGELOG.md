@@ -2,6 +2,49 @@
 
 ## Sin publicar
 
+### Arreglado
+- **El contexto del modelo ya llega al motor.** `[model].context` (o
+  `ROPERO_<NOMBRE>_CTX`) estaba en el catálogo, en el dump y en `ropero
+  config`, y **nunca se pasaba**: llama-server arrancaba con el contexto
+  **nativo** del modelo (262144 en flint, 266144 en nemotron). Tres
+  consecuencias, todas medidas:
+  - la KV cache se comía la VRAM (2,3 GiB en flint) y no quedaba sitio para
+    los expertos ni para la moe-cache → **flint abortaba al arrancar**;
+  - los expertos se quedaban en la CPU → el modelo iba a **la mitad de
+    velocidad** (nemotron: 60 t/s en vez de 100-120);
+  - el contexto no estaba en el argv, así que tampoco estaba en el sello de
+    configuración → cambiar `context =` en el TOML **no reiniciaba nada** y el
+    servidor viejo seguía sirviendo con el contexto viejo.
+  El `-c` va antes de los args del TOML: si el TOML declara su propio `-c`,
+  ese gana.
+- **El puerto se detecta sin `lsof`.** Todo el arranque (el check de "puerto
+  ocupado", el "puerto del sello", el `stop`) preguntaba a `lsof`, que no
+  está en todas las máquinas. **Sin `lsof` esas preguntas devolvían siempre
+  "libre"**: ropero arrancaba un servidor encima del que ya estaba (que
+  moría con *address already in use*), el `stop` no mataba nada y el "puerto
+  ocupado" nunca saltaba. Ahora se pregunta a `lsof`, y si no está, a `ss`,
+  a `fuser` y, como último recurso, a `/proc/net/tcp` (+ `/proc/*/fd` para
+  el PID), que siempre está en Linux.
+- **El `stop` mata al servidor que se está cargando.** Antes, si el puerto
+  no estaba en LISTEN, `rp_stop_port` borraba el estado y **no mataba
+  nada**: un `stop` mientras el modelo se cargaba lo dejaba vivo, y cuando
+  terminaba de cargar se ponía a servir peticiones ("el servidor sigue
+  recibiendo llamadas"). Ahora se mata al PID del estado aunque el puerto no
+  escuche todavía, y la espera mira a los PIDs y no sólo al puerto.
+- **`stop <modelo>` encuentra al modelo aunque no esté sirviendo todavía:**
+  se busca por el estado (`MODEL`) y no sólo por lo que responde el puerto.
+- **El Ctrl-C en primer plano mata al servidor sin `lsof`.** El trap del
+  launcher llama a `rp_stop_port`, que sin `lsof` no encontraba a nadie.
+  Además la espera en primer plano ya no es un `wait` sino un bucle con
+  `kill -0`: el engine arranca con `nohup ... &`, y bash pone SIGINT y
+  SIGQUIT en `SIG_IGN` en los comandos en background de un shell sin job
+  control, disposición que hereda el `exec` (medido: `SigIgn 0x7`), así que
+  llama-server **ignora el SIGINT para siempre** y no puede morir con él.
+- **Un estado sin sello de configuración ya no cuenta como "la misma
+  config"**: antes ropero respondía "'x' ya está corriendo" y se callaba,
+  dejando la config vieja para siempre. Ahora, sin sello no se puede probar
+  que la config sea la misma → se reinicia y se avisa.
+
 ### Cambiado
 - El motor principal pasa de `AtomicBot-ai/atomic-llama-cpp-turboquant` a
   **nuestro motor**, `Lorenzo-SF/ropero-llama-turboquant`, que es **privado**:
