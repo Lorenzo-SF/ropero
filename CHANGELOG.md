@@ -1,5 +1,25 @@
 # Changelog
 
+## Sin publicar
+
+### Cambiado
+- El motor principal pasa de `AtomicBot-ai/atomic-llama-cpp-turboquant` a
+  **nuestro propio fork**, `Lorenzo-SF/atomic-llama-cpp-turboquant`, que
+  además de TurboQuant y MTP/NextN trae:
+  - **turbo5/turbo6** (los tipos de KV `TQ5_0`/`TQ6_0`), tomados del motor de
+    TheTom;
+  - **flint** (la arquitectura nueva de upstream, PR #30928): el `models/llama/flint.toml`
+    ya no necesita el motor oficial;
+  - **los parches de ropero horneados en el motor** (la regla del NVFP4 y los
+    patterns sin anclar): `bin/quant/aplicar-parche-motor.sh` los detecta y no
+    hace nada, pero sigue siendo el que los aplica si el clon es de otro
+    dueño (el oficial).
+- Engine `llama-server-official` **oculto**: no se anuncia, no se instala con
+  `install engines` y el doctor no lo comprueba. Se puede instalar a mano
+  (`install engines llama-official`). Los cuatro modelos que lo usaban
+  (`flint`, `gptoss`, `groot`, `qwen38`) pasan a
+  `models/llama-official/fired/`: ahora los arranca el motor principal.
+
 ## 1.0.0 — 2026-10-30
 
 Refactor completo del monolito a módulos. Mismo producto, una sola fuente de

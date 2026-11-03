@@ -9,6 +9,18 @@
 # motor.sh — NVFP4 de expertos + patterns sin anclar), compila y enlaza el
 # binario en $BIN_DIR.
 #
+# EL MOTOR: Lorenzo-SF/atomic-llama-cpp-turboquant
+# ─────────────────────────────────────────────────
+# Antes era AtomicBot-ai/atomic-llama-cpp-turboquant (el fork de turboquant
+# con MTP/NextN). Ahora es NUESTRO fork de ese repo, con:
+#   - turbo5/turbo6 (los tipos de KV TQ5_0/TQ6_0), tomados de TheTom
+#   - flint (la arquitectura nueva de upstream), por el PR #30928
+#   - los parches de ropero YA HORNEADOS en el motor (la regla del NVFP4 y
+#     los patterns sin anclar): el script de parches los detecta y no hace
+#     nada, pero sigue siendo el que los aplica si alguien clona otro motor
+#   - el motor de TheTom (routing nativo en CUDA, FA en CPU con KV
+#     cuantizado, kv-stream) y el skip de las capas turbo en el context-shift
+#
 # ORDEN de install (importante): clone → cmake configure → parches → build.
 # El script de parches COMPILA al final dentro de build/, así que build/
 # (con su CMakeCache) tiene que existir ANTES: por eso el configure va
@@ -17,7 +29,7 @@
 # =============================================================================
 
 rp_eng_llama-server_label() {
-    printf 'llama-server · fork turboquant\n'
+    printf 'llama-server · fork turboquant (Lorenzo-SF)\n'
 }
 
 rp_eng_llama-server_compatible() {
@@ -64,8 +76,8 @@ rp_eng_llama-server_install() {
             rp_msg warn "sustituyo $LLAMA_DIR por un clon limpio del fork"
             rm -rf "$LLAMA_DIR" || return 1
         fi
-        rp_step 1 5 "clonando AtomicBot-ai/atomic-llama-cpp-turboquant (HTTPS)..."
-        git clone -q https://github.com/AtomicBot-ai/atomic-llama-cpp-turboquant.git \
+        rp_step 1 5 "clonando Lorenzo-SF/atomic-llama-cpp-turboquant (HTTPS)..."
+        git clone -q https://github.com/Lorenzo-SF/atomic-llama-cpp-turboquant.git \
             "$LLAMA_DIR" || {
             rp_msg error "falló el clone del motor"
             return 1

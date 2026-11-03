@@ -356,8 +356,12 @@ sin TTY y sin selección explícita es error de uso.
 Opciones:
   --force   reinstala aunque ya estén instalados
 
-Engines: llama-server · llama-server-official · vllm · mlx-serve · airllm · tensorrt-llm ·
+Engines: llama-server · vllm · mlx-serve · airllm · tensorrt-llm ·
          fastflowlm
+
+(El engine "llama-official" está oculto: el motor principal ya es nuestro
+fork con flint y turbo5/6. Se puede instalar a mano: install engines
+llama-official)
 
 Exit: 0 (aunque haya omitidos) · 1 si algún engine falla · 2 uso.
 EOF

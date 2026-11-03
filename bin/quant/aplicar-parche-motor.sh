@@ -5,10 +5,17 @@
 #
 # POR QUE ESTO VIVE EN ROEPO Y NO EN EL MOTOR
 # ────────────────────────────────────────────
-# Los parches se aplican a un clon de llama.cpp que es de OTRO dueño (el
-# atomic, con TurboQuant). Con el token de este repo no se puede push ahi
-# (ni admin), asi que los parches se delivering COMO FICHEROS y se aplican
-# aqui, en la maquina de cada uno.
+# Los parches se aplican a un clon de llama.cpp que puede ser de OTRO dueño
+# (el oficial, ggml-org/llama.cpp). Con el token de este repo no se puede
+# push ahi (ni admin), asi que los parches se delivering COMO FICHEROS y se
+# aplican aqui, en la maquina de cada uno.
+#
+# NUESTRO MOTOR (Lorenzo-SF/atomic-llama-cpp-turboquant) YA LOS TIENE
+# HORNEADOS: los dos parches son commits del propio fork. Ahi este script no
+# hace nada (lo dice: "los dos parches ya estan aplicados") y el binario que
+# se compila ya sale con ellos. Se sigue invocando por dos razones: que el
+# clon sea de cualquiera (y entonces hay que parchearlo) y que el check
+# (`--check`) sirva de comprobacion de que el motor que se va a usar los tiene.
 #
 # QUE HACE CADA PARCHE
 # ────────────────────
