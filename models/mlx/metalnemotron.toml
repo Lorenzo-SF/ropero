@@ -1,9 +1,9 @@
 # metalnemotron — NVIDIA-Nemotron-3.5-Lightning-30B-A3B-4bit (MLX, mlx-serve)
 # Comando real servido (el engine añade serve/--host/--port/--model/--api-key-env):
-#   mlx-serve serve --mtp --host 127.0.0.1 --port 9999 --model <SAFETENSORS_DIR>/... \
+#   mlx-serve serve --mtp --host 0.0.0.0.0.5 --port 9999 --model <SAFETENSORS_DIR>/... \
 #     --os-reserve-gib 1 --ctx-size 133072 --max-resident-models 1 --no-vision \
-#     --tokenize-cache-entries 16 --int8-qk --prefill-decode-share 0.50 --kv-quant 4 \
-#     --skip-mem-preflight --prefix-cache-disk 20GB --max-tokens 16384
+#     --tokenize-cache-entries 32 --int8-qk --prefill-decode-share 0.60 --kv-quant 4 \
+#     --skip-mem-preflight --prefix-cache-disk 20GB --max-tokens 32768
 
 [model]
 name    = "metalnemotron"
@@ -28,11 +28,11 @@ base = [
     "--ctx-size", "${ctx}",
     "--max-resident-models", "1",
     "--no-vision",
-    "--tokenize-cache-entries", "16",
+    "--tokenize-cache-entries", "32",
     "--int8-qk",
-    "--prefill-decode-share", "0.50",
+    "--prefill-decode-share", "0.60",
     "--kv-quant", "4",
     "--skip-mem-preflight",
     "--prefix-cache-disk", "20GB",
-    "--max-tokens", "16384",
+    "--max-tokens", "32768",
 ]

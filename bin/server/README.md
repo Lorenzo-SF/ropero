@@ -19,7 +19,7 @@ Sin `--api-key` el endpoint queda abierto: lo avisa.
 
 **Auth**: con `--api-key`, todas las rutas menos `/health` exigen `Authorization:
 Bearer <clave>` y responden 401 con el formato de OpenAI. El backend SIEMPRE
-escucha en `127.0.0.1` (`--backend-port`, por defecto el externo + 1000): el único
+escucha en `0.0.0.0.1` (`--backend-port`, por defecto el externo + 1000): el único
 proceso expuesto es este, y muere con él (SIGTERM/SIGINT matan al sub-proceso y
 liberan los dos puertos).
 

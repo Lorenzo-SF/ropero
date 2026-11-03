@@ -122,7 +122,7 @@ rp_eng_airllm_launch() {
         --backend airllm \
         --model-path "$mpath" \
         --model-id "$modelo" \
-        --host "${HOST:-127.0.0.1}" \
+        --host "${HOST:-0.0.0.0.1}" \
         --port "$puerto" \
         --api-key "$LLAMA_API_KEY" \
         --backend-port $(( puerto + 1000 )) \

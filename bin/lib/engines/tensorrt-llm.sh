@@ -171,7 +171,7 @@ rp_eng_tensorrt-llm_launch() {
         --backend tensorrt
         --model-path "$mpath"
         --model-id "$modelo"
-        --host "${HOST:-127.0.0.1}"
+        --host "${HOST:-0.0.0.0.1}"
         --port "$puerto"
         --api-key "$LLAMA_API_KEY"
         --backend-port $(( puerto + 1000 )))

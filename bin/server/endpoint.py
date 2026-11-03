@@ -38,10 +38,10 @@
 #
 # ARQUITECTURA
 #
-#   cliente ──► [ bin/server/endpoint.py ] ──► 127.0.0.1:<puerto interno>
+#   cliente ──► [ bin/server/endpoint.py ] ──► 0.0.0.0.1:<puerto interno>
 #                (el ÚNICO que se expone)      (trtllm-serve | flm serve)
 #
-#   El sub-proceso SIEMPRE escucha en 127.0.0.1. El puerto interno es
+#   El sub-proceso SIEMPRE escucha en 0.0.0.0.1. El puerto interno es
 #   `--backend-port` (por defecto, puerto externo + 1000).
 #
 # DEPENDENCIAS
@@ -638,7 +638,7 @@ class AirLLMBackend:
 class ProxyBackend:
     """Lanza el engine como sub-proceso y hace de proxy inverso.
 
-    El engine SIEMPRE escucha en 127.0.0.1: el único proceso expuesto es
+    El engine SIEMPRE escucha en 0.0.0.0.1: el único proceso expuesto es
     este. El nombre del modelo del body se reescribe al que el backend
     conoce, para que el cliente pueda mandar cualquier nombre.
     """
@@ -820,7 +820,7 @@ class ProxyBackend:
                 continue
             if self.child.poll() is not None:
                 return
-            if port_open("127.0.0.1", self.args.backend_port):
+            if port_open("0.0.0.0.1", self.args.backend_port):
                 self.ready_flag = True
                 return
             time.sleep(0.5)
@@ -855,7 +855,7 @@ class ProxyBackend:
             "alive": self.alive(),
             "ready": self.ready(),
             "child_pid": self.child_pid,
-            "target_host": "127.0.0.1",
+            "target_host": "0.0.0.0.1",
             "target_port": self.args.backend_port,
             "error": self.error,
         }
@@ -912,7 +912,7 @@ class ProxyBackend:
             return err(503, "model loading", "server_error", "model_loading")
 
         body = self._backend_body(payload, messages)
-        url = "http://127.0.0.1:%d%s" % (self.args.backend_port, upstream_path)
+        url = "http://0.0.0.0.1:%d%s" % (self.args.backend_port, upstream_path)
         headers = self._upstream_headers(request)
 
         if want_stream:
@@ -1223,7 +1223,7 @@ def tensorrt_argv(args, bin_path: str, omit=None):
         # fuente de `tensorrt_llm/commands/serve.py`); con --model el
         # binario moría con "no such option".
         str(args.model_path),
-        "--host", "127.0.0.1",
+        "--host", "0.0.0.0.1",
         "--port", str(args.backend_port),
     ]
     if "--served_model_name" not in omit:
@@ -1241,14 +1241,14 @@ def flm_argv(args, bin_path: str, omit=None):
 
     · El modelo se identifica por TAG (`llama3.2:1b`), NO por ruta: `flm serve`
       habla con su propio almacén de modelos.
-    · SÍ tiene `--host` (default 127.0.0.1); se pone explícito para que el
+    · SÍ tiene `--host` (default 0.0.0.0.1); se pone explícito para que el
       backend no pueda salir a la red ni por accidente.
     · NO hay auth: su doc dice "the key is not checked".
     """
     omit = omit or set()
     argv = [
         bin_path, "serve", str(args.model_path),
-        "--host", "127.0.0.1",
+        "--host", "0.0.0.0.1",
         "--port", str(args.backend_port),
     ]
     if args.context:
@@ -1260,7 +1260,7 @@ def flm_argv(args, bin_path: str, omit=None):
 
 
 def mlx_argv(args, bin_path: str, omit=None):
-    """`mlx_lm.server --model <path> --host 127.0.0.1 --port N` (MLX).
+    """`mlx_lm.server --model <path> --host 0.0.0.0.1 --port N` (MLX).
 
     · NO tiene --api-key ni --alias: la auth la pone este endpoint y el nombre
       se reescribe a "default_model" (mlx_lm.server solo acepta ese).
@@ -1271,7 +1271,7 @@ def mlx_argv(args, bin_path: str, omit=None):
     argv = [
         bin_path,
         "--model", str(args.model_path),
-        "--host", "127.0.0.1",
+        "--host", "0.0.0.0.1",
         "--port", str(args.backend_port),
     ]
     if args.context:
@@ -1348,7 +1348,7 @@ def build_app(args, backend):
         return {
             "engine": backend.label,
             "model": args.model_id,
-            "target_host": "127.0.0.1" if isinstance(backend, ProxyBackend) else args.host,
+            "target_host": "0.0.0.0.1" if isinstance(backend, ProxyBackend) else args.host,
             "target_port": args.backend_port if isinstance(backend, ProxyBackend) else args.port,
             "child_pid": backend.status().get("child_pid", 0),
             "child_alive": backend.alive(),
@@ -1399,7 +1399,7 @@ def main() -> int:
         description="Endpoint OpenAI-compatible de ropero para airllm, tensorrt-llm "
                     "y fastflowlm (FastAPI + uvicorn).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="El backend SIEMPRE escucha en 127.0.0.1; este proceso es el único "
+        epilog="El backend SIEMPRE escucha en 0.0.0.0.1; este proceso es el único "
                "que se expone y el único que exige la API key.",
     )
     ap.add_argument("--backend", required=True,
@@ -1422,7 +1422,7 @@ def main() -> int:
     ap.add_argument("--max-seq-len", type=int, default=0,
                     help="alias de --context con el nombre que usa airllm")
     ap.add_argument("--backend-port", type=int, default=0,
-                    help="puerto INTERNO del backend en 127.0.0.1 "
+                    help="puerto INTERNO del backend en 0.0.0.0.1 "
                          "(default: puerto externo + 1000)")
     ap.add_argument("--backend-bin", default="",
                     help="ruta al ejecutable del backend (si no, se busca donde "

@@ -179,7 +179,7 @@ _rp_engine_deps_ok() {
 # curl primero (está en macOS y Linux); wget como fallback. Sin cliente HTTP
 # no hay probe: rc 1.
 _rp_engine_http_ok() {
-    local puerto="$1" host="${HOST:-127.0.0.1}"
+    local puerto="$1" host="${HOST:-0.0.0.0.1}"
     if command -v curl >/dev/null 2>&1; then
         curl -fsS --max-time 2 "http://$host:$puerto/health" >/dev/null 2>&1 && return 0
         return 1

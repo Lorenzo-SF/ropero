@@ -129,7 +129,7 @@ rp_eng_vllm_launch() {
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
     nohup "$bin" serve "$mpath" \
         "$@" \
-        --host "${HOST:-127.0.0.1}" \
+        --host "${HOST:-0.0.0.0.1}" \
         --port "$puerto" \
         --api-key "$LLAMA_API_KEY" >>"$logfile" 2>&1 </dev/null &
     printf '%s\n' "$!"

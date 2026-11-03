@@ -221,7 +221,7 @@ _rp_http_models_ids() {
     rp_api_key 2>/dev/null || true
     curl -fsS --max-time 3 \
         -H "Authorization: Bearer ${LLAMA_API_KEY:-}" \
-        "http://${HOST:-127.0.0.1}:$puerto/v1/models" 2>/dev/null \
+        "http://${HOST:-0.0.0.0.1}:$puerto/v1/models" 2>/dev/null \
         | grep -oE '"id"[[:space:]]*:[[:space:]]*"[^"]*"' \
         | sed -E 's/.*"([^"]*)"$/\1/'
     return 0

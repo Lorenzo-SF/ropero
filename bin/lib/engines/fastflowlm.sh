@@ -219,7 +219,7 @@ rp_eng_fastflowlm_launch() {
         --backend flm
         --model-path "$tag"
         --model-id "$modelo"
-        --host "${HOST:-127.0.0.1}"
+        --host "${HOST:-0.0.0.0.1}"
         --port "$puerto"
         --api-key "$LLAMA_API_KEY"
         --backend-port $(( puerto + 1000 )))

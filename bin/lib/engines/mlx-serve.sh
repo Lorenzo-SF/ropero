@@ -135,7 +135,7 @@ rp_eng_mlx-serve_launch() {
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
     nohup "$bin" serve \
         "$@" \
-        --host "${HOST:-127.0.0.1}" \
+        --host "${HOST:-0.0.0.0.1}" \
         --port "$puerto" \
         --model "$mpath" \
         --api-key-env ROPERO_MLX_API_KEY \

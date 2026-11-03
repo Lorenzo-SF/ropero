@@ -120,7 +120,7 @@ Añadir un motor = añadir `bin/lib/engines/<id>.sh` (y, si tiene modelos,
 ## Variables
 
 `GGUF_DIR` (`~/models/gguf`), `SAFETENSORS_DIR` (`~/models/safetensors`),
-`LOG_DIR`, `STATE_DIR`, `HOST` (`127.0.0.1`), `PORT` (`9999`),
+`LOG_DIR`, `STATE_DIR`, `HOST` (`0.0.0.0.1`), `PORT` (`9999`),
 `CPU_PORT` (`9998`), `LLAMA_API_KEY` (se genera una si no existe),
 `ROPERO_START_TIMEOUT` (`300`), `HF_TOKEN`.
 

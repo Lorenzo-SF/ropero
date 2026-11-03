@@ -36,7 +36,7 @@
 : "${BIN_DIR:=$HOME/.local/bin}"
 
 # Bind de todos los servers (loopback: no exponemos nada a la red)
-: "${HOST:=127.0.0.1}"
+: "${HOST:=0.0.0.0}"
 # Slot GPU/dGPU
 : "${PORT:=9999}"
 # Slot CPU. Sólo se GESTIONA en Linux; en macOS no existe el slot (spec §4,

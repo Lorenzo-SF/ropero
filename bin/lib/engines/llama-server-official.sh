@@ -285,7 +285,7 @@ rp_eng_llama-server-official_launch() {     # llama-server no lo necesita: su id
     # llama-server usa su default (-1 = todos los núcleos físicos).
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
     nohup "$bin" \
-        --host "${HOST:-127.0.0.1}" \
+        --host "${HOST:-0.0.0.0.1}" \
         --port "$puerto" \
         --api-key "$LLAMA_API_KEY" \
         --threads 16 \
