@@ -45,8 +45,17 @@
 # Lo que hace cada tirada queda en $LOG_DIR/<modelo>.log, y al final un
 # resumen con lo que se hizo y lo que fallo.
 # =============================================================================
-# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
-# sourcea. Los abortos críticos son explícitos (`exit 1`).
+
+# SIN `errexit` (-e) NI `nounset` (-u): un fallo implícito (un grep que no
+# encuentra, una tubería cuyo primer tramo falla) no aborta el script; los
+# abortos críticos son explícitos (`exit 1`) y sí lo terminan. Por eso
+# estos scripts SE EJECUTAN, no se sourcean: su `exit` mata tu shell.
+# NO reintroducir errexit ni nounset (`pipefail` no puede terminar una shell).
+#
+# La línea en blanco que abre este bloque CIERRA la cabecera de uso: el
+# --help imprime todo lo que hay entre el shebang y esa línea, y ahí para
+# (mismo criterio que bin/quant/subir-hf.sh). Así no hay ningún rango de
+# líneas que ajustar al añadir o quitar una línea de la cabecera.
 set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,7 +71,14 @@ MODELOS_PEDIDOS=()
 for a in "$@"; do
     case "$a" in
         --parar)        PARAR=1 ;;
-        --help|-h)      sed -n '2,45p' "$0"; exit 0 ;;
+        --help|-h)
+            # La cabecera de uso es el bloque de comentarios inicial: se
+            # corta en la primera línea que no sea comentario (la línea en
+            # blanco que cierra la cabecera también corta, y por eso marca
+            # dónde acaba). Así no hay ningún rango de líneas que ajustar al
+            # tocarla. Mismo criterio que bin/quant/subir-hf.sh.
+            awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^#[ ]?/, ""); print }' "${BASH_SOURCE[0]}"
+            exit 0 ;;
         todos)          MODELOS_PEDIDOS+=("todos") ;;
         *)              MODELOS_PEDIDOS+=("$a") ;;
     esac

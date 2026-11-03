@@ -64,11 +64,14 @@
 # -----------------------------------------------------------------------------
 # Opciones de shell: SÓLO `pipefail`.
 #
-# SIN `errexit` (-e) NI `nounset` (-u), a propósito: este script se ejecuta (y
-# se sourcea) desde la shell del usuario, así que errexit la MATARÍA ante un
-# fallo y nounset le dejaría la shell en modo estricto (en bash 3.2, además,
-# aborta al expandir un array vacío). Por eso los abortos son EXPLICÍTOS y
-# locales (`|| die "..."`) en cada ruta crítica, nunca implícitos.
+# SIN `errexit` (-e) NI `nounset` (-u): un fallo implícito (un comando que no
+# encuentra lo que busca, una tubería cuyo primer tramo falla) NO aborta el
+# instalador. Los abortos son EXPLÍCITOS y locales (`|| die "..."`) en cada
+# ruta crítica: con `errexit` la instalación se paraba a medias, sin mensaje
+# (un symlink sin crear, un farm sin montar).
+#
+# install.sh SE EJECUTA (típicamente `curl … | bash`), no se sourcea: su
+# `exit` —el de `main`— termina la shell de quien lo sourcee.
 #
 # NO reintroducir errexit ni nounset: rompe ese contrato.
 # -----------------------------------------------------------------------------
@@ -94,9 +97,15 @@ _ropero_bootstrap() {
         exit 1
     fi
     export ROPERO_BOOTSTRAP=1
-    exec bash -c "$script" -- "$@"
+    # Un `exec` con éxito NO vuelve: sólo vuelve si la segunda pasada no ha
+    # podido arrancar. Sin esto, el script seguiría a `main` sin haber leído
+    # el script de stdin: instalaría a medias, sin saberlo.
+    exec bash -c "$script" -- "$@" || {
+        printf 'install.sh: no se pudo re-ejecutar el script desde stdin\n' >&2
+        exit 1
+    }
 }
-_ropero_bootstrap "$@"
+_ropero_bootstrap "$@" || exit 1
 
 # -----------------------------------------------------------------------------
 # Parámetros del repo. Flag > variable de entorno > default.
@@ -710,19 +719,27 @@ fase_check() {
     #    cómo se instalara (local o red). Si no, se deduce del modo.
     local link="$BIN_DIR/$NAME"
     local target dir rel=""
+    local bruto=""
     if [[ -L "$link" ]]; then
-        target="$(readlink "$link")"
-        case "$target" in
-            /*) ;;
-            *) target="$PWD/$target" ;;
-        esac
-        dir="$(real_path "$(dirname "$target")")" || dir=""
-        if [[ -n "$dir" ]]; then
-            rel="${ENTRY%/*}"
-            if [[ "$rel" == "$ENTRY" ]]; then
-                ORIGIN="$dir"
-            else
-                ORIGIN="$(cd -P "$dir/.." 2>/dev/null && pwd)" || ORIGIN=""
+        # Si el readlink falla NO se inventa un origen: con `target` vacío el
+        # `case` lo convertiría en "$PWD/" y ORIGIN saldría del padre del
+        # $PWD —un path falso contra el que se compararía todo lo demás.
+        # Se deja ORIGIN vacío y se cae al camino de abajo (--local o $DIR).
+        bruto="$(readlink "$link" 2>/dev/null)" || bruto=""
+        target="$bruto"
+        if [[ -n "$target" ]]; then
+            case "$target" in
+                /*) ;;
+                *) target="$PWD/$target" ;;
+            esac
+            dir="$(real_path "$(dirname "$target")")" || dir=""
+            if [[ -n "$dir" ]]; then
+                rel="${ENTRY%/*}"
+                if [[ "$rel" == "$ENTRY" ]]; then
+                    ORIGIN="$dir"
+                else
+                    ORIGIN="$(cd -P "$dir/.." 2>/dev/null && pwd)" || ORIGIN=""
+                fi
             fi
         fi
     fi
@@ -743,11 +760,17 @@ fase_check() {
 
     # ── 1. El entrypoint en ~/.local/bin.
     if [[ -L "$link" ]]; then
-        ok "$link → $(readlink "$link")"
+        # El destino se muestra desde el `readlink` ya leído arriba: si falló,
+        # se dice, en vez de imprimir un enlace sin destino.
+        if [[ -n "$bruto" ]]; then
+            ok "$link → $bruto"
+        else
+            err "$link: no se pudo leer el enlace (falló readlink)"
+        fi
         if [[ -e "$link" ]]; then
             ok "el symlink resuelve"
         else
-            err "el symlink está roto: $(readlink "$link")"
+            err "el symlink está roto: $bruto"
         fi
         if same_path "$link" "$ORIGIN/$ENTRY"; then
             ok "apunta al entrypoint: $ORIGIN/$ENTRY"

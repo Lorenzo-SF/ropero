@@ -23,8 +23,11 @@
 # El usuario de HF sale de quant/hf.env (HF_USER=...) o del entorno.
 # =============================================================================
 
-# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
-# sourcea. Los abortos críticos son explícitos (`exit 1`).
+# SIN `errexit` (-e) NI `nounset` (-u): un fallo implícito (un grep que no
+# encuentra, una tubería cuyo primer tramo falla) no aborta el script; los
+# abortos críticos son explícitos (`exit 1`) y sí lo terminan. Por eso
+# estos scripts SE EJECUTAN, no se sourcean: su `exit` mata tu shell.
+# NO reintroducir errexit ni nounset (`pipefail` no puede terminar una shell).
 set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -105,10 +108,12 @@ nombre_modelo() {
     base="$(basename "$f" .gguf)"
     # el quant va como sufijo: "fable-coder-35B-A3B.Q2_K" -> "fable-coder-35B-A3B"
     #
-    # OJO: "sufijo" se DECLARA FUERA del if. Si la declaración viviera dentro
-    # del bloque y la condición no se cumpliera, la variable no existiría y
-    # "es_quant" recibiría una cadena vacía: el recorte del quant no
-    # ocurriría, en silencio, y el nombre del modelo saldría mal.
+    # OJO: "sufijo" se DECLARA FUERA del if. La condición (`es_quant
+    # "$sufijo"`) se evalúa ANTES de entrar en el bloque: si la declaración
+    # viviera dentro, al llegar a la condición la variable no existiría
+    # todavía (con `nounset`: "unbound variable"; sin él: cadena vacía), y
+    # el recorte del quant no ocurriría, en silencio: el nombre del modelo
+    # saldría mal.
     sufijo="${base##*.}"
     if [[ "$base" == *.* ]] && es_quant "$sufijo"; then
         base="${base%.*}"

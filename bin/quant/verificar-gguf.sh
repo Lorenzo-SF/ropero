@@ -11,8 +11,11 @@
 #
 # CODIGO DE SALIDA: 0 si esta bien, 1 si no.
 # =============================================================================
-# SIN `errexit`/`nounset`: un fallo no puede matar la shell de quien lo
-# sourcea. Los abortos críticos son explícitos (`exit 1`).
+# SIN `errexit` (-e) NI `nounset` (-u): un fallo implícito (un grep que no
+# encuentra, una tubería cuyo primer tramo falla) no aborta el script; los
+# abortos críticos son explícitos (`exit 1`) y sí lo terminan. Por eso
+# estos scripts SE EJECUTAN, no se sourcean: su `exit` mata tu shell.
+# NO reintroducir errexit ni nounset (`pipefail` no puede terminar una shell).
 set -o pipefail
 
 AQUI="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

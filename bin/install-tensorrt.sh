@@ -4,12 +4,11 @@
 # =============================================================================
 # Opciones de shell: SÓLO `pipefail`.
 #
-# SIN `errexit` (-e) NI `nounset` (-u), a propósito: este script lo ejecuta
-# una shell del usuario y un fallo NO puede matarla. Cada paso crítico lleva
-# su propia comprobación EXPLÍCITA (`|| { echo "ERROR: ..." >&2; exit 1; }`),
-# así que la secuencia se detiene en el primer fallo con un mensaje claro.
-#
-# NO reintroducir errexit ni nounset.
+# SIN `errexit` (-e) NI `nounset` (-u): un fallo implícito no aborta el
+# script; los abortos críticos son EXPLÍCITOS (`|| { ...; exit 1; }`) y sí lo
+# terminan, así que la secuencia se detiene en el primer fallo CON un mensaje
+# claro. Este script SE EJECUTA, no se sourcea: su `exit` mata tu shell.
+# NO reintroducir errexit ni nounset (`pipefail` no puede terminar una shell).
 # =============================================================================
 set -o pipefail
 
@@ -31,8 +30,17 @@ sudo systemctl enable --now docker \
 
 # Añadir tu usuario al grupo docker (permite usar docker sin sudo)
 # Cierra sesión y vuelve a entrar después de ejecutar esto.
-sudo usermod -aG docker "$USER" \
-  || { echo "ERROR: no se pudo añadir '$USER' al grupo docker" >&2; exit 1; }
+#
+# $USER no siempre está definido (cron, systemd, una shell sin login): sin
+# valor por defecto, `usermod -aG docker ""` fallaría con un mensaje que no
+# dice nada útil. Se usa el usuario real del proceso.
+DOCKER_USER="${USER:-$(id -un 2>/dev/null)}"
+if [[ -z "$DOCKER_USER" ]]; then
+    echo "ERROR: no se pudo determinar el usuario actual (define USER o ejecuta esto en una shell con sesión)" >&2
+    exit 1
+fi
+sudo usermod -aG docker "$DOCKER_USER" \
+  || { echo "ERROR: no se pudo añadir '$DOCKER_USER' al grupo docker" >&2; exit 1; }
 
 # Configurar el runtime de NVIDIA para Docker
 sudo nvidia-ctk runtime configure --runtime=docker \

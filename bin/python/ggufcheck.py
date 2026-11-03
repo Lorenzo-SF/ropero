@@ -6,6 +6,11 @@ safetensors cuando el GGUF final no esta bien.
   ggufcheck.py FICHERO              -> valida (exit 0 ok, 1 mal)
   ggufcheck.py FICHERO --info       -> imprime la metadata y sale
 
+Todos los modos (validar, --info, --meta, --nombres, --bloque,
+--tipo-predominante) leen SOLO la cabecera del GGUF (metadata + indice de
+tensores), nunca los datos: un GGUF de 60 GB no se carga en memoria. El
+tamano total del fichero sale de os.path.getsize.
+
 El tamano de los tensores NO esta escrito aqui: se pregunta a la propia
 libggml (ctypes), que es la fuente de verdad. Si no se puede cargar, el
 check de tamano se salta con un aviso y el resto del check sigue valiendo.
@@ -45,6 +50,18 @@ ESCALARES = {
 }
 
 
+# Tope de lo que se lee para el indice de tensores (un modelo real de 30k
+# tensores ocupa unos pocos MiB). Evita que un n_tensors corrupto haga leer
+# el fichero entero.
+MAX_INDICE = 256 * 1024 * 1024
+
+# Minimo absoluto de bytes que ocupa un tensor en el indice: longitud del
+# nombre (uint64 = 8) + nombre (>= 0) + n_dims (uint32 = 4) + dims (8 * n_dims,
+# n_dims >= 0 en el formato) + tipo (uint32 = 4) + offset (uint64 = 8) = 24.
+# Es una cota inferior estricta, nunca rechaza un GGUF valido.
+MIN_TENSOR_INDICE = 24
+
+
 class GgufError(Exception):
     pass
 
@@ -67,18 +84,16 @@ def _cargar_libggml(rutas):
 
 
 class Gguf:
-    def __init__(self, path, lib_rutas=(), solo_cabecera=False):
+    def __init__(self, path, lib_rutas=(), solo_cabecera=True):
+        # solo_cabecera: DEPRECADO e ignorado. Siempre se lee solo la
+        # cabecera; se conserva para no romper a los llamadores antiguos.
         self.path = path
         self.tam = os.path.getsize(path)
-        # Con solo_cabecera se lee SOLO la cabecera (metadata + indice de
-        # tensores), no los datos. Sin esto, listar los nombres de un GGUF de
-        # 10 GB era leerse 10 GB en memoria: inviable.
-        if solo_cabecera:
-            with open(path, "rb") as f:
-                self.data = self._leer_cabecera(f)
-        else:
-            with open(path, "rb") as f:
-                self.data = f.read()
+        # Se lee SOLO la cabecera (metadata + indice de tensores), nunca los
+        # datos: un GGUF de 60 GB no cabe en memoria. self.data es la
+        # cabecera; el tamano total del fichero esta en self.tam.
+        with open(path, "rb") as f:
+            self.data = self._leer_cabecera(f)
         d = self.data
         if d[:4] != b"GGUF":
             raise GgufError("no empieza por GGUF (magico: %r)" % d[:4])
@@ -95,9 +110,11 @@ class Gguf:
     def _leer_cabecera(self, f):
         """Lee SOLO la cabecera (metadata + indice de tensores), no los datos.
 
-        Sin esto, listar los nombres de un GGUF de 10 GB era leerse 10 GB en
-        memoria. El indice de tensores va justo detras de la metadata, asi
-        que su tamano no se sabe hasta leerla: se lee a trozos, probando.
+        Leer el fichero entero de un GGUF de 60 GB es inviable. El indice de
+        tensores va justo detras de la metadata, asi que su tamano no se sabe
+        hasta leerla: se lee a trozos, probando. Las lecturas estan acotadas
+        (metadata <= 64 MiB, indice <= MAX_INDICE) aunque la cabecera declare
+        valores absurdos.
         """
         f.seek(0)
         cab = f.read(24)
@@ -126,11 +143,30 @@ class Gguf:
             except (struct.error, IndexError):
                 continue          # falta mas metadata
             fin = a._offset_tras_kv
+            # Validacion temprana: cada tensor ocupa en el indice como
+            # minimo MIN_TENSOR_INDICE bytes, asi que si n_tensors no cabe
+            # entre el final de la metadata y el final del fichero, el GGUF
+            # es invalido. Falla ya, sin parsear cientos de MiB de basura.
+            hueco = max(self.tam - fin, 0)
+            if n_tensors * MIN_TENSOR_INDICE > hueco:
+                raise GgufError(
+                    "el GGUF declara %d tensores pero tras la metadata solo "
+                    "quedan %d bytes en el fichero (hacen falta >= %d): "
+                    "fichero truncado o cabecera corrupta"
+                    % (n_tensors, hueco, n_tensors * MIN_TENSOR_INDICE))
+            if n_tensors * MIN_TENSOR_INDICE > MAX_INDICE:
+                raise GgufError(
+                    "el GGUF declara %d tensores: su indice (>= %d bytes) "
+                    "supera el tope de lectura (%d); cabecera corrupta"
+                    % (n_tensors, n_tensors * MIN_TENSOR_INDICE, MAX_INDICE))
             # 2. el indice de tensores, que va justo detras
+            mejor = buf[:fin]
             for extra in (n_tensors * 64 + 8192, n_tensors * 160 + 8192,
                           n_tensors * 320 + 8192):
+                extra = min(extra, MAX_INDICE)   # n_tensors corrupto
                 f.seek(fin)
                 buf2 = buf[:fin] + f.read(extra)
+                mejor = buf2
                 try:
                     b = aux(buf2)
                     b._offset_tras_kv = fin
@@ -138,13 +174,19 @@ class Gguf:
                 except (struct.error, IndexError, GgufError):
                     continue      # falta mas indice
                 return buf2
-            return buf[:fin]
+            # El indice esta incompleto incluso leyendo lo maximo: se
+            # devuelve lo mas grande leido para que el parseo final cuente
+            # los tensores reales y el error diga cuantos hay de verdad.
+            return mejor
         raise GgufError("no se pudo leer la metadata")
 
     def _str(self, off):
         (l,) = struct.unpack_from("<Q", self.data, off); off += 8
         if l > 1 << 30:
             raise GgufError("longitud de string imposible: %d" % l)
+        if off + l > len(self.data):
+            # la cabecera leida hasta ahora se acaba antes: falta mas
+            raise struct.error("string fuera del buffer")
         s = self.data[off:off + l].decode("utf-8", "replace")
         return s, off + l
 
@@ -164,6 +206,8 @@ class Gguf:
                         s, off = self._str(off); val.append(s)
                 elif et in ESCALARES:
                     fmt, sz = ESCALARES[et]
+                    if off + sz * cnt > len(d):
+                        raise struct.error("array fuera del buffer")
                     val = list(struct.unpack_from("<" + fmt * cnt, d, off)); off += sz * cnt
                 else:
                     raise GgufError("array de tipo %d (no soportado)" % et)
@@ -184,6 +228,8 @@ class Gguf:
             try:
                 name, off = self._str(off)
                 (ndim,) = struct.unpack_from("<I", d, off); off += 4
+                if ndim > 16:
+                    raise GgufError("tensor '%s' con %d dimensiones (imposible)" % (name, ndim))
                 dims = list(struct.unpack_from("<" + "Q" * ndim, d, off)); off += 8 * ndim
                 (ttype,) = struct.unpack_from("<I", d, off); off += 4
                 (toff,) = struct.unpack_from("<Q", d, off); off += 8
@@ -256,11 +302,9 @@ def main(argv):
     if not os.path.exists(path):
         print("[x] no existe: %s" % path, file=sys.stderr)
         return 1
-    # --nombres y --bloque solo necesitan la cabecera: leer el GGUF entero
-    # (10 GB) para listar nombres era inviable.
-    solo_cabecera = ("--nombres" in argv) or ("--bloque" in argv) or ("--tipo-predominante" in argv)
+    # Todos los modos leen solo la cabecera (ver Gguf.__init__).
     try:
-        g = Gguf(path, libs, solo_cabecera=solo_cabecera)
+        g = Gguf(path, libs)
     except GgufError as e:
         print("[x] GGUF invalido: %s" % e, file=sys.stderr)
         return 1

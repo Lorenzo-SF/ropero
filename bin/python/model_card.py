@@ -125,7 +125,7 @@ def _nombre_quant(datos, fuente):
 def _lee_gguf(ruta):
     """La metadata del GGUF. Solo la cabecera: un GGUF son 10 GB."""
     try:
-        g = Gguf(ruta, solo_cabecera=True)
+        g = Gguf(ruta)
         return g.resumen()
     except (GgufError, OSError, ValueError) as e:
         print("[x] no se puede leer el GGUF %s: %s" % (ruta, e), file=sys.stderr)
