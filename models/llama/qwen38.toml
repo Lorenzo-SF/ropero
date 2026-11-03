@@ -1,18 +1,17 @@
-# =============================================================================
 # qwen — Qwen3.8-27B (base, denso 27B + VLM) con GGUF de bartowski
-# =============================================================================
+# Configurado para RTX 5080 16GB VRAM + 32GB sistema RAM (Cachy OS)
 
 [model]
 name    = "qwen38"
 engine  = "llama-server"
-context = 266144
+context = 32768
 
 [files]
 gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf"
 
 [download]
-repo = "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
-file = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" # con mtp, IQ3_XXS, sin mtp, entra el 
+repo = "ISTA-DASLab/Qwen3.8-27B-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
+file = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf" #"Qwen3.8-27B-UD-IQ3_XXS.gguf" # con mtp, IQ3_XXS, sin mtp, entra el 
 size = "4.48 GB"
 
 # [build]
@@ -25,13 +24,13 @@ size = "4.48 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
-default = "low"
+default = "medium"
 
 [args]
 base = [
-    "--n-gpu-layers", "66",
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
+    "--n-gpu-layers", "56",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
     "--temp", "1.0",
     "--top-p", "0.95",
     "--top-k", "20",
@@ -39,13 +38,13 @@ base = [
     "--repeat-penalty", "1.0",
     "--n-predict", "16384",
     "--reasoning-preserve",
-    "--reasoning-budget", "12288",
+    "--reasoning-budget", "8192",
     "--checkpoint-min-step","256",
     "--spec-default",
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "2",
-    "--spec-draft-type-k", "turbo3",
-    "--spec-draft-type-v", "turbo3",
+    "--spec-draft-type-k", "mtp",
+    "--spec-draft-type-v", "mtp",
 ]
 
 [args.level.low]
@@ -59,4 +58,3 @@ reasoning_effort = "xhigh"
 
 [args.level.xhigh]
 reasoning_effort = "xhigh"
-
