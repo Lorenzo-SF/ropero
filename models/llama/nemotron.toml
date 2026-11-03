@@ -47,6 +47,18 @@ default     = "think"
 base = [
     "--n-gpu-layers", "54",
     "--n-cpu-moe", "14",
+    # AVISO: "soft" aquí NO significa "usa la VRAM que sobre". En el motor,
+    # soft cae en modo "on" (common/common.cpp) y la capacidad se calcula
+    # como free - reserva, con la reserva HARDCODADA en 3072 MiB
+    # (ggml/src/ggml-cuda/moe-cache.cu:166). Con el modelo de 18 GB en una
+    # VRAM de 16 GB sólo quedan ~728 MiB libres -> granted=0 MiB: la
+    # moe-cache no existe. Medido en el arranque:
+    #   [moe-cache] CUDA0 capacity: policy=free-minus-reserve
+    #       granted=0 MiB free=728 MiB reserve=3072 MiB
+    # El knob real: GGML_CUDA_MOE_CACHE_RESERVE_MB (p. ej. 256) -> granted =
+    # free - 256. NO se activa de momento: el cuello medido es el techo de
+    # potencia de la GPU, no el PCIe (nemotron y un 4B entero en la VRAM
+    # tardan lo mismo por token).
     "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
 	
     "--cache-type-k", "turbo3",
