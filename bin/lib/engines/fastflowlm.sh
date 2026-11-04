@@ -243,7 +243,7 @@ rp_eng_fastflowlm_launch() {
         --host "${HOST:-127.0.0.1}"
         --port "$puerto"
         --pmode turbo
-        --socket 20
+        --socket 5
         --q-len 20 )
     local a
     for a in "$@"; do

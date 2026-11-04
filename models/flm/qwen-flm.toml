@@ -1,0 +1,31 @@
+# =============================================================================
+# d3-turbo-flm — Modelo de decisión FastFlowLM (NPU AMD XDNA)
+# =============================================================================
+# El 2º más grande de la familia d3 (d3:nano < d3:lite < d3:mini < d3:turbo < d3:ultra)
+# Uso: clasificación multi-clase, routing de peticiones, guardrails
+# Se usa con: flm serve <modelo> --decision d3:turbo
+# =============================================================================
+
+[model]
+name    = "qwen-flm"
+engine  = "fastflowlm"
+context = 131072
+format  = "q4nx"
+path    = "d3:turbo"
+
+[files]
+
+[download]
+repo = "FastFlowLM/Qwen3.5-9B-NPU2"
+size = "~8 GB"
+
+[limits]
+min_ram_gb = 8
+
+[args]
+base = [
+  "--prefill-chunk-len", "8192",
+  "--prefix-cache-mb", "2048",
+  "--prefix-slots", "4",
+  "--prefix-min-gain", "256",
+]

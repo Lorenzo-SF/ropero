@@ -132,7 +132,7 @@ _rp_models_menu() {
     rp_header "modelos instalables"
     local i real fmt size caminos
     local n=0
-    local -a rows=() row_colors=() sort_keys=()
+    local -a rows=() row_colors=() sort_keys=() sort_reals=() sort_nums=()
     for (( i = 0; i < ${#MODEL_NAMES[@]}; i++ )); do
         [[ "${MODEL_ISALIAS[$i]}" == "0" ]] || continue
         [[ "${MODEL_ORIGIN[$i]}" == "active" ]] || continue
@@ -164,16 +164,19 @@ _rp_models_menu() {
         sort_keys+=("$(printf '%s\t%s\t%d' "$fmt" "$real" "$n")")
         rows+=("$(printf '%s;%s;%s;%s' "$n" "$real" "$size" "$caminos")")
         row_colors+=("$color")
+        sort_reals+=("$real")
+        sort_nums+=("$n")
     done
     if (( n == 0 )); then
         rp_msg warn "no hay modelos instalables en este SO (con [download] o [build])"
         return 0
     fi
     # Ordenar por engine y luego por nombre de modelo
+    # Imprimir los pares "número|real" en el orden ordenado (para parsing)
+    # Y construir la tabla ordenada
     local -a sorted_indices=()
-    local idx=0
     while IFS=$'\t' read -r eng name num; do
-        sorted_indices+=("$num")
+        sorted_indices+=("$((num - 1))")
     done < <(printf '%s\n' "${sort_keys[@]}" | sort -t$'\t' -k1,1 -k2,2)
 
     # Leyenda de colores por engine
@@ -194,35 +197,30 @@ _rp_models_menu() {
         echo "" >&2
     fi
 
-    # Presentación con alaja (sin columna engine, coloreada por fila)
-    if command -v alaja >/dev/null 2>&1; then
-        local -a alaja_rows=()
-        local -a alaja_colors=()
-        local si
-        for si in "${sorted_indices[@]}"; do
-            # si es el número original (1-based), buscar en rows
-            local ri=$((si - 1))
-            alaja_rows+=("${rows[$ri]}")
-            alaja_colors+=("${row_colors[$ri]}")
-        done
-        # Construir args de row-color
-        local -a row_color_args=()
-        local ri2=0
-        for ri2 in "${!alaja_rows[@]}"; do
-            local rnum=$((ri2 + 1))
-            row_color_args+=(--row-${rnum}-color "${alaja_colors[$ri2]}")
+    # Imprimir pares "número|real" en orden ordenado + presentación
+    local -a t_rows=() t_colors=()
+    for si in "${sorted_indices[@]}"; do
+        local original_num="${sort_nums[$si]}"
+        printf '%d|%s\n' "$original_num" "${sort_reals[$si]}"
+        t_rows+=("${rows[$si]}")
+        t_colors+=("${row_colors[$si]}")
+    done
+
+    # Presentación con alaja
+    if command -v alaja >/dev/null 2>&1 && (( ${#t_rows[@]} > 0 )); then
+        local -a rc_args=()
+        local ri=0
+        for ri in "${!t_rows[@]}"; do
+            rc_args+=(--row-$((ri+1))-color "${t_colors[$ri]}")
         done
         alaja table --headers "N;Modelo;Tamaño;Caminos" \
-            --rows "$(printf '%s;;' "${alaja_rows[@]}")" \
-            "${row_color_args[@]}" \
+            --rows "$(printf '%s;;' "${t_rows[@]}")" \
+            "${rc_args[@]}" \
             --border rounded --table-align center --align center >&2
     else
-        # Fallback sin alaja
-        local si
-        for si in "${sorted_indices[@]}"; do
-            local ri=$((si - 1))
-            # Re-extraer datos de la fila original
-            echo "  ${rows[$ri]}" >&2
+        local ri=0
+        for ri in "${!t_rows[@]}"; do
+            echo "  ${t_rows[$ri]}" >&2
         done
     fi
     rp_msg info "selección: números o nombres separados por espacio · all · 0 para salir"

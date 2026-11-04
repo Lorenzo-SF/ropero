@@ -21,7 +21,7 @@ min_ram_gb = 4
 [args]
 base = [
   "--q-len", "20",
-  "--prefill-chunk-len", "4096",
+  "--prefill-chunk-len", "8192",
   "--prefix-cache-mb", "2048",
   "--prefix-slots", "4",
   "--prefix-min-gain", "256",
