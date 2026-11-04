@@ -83,7 +83,8 @@ fichero *en su propio directorio*, se baja.
 ### Modelos para la NPU AMD (FastFlowLM)
 
 `models/flm/` tiene los modelos que FLM sirve en la NPU (XDNA) en vez de en
-la GPU: `gptoss-flm`, `qwen36-flm`, `qwen38-flm` y `nemotron-bolt-flm`. Su
+la GPU: `gptoss-flm`, `qwen36-flm`, `qwen38-flm`, `qwen38-dflash2-flm`,
+`nemotron-bolt-flm`, `deepseek-r1-flm` y `deepseek-r1-0528-flm`. Su
 `[model].path` es el **TAG del almacén de FLM** (`gpt-oss:20b`), no una ruta.
 
 ```bash
@@ -96,6 +97,14 @@ con el build NPU2 del modelo, y `ropero install models` delega en
 `flm pull`. Los contextos son los que FLM aguanta, no los del catálogo: con
 Qwen3.6 por encima de 32768 tokens, o con Qwen3.8 en prompts largos, FLM
 devuelve basura.
+
+**La memoria es el límite de verdad**, y hay un tope: la NPU no tiene RAM
+propia, usa un carveout de la RAM del sistema que decide el BIOS, y con el
+reparto por defecto se queda en ~15,6 GB (lo dice la doc de FLM). Con la
+UMA frame buffer del iGPU fijada a **2 GB** en el BIOS
+(Advanced → AMD CBS) la NPU llega a ver ~21 GB. `docs/flm-memoria.md` tiene
+la tabla medida de cada modelo: pesos, coste por token de contexto y total
+a 8k/16k/32k.
 
 ## Probar un modelo
 

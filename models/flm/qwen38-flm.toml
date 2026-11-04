@@ -9,8 +9,17 @@
 # CONTEXTO: se queda en 4096, el contexto por defecto de FLM para este tag.
 # No es capricho: FLM avisa de que Qwen3.8 con prompts largos devuelve basura
 # (un passkey salió bien a 6k y 14k tokens y se corrompió a 10k y 28k, con
-# resultados distintos entre ejecuciones). Si subes el contexto, el modelo
-# puede contestarte "! ! !".
+# resultados distintos entre ejecuciones). El máximo del modelo en FLM son
+# 8k tokens. Si subes el contexto, el modelo puede contestarte "! ! !".
+#
+# MEMORIA (medida por FLM, no estimada):
+#   · pesos ............ ~17,6 GB
+#   · contexto ......... 84 KiB por token (672 MiB por cada 8k) + 151 MiB fijos
+#   · total a 4k ....... ~18,1 GB   · a 8k ... ~18,4 GB
+#
+# NECESITA EL BIOS: con el tope por defecto de la NPU (~15,6 GB) no cabe ni
+# en el contexto mínimo. Con la UMA frame buffer del iGPU fijada a 2 GB la
+# NPU llega a ~21 GB y sí cabe (ver docs/flm-memoria.md).
 # =============================================================================
 
 [model]
@@ -27,12 +36,9 @@ repo = "FastFlowLM/Qwen3.8-27B-NPU2"
 size = "~27 GB"
 
 [limits]
-min_ram_gb = 20
+min_ram_gb = 19
 
 [args]
-# Flags del servidor de FLM (los de `flm serve`). Los de prefijo están a
-# su valor por defecto: se ponen explícitos para que se vea de qué va el
-# modelo sin tener que mirar la documentación de FLM.
 base = [
     "--prefix-cache-mb", "4096",
     "--prefix-slots", "8",

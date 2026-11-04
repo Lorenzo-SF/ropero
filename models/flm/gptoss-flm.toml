@@ -10,9 +10,18 @@
 # artefacto lo baja FLM, no ropero (ropero install models gptoss-flm →
 # flm pull gpt-oss:20b).
 #
-# FLM avisa de que este modelo usa ~15,1 GB en FLM y que la NPU sólo puede
-# tomar ~15,6 GB de la RAM del sistema: en una máquina de 32 GB "a veces
-# funciona y a veces no". Con menos de 32 GB de RAM, no lo pongas en marcha.
+# MEMORIA (medida por FLM, no estimada):
+#   · pesos ............ ~13,8 GB
+#   · contexto ......... 24 KiB por token (192 MiB por cada 8k) + 3 MiB fijos
+#   · total a 8k ....... ~14,0 GB   · a 32k ... ~14,6 GB
+#   · contexto máximo de FLM: 128k
+#
+# CABE JUSTO: FLM avisa de que este modelo usa ~15,1 GB dentro de FLM y de
+# que la NPU tiene un tope interno de ~15,6 GB de asignación (AMD/Microsoft),
+# con lo que sólo media RAM del sistema queda para la NPU. En una máquina de
+# 32 GB "a veces funciona y a veces no". Con menos de 32 GB de RAM, o con el
+# tope por defecto de la NPU, no lo pongas en marcha: sube la UMA frame
+# buffer del iGPU a 2 GB en el BIOS primero (ver docs/flm-memoria.md).
 # =============================================================================
 
 [model]

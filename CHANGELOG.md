@@ -6,9 +6,12 @@
 - **Modelos para la NPU AMD (FastFlowLM): `models/flm/`.** TOMLs para los
   modelos del catálogo `llama` que FLM sabe servir: `gptoss-flm`
   (gpt-oss:20b), `qwen36-flm` (qwen3.6-moe:35b-a3b), `qwen38-flm`
-  (qwen3.8-mtp:27b) y `nemotron-bolt-flm` (nemotron3.5-bolt:e4b, que NO es
-  el nemotron del catálogo sino el Bolt-E4B de 4 GB). El `[model].path` de
-  estos TOMLs es el TAG del almacén de FLM, no una ruta.
+  (qwen3.8-mtp:27b), `qwen38-dflash2-flm` (qwen3.8-dflash2:27b, el mismo
+  modelo con el draft DFlash 2 de z-lab: 1,16x de decode) y
+  `nemotron-bolt-flm` (nemotron3.5-bolt:e4b, que NO es el nemotron del
+  catálogo sino el Bolt-E4B de 4 GB). También `deepseek-r1-flm`
+  (deepseek-r1:8b) y `deepseek-r1-0528-flm` (deepseek-r1-0528:8b). El
+  `[model].path` de estos TOMLs es el TAG del almacén de FLM, no una ruta.
   - `ropero install models <modelo-flm>` **no** baja un checkpoint a
     `models/safetensors`: delega en el engine, que usa `flm pull <tag>`
     (FLM tiene su propio almacén, `~/.config/flm/models`, y su propio build
@@ -33,6 +36,17 @@
   - Si el fichero está en disco con el nombre del repo en vez del que espera
     el modelo, no se enlaza un directorio que no serviría: se explica cómo
     renombrarlo (es un rename, no una descarga).
+- **`docs/flm-memoria.md`**: cuánto RAM usa cada modelo en la NPU y si se
+  puede usar más que el tope de ~15,6 GB. La respuesta: sí, el tope no es de
+  FLM (la cadena ni aparece en su código) sino del reparto de RAM que hace
+  el BIOS; con la UMA frame buffer del iGPU a 2 GB la NPU ve ~21 GB. La tabla
+  trae pesos, coste por token de contexto y total a 8k/16k/32k, medidos de
+  la doc de FLM (no estimados).
+- **`test/test-endpoint-auth.sh`**: 17 comprobaciones de que el endpoint
+  exige la API key con cualquier backend, FLM incluido (FLM no la comprueba:
+  la pone el endpoint de delante). Se ejecuta el `authed()` real del fichero
+  y se comprueba el cableado: el engine fastflowlm le pasa `--api-key` al
+  endpoint y se niega a arrancar sin `LLAMA_API_KEY`.
 - **`test/test-models-symlink.sh`**: 16 comprobaciones sobre el symlink
   (se enlaza, es idempotente, `--force` no enlaza, un repo distinto NO
   enlaza, sin fichero en disco se descarga, el nombre equivocado avisa).
