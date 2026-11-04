@@ -241,7 +241,10 @@ rp_eng_fastflowlm_launch() {
     local -a cmd
     cmd=("$(rp_eng_fastflowlm_resolve)" serve "$tag"
         --host "${HOST:-127.0.0.1}"
-        --port "$puerto")
+        --port "$puerto"
+        --pmode turbo
+        --socket 20
+        --q-len 20 )
     local a
     for a in "$@"; do
         cmd+=("$a")

@@ -162,9 +162,21 @@ _rp_launch_puerto_destino() {
     fi
     if [[ "$cpu" == "1" ]]; then
         printf '%s' "$CPU_PORT"
-    else
-        printf '%s' "$PORT"
+        return 0
     fi
+    # Puerto base por engine (10 puertos por engine, descendente)
+    local engine
+    engine="$(rp_engine_for_model "$real" 2>/dev/null)" || engine=""
+    case "$engine" in
+        llama-server)            printf '9999' ;;
+        llama-server-official)   printf '9989' ;;
+        fastflowlm)              printf '9979' ;;
+        mlx-serve)               printf '9969' ;;
+        tensorrt-llm)            printf '9959' ;;
+        vllm)                    printf '9949' ;;
+        airllm)                  printf '9939' ;;
+        *)                       printf '%s' "$PORT" ;;
+    esac
     return 0
 }
 
