@@ -12,7 +12,7 @@ gguf   = "Agents-A1-Q4_K_M.gguf"
 [download]
 repo = "InternScience/Agents-A1-Q4_K_M-GGUF"
 file = "Agents-A1-Q4_K_M.gguf"
-size = "11.66 GB"
+size = "21.17 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -22,7 +22,7 @@ default = "low"
 base = [
     "--n-gpu-layers", "41",
     "--n-cpu-moe", "14",
-    "--moe-cache","soft",
+    "--moe-cache","off",
 
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",

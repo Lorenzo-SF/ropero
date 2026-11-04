@@ -20,7 +20,7 @@ base = [
     # 26 capas ≈ 10,7 GiB de pesos en la GPU (estimado, ver arriba).
     "--n-gpu-layers", "50",
     "--n-cpu-moe", "25",
-    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+    "--moe-cache","off", # aqui, auto sube alrededor de un 10%
 	
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",

@@ -16,7 +16,7 @@ quant        = "NVFP4"
 imatrix_repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
 imatrix_file = "Ornith-1.5-35B-A3B-imatrix.gguf"
 keep_source  = true
-size = "71.9 GB"
+size = "21.15 GB"
 
 [levels]
 list    = ["low", "medium", "high"]
@@ -26,7 +26,7 @@ default = "low"
 base = [
     "--n-gpu-layers", "42",
     "--n-cpu-moe", "14",
-    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+    "--moe-cache","off", # aqui, auto sube alrededor de un 10%
 	
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",

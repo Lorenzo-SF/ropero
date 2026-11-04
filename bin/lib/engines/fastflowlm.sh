@@ -222,46 +222,33 @@ rp_eng_fastflowlm_launch() {
     local modelo="$1" puerto="$2" logfile="$3"
     shift 3
 
-    local py
-    if ! py="$(_rp_engine_python_with fastapi uvicorn)"; then
-        rp_msg error "el endpoint de fastflowlm necesita fastapi y uvicorn, y no hay un python3 que los tenga"
-        return 1
-    fi
     if ! rp_eng_fastflowlm_resolve >/dev/null; then
         rp_msg error "fastflowlm no está instalado (ropero install engines fastflowlm)"
-        return 1
-    fi
-    if [[ -z "${LLAMA_API_KEY:-}" ]]; then
-        rp_msg error "falta LLAMA_API_KEY: el launcher (04) la resuelve antes de llamar al engine"
         return 1
     fi
     modelo="$(rp_model_field "$modelo" real)"
     # El modelo de flm es un TAG de su almacén, NO una ruta: se pasa tal
     # cual lo declara el TOML ([model].path).
     local tag
-    tag="$(rp_model_field "$modelo" path)" || return 1
+    tag="$(rp_model_field "$modelo" path 2>/dev/null)" || tag=""
     if [[ -z "$tag" ]]; then
         rp_msg error "'$modelo' no declara [model].path (el TAG del almacén de FLM)"
         return 1
     fi
 
-    # Args del modelo envueltos en --extra-arg: los reenvía a `flm serve`.
-    local -a cmd=("$py" "${ROPERO_ROOT}/bin/server/endpoint.py"
-        --backend flm
-        --model-path "$tag"
-        --model-id "$modelo"
-        --host "${HOST:-0.0.0.0.1}"
-        --port "$puerto"
-        --api-key "$LLAMA_API_KEY"
-        --backend-port $(( puerto + 1000 )))
+    # flm serve directo (sin endpoint.py proxy). flm tiene su propio
+    # endpoint OpenAI-compatible en el puerto asignado.
+    local -a cmd
+    cmd=("$(rp_eng_fastflowlm_resolve)" serve "$tag"
+        --host "${HOST:-127.0.0.1}"
+        --port "$puerto")
     local a
     for a in "$@"; do
-        cmd+=(--extra-arg "$a")
+        cmd+=("$a")
     done
 
     # Sin el chequeo de versión, flm hace una llamada de red en cada
-    # arranque (ruido en una máquina offline). El prefijo `env` no contamina
-    # el entorno del shell padre.
+    # arranque (ruido en una máquina offline).
     mkdir -p "$(dirname "$logfile")" 2>/dev/null
     env FLM_DISABLE_UPDATE_CHECK="${FLM_DISABLE_UPDATE_CHECK:-1}" \
     nohup ${cmd[@]+"${cmd[@]}"} >>"$logfile" 2>&1 </dev/null &

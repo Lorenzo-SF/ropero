@@ -121,7 +121,7 @@ rp_header() {
     local texto="$*"
     _rp_ui_ensure
     if [[ "$RP_UI_ALAJA" == "1" ]]; then
-        alaja header -- "$texto" >&2 || _rp_header_plain "$texto"
+        alaja separator --text "Ropero" --color "hex:#fcaf00" --width 130 --align center  >&2 && alaja info "$texto" --color "hex:#fcaf00" --align center && alaja message --texto "" >&2 || _rp_header_plain "$texto"
     else
         _rp_header_plain "$texto"
     fi

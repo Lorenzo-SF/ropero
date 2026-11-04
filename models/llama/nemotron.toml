@@ -25,7 +25,7 @@ file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
 # El destino es el mismo nombre que usa el build (gguffer) y que espera el
 # launcher: así da igual de qué camino venga el GGUF.
 name = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
-size = "17.98 GB"
+size = "18.90 GB"
 
 [download.aux.chat_template]
 repo = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
@@ -62,7 +62,7 @@ base = [
     # free - 256. NO se activa de momento: el cuello medido es el techo de
     # potencia de la GPU, no el PCIe (nemotron y un 4B entero en la VRAM
     # tardan lo mismo por token).
-    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+    "--moe-cache","off", # aqui, auto sube alrededor de un 10%
 	
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",

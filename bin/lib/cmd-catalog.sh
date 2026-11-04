@@ -61,6 +61,7 @@ rp_cmd_list() {
     fi
 
     local i nombre motor fmt ctx desc extra n=0
+    local -a alaja_rows=() alaja_colors=()
     for (( i = 0; i < ${#MODEL_NAMES[@]}; i++ )); do
         # Las filas de alias no son modelos: el alias ya sale en su columna.
         [[ "${MODEL_ISALIAS[$i]}" == "0" ]] || continue
@@ -86,13 +87,76 @@ rp_cmd_list() {
         [[ -n "${MODEL_ALIAS[$i]}" ]] && extra="alias=${MODEL_ALIAS[$i]} "
         [[ "${MODEL_ORIGIN[$i]}" == "fired" ]] && extra="${extra}retirado"
 
+        # stdout crudo (para el plugin de opencode)
         printf '  %-16s engine=%-13s format=%-12s ctx=%-7s %s%s\n' \
             "$nombre" "$motor" "$fmt" "$ctx" "$extra" "$desc"
+
+        # Presentación con alaja (stderr) — color por engine
+        if command -v alaja >/dev/null 2>&1; then
+            local color
+            case "$motor" in
+                airllm)                color="hex:#dddddd" ;;
+                llama-server)          color="hex:#0099bb" ;;
+                llama-server-official) color="hex:#ff6600" ;;
+                mlx-serve)             color="hex:#888888" ;;
+                fastflowlm)            color="hex:#FF2B00" ;;
+                tensorrt-llm)          color="hex:#aacc00" ;;
+                vllm)                  color="hex:#cc00cc" ;;
+                *)                     color="xterm:7" ;;
+            esac
+            alaja_rows+=("$(printf '%s;%s;%s;%s' "$nombre" "$motor" "$ctx" "$desc")")
+            alaja_colors+=("$color")
+        fi
         n=$((n + 1))
     done
 
     if [[ "$n" == "0" ]]; then
         rp_msg warn "el catálogo no tiene modelos que listar"
+        return 0
+    fi
+
+    # Presentación con alaja (stderr)
+    if command -v alaja >/dev/null 2>&1 && (( ${#alaja_rows[@]} > 0 )); then
+        # Leyenda de colores por engine
+        alaja message --align center \
+            --text "[ airllm ]" --color "hex:#dddddd" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ llama-server (fork) ]" --color "hex:#0099bb" --reverse  \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ llama-server (oficial) ]" --color "hex:#ff6600" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ MLX (METAL) ]" --color "hex:#888888" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ FLM (NPU) ]" --color "hex:#FF2B00" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ TensorRT-Llm (CUDA) ]" --color "hex:#aacc00" --reverse \
+            --text " " --color "xterm:0" --reverse >&2
+        echo "" >&2
+        # Tabla ordenada por engine y luego por nombre
+        local -a sorted_idx=()
+        local si
+        while IFS= read -r si; do
+            sorted_idx+=("$si")
+        done < <(for ((i=0; i<${#alaja_rows[@]}; i++)); do
+            # Extraer engine de la fila (campo 2)
+            local eng
+            eng="$(echo "${alaja_rows[$i]}" | cut -d';' -f2)"
+            printf '%s\t%d\n' "$eng" "$i"
+        done | sort -t$'\t' -k1,1 -k2,2 | cut -f2)
+        local -a t_rows=() t_colors=()
+        for si in "${sorted_idx[@]}"; do
+            t_rows+=("${alaja_rows[$si]}")
+            t_colors+=("${alaja_colors[$si]}")
+        done
+        local -a rc_args=()
+        local ri=0
+        for ri in "${!t_rows[@]}"; do
+            rc_args+=(--row-$((ri+1))-color "${t_colors[$ri]}")
+        done
+        alaja table --headers "Modelo;Engine;Contexto;Tamaño" \
+            --rows "$(printf '%s;;' "${t_rows[@]}")" \
+            "${rc_args[@]}" \
+            --border rounded --table-align center --align center >&2
     fi
     return 0
 }

@@ -16,7 +16,7 @@ quant        = "NVFP4"
 imatrix_repo = "mradermacher/Qwen3.6-35B-A3B-i1-GGUF"
 imatrix_file = "Qwen3.6-35B-A3B.imatrix.gguf"
 keep_source  = true
-size = "61.1 GB"
+size = "21.15 GB"
 
 [levels]
 list    = ["low", "medium", "high"]

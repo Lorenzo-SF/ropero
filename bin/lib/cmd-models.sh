@@ -132,6 +132,7 @@ _rp_models_menu() {
     rp_header "modelos instalables"
     local i real fmt size caminos
     local n=0
+    local -a rows=() row_colors=() sort_keys=()
     for (( i = 0; i < ${#MODEL_NAMES[@]}; i++ )); do
         [[ "${MODEL_ISALIAS[$i]}" == "0" ]] || continue
         [[ "${MODEL_ORIGIN[$i]}" == "active" ]] || continue
@@ -146,17 +147,92 @@ _rp_models_menu() {
         size="${MODEL_SIZE[$i]}"
         [[ -n "$size" ]] || size="-"
         n=$((n + 1))
-        printf '  %2d) %-16s · %-13s · %-10s · [%s]\n' "$n" "$real" "$fmt" "$size" "$caminos" >&2
+        # Formato para parsing (stdout, capturado por el caller)
         printf '%d|%s\n' "$n" "$real"
+        # Color por engine
+        local color
+        case "$fmt" in
+            airllm)                color="hex:#dddddd" ;;
+            llama-server)          color="hex:#0099bb" ;;
+            llama-server-official) color="hex:#ff6600" ;;
+            mlx-serve)             color="hex:#888888" ;;
+            fastflowlm)            color="hex:#FF2B00" ;;
+            tensorrt-llm)          color="hex:#aacc00" ;;
+            *)                     color="xterm:7" ;;
+        esac
+        # Clave de ordenación: engine + modelo
+        sort_keys+=("$(printf '%s\t%s\t%d' "$fmt" "$real" "$n")")
+        rows+=("$(printf '%s;%s;%s;%s' "$n" "$real" "$size" "$caminos")")
+        row_colors+=("$color")
     done
     if (( n == 0 )); then
         rp_msg warn "no hay modelos instalables en este SO (con [download] o [build])"
+        return 0
+    fi
+    # Ordenar por engine y luego por nombre de modelo
+    local -a sorted_indices=()
+    local idx=0
+    while IFS=$'\t' read -r eng name num; do
+        sorted_indices+=("$num")
+    done < <(printf '%s\n' "${sort_keys[@]}" | sort -t$'\t' -k1,1 -k2,2)
+
+    # Leyenda de colores por engine
+    if command -v alaja >/dev/null 2>&1; then
+        alaja message --align center \
+            --text "[ airllm ]" --color "hex:#dddddd" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ llama-server (fork) ]" --color "hex:#0099bb" --reverse  \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ llama-server (oficial) ]" --color "hex:#ff6600" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ MLX (METAL) ]" --color "hex:#888888" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ FLM (NPU) ]" --color "hex:#FF2B00" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ TensorRT-Llm (CUDA) ]" --color "hex:#aacc00" --reverse \
+            --text " " --color "xterm:0" --reverse >&2
+        echo "" >&2
+    fi
+
+    # Presentación con alaja (sin columna engine, coloreada por fila)
+    if command -v alaja >/dev/null 2>&1; then
+        local -a alaja_rows=()
+        local -a alaja_colors=()
+        local si
+        for si in "${sorted_indices[@]}"; do
+            # si es el número original (1-based), buscar en rows
+            local ri=$((si - 1))
+            alaja_rows+=("${rows[$ri]}")
+            alaja_colors+=("${row_colors[$ri]}")
+        done
+        # Construir args de row-color
+        local -a row_color_args=()
+        local ri2=0
+        for ri2 in "${!alaja_rows[@]}"; do
+            local rnum=$((ri2 + 1))
+            row_color_args+=(--row-${rnum}-color "${alaja_colors[$ri2]}")
+        done
+        alaja table --headers "N;Modelo;Tamaño;Caminos" \
+            --rows "$(printf '%s;;' "${alaja_rows[@]}")" \
+            "${row_color_args[@]}" \
+            --border rounded --table-align center --align center >&2
     else
-        rp_msg info "selección: números o nombres separados por espacio · all · 0 para salir"
+        # Fallback sin alaja
+        local si
+        for si in "${sorted_indices[@]}"; do
+            local ri=$((si - 1))
+            # Re-extraer datos de la fila original
+            echo "  ${rows[$ri]}" >&2
+        done
+    fi
+    rp_msg info "selección: números o nombres separados por espacio · all · 0 para salir"
+    # Si FLM está instalado, avisar de que tiene más modelos disponibles.
+    if command -v flm >/dev/null 2>&1 || [[ -x /opt/fastflowlm/bin/flm ]]; then
+        rp_msg info "FLM dispone de más modelos con el comando 'flm pull <modelo>'."
+        rp_msg info "  Puedes verlos con 'flm list'"
     fi
     return 0
 }
-
 # _rp_models_menu_seleccion — pregunta hasta obtener una selección válida.
 # Deja los reales elegidos en stdout, uno por línea. Exit 0 con salida vacía
 # si el usuario sale (0).

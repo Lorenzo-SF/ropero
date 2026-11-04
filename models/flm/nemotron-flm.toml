@@ -1,0 +1,58 @@
+# =============================================================================
+# nemotron-bolt-flm — Nemotron-3.5-Bolt-E4B en la NPU AMD (FastFlowLM)
+# =============================================================================
+# Repo principal:  FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2
+#   - model.q4nx          (modelo base, ~4 GB)
+#   - vision_weight.q4nx  (pesos de visión, ~1 GB) — MISMO repo
+#   - audio_weight.q4nx   (pesos de audio/ASR, ~500 MB) — MISMO repo
+# Repo speculative: FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2
+#   - dflash_weight.q4nx  (drafter para speculative decoding, ~1 GB) — OTRO repo
+#
+# Para activar vision/audio/spec, los archivos adicionales deben estar en
+# el mismo directorio que model.q4nx en ~/.config/flm/models/Nemotron-3.5-Bolt-E4B-NPU2/
+# =============================================================================
+
+[model]
+name    = "nemotron-flm"
+engine  = "fastflowlm"
+context = 131072
+format  = "q4nx"
+path    = "nemotron3.5-bolt:e4b"
+
+[files]
+# Archivos adicionales. vision_weight y audio_weight están en el MISMO repo
+# que el modelo. dflash_weight está en un repo SEPARADO.
+extra = ["vision_weight.q4nx", "audio_weight.q4nx", "dflash_weight.q4nx"]
+
+[download]
+repo = "FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2"
+size = "~4 GB"
+
+[download.extra]
+# vision_weight y audio_weight: mismo repo que el modelo
+vision_weight = { repo = "FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2", file = "vision_weight.q4nx", size = "~1 GB" }
+audio_weight  = { repo = "FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2", file = "audio_weight.q4nx", size = "~500 MB" }
+# dflash_weight: repo SEPARADO (speculative decoding)
+dflash_weight = { repo = "FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2", file = "dflash_weight.q4nx", size = "~1 GB" }
+
+[limits]
+min_ram_gb = 8
+
+[args]
+base = [
+    "--prefill-chunk-len", "4096",
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+    "--prefix-min-gain", "512",
+
+    # Visión: activar con --img-pre-resize (0-8)
+    # Requiere vision_weight.q4nx en el directorio del modelo
+    "--img-pre-resize", "2",
+    # Audio: activar ASR (speech-to-text) con --asr 1
+    # Requiere audio_weight.q4nx en el directorio del modelo
+    "--asr", "1",
+    # Speculative decoding: activar con --spec-type (si flm lo soporta)
+    # Requiere dflash_weight.q4nx en el directorio del modelo
+    # "--spec-type", "dflash",
+    # "--draft-max", "4",
+]

@@ -1,0 +1,28 @@
+# =============================================================================
+# lfm3-flm — Liquid Foundation Model 3 (1.7B) en la NPU AMD (FastFlowLM)
+# =============================================================================
+
+[model]
+name    = "lfm3"
+engine  = "fastflowlm"
+context = 131072
+format  = "q4nx"
+path    = "lfm3:1.7b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/LFM3-1.7B-NPU2"
+size = "~1.7 GB"
+
+[limits]
+min_ram_gb = 4
+
+[args]
+base = [
+  "--q-len", "20",
+  "--prefill-chunk-len", "4096",
+  "--prefix-cache-mb", "2048",
+  "--prefix-slots", "4",
+  "--prefix-min-gain", "256",
+]

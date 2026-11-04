@@ -10,7 +10,7 @@ gguf = "Groot-19B-A3B-261023-Q4_K_M.gguf"
 [download]
 repo = "GrootTeam/Groot-19B-A3B-261023-GGUF"
 file = "Groot-19B-A3B-261023-Q4_K_M.gguf"
-size = "11.7 GB" # Tamaño estimado para Q4_K_M
+size = "11.66 GB" # Tamaño estimado para Q4_K_M
 
 # [build]
 

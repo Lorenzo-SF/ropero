@@ -12,7 +12,7 @@ gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf"
 [download]
 repo = "ISTA-DASLab/Qwen3.8-27B-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf"
-size = "4.48 GB"
+size = "10.44 GB"
 
 [build]
 repo         = "nvidia/Qwen3.8-27B-NVFP4"

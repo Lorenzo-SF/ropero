@@ -16,7 +16,7 @@ quant        = "NVFP4"
 imatrix_repo = "n19875624/Qwen3-Coder-30B-A3B-Instruct-code-imatrix-GGUF"
 imatrix_file = "code.imatrix"
 keep_source  = true
-size = "61.1 GB"
+size = "17.91 GB"
 
 [args]
 base = [
