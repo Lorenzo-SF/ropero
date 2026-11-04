@@ -323,14 +323,16 @@ rp_cmd_path() {
     # cual (lo resuelve el almacén de FLM, no el filesystem).
     if [[ -n "$mpath" ]]; then
         case "$fmt/$motor" in
+            # flm va PRIMERO: su [model].path es un TAG (no una ruta), y el
+            # formato "safetensors" no lo convierte en un checkpoint local.
+            */fastflowlm)
+                printf 'MODEL_PATH=%s\n' "$mpath"
+                ;;
             safetensors/*)
                 case "$mpath" in
                     /*) printf 'MODEL_PATH=%s\n' "$mpath" ;;
                     *)  printf 'MODEL_PATH=%s\n' "$SAFETENSORS_DIR/$mpath" ;;
                 esac
-                ;;
-            */fastflowlm)
-                printf 'MODEL_PATH=%s\n' "$mpath"
                 ;;
         esac
     fi

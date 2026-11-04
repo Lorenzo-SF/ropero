@@ -13,6 +13,10 @@ gguf = "gpt-oss-20b-nvfp4.gguf"
 [download]
 repo = "FreedomAISVR/gpt-oss-20B-NVFP4-GGUF"
 file = "gpt-oss-20b-nvfp4.gguf"
+# El fichero del repo se llama distinto de [files].gguf: sin este "name" el
+# download lo deja con el nombre del repo y el launcher no lo encuentra
+# (el preflight pide $GGUF_DIR/<modelo>/<[files].gguf>).
+name = "gpt-oss-20b-MXFP4_MOE.gguf"
 size = "12.7 GB"
 
 [levels]

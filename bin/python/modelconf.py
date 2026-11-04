@@ -55,11 +55,20 @@ FIELD_SEP = "\x1f"
 
 # Engines conocidos (spec §6). El id canónico del engine MLX es "mlx-serve";
 # "mlx_lm" es la ortografía legacy y se canóniza al cargar (con aviso en
-# stderr), de modo que los TOML viejos siguen valiendo sin edición.
+# stderr), de modo que los TOML viejos siguen valendo sin edición.
+#
+# "llama-server-official" (el llama.cpp de upstream sin turboquant) está
+# OCULTO en los menús de install (RP_ENGINE_IDS_HIDDEN en 03-engines.sh),
+# pero es un engine de verdad: existe su fichero en bin/lib/engines/ y sus
+# modelos están en models/llama-official/. Oculto NO es desconocido: el
+# validador tiene que aceptarlo o el catálogo da problemas falsos.
 KNOWN_ENGINES = (
     "llama-server", "vllm", "airllm", "mlx-serve", "tensorrt-llm", "fastflowlm",
+    "llama-server-official",
 )
-KNOWN_ENGINE_DIRS = ("llama", "vllm", "airllm", "mlx", "tensorrt", "flm")
+KNOWN_ENGINE_DIRS = (
+    "llama", "vllm", "airllm", "mlx", "tensorrt", "flm", "llama-official",
+)
 KNOWN_FORMATS = ("gguf", "safetensors")
 
 # ids legacy → id canónico (spec §7.4.1).

@@ -1,0 +1,41 @@
+# =============================================================================
+# gptoss-flm — GPT-OSS-20B en la NPU AMD (FastFlowLM)
+#
+# El MISMO modelo que 'gptoss' (el GGUF que corre en la GPU), pero el build
+# NPU2 que usa FLM: model.q4nx, servido por `flm serve gpt-oss:20b` sobre la
+# NPU (XDNA) y NO sobre la GPU. Sirve para comparar el mismo modelo en las
+# dos máquinas de inferencia.
+#
+# OJO: [model].path NO es una ruta: es el TAG del almacén de FLM. El
+# artefacto lo baja FLM, no ropero (ropero install models gptoss-flm →
+# flm pull gpt-oss:20b).
+#
+# FLM avisa de que este modelo usa ~15,1 GB en FLM y que la NPU sólo puede
+# tomar ~15,6 GB de la RAM del sistema: en una máquina de 32 GB "a veces
+# funciona y a veces no". Con menos de 32 GB de RAM, no lo pongas en marcha.
+# =============================================================================
+
+[model]
+name    = "gptoss-flm"
+engine  = "fastflowlm"
+context = 8192
+format  = "safetensors"
+path    = "gpt-oss:20b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/GPT-OSS-20B-NPU2"
+size = "~20 GB"
+
+[limits]
+min_ram_gb = 32
+
+[args]
+# Flags del servidor de FLM (los de `flm serve`). Los de prefijo están a
+# su valor por defecto: se ponen explícitos para que se vea de qué va el
+# modelo sin tener que mirar la documentación de FLM.
+base = [
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+]

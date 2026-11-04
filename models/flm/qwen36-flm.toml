@@ -1,0 +1,38 @@
+# =============================================================================
+# qwen36-flm — Qwen3.6-35B-A3B en la NPU AMD (FastFlowLM)
+#
+# El mismo modelo que 'qwen36' (Qwen3.6-35B-A3B en GGUF, en la GPU), pero
+# el build NPU2 de FLM: model.q4nx sobre la NPU (XDNA).
+#
+# OJO: [model].path NO es una ruta: es el TAG del almacén de FLM.
+#
+# CONTEXTO: FLM avisa de que Qwen3.6 con más de 32768 tokens devuelve basura
+# (paged attention: un passkey pedido tras ~48k tokens salió como "!" repetido
+# en una máquina AIE4). Por eso el contexto se queda en 32768, el valor por
+# defecto del modelo, y no se sube.
+# =============================================================================
+
+[model]
+name    = "qwen36-flm"
+engine  = "fastflowlm"
+context = 32768
+format  = "safetensors"
+path    = "qwen3.6-moe:35b-a3b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/Qwen3.6-35B-A3B-NPU2"
+size = "~35 GB"
+
+[limits]
+min_ram_gb = 24
+
+[args]
+# Flags del servidor de FLM (los de `flm serve`). Los de prefijo están a
+# su valor por defecto: se ponen explícitos para que se vea de qué va el
+# modelo sin tener que mirar la documentación de FLM.
+base = [
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+]

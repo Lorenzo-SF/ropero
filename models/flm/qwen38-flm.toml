@@ -1,0 +1,39 @@
+# =============================================================================
+# qwen38-flm — Qwen3.8-27B en la NPU AMD (FastFlowLM)
+#
+# El mismo modelo que 'qwen38' (Qwen3.8-27B en GGUF, en la GPU), pero el
+# build NPU2 de FLM: model.q4nx sobre la NPU (XDNA).
+#
+# OJO: [model].path NO es una ruta: es el TAG del almacén de FLM.
+#
+# CONTEXTO: se queda en 4096, el contexto por defecto de FLM para este tag.
+# No es capricho: FLM avisa de que Qwen3.8 con prompts largos devuelve basura
+# (un passkey salió bien a 6k y 14k tokens y se corrompió a 10k y 28k, con
+# resultados distintos entre ejecuciones). Si subes el contexto, el modelo
+# puede contestarte "! ! !".
+# =============================================================================
+
+[model]
+name    = "qwen38-flm"
+engine  = "fastflowlm"
+context = 4096
+format  = "safetensors"
+path    = "qwen3.8-mtp:27b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/Qwen3.8-27B-NPU2"
+size = "~27 GB"
+
+[limits]
+min_ram_gb = 20
+
+[args]
+# Flags del servidor de FLM (los de `flm serve`). Los de prefijo están a
+# su valor por defecto: se ponen explícitos para que se vea de qué va el
+# modelo sin tener que mirar la documentación de FLM.
+base = [
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+]

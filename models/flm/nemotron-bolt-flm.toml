@@ -1,0 +1,38 @@
+# =============================================================================
+# nemotron-bolt-flm — Nemotron-3.5-Bolt-E4B en la NPU AMD (FastFlowLM)
+#
+# OJO: esto NO es el 'nemotron' del catálogo (NVIDIA-Nemotron-3.5-Lightning-
+# 30B-A3B, que corre en la GPU). Es el otro Nemotron 3.5 que tiene FLM: el
+# Bolt-E4B de 4 GB. Se llama distinto a propósito: no es el mismo modelo.
+#
+# El Bolt-E4B sí cabe bien: con el mapeo por memoria de las embeddings, FLM
+# lo deja en ~3,9 GiB de RAM privada (0,3 GiB con el mmap) y su contexto por
+# defecto es de 32k. Viene con visión y audio.
+#
+# OJO: [model].path NO es una ruta: es el TAG del almacén de FLM.
+# =============================================================================
+
+[model]
+name    = "nemotron-bolt-flm"
+engine  = "fastflowlm"
+context = 32768
+format  = "safetensors"
+path    = "nemotron3.5-bolt:e4b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2"
+size = "~4 GB"
+
+[limits]
+min_ram_gb = 8
+
+[args]
+# Flags del servidor de FLM (los de `flm serve`). Los de prefijo están a
+# su valor por defecto: se ponen explícitos para que se vea de qué va el
+# modelo sin tener que mirar la documentación de FLM.
+base = [
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+]

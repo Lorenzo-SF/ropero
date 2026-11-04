@@ -86,6 +86,15 @@ instalado. Un engine individual sin instalar es un aviso, no un fallo.
 EOF
 }
 
+# _rp_doctor_flm_instalados — los TAGs de FLM que hay en su almacén local.
+# Vacío si flm no está instalado o no se puede preguntar. En ese caso el
+# doctor NO dice que falten: no sabe, y no se inventa un estado.
+_rp_doctor_flm_instalados() {
+    local bin
+    bin="$(rp_engine_call fastflowlm resolve 2>/dev/null)" || return 0
+    "$bin" list --filter installed --quiet 2>/dev/null | tr '\n' ' '
+}
+
 rp_cmd_doctor() {
     local a
     for a in "$@"; do
@@ -279,7 +288,7 @@ rp_cmd_doctor() {
 
     # ── Modelos activos en disco (avisos; los instala `ropero models`) ───
     if rp_mc_load; then
-        local i nombre faltan=0
+        local i nombre faltan=0 flm_instalados="" flm_consultado=0
         for (( i = 0; i < ${#MODEL_NAMES[@]}; i++ )); do
             [[ "${MODEL_ISALIAS[$i]}" == "0" ]] || continue
             [[ "${MODEL_ORIGIN[$i]}" == "active" ]] || continue
@@ -293,8 +302,21 @@ rp_cmd_doctor() {
                     ;;
                 safetensors)
                     if [[ "${MODEL_ENGINE[$i]}" == "fastflowlm" ]]; then
-                        # El modelo de flm es un TAG de su almacén: no se
-                        # puede comprobar en disco local.
+                        # El modelo de flm es un TAG de su almacén, que SÍ es
+                        # local (~/.config/flm/models): se le pregunta a flm
+                        # qué tiene instalado.
+                        local tag="${MODEL_PATH[$i]}"
+                        if [[ "$flm_consultado" == "0" ]]; then
+                            flm_consultado=1
+                            flm_instalados="$(_rp_doctor_flm_instalados)"
+                            if [[ -z "$flm_instalados" ]]; then
+                                _rp_doctor_warn "no se pueden comprobar los modelos FLM: fastflowlm no está instalado (ropero install engines fastflowlm)"
+                            fi
+                        fi
+                        if [[ -n "$tag" && -n "$flm_instalados" && "$flm_instalados" != *"$tag"* ]]; then
+                            _rp_doctor_warn "modelo '$nombre' (FLM $tag) no está en el almacén de FLM (ropero install models $nombre)"
+                            faltan=$((faltan + 1))
+                        fi
                         continue
                     fi
                     if [[ -n "${MODEL_PATH[$i]}" && ! -d "$SAFETENSORS_DIR/${MODEL_PATH[$i]}" ]]; then

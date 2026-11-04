@@ -21,7 +21,10 @@ chat_template = "chat_template.jinja"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
-file = "Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
+# El destino es el mismo nombre que usa el build (gguffer) y que espera el
+# launcher: así da igual de qué camino venga el GGUF.
+name = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 size = "17.98 GB"
 
 [download.aux.chat_template]
