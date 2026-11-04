@@ -171,14 +171,6 @@ _rp_models_menu() {
         rp_msg warn "no hay modelos instalables en este SO (con [download] o [build])"
         return 0
     fi
-    # Ordenar por engine y luego por nombre de modelo
-    # Imprimir los pares "número|real" en el orden ordenado (para parsing)
-    # Y construir la tabla ordenada
-    local -a sorted_indices=()
-    while IFS=$'\t' read -r eng name num; do
-        sorted_indices+=("$((num - 1))")
-    done < <(printf '%s\n' "${sort_keys[@]}" | sort -t$'\t' -k1,1 -k2,2)
-
     # Leyenda de colores por engine
     if command -v alaja >/dev/null 2>&1; then
         alaja message --align center \
@@ -197,13 +189,22 @@ _rp_models_menu() {
         echo "" >&2
     fi
 
-    # Imprimir pares "número|real" en orden ordenado + presentación
+    # Imprimir pares "número|real" en orden original (para parsing)
+    # Y presentación con alaja (sin ordenar)
     local -a t_rows=() t_colors=()
-    for si in "${sorted_indices[@]}"; do
-        local original_num="${sort_nums[$si]}"
-        printf '%d|%s\n' "$original_num" "${sort_reals[$si]}"
-        t_rows+=("${rows[$si]}")
-        t_colors+=("${row_colors[$si]}")
+    local seq=0
+    for (( i = 0; i < ${#rows[@]}; i++ )); do
+        seq=$((seq + 1))
+        # Renumerar: usar número secuencial (1, 2, 3, ...) en vez del original
+        printf '%d|%s\n' "$seq" "${sort_reals[$i]}"
+        # Actualizar la fila para que muestre el número secuencial
+        local real_name="${sort_reals[$i]}"
+        local size_val="${rows[$i]#*;}"
+        size_val="${size_val#*;}"
+        size_val="${size_val%%;*}"
+        local caminos_val="${rows[$i]##*;}"
+        t_rows+=("$(printf '%d;%s;%s;%s' "$seq" "$real_name" "$size_val" "$caminos_val")")
+        t_colors+=("${row_colors[$i]}")
     done
 
     # Presentación con alaja
