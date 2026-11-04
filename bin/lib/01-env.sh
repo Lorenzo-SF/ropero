@@ -25,6 +25,8 @@
 : "${GGUF_DIR:=$HOME/models/gguf}"
 # Checkpoints safetensors (mlx, airllm, vllm)
 : "${SAFETENSORS_DIR:=$HOME/models/safetensors}"
+# Checkpoints q4nx (FastFlowLM/NPU)
+: "${Q4NX_DIR:=$HOME/models/q4nx}"
 # Logs de arranque, uno por modelo: <modelo>.log
 : "${LOG_DIR:=$HOME/.logs/ropero}"
 # Estado runtime: api_key y ports/<puerto>
@@ -59,7 +61,7 @@
 # rp_env_setup — crea los directorios de trabajo. Devuelve 1 si mkdir falla
 # (directorio sin permisos es error real, no algo que tragarse en silencio).
 rp_env_setup() {
-    mkdir -p "$GGUF_DIR" "$SAFETENSORS_DIR" "$LOG_DIR" "$STATE_DIR" \
+    mkdir -p "$GGUF_DIR" "$SAFETENSORS_DIR" "$Q4NX_DIR" "$LOG_DIR" "$STATE_DIR" \
         "$LLAMA_DIR" "$LLAMA_OFFICIAL_DIR" "$BIN_DIR" || return 1
 }
 

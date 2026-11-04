@@ -1,35 +1,21 @@
-# =============================================================================
-# nemotron-bolt-flm — Nemotron-3.5-Bolt-E4B en la NPU AMD (FastFlowLM)
-# =============================================================================
-# Repo principal:  FastFlowLM/Nemotron-3.5-Bolt-E4B-NPU2
-#   - model.q4nx          (modelo base, ~4 GB)
-#   - vision_weight.q4nx  (pesos de visión, ~1 GB) — MISMO repo
-#   - audio_weight.q4nx   (pesos de audio/ASR, ~500 MB) — MISMO repo
-# Repo speculative: FastFlowLM/Nemotron-3.5-Bolt-E4B-DFlash-NPU2
-#   - dflash_weight.q4nx  (drafter para speculative decoding, ~1 GB) — OTRO repo
-#
-# Para activar vision/audio/spec, los archivos adicionales deben estar en
-# el mismo directorio que model.q4nx en ~/.config/flm/models/Nemotron-3.5-Bolt-E4B-NPU2/
-# =============================================================================
-
 [model]
 name    = "qwen38-flm"
 engine  = "fastflowlm"
 context = 131072
 format  = "q4nx"
-path    = "nemotron3.5-bolt:e4b"
+path    = "Qwen3.8-27B-NPU2"
 
 [download]
 repo = "FastFlowLM/Qwen3.8-27B-NPU2"
-size = "~18 GB"
+size = "~8 GB"
 
 [limits]
-min_ram_gb = 18
+min_ram_gb = 8
 
 [args]
 base = [
-    "--prefill-chunk-len", "8192",
-    "--prefix-cache-mb", "4096",
-    "--prefix-slots", "8",
-    "--prefix-min-gain", "512",
+  "--prefill-chunk-len", "8192",
+  "--prefix-cache-mb", "2048",
+  "--prefix-slots", "4",
+  "--prefix-min-gain", "256",
 ]
