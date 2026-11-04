@@ -254,6 +254,125 @@ _rp_models_aux() {
 }
 
 # -----------------------------------------------------------------------------
+# Reutilización: el GGUF ya está en el directorio de OTRO modelo.
+#
+# Dos TOMLs pueden pedir el MISMO GGUF (por ejemplo una variante que sólo
+# cambia los args, o el mismo modelo con otro runtime). Bajarlo dos veces son
+# 20 GB tontos: si el fichero ya está en $GGUF_DIR/<otro-modelo>/, este modelo
+# se ENLAZA a ese directorio (un symlink) y no se descarga nada.
+#
+# La comparación es de repo + nombre de fichero (campos 13 y 15 del dump):
+# con el mismo repo y el mismo nombre, el contenido es el mismo. Comparar
+# sólo por el nombre del fichero NO vale: "mmproj-BF16.gguf" (o cualquier
+# "modelo.gguf") aparece en repos distintos con contenidos distintos, y
+# enlazar uno con otro serviría al modelo equivocado.
+#
+# _rp_models_gguf_reutilizable <repo> <dest> [orig]
+#
+# Imprime "<modelo>\t<nombre_del_fichero>" del primer modelo del catálogo que
+# tiene YA ese GGUF en disco:
+#   · <dest>  → el fichero está con el nombre que espera este modelo: se
+#               puede enlazar tal cual.
+#   · <orig>  → el fichero está en disco con el nombre del repo (todavía sin
+#               renombrar): NO se enlaza (el modelo no encontraría su
+#               fichero), pero se avisa de cómo arreglarlo.
+_rp_models_gguf_reutilizable() {
+    local repo="$1" dest="$2" orig="${3:-}"
+    [[ -n "$repo" && -n "$dest" ]] || return 1
+    local py candidatos nombre
+    py="$(_rp_mc_python)" || return 1
+    candidatos="$("$py" "$RP_MODELCONF_PY" dump --root "$RP_MODELS_DIR" \
+        --include-fired 2>/dev/null | awk -v fs="$RP_MODELS_SEP" \
+            -v repo="$repo" -v dest="$dest" '
+            BEGIN { FS = fs }
+            ($13 == repo && $15 == dest && $1 != "") { print $1 }')" || return 1
+    [[ -n "$candidatos" ]] || return 1
+    for nombre in $candidatos; do
+        if [[ -f "$GGUF_DIR/$nombre/$dest" ]]; then
+            printf '%s\t%s\n' "$nombre" "$dest"
+            return 0
+        fi
+    done
+    # Mismo repo y mismo nombre destino, pero el fichero en disco conserva el
+    # nombre del repo (una descarga a medio renombrar).
+    if [[ -n "$orig" && "$orig" != "$dest" ]]; then
+        for nombre in $candidatos; do
+            if [[ -f "$GGUF_DIR/$nombre/$orig" ]]; then
+                printf '%s\t%s\n' "$nombre" "$orig"
+                return 0
+            fi
+        done
+    fi
+    return 1
+}
+
+# _rp_models_symlink_gguf <real> <repo> <dest> [orig] — 0 si este modelo se
+# resuelve con un symlink a otro directorio (nada que descargar); 1 si no
+# procede y hay que seguir con la descarga.
+_rp_models_symlink_gguf() {
+    local real="$1" repo="$2" dest="$3" orig="${4:-}"
+    # --force significa "quiero el fichero AHORA AQUÍ": no se enlaza nada.
+    [[ "${ROPERO_FORCE:-0}" == "1" ]] && return 1
+    [[ -n "$repo" && -n "$dest" ]] || return 1
+
+    local dir="$GGUF_DIR/$real"
+    # Ya tiene su propio fichero: no hay nada que enlazar.
+    [[ -f "$dir/$dest" ]] && return 1
+    # Un enlace roto (el directorio destino se borró) estorba: se quita.
+    if [[ -L "$dir" && ! -d "$dir" ]]; then
+        rp_msg warn "el enlace $dir está roto: lo quito"
+        rm -f "$dir" || return 1
+    fi
+    # Un enlace ya hecho (a mano o de antes) se respeta: no se toca.
+    [[ -L "$dir" ]] && return 1
+
+    local otro encontrado
+    otro="$(_rp_models_gguf_reutilizable "$repo" "$dest" "$orig")" || return 1
+    [[ -n "$otro" ]] || return 1
+    encontrado="${otro#*$'\t'}"
+    otro="${otro%%$'\t'*}"
+
+    if [[ "$encontrado" != "$dest" ]]; then
+        # El fichero está, pero con el nombre del repo: el modelo no lo
+        # encontraría. Se explica cómo arreglarlo (es un rename, no una
+        # descarga) en vez de enlazar un directorio que no sirve.
+        rp_msg warn "el GGUF de '$otro' está como '$encontrado', no como '$dest'"
+        rp_msg info "  renómbralo (no se descarga nada):"
+        rp_msg info "    mv $GGUF_DIR/$otro/$encontrado $GGUF_DIR/$otro/$dest"
+        rp_msg info "  o ejecuta 'ropero install models $otro' (ropero lo renombra solo)"
+        return 1
+    fi
+
+    mkdir -p "$GGUF_DIR" || return 1
+    if ! ln -s "$GGUF_DIR/$otro" "$dir" 2>/dev/null; then
+        rp_msg warn "no se pudo enlazar $dir → $GGUF_DIR/$otro: se descarga"
+        return 1
+    fi
+    rp_msg ok "$real: el GGUF ya estaba en '$otro' → symlink (no se descarga)"
+    return 0
+}
+
+# _rp_models_engine_install_model <real> [dry] — 0 si el engine del modelo
+# trae su propio "conseguir el modelo" y lo ha hecho.
+#
+# FLM es el caso: su almacén es propio (~/.config/flm/models) y lo que se
+# baja es el build NPU2 (model.q4nx), no el GGUF de ropero. El engine lo
+# sabe: `flm pull <tag>`. Un engine sin este hook sigue el camino normal
+# (download/build), así que esto no cambia nada para los demás.
+_rp_models_engine_install_model() {
+    local real="$1" dry="${2:-0}" motor canon
+    motor="$(rp_engine_for_model "$real" 2>/dev/null)" || return 1
+    canon="$(rp_engine_canonical "$motor" 2>/dev/null)" || return 1
+    rp_engine_load "$motor" >/dev/null 2>&1 || return 1
+    declare -F "rp_eng_${canon}_install_model" >/dev/null 2>&1 || return 1
+    if [[ "$dry" == "1" ]]; then
+        rp_msg info "el engine '$canon' lo bajaría con su propio mecanismo (flm pull <tag>)"
+        return 0
+    fi
+    "rp_eng_${canon}_install_model" "$real"
+}
+
+# -----------------------------------------------------------------------------
 # Camino download: artefacto principal + auxiliares use=run.
 # -----------------------------------------------------------------------------
 _rp_models_download() {
@@ -269,7 +388,13 @@ _rp_models_download() {
     if [[ "$dry" == "1" ]]; then
         if [[ "$fmt" == "gguf" ]]; then
             [[ -n "$dest" ]] || dest="$file"
-            rp_msg info "descargaría $file (~${size:-?}) → $GGUF_DIR/$real/$dest"
+            local otro otro_nombre
+            if otro="$(_rp_models_gguf_reutilizable "$repo" "$dest" "$file")" && [[ -n "$otro" ]]; then
+                otro_nombre="${otro%%$'\t'*}"
+                rp_msg info "usaría el GGUF de '$otro_nombre' (symlink $GGUF_DIR/$real → $otro_nombre): sin descarga"
+            else
+                rp_msg info "descargaría $file (~${size:-?}) → $GGUF_DIR/$real/$dest"
+            fi
         else
             mpath="${MODEL_PATH[$idx]}"
             case "$mpath" in
@@ -283,6 +408,12 @@ _rp_models_download() {
     fi
 
     if [[ "$fmt" == "gguf" ]]; then
+        # ¿El GGUF ya está en el directorio de otro modelo (mismo repo y
+        # mismo fichero)? → symlink, sin volver a bajarlo.
+        if _rp_models_symlink_gguf "$real" "$repo" "$dest" "$file"; then
+            _rp_models_aux "$real" run 0 "$force" || return 1
+            return 0
+        fi
         # consentimiento: la selección ya lo dio (RP_YES=1 en el prefijo)
         RP_YES=1 ROPERO_FORCE="$force" \
             rp_download_gguf "$repo" "$file" "$real" "$size" \
@@ -461,6 +592,13 @@ rp_cmd_models() {
     for real in ${reales[@]+"${reales[@]}"}; do
         idx="$(_rp_mc_idx "$real")"
         rp_header "modelo: $real"
+
+        # El engine puede traer su propio "conseguir el modelo" (FLM:
+        # flm pull <tag>). Si lo trae, manda él.
+        if _rp_models_engine_install_model "$real" "$dry"; then
+            ok=$((ok + 1))
+            continue
+        fi
 
         local tiene_dl=0 tiene_bld=0
         _rp_models_tiene_download "$real" && tiene_dl=1

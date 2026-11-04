@@ -1,0 +1,48 @@
+# =============================================================================
+# qwen38-dflash2-flm — Qwen3.8-27B con el draft DFlash 2, en la NPU AMD
+#
+# El MISMO modelo que 'qwen38-flm' (Qwen3.8-27B), pero decodificado con el
+# draft de z-lab (DFlash 2) en vez de la cabeza MTP que trae el modelo. El
+# draft es un modelo de 5 capas y 2B parámetros: escribe un bloque de 7
+# tokens de una vez y la NPU los verifica todos en una pasada. De media,
+# 1,16x la velocidad de decode del mtp (de 0,9x a 1,5x según el prompt: lo
+# gana en código y respuestas estructuradas).
+#
+# SON DOS DESCARGAS: los pesos del modelo (el paquete qwen3.8-mtp:27b, ~18 GB)
+# y el draft (FastFlowLM/Qwen3.8-27B-DFlash2-NPU2, 1,4 GB). `flm pull
+# qwen3.8-dflash2:27b` baja el que falte ✓.
+#
+# OJO: [model].path NO es una ruta, es el TAG del almacén de FLM.
+#
+# MEMORIA (medida por FLM, no estimada):
+#   · pesos ............ ~19,7 GB (17,6 del modelo + 2,1 del draft)
+#   · contexto ......... 84 KiB por token (672 MiB por cada 8k) + 151 MiB fijos
+#   · total a 4k ....... ~20,2 GB   · a 8k ... ~20,5 GB
+#   · contexto máximo de FLM: 8k (el modelo NO aguanta más)
+#
+# ESTE ES EL QUE NECESITA EL BIOS: con el tope por defecto de la NPU
+# (~15,6 GB) NO CABE ni con el contexto mínimo. Con la UMA frame buffer del
+# iGPU fijada a 2 GB en el BIOS la NPU llega a ~21 GB y sí cabe, pero justa.
+# =============================================================================
+
+[model]
+name    = "qwen38-dflash2-flm"
+engine  = "fastflowlm"
+context = 4096
+format  = "safetensors"
+path    = "qwen3.8-dflash2:27b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/Qwen3.8-27B-DFlash2-NPU2"
+size = "~1,4 GB + 18 GB"
+
+[limits]
+min_ram_gb = 21
+
+[args]
+base = [
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+]

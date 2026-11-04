@@ -64,6 +64,48 @@ Si un TOML tiene `[download]` y `[build]`, `ropero install models <modelo>`
 exige `--download` o `--build`; en el menú interactivo se pregunta.
 Plantilla completa y documentada: `ropero template`.
 
+### El mismo GGUF en dos modelos
+
+Si dos TOMLs piden **el mismo fichero del mismo repo** (por ejemplo
+`gptoss` con nuestro fork y `gptoss-o` con el llama.cpp de upstream),
+`ropero install models` **no lo baja dos veces**: el segundo modelo se
+enlaza al directorio del primero
+
+```
+~/models/gguf/gptoss-o -> ~/models/gguf/gptoss
+```
+
+y los dos modelos sirven el mismo fichero. La comparación es de repo +
+nombre (no sólo del nombre del fichero: `mmproj-BF16.gguf` existe en repos
+distintos con contenidos distintos). `--force` no enlaza nada: si quieres el
+fichero *en su propio directorio*, se baja.
+
+### Modelos para la NPU AMD (FastFlowLM)
+
+`models/flm/` tiene los modelos que FLM sirve en la NPU (XDNA) en vez de en
+la GPU: `gptoss-flm`, `qwen36-flm`, `qwen38-flm`, `qwen38-dflash2-flm`,
+`nemotron-bolt-flm`, `deepseek-r1-flm` y `deepseek-r1-0528-flm`. Su
+`[model].path` es el **TAG del almacén de FLM** (`gpt-oss:20b`), no una ruta.
+
+```bash
+ropero install models gptoss-flm   # → flm pull gpt-oss:20b
+ropero gptoss-flm                   # arranca en la NPU
+```
+
+FLM no usa el GGUF de ropero: tiene su propio almacén (`~/.config/flm/models`)
+con el build NPU2 del modelo, y `ropero install models` delega en
+`flm pull`. Los contextos son los que FLM aguanta, no los del catálogo: con
+Qwen3.6 por encima de 32768 tokens, o con Qwen3.8 en prompts largos, FLM
+devuelve basura.
+
+**La memoria es el límite de verdad**, y hay un tope: la NPU no tiene RAM
+propia, usa un carveout de la RAM del sistema que decide el BIOS, y con el
+reparto por defecto se queda en ~15,6 GB (lo dice la doc de FLM). Con la
+UMA frame buffer del iGPU fijada a **2 GB** en el BIOS
+(Advanced → AMD CBS) la NPU llega a ver ~21 GB. `docs/flm-memoria.md` tiene
+la tabla medida de cada modelo: pesos, coste por token de contexto y total
+a 8k/16k/32k.
+
 ## Probar un modelo
 
 ```bash
@@ -110,7 +152,7 @@ bin/python/             modelconf, ggufcheck, model card
 bin/server/endpoint.py  OpenAI-compatible para motores sin server propio
 bin/quant/              pipeline de cuantización y parches del motor
 models/                 TOMLs (activos + fired/)
-tests/                  pruebas de modelos + suite offline (tests/suite/run.sh)
+test/                   pruebas de modelos + test del symlink (test/test-models-symlink.sh)
 docs/specs/             contrato del refactor 1.0
 ```
 

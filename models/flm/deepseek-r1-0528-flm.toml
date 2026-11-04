@@ -1,0 +1,39 @@
+# =============================================================================
+# deepseek-r1-0528-flm — DeepSeek-R1-0528-Qwen3-8B en la NPU AMD (FastFlowLM)
+#
+# La versión de mayo de 2024 de R1, sobre Qwen3-8B (no Llama): es más lista
+# que el distill de Llama-3.1 y tiene un poco más de contexto por defecto.
+# OJO: [model].path NO es una ruta, es el TAG del almacén de FLM.
+#
+# MEMORIA (medida por FLM, no estimada):
+#   · pesos ............ ~3,3 GB
+#   · contexto ......... 144 KiB por token (el que más KV gasta: 1,1 GB por
+#                        cada 8k de tokens)
+#   · total a 8k ....... ~4,5 GB    · a 16k ... ~5,6 GB    · a 32k ... ~7,8 GB
+#   · contexto máximo de FLM: 64k
+#
+# Con 32 GB de RAM el 8B que más rinde es este: cabe de sobra y el contexto
+# es el más barato por token de los seis.
+# =============================================================================
+
+[model]
+name    = "deepseek-r1-0528-flm"
+engine  = "fastflowlm"
+context = 16384
+format  = "safetensors"
+path    = "deepseek-r1-0528:8b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/DeepSeek-R1-0528-Qwen3-8B-NPU2"
+size = "~8 GB"
+
+[limits]
+min_ram_gb = 8
+
+[args]
+base = [
+    "--prefix-cache-mb", "4096",
+    "--prefix-slots", "8",
+]

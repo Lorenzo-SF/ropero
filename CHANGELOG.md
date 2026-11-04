@@ -3,6 +3,53 @@
 ## Sin publicar
 
 ### Añadido
+- **Modelos para la NPU AMD (FastFlowLM): `models/flm/`.** TOMLs para los
+  modelos del catálogo `llama` que FLM sabe servir: `gptoss-flm`
+  (gpt-oss:20b), `qwen36-flm` (qwen3.6-moe:35b-a3b), `qwen38-flm`
+  (qwen3.8-mtp:27b), `qwen38-dflash2-flm` (qwen3.8-dflash2:27b, el mismo
+  modelo con el draft DFlash 2 de z-lab: 1,16x de decode) y
+  `nemotron-bolt-flm` (nemotron3.5-bolt:e4b, que NO es el nemotron del
+  catálogo sino el Bolt-E4B de 4 GB). También `deepseek-r1-flm`
+  (deepseek-r1:8b) y `deepseek-r1-0528-flm` (deepseek-r1-0528:8b). El
+  `[model].path` de estos TOMLs es el TAG del almacén de FLM, no una ruta.
+  - `ropero install models <modelo-flm>` **no** baja un checkpoint a
+    `models/safetensors`: delega en el engine, que usa `flm pull <tag>`
+    (FLM tiene su propio almacén, `~/.config/flm/models`, y su propio build
+    NPU2). Es el primer engine con su propio "conseguir el modelo"; los
+    demás siguen el camino normal (download/build).
+  - `ropero doctor` los comprueba contra el almacén de FLM (`flm list`) y, si
+    FLM no está instalado, lo dice en vez de afirmar que los modelos faltan.
+  - Los contextos NO son los del catálogo: son los que FLM aguanta. Qwen3.6
+    con más de 32768 tokens devuelve basura (paged attention) y Qwen3.8 con
+    prompts largos también (un passkey se corrompió a 10k y 28k tokens).
+- **Un GGUF que ya está en otro modelo ya no se vuelve a bajar.** Si dos
+  TOMLs piden el mismo fichero del mismo repo (el caso real: `gptoss` y
+  `gptoss-o`, el mismo modelo con nuestro fork y con el llama.cpp de
+  upstream), el segundo modelo se **enlaza** al directorio del primero
+  (`~/models/gguf/gptoss-o` → `~/models/gguf/gptoss`) en vez de bajarse
+  12,7 GB otra vez.
+  - La comparación es de **repo + nombre de fichero**, no sólo del nombre:
+    `mmproj-BF16.gguf` aparece en repos distintos con contenidos distintos,
+    y enlazar uno con otro serviría el modelo equivocado.
+  - `--force` no enlaza nada (si quieres el fichero *aquí*, se baja).
+  - Un enlace ya hecho (a mano o de antes) se respeta: no se toca.
+  - Si el fichero está en disco con el nombre del repo en vez del que espera
+    el modelo, no se enlaza un directorio que no serviría: se explica cómo
+    renombrarlo (es un rename, no una descarga).
+- **`docs/flm-memoria.md`**: cuánto RAM usa cada modelo en la NPU y si se
+  puede usar más que el tope de ~15,6 GB. La respuesta: sí, el tope no es de
+  FLM (la cadena ni aparece en su código) sino del reparto de RAM que hace
+  el BIOS; con la UMA frame buffer del iGPU a 2 GB la NPU ve ~21 GB. La tabla
+  trae pesos, coste por token de contexto y total a 8k/16k/32k, medidos de
+  la doc de FLM (no estimados).
+- **`test/test-endpoint-auth.sh`**: 17 comprobaciones de que el endpoint
+  exige la API key con cualquier backend, FLM incluido (FLM no la comprueba:
+  la pone el endpoint de delante). Se ejecuta el `authed()` real del fichero
+  y se comprueba el cableado: el engine fastflowlm le pasa `--api-key` al
+  endpoint y se niega a arrancar sin `LLAMA_API_KEY`.
+- **`test/test-models-symlink.sh`**: 16 comprobaciones sobre el symlink
+  (se enlaza, es idempotente, `--force` no enlaza, un repo distinto NO
+  enlaza, sin fichero en disco se descarga, el nombre equivocado avisa).
 - **`bin/diagnostico.sh`**: un solo script que recoge TODO en un fichero
   (ropero, el motor y sus flags de compilación, los procesos vivos con su
   cmdline real, los logs con las marcas clave, los TOML, los ajustes del
@@ -23,6 +70,28 @@
   medir de sí mismo sigue aquí: el banco de motores y el diagnóstico.
 
 ### Arreglado
+- **`ropero path <modelo-flm>` ya no enseña una ruta inventada.** El `case`
+  del path probaba `safetensors/*` antes que `*/fastflowlm`, y como los TOMLs
+  de FLM son `format = safetensors`, salía `models/safetensors/gpt-oss:20b`
+  como si fuera un directorio. El `[model].path` de FLM es un TAG: se
+  imprime tal cual.
+- **El nombre del GGUF en disco no era el que esperaba el launcher.** En
+  `gptoss` (y `gptoss-o`) el `[download].file` era el nombre del repo
+  (`gpt-oss-20b-nvfp4.gguf`) pero `[files].gguf` era otro
+  (`gpt-oss-20b-MXFP4_MOE.gguf`), sin `[download].name` que los casara: la
+  descarga dejaba el fichero con un nombre que el preflight no busca, y el
+  modelo no arrancaba. Ahora `[download].name` lo fija. Lo mismo en
+  `nemotron`, donde además el `[download].file` apuntaba a un fichero que el
+  repo no publica.
+- **El validador del catálogo daba 8 problemas falsos.** Los modelos de
+  `models/llama-official/` (el llama.cpp de upstream) declaraban un engine y
+  una carpeta que el validador no conocía: 4 avisos por engine y 4 por
+  carpeta. Oculto en los menús de install no es desconocido.
+- **Los modelos `llama-official` vuelven a estar activos.** `flint-o`,
+  `gptoss-o`, `groot-o` y `qwen38-o` estaban en `fired/` (retirados) desde
+  que el motor principal pasó a ser nuestro fork, así que no se podían ni
+  instalar ni arrancar: justamente los que hacen falta para comparar el
+  mismo modelo con el motor de upstream.
 - **Un engine que no publica `/v1/models` ya no hace esperar 300 s.** El
   fallback "ropero sabe a quién arrancó en este puerto" estaba **dentro**
   del `if` que comprueba que haya ids: si el engine no publica ids, la

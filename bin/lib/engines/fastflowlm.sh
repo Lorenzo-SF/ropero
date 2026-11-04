@@ -187,6 +187,37 @@ rp_eng_fastflowlm_native_auth() {
     return 0
 }
 
+# rp_eng_fastflowlm_install_model <modelo> — "conseguir el modelo" de FLM.
+#
+# FLM no usa el GGUF de ropero: su almacén es propio (~/.config/flm/models)
+# y lo que se baja es el build NPU2 (model.q4nx). Por eso el install de un
+# TOML de fastflowlm NO baja un checkpoint a $SAFETENSORS_DIR: delega en
+# `flm pull <tag>`, que es quien sabe la disposición y la revisión.
+#
+# El hook es opcional: si un engine no lo define, el install sigue el camino
+# normal (download/build).
+rp_eng_fastflowlm_install_model() {
+    local modelo="${1:-}" tag flm
+    [[ -n "$modelo" ]] || { rp_msg error "install_model: falta el modelo"; return 1; }
+
+    tag="$(rp_model_field "$modelo" path 2>/dev/null)" || tag=""
+    if [[ -z "$tag" ]]; then
+        rp_msg error "'$modelo' no declara [model].path (el TAG del almacén de FLM)"
+        return 1
+    fi
+    if ! flm="$(rp_eng_fastflowlm_resolve)"; then
+        rp_msg error "fastflowlm no está instalado (ropero install engines fastflowlm)"
+        return 1
+    fi
+    rp_msg info "bajando '$tag' (build NPU2) con flm pull..."
+    if ! "$flm" pull "$tag"; then
+        rp_msg error "falló 'flm pull $tag'"
+        return 1
+    fi
+    rp_msg ok "$modelo listo (FLM: $tag)"
+    return 0
+}
+
 rp_eng_fastflowlm_launch() {
     local modelo="$1" puerto="$2" logfile="$3"
     shift 3
