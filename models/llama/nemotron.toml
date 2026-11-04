@@ -72,22 +72,26 @@ base = [
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",
-    "--spec-default",
+    # "--spec-default",  # DESACTIVADO: el drafter ngram-mod es la fuente de la
+    # inestabilidad medida (aceptacion 0.00-1.00 entre rondas sobre el mismo
+    # prompt). Con spec-default ON: 69-100 t/s con picos de 4.47 ms/tok.
+    # Con spec-default OFF: 84-93 t/s estables (medido 2026-11-04, 3 rondas).
+    # Re-activar solo tras identificar el commit que rompe el drafter.
 ]
 
 [args.level.think]
+chat_template_kwargs = { enable_thinking = true }
 base = [
     "--temp", "0.6",
     "--top-p", "0.9",
     "--min-p", "0.01",
     "--top-k", "5",
     "--reasoning", "true",
-    # "--chat-template-kwargs", '{"enable_thinking": true}',
 ]
 
 [args.level.instruct]
+chat_template_kwargs = { enable_thinking = false }
 base = [
     "--temp", "0.2",
     "--reasoning", "false",
-    # "--chat-template-kwargs", '{"enable_thinking": true}',
 ]

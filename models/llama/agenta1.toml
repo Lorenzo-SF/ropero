@@ -4,7 +4,7 @@
 [model]
 name    = "agenta1"
 engine  = "llama-server"
-context = 262144
+context = 131072
 
 [files]
 gguf   = "Agents-A1-Q4_K_M.gguf"
@@ -31,12 +31,12 @@ base = [
     "--top-k", "15",
     "--min-p", "0.15",
     "--repeat-penalty", "1.08",
-    "--dry-multiplier", "0.8",
-    "--dry-base", "1.75",
-    "--dry-allowed-length", "5",
-    "--dry-penalty-last-n", "1024",
-    "--dry-sequence-breaker", '["\n", ":", " ", "\t", "\"", ","]',
-    "--samplers", "min_p;top_k;top_p;temp;dry",
+    # "--dry-multiplier", "0.8",
+    # "--dry-base", "1.75",
+    # "--dry-allowed-length", "5",
+    # "--dry-penalty-last-n", "1024",
+    # "--dry-sequence-breaker", '["\n", ":", " ", "\t", "\"", ","]',
+    # "--samplers", "min_p;top_k;top_p;temp;dry",
     "--reasoning-budget", "4096",
     "--n-predict", "8192",
 ]

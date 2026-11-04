@@ -32,8 +32,8 @@ base = [
     "--n-predict", "16384",
     "--slot-prompt-similarity", "0.2",
     "--keep", "8192",
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
 ]
 
 [args.level.low]
