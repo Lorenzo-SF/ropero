@@ -69,7 +69,7 @@ KNOWN_ENGINES = (
 KNOWN_ENGINE_DIRS = (
     "llama", "vllm", "airllm", "mlx", "tensorrt", "flm", "llama-official",
 )
-KNOWN_FORMATS = ("gguf", "safetensors")
+KNOWN_FORMATS = ("gguf", "safetensors", "q4nx")
 
 # ids legacy → id canónico (spec §7.4.1).
 LEGACY_ENGINES = {"mlx_lm": "mlx-serve"}
