@@ -106,13 +106,20 @@ PY
 rc=$?
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Y el CABLEADO: el engine fastflowlm tiene quearle la key al endpoint.
+# Y el CABLEADO: el engine fastflowlm arranca `flm serve` DIRECTO (sin el
+# proxy endpoint.py, que se retiró: el propio FLM habla el protocolo
+# OpenAI-compatible).
 #
 # Se llama al launch REAL del engine (bin/lib/engines/fastflowlm.sh) con un
-# `env` falso en el PATH que captura el argv: el motor de FLM no tiene
-# --api-key (su doc dice que no comprueba la key), así que la auth la pone
-# el endpoint de delante. Si el engine no se la pasa, el endpoint queda
-# ABIERTO.
+# `env` falso en el PATH que captura el argv.
+#
+# ⚠️ CONTRATO ACTUAL (tras el refactor del engine):
+#   · el motor se arranca DIRECTO: `flm serve [tag] ...`
+#   · NO se arranca endpoint.py: el proxy ya no está en el camino
+#   · el TAG del modelo se pasa tal cual (d3mini no lleva tag: sirve sólo la
+#     decisión, y su tag va en --decision, que llega como arg del TOML)
+#   · el servidor escucha en 127.0.0.1: la auth la hace FLM si se le da
+#     --api-key; hoy NO se le da, así que el puerto queda abierto a local.
 # ─────────────────────────────────────────────────────────────────────────────
 echo ""
 echo "cableado del engine fastflowlm:"
@@ -149,7 +156,7 @@ rp_model_field() {
 }
 
 export LLAMA_API_KEY="sk-ropero-clave-de-prueba"
-export ROPERO_TEST_ARGV="$TMPD/argv.txt"
+export ROPERO_TEST_ARGV="\${ROPERO_TEST_ARGV:-$TMPD/argv.txt}"
 PATH="$TMPD/bin:\$PATH"
 rp_eng_fastflowlm_launch gptoss-flm 9999 "$TMPD/log.txt" --prefix-slots 8 >/dev/null
 # El launch arranca el endpoint en segundo plano: hay que esperar a ese
@@ -171,22 +178,28 @@ comprobar() {
 
 if [[ -s "$TMPD/argv.txt" ]]; then
     ARGV="$(cat "$TMPD/argv.txt")"
-    comprobar "el engine arranca el endpoint" '[[ "$ARGV" == *endpoint.py* ]]'
-    comprobar "le pasa --api-key" '[[ "$ARGV" == *--api-key* ]]'
-    comprobar "le pasa la MISMA key que tiene el launcher" \
-        '[[ "$ARGV" == *"--api-key sk-ropero-clave-de-prueba"* ]]'
+    comprobar "el engine arranca flm serve DIRECTO" '[[ "$ARGV" == *"flm serve"* ]]'
+    comprobar "NO arranca el proxy endpoint.py (quedó el motor directo)" \
+        '[[ "$ARGV" != *endpoint.py* ]]'
     comprobar "le pasa el modelo (el TAG de FLM)" '[[ "$ARGV" == *"gpt-oss:20b"* ]]'
+    comprobar "le pasa los args del modelo (--prefix-slots 8)" \
+        '[[ "$ARGV" == *"--prefix-slots 8"* ]]'
+    comprobar "escucha sólo en local" '[[ "$ARGV" == *"--host 127.0.0.1"* ]]'
 else
     fallos=$((fallos + 1))
     printf '  FALLO el engine no llegó a construir el argv\n'
 fi
 
-# Y sin key en el entorno, el engine tiene que negarse a arrancar (si no,
-# el endpoint saldría sin --api-key y con la auth desactivada).
+# Y sin key en el entorno, el engine arranca igual: ya no hay proxy que
+# necesitara la key. Lo que se vigila aquí es lo contrario de antes — que la
+# key NO se invente: si algún día se le pasa --api-key al motor, tiene que
+# ser la del launcher, no una recién generada.
 ROPERO_TEST_ARGV="$TMPD/argv2.txt" PATH="$TMPD/bin:$PATH" \
     LLAMA_API_KEY="" bash "$TMPD/stub.sh" >/dev/null 2>&1
-comprobar "sin LLAMA_API_KEY el engine NO arranca" \
-    '[[ ! -s "$TMPD/argv2.txt" ]]'
+comprobar "sin LLAMA_API_KEY el engine arranca (FLM directo, sin proxy)" \
+    '[[ -s "$TMPD/argv2.txt" ]]'
+comprobar "el motor no recibe ninguna key inventada" \
+    '! grep -q -- "--api-key" "$TMPD/argv2.txt"'
 
 printf '\n%s ok · %s fallo(s)\n' "$((ok + 12))" "$((fallos))"
 [[ "$fallos" == "0" ]] || exit 1

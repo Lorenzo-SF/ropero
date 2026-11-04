@@ -197,26 +197,49 @@ rp_eng_fastflowlm_native_auth() {
 # El hook es opcional: si un engine no lo define, el install sigue el camino
 # normal (download/build).
 rp_eng_fastflowlm_install_model() {
-    local modelo="${1:-}" tag flm
+    local modelo="${1:-}" tag flm dtag
     [[ -n "$modelo" ]] || { rp_msg error "install_model: falta el modelo"; return 1; }
 
     tag="$(rp_model_field "$modelo" path 2>/dev/null)" || tag=""
-    # if [[ -z "$tag" ]]; then
-    #     rp_msg error "'$modelo' no declara [model].path (el TAG del almacén de FLM)"
-    #     return 1
-    # fi
+
+    # EL TAG PUEDE VENIR DE DOS SITIOS, y hay que bajarlos los dos:
+    #
+    #   · [model].path — el modelo que se sirve como principal (p.ej. lfm3).
+    #   · --decision <tag> en [args] — el motor de decisión que el servidor
+    #     expone en /v1/systemone.
+    #
+    # El caso de d3mini es el segundo: su [model].path va VACÍO a propósito,
+    # porque `flm serve` sin tag no sirve ningún modelo de chat, sólo la
+    # decisión. Con path vacío, el único tag que existe es el de --decision,
+    # y sin bajarlo el servidor arranca y no sabe clasificar nada.
+    local -a tags=()
+    [[ -n "$tag" ]] && tags+=("$tag")
+    dtag="$(rp_model_argv "$modelo" 2>/dev/null | awk 'prev == "--decision" { print; exit } { prev = $0 }')"
+    [[ -n "$dtag" ]] && tags+=("$dtag")
+
+    if [[ ${#tags[@]} -eq 0 ]]; then
+        rp_msg warn "'$modelo' no declara [model].path ni '--decision': no hay tag que bajar"
+        return 0
+    fi
+
     if ! flm="$(rp_eng_fastflowlm_resolve)"; then
         rp_msg error "fastflowlm no está instalado (ropero install engines fastflowlm)"
         return 1
     fi
-    rp_msg info "bajando '$tag' (build NPU2) con flm pull..."
-    if ! "$flm" pull "$tag"; then
-        rp_msg error "falló 'flm pull $tag'"
-        return 1
-    fi
+    local t
+    for t in "${tags[@]}"; do
+        rp_msg info "bajando '$t' (build NPU2) con flm pull..."
+        if ! "$flm" pull "$t"; then
+            rp_msg error "falló 'flm pull $t'"
+            return 1
+        fi
+    done
     # Crear symlink en ~/models/q4nx/ para que ropero pueda encontrar el modelo
     local flm_dir
     flm_dir="$(find ~/.config/flm/models -maxdepth 1 -type d -iname "*$(echo "$tag" | cut -d: -f1)*" 2>/dev/null | head -1)"
+    if [[ -z "$flm_dir" ]]; then
+        flm_dir="$(find ~/.config/flm/models -maxdepth 1 -type d -iname "*$(echo "${tags[0]}" | cut -d: -f1)*" 2>/dev/null | head -1)"
+    fi
     if [[ -n "$flm_dir" && -d "$flm_dir" ]]; then
         local q4nx_dir="$HOME/models/q4nx/$modelo"
         mkdir -p "$q4nx_dir" 2>/dev/null
@@ -230,9 +253,9 @@ rp_eng_fastflowlm_install_model() {
                 ln -s "$f" "$q4nx_dir/$bn" 2>/dev/null
             fi
         done
-        rp_msg ok "$modelo listo (FLM: $tag) → symlink en ~/models/q4nx/$modelo"
+        rp_msg ok "$modelo listo (FLM: ${tags[*]}) → symlink en ~/models/q4nx/$modelo"
     else
-        rp_msg ok "$modelo listo (FLM: $tag)"
+        rp_msg ok "$modelo listo (FLM: ${tags[*]})"
     fi
     return 0
 }
@@ -253,7 +276,7 @@ rp_eng_fastflowlm_launch() {
     if [[ -z "$tag" ]]; then
         local -a cmd
         cmd=("$(rp_eng_fastflowlm_resolve)" serve
-            --host "${HOST:-127.0.0.1}"
+            --host "${FLM_HOST:-127.0.0.1}"
             --port "$puerto"
             --pmode turbo
             --socket 5
@@ -261,7 +284,7 @@ rp_eng_fastflowlm_launch() {
     else
         local -a cmd    
         cmd=("$(rp_eng_fastflowlm_resolve)" serve "$tag"
-            --host "${HOST:-127.0.0.1}"
+            --host "${FLM_HOST:-127.0.0.1}"
             --port "$puerto"
             --pmode turbo
             --socket 5

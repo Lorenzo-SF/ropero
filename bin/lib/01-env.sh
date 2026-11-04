@@ -37,8 +37,20 @@
 # Symlinks de binarios (ropero, llama-server, ...)
 : "${BIN_DIR:=$HOME/.local/bin}"
 
-# Bind de todos los servers (loopback: no exponemos nada a la red)
+# Bind de todos los servers.
+#
+# OJO: 0.0.0.0 SÍ expone a la red (LAN). Es a propósito para llama-server:
+# el runtime local de la otra máquina (marichocho-cuda/mlx en
+# 192.168.1.137:9999) tiene que poder alcanzarlo. Por eso el comentario
+# viejo decía "loopback" y mentía.
+#
+# La NPU es local de verdad (sólo esta máquina la tiene): el engine
+# fastflowlm usa FLM_HOST, que por defecto es loopback. Si algún día hace
+# falta exponerla, se pone FLM_HOST=0.0.0.0 — y con una key, porque FLM
+# sin --api-key acepta a cualquiera que llegue al puerto.
 : "${HOST:=0.0.0.0}"
+# Bind del engine fastflowlm (la NPU): local por defecto.
+: "${FLM_HOST:=127.0.0.1}"
 # Slot GPU/dGPU
 : "${PORT:=9999}"
 # Slot CPU. Sólo se GESTIONA en Linux; en macOS no existe el slot (spec §4,
