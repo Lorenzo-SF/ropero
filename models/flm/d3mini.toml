@@ -1,19 +1,22 @@
 [model]
-name    = "qwen38-flm"
+name    = "d3mini"
 engine  = "fastflowlm"
-context = 32000
+context = 131072
 format  = "q4nx"
-path    = "Qwen3.8-27B-NPU2"
+path    = ""
+
+[files]
 
 [download]
-repo = "FastFlowLM/Qwen3.8-27B-NPU2"
-size = "~8 GB"
+repo = "FastFlowLM/LFM3-1.7B-NPU2"
+size = "~1.7 GB"
 
 [limits]
-min_ram_gb = 8
+min_ram_gb = 4
 
 [args]
 base = [
+  "--decision", "d3:mini",
   "--prefill-chunk-len", "8192",
   "--prefix-cache-mb", "2048",
   "--prefix-slots", "4",

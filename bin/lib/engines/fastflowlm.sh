@@ -201,10 +201,10 @@ rp_eng_fastflowlm_install_model() {
     [[ -n "$modelo" ]] || { rp_msg error "install_model: falta el modelo"; return 1; }
 
     tag="$(rp_model_field "$modelo" path 2>/dev/null)" || tag=""
-    if [[ -z "$tag" ]]; then
-        rp_msg error "'$modelo' no declara [model].path (el TAG del almacén de FLM)"
-        return 1
-    fi
+    # if [[ -z "$tag" ]]; then
+    #     rp_msg error "'$modelo' no declara [model].path (el TAG del almacén de FLM)"
+    #     return 1
+    # fi
     if ! flm="$(rp_eng_fastflowlm_resolve)"; then
         rp_msg error "fastflowlm no está instalado (ropero install engines fastflowlm)"
         return 1
@@ -251,19 +251,27 @@ rp_eng_fastflowlm_launch() {
     local tag
     tag="$(rp_model_field "$modelo" path 2>/dev/null)" || tag=""
     if [[ -z "$tag" ]]; then
-        rp_msg error "'$modelo' no declara [model].path (el TAG del almacén de FLM)"
-        return 1
+        local -a cmd
+        cmd=("$(rp_eng_fastflowlm_resolve)" serve
+            --host "${HOST:-127.0.0.1}"
+            --port "$puerto"
+            --pmode turbo
+            --socket 5
+            --q-len 20 )
+    else
+        local -a cmd    
+        cmd=("$(rp_eng_fastflowlm_resolve)" serve "$tag"
+            --host "${HOST:-127.0.0.1}"
+            --port "$puerto"
+            --pmode turbo
+            --socket 5
+            --q-len 20 )
     fi
 
     # flm serve directo (sin endpoint.py proxy). flm tiene su propio
     # endpoint OpenAI-compatible en el puerto asignado.
-    local -a cmd
-    cmd=("$(rp_eng_fastflowlm_resolve)" serve "$tag"
-        --host "${HOST:-127.0.0.1}"
-        --port "$puerto"
-        --pmode turbo
-        --socket 5
-        --q-len 20 )
+ 
+
     local a
     for a in "$@"; do
         cmd+=("$a")

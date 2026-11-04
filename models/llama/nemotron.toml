@@ -5,25 +5,15 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-# context = 524288
 context = 266144
-# context = 131072
 
 [files]
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
-# El chat template va como AUXILIARIO descargado, no como una ruta escrita a
-# mano en los args. Motivo: NVIDIA publica el template oficial SÓLO como
-# "chat_template.jinja" aparte (nunca dentro del tokenizer_config.json), y
-# con el template de la comunidad el modelo responde en HTML y no razona
-# bien. Con el aux, ropero lo baja a la carpeta del modelo y ${chat_template}
-# apunta a él sin rutas absolutas: el mismo fichero en otra máquina.
 chat_template = "chat_template.jinja"
 
 [download]
 repo = "unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
 file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-MXFP4_MOE.gguf"
-# El destino es el mismo nombre que usa el build (gguffer) y que espera el
-# launcher: así da igual de qué camino venga el GGUF.
 name = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
 size = "18.90 GB"
 
@@ -44,30 +34,18 @@ size = "65.8 GB"
 
 [levels]
 list        = ["think", "instruct"]
-default     = "think"
+default     = "instruct"
 
 [args]
 base = [
     "--n-gpu-layers", "54",
     "--n-cpu-moe", "14",
-    # AVISO: "soft" aquí NO significa "usa la VRAM que sobre". En el motor,
-    # soft cae en modo "on" (common/common.cpp) y la capacidad se calcula
-    # como free - reserva, con la reserva HARDCODADA en 3072 MiB
-    # (ggml/src/ggml-cuda/moe-cache.cu:166). Con el modelo de 18 GB en una
-    # VRAM de 16 GB sólo quedan ~728 MiB libres -> granted=0 MiB: la
-    # moe-cache no existe. Medido en el arranque:
-    #   [moe-cache] CUDA0 capacity: policy=free-minus-reserve
-    #       granted=0 MiB free=728 MiB reserve=3072 MiB
-    # El knob real: GGML_CUDA_MOE_CACHE_RESERVE_MB (p. ej. 256) -> granted =
-    # free - 256. NO se activa de momento: el cuello medido es el techo de
-    # potencia de la GPU, no el PCIe (nemotron y un 4B entero en la VRAM
-    # tardan lo mismo por token).
-    "--moe-cache","off", # aqui, auto sube alrededor de un 10%
+    "--moe-cache","soft", 
 	
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
 
-    "--repeat-penalty", "1.0",
+    "--repeat-penalty", "1.1",
     "--repeat-last-n", "64",
     "--n-predict", "8192",
     "--keep", "16384",
@@ -75,11 +53,16 @@ base = [
     "--reasoning-format", "deepseek",
     "--reasoning-preserve",
     "--reasoning-budget", "32768",
-    # "--spec-default",  # DESACTIVADO: el drafter ngram-mod es la fuente de la
-    # inestabilidad medida (aceptacion 0.00-1.00 entre rondas sobre el mismo
-    # prompt). Con spec-default ON: 69-100 t/s con picos de 4.47 ms/tok.
-    # Con spec-default OFF: 84-93 t/s estables (medido 2026-11-04, 3 rondas).
-    # Re-activar solo tras identificar el commit que rompe el drafter.
+
+    "--spec-type", "draft-mtp",
+    "--spec-draft-n-max", "2",          # con aceptación baja, draftar largo se wastea
+    "--spec-draft-n-min", "1",
+
+#     "--spec-type", "ngram-simple",
+# "--spec-ngram-simple-size-n", "8",
+# "--spec-ngram-simple-size-m", "32",
+# "--spec-draft-n-min", "1",
+# "--spec-draft-n-max", "2",
 ]
 
 [args.level.think]

@@ -20,4 +20,5 @@ base = [
   "--prefix-cache-mb", "2048",
   "--prefix-slots", "4",
   "--prefix-min-gain", "256",
+  "--decision", "d3:mini",
 ]

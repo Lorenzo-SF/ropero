@@ -375,12 +375,12 @@ rp_eng_llama-server_launch() {     # llama-server no lo necesita: su identidad
         --port "$puerto" \
         --api-key "$LLAMA_API_KEY" \
         --threads 16 \
-        --threads-batch 16 \
+        --threads-batch 24 \
         --flash-attn on \
         --jinja \
-        --log-verbosity 4 \
+        --log-verbosity 3 \
         --parallel 1 \
-        --load-mode none \
+        --load-mode  none \
         --kv-unified \
         --kv-offload \
         --batch-size 4096 \
