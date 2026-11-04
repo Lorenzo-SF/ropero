@@ -1,7 +1,7 @@
 [model]
 name    = "qwen38-flm"
 engine  = "fastflowlm"
-context = 131072
+context = 32000
 format  = "q4nx"
 path    = "Qwen3.8-27B-NPU2"
 

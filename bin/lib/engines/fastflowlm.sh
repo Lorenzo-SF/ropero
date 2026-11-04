@@ -214,7 +214,26 @@ rp_eng_fastflowlm_install_model() {
         rp_msg error "falló 'flm pull $tag'"
         return 1
     fi
-    rp_msg ok "$modelo listo (FLM: $tag)"
+    # Crear symlink en ~/models/q4nx/ para que ropero pueda encontrar el modelo
+    local flm_dir
+    flm_dir="$(find ~/.config/flm/models -maxdepth 1 -type d -iname "*$(echo "$tag" | cut -d: -f1)*" 2>/dev/null | head -1)"
+    if [[ -n "$flm_dir" && -d "$flm_dir" ]]; then
+        local q4nx_dir="$HOME/models/q4nx/$modelo"
+        mkdir -p "$q4nx_dir" 2>/dev/null
+        # Symlink cada archivo del almacén de flm
+        local f
+        for f in "$flm_dir"/*; do
+            [[ -f "$f" ]] || continue
+            local bn
+            bn="$(basename "$f")"
+            if [[ ! -e "$q4nx_dir/$bn" ]]; then
+                ln -s "$f" "$q4nx_dir/$bn" 2>/dev/null
+            fi
+        done
+        rp_msg ok "$modelo listo (FLM: $tag) → symlink en ~/models/q4nx/$modelo"
+    else
+        rp_msg ok "$modelo listo (FLM: $tag)"
+    fi
     return 0
 }
 

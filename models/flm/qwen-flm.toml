@@ -1,21 +1,32 @@
+# =============================================================================
+# qwen-flm — Qwen3.5 9B en NPU AMD (FastFlowLM)
+# =============================================================================
+# Repo: FastFlowLM/Qwen3.5-9B-NPU2
+# Archivo: model.q4nx (~7.6 GB) + vision_weight.q4nx (~1 GB)
+# Tag flm: qwen3.5:9b
+# =============================================================================
+
 [model]
 name    = "qwen-flm"
 engine  = "fastflowlm"
 context = 131072
 format  = "q4nx"
-path    = "qwen-flm"
+path    = "qwen3.5:9b"
+
+[files]
+extra = ["vision_weight.q4nx"]
 
 [download]
 repo = "FastFlowLM/Qwen3.5-9B-NPU2"
-size = "~8 GB"
+size = "~8.6 GB"
 
 [limits]
 min_ram_gb = 8
 
 [args]
 base = [
-  "--prefill-chunk-len", "8192",
-  "--prefix-cache-mb", "2048",
-  "--prefix-slots", "4",
-  "--prefix-min-gain", "256",
+    "--prefix-cache-mb", "2048",
+    "--prefix-slots", "4",
+    "--prefix-min-gain", "256",
+    "--img-pre-resize", "2",
 ]
