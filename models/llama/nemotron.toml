@@ -5,7 +5,7 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-context = 266144
+context = 131072
 
 [files]
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
@@ -33,15 +33,16 @@ keep_source  = true
 size = "65.8 GB"
 
 [levels]
-list        = ["think", "instruct"]
+list        = ["instruct", "think"]
 default     = "instruct"
 
 [args]
 base = [
     "--n-gpu-layers", "54",
-    "--n-cpu-moe", "14",
+    "--n-cpu-moe", "12",
     "--moe-cache","soft", 
-	
+    "--kv-unified",
+    "--kv-offload",
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
 
@@ -50,19 +51,11 @@ base = [
     "--n-predict", "8192",
     "--keep", "16384",
     "--chat-template-file", "${chat_template}",
-    "--reasoning-format", "deepseek",
-    "--reasoning-preserve",
-    "--reasoning-budget", "32768",
 
-    "--spec-type", "draft-mtp",
-    "--spec-draft-n-max", "2",          # con aceptación baja, draftar largo se wastea
-    "--spec-draft-n-min", "1",
-
-#     "--spec-type", "ngram-simple",
-# "--spec-ngram-simple-size-n", "8",
-# "--spec-ngram-simple-size-m", "32",
-# "--spec-draft-n-min", "1",
-# "--spec-draft-n-max", "2",
+    "--spec-type", "ngram-map-k4v",
+    "--spec-ngram-map-k4v-size-n", "24",
+    "--spec-ngram-map-k4v-size-m", "48",
+    "--spec-ngram-map-k4v-min-hits", "1",
 ]
 
 [args.level.think]
@@ -73,6 +66,11 @@ base = [
     "--min-p", "0.01",
     "--top-k", "5",
     "--reasoning", "true",
+    "--reasoning-format", "deepseek",
+    "--reasoning-preserve",
+    "--reasoning-budget", "32768",
+    "--spec-draft-n-max", "4", 
+
 ]
 
 [args.level.instruct]
@@ -80,4 +78,6 @@ chat_template_kwargs = { enable_thinking = false }
 base = [
     "--temp", "0.2",
     "--reasoning", "false",
+    "--spec-draft-n-max", "3", 
+
 ]

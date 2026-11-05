@@ -5,32 +5,49 @@
 [model]
 name    = "ornith"
 engine  = "llama-server"
-context = 262144
+context = 131072
 
 [files]
 gguf = "Ornith-1.5-35B-A3B-NVFP4.gguf"
 
-[build]
-repo         = "ornith-ai/Ornith-1.5-35B-A3B"
-quant        = "NVFP4"
-imatrix_repo = "bartowski/Ornith-1.5-35B-A3B-GGUF"
-imatrix_file = "Ornith-1.5-35B-A3B-imatrix.gguf"
-keep_source  = true
-size = "21.15 GB"
+[download]
+repo = "jashepp/Ornith-1.5-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF"
+file = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
+name = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
+size = "18.90 GB"
+
+[download.aux.chat_template]
+repo = "jashepp/Ornith-1.5-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF"
+file = "chat_template.jinja"
+name = "chat_template.jinja"
+size = "7.54 KB"
+use = "run"
+ 
 
 [levels]
-list    = ["low", "medium", "high"]
-default = "low"
+list    = ["instruct", "think"]
+default = "instruct"
 
 [args]
 base = [
-    "--n-gpu-layers", "42",
+    "--n-gpu-layers", "44",
     "--n-cpu-moe", "14",
-    "--moe-cache","off", # aqui, auto sube alrededor de un 10%
-	
+    "--moe-cache","soft",
+    "--kv-unified",
+    "--kv-offload",
+    "--cache-reuse", "512",
+
     "--cache-type-k", "turbo3",
     "--cache-type-v", "turbo3",
-    "--temp", "0.60",
+
+    "--spec-type", "ngram-map-k4v",
+    "--spec-ngram-map-k4v-size-n", "24",
+    "--spec-ngram-map-k4v-size-m", "48",
+    "--spec-ngram-map-k4v-min-hits", "1",
+]
+
+[args.level.think]
+base = [
     "--top-k", "35",
     "--top-p", "0.93",
     "--min-p", "0.10",
@@ -39,18 +56,23 @@ base = [
     "--dry-base", "1.75",
     "--dry-allowed-length", "3",
     "--dry-penalty-last-n", "1024",
-    "--dry-sequence-breaker", '["\\n","```\\n",":","\\t","\\"","|","-","\\}","\\]","/","\\\\"]',
-    "--samplers", "top_k;top_p;min_p;dry;temp;top_n_sigma",
+    "--samplers", "'top_k;top_p;min_p;dry;temp;top_n_sigma'",
+    "--presence-penalty", "0.0",
+    "--repeat-penalty", "1.0",
+    "--reasoning", "on",
+    "--reasoning-format", "auto",
     "--reasoning-budget", "32768",
-    "--n-predict", "8192",
 ]
 
-[args.level.low]
-chat_template_kwargs = { enable_thinking = false }
-
-[args.level.medium]
-chat_template_kwargs = { enable_thinking = true }
-
-[args.level.high]
-chat_template_kwargs = { enable_thinking = true }
+[args.level.instruct]
+base = [
+    "--temperature", "0.7",
+    "--top-p", "0.8",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--presence-penalty", "1.5",
+    "--repeat-penalty", "1.0",
+    "--reasoning", "off",
+    "--reasoning-format", "auto",
+]
 

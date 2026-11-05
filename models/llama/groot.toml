@@ -1,18 +1,20 @@
 [model]
 name    = "groot"
 engine  = "llama-server"
-# context = 524288 
-context = 266144 
+context = 262144 
 
 [files]
-gguf = "Groot-19B-A3B-261023-Q4_K_M.gguf"
+gguf = "Groot-19B-A3B-261023-NVFP4.gguf"
 
 [download]
 repo = "GrootTeam/Groot-19B-A3B-261023-GGUF"
-file = "Groot-19B-A3B-261023-Q4_K_M.gguf"
-size = "11.66 GB" # Tamaño estimado para Q4_K_M
+file = "Groot-19B-A3B-261023-NVFP4.gguf"
+size = "13.6 GB" # Tamaño estimado para Q4_K_M
 
-# [build]
+[build] # solo crear gguf, ya esta cuantizado
+repo         = "GrootTeam/Groot-19B-A3B-261023-NVFP4"
+keep_source  = true
+size = "13.6 GB"
 
 [levels]
 list    = ["think", "instruct"]
@@ -22,18 +24,22 @@ default = "think"
 base = [
     "--n-gpu-layers", "999",
     "--moe-cache","soft", 
-	
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
+    "--kv-unified",
+    "--kv-offload",
+    "--cache-reuse", "512",
+    
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
 
     "--n-predict", "8192",
     "--keep", "16384",
     "--presence-penalty", "1.5",
     "--repeat-penalty", "1.0",
 
-    "--spec-type", "nextn",
-    "--spec-draft-n-max", "4" ,
-    "--spec-draft-n-min", "1"
+    "--spec-type", "ngram-map-k4v",
+    "--spec-ngram-map-k4v-size-n", "24",
+    "--spec-ngram-map-k4v-size-m", "48",
+    "--spec-ngram-map-k4v-min-hits", "1",
 ]
 
 [args.level.think]
@@ -58,3 +64,4 @@ base = [
     "--min-p", "0.0",
     "--reasoning", "false",
 ]
+
