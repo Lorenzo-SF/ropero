@@ -20,13 +20,13 @@ repo = "unsloth/Qwen3.8-27B-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-UD-IQ3_S.gguf"
 size = "12 GB"
 
-[build]
-repo         = "nvidia/Qwen3.8-27B-NVFP4"
-quant        = "NVFP4"
-imatrix_repo = "unsloth/Qwen3.8-27B-GGUF"
-imatrix_file = "imatrix_unsloth.gguf"
-keep_source  = true
-size = "55.6 GB"
+# [build]
+# repo         = "nvidia/Qwen3.8-27B-NVFP4"
+# quant        = "NVFP4"
+# imatrix_repo = "unsloth/Qwen3.8-27B-GGUF"
+# imatrix_file = "imatrix_unsloth.gguf"
+# keep_source  = true
+# size = "55.6 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
