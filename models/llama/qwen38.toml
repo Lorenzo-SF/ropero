@@ -11,11 +11,11 @@ context = 98304
 # gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"
 gguf = "Qwen3.8-27B-UD-IQ3_S.gguf"
 
-[download]
 # repo = "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
 # file = "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"
 # size = "12.1 GB"
 
+[download]
 repo = "unsloth/Qwen3.8-27B-GGUF" #"unsloth/Qwen3.8-27B-GGUF"
 file = "Qwen3.8-27B-UD-IQ3_S.gguf"
 size = "12 GB"

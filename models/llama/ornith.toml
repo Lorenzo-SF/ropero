@@ -8,12 +8,12 @@ engine  = "llama-server"
 context = 131072
 
 [files]
-gguf = "Ornith-1.5-35B-A3B-NVFP4.gguf"
+gguf = "Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf"
 
 [download]
 repo = "jashepp/Ornith-1.5-35B-A3B-MXFP4_MOE_Hybrid-Imatrix-GGUF"
-file = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
-name = "Ornith-1.5-35B-A3B-MXFP4_MOE_Q8_0_F16-Imatrix.gguf"
+file = "Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf"
+name = "Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf"
 size = "18.90 GB"
 
 [download.aux.chat_template]
