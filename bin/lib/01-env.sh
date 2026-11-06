@@ -58,7 +58,9 @@
 : "${CPU_PORT:=9998}"
 
 
-: "${OPENAI_API_KEY:=sk-local-dev-key}"
+# : "${OPENAI_API_KEY:=sk-local-dev-key}"
+: "${OPENAI_API_KEY:=$LLAMA_API_KEY}"
+
 # Timeout de arranque/espera de modelo, en segundos.
 : "${ROPERO_START_TIMEOUT:=300}"
 
