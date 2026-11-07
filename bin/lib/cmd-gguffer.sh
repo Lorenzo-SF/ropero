@@ -8,7 +8,8 @@
 #
 # Portado del monolito 0.x. Correcciones de 1.0:
 #   · cuantización ya aplicada en el repo NO es error: se coloca el gguf y
-#     se sale 0 sin borrar nada (ver _gguffer_repo_ya_cuantizado).
+#     se sale 0 sin borrar nada (ver _gguffer_quant_fuente y
+#     _gguffer_que_vamos_a_hacer).
 #   · bash 3.2: sin mapfile (bucles while IFS= read -r).
 #   · ggufcheck.py vive en $ROPERO_ROOT/bin/python/.
 # =============================================================================
@@ -25,7 +26,7 @@ Fabrica un GGUF desde pesos HF o reutiliza un GGUF ya publicado.
   --gguf-file NOMBRE         fichero dentro del repo de --gguf
   --quant TIPO[,TIPO...]     cuantizaciones a fabricar (repetible)
   --imatrix FICHERO          importance matrix local
-  --imatrix-repo OWNER/NAME  repo del imatrix
+  --imatrix-repo OWNER/NAME  repo del imatrix (con --imatrix-file)
   --imatrix-file NOMBRE      fichero del imatrix dentro del repo
   --out NOMBRE|RUTA          nombre/carpeta/ruta de salida
   --out-principal RUTA       ruta del quant principal (los demas a su lado)
@@ -39,6 +40,25 @@ Fabrica un GGUF desde pesos HF o reutiliza un GGUF ya publicado.
   --list-quants              lista quants del motor y publicados
   --diagnostico              diagnostico del entorno
   -h, --help                 esta ayuda
+
+REGLAS DEL IMATRIX
+  · --imatrix es EXCLUYENTE con el par --imatrix-repo/--imatrix-file.
+  · --imatrix-repo y --imatrix-file van siempre juntos.
+  · Si vas a cuantizar (--quant), hace falta el imatrix: o el fichero local
+    (--imatrix) o el par del repo. Sin el, el gguffer no cuantiza.
+  · Si NO vas a cuantizar, el imatrix no hace falta (y no se baja).
+
+PESOS QUE YA VIENEN CUANTIZADOS
+  Los checkpoints de fabrica (los de NVIDIA en NVFP4, el gpt-oss en MXFP4)
+  ya estan en un quant: no se pueden re-cuantizar.
+    · sin --quant          -> se convierten y se colocan (el GGUF sale en el
+                               quant que ya traian)
+    · con --quant IGUAL    -> se convierten y se colocan (no se cuantiza dos
+                               veces, y no hace falta imatrix)
+    · con --quant DISTINTO -> error, antes de bajar los pesos, diciendo que
+                               repo hermano sin cuantizar hay que usar
+  Los que el conversor dequantiza (FP8, AWQ, GPTQ) salen en F16: de esos si
+  se puede cuantizar, pero avisando de que el quant de fabrica se pierde.
 HELP
 }
 
@@ -224,78 +244,310 @@ sys.exit(0)
 PY
 }
 
-# _gguffer_repo_ya_cuantizado <owner/repo>
+# _gguffer_quant_fuente <owner/repo | directorio>
 #
-# Devuelve 0 si el repo de pesos YA Viene cuantizado, 1 si no (o si no se
-# pudo saber). Imprime el motivo por stderr.
+# Imprime de que tipo es el checkpoint que hay que convertir:
 #
-# ── POR QUÉ ESTE CHEQUEO ─────────────────────────────────────────────────────
+#   NVFP4    los pesos YA VIENEN en NVFP4 y el conversor los conserva
+#   MXFP4    los pesos YA VIENEN en MXFP4 (el gpt-oss) y se conservan
+#   MIXTO    "mixed-precision": NVFP4 + FP8. Es de la familia NVFP4, pero el
+#            motor actual NO sabe convertirlo (ver _gguffer_aviso_mixto)
+#   DEQUANT  los pesos vienen en un quant que se DEQUANTIZA al convertir
+#            (FP8, AWQ, GPTQ): el GGUF sale en F16
+#   NINGUNO  los pesos vienen sin cuantizar (BF16/F16): se pueden cuantizar
 #
-# Cuantizar un repo que YA viene cuantizado no es un error raro: es lo que
-# pasa con todos los repos de NVIDIA ("...-NVFP4", "...-FP8") y con los
-# checkpoints de modelopt. Vienen con la metadata "hf_quant_config.json" o
-# con "quantization_config" en el config.json.
+# ── POR QUÉ IMPORTA ──────────────────────────────────────────────────────────
 #
-# El fallo es CARO, porque se descubre tarde: el gguffer baja 40-60 GB, los
-# convierte, y solo al cuantizar el motor dice
+# De esto depende TODO lo que hace el gguffer después:
 #
-#     llama_model_quantize: failed to quantize: requantizing from type
-#     nvfp4 is disabled
+#   · si los pesos ya vienen en NVFP4 y pides Q4_K_M, el motor no puede
+#     re-cuantizar (solo cuantiza pesos que NO están cuantizados): el error
+#     se dice ANTES de bajar 60 GB, no después;
+#   · si los pesos vienen en FP8, el conversor los dequantiza a F16: pides
+#     un quant y se puede, pero conviene avisar de que se pierde la ventaja
+#     del quant de fábrica;
+#   · si los pesos vienen sin quant, se cuantiza desde cero (y hace falta
+#     el imatrix).
 #
-# que no dice de donde sale el problema. Y la respuesta correcta (usar el
-# repo BF16) se puede saber ANTES de bajar nada.
+# ── DE DÓNDE SE SACA LA METADATA ────────────────────────────────────────────
 #
-# OJO: esto NO es el mismo caso que "el GGUF ya esta cuantizado", que se
-# comprueba con el file_type del GGUF (que se ve en la fase 3). Aqui se
-# mira el REPO, antes de descargar: el repo es la fuente, y la fuente dice
-# si sus pesos estan cuantizados.
+# De los dos ficheros que la pone el repo:
+#
+#   · "config.json"           → "quantization_config" (compressed-tensors,
+#                              modelopt, awq, gptq, mxfp4 del gpt-oss)
+#   · "hf_quant_config.json"  → los checkpoints de modelopt (NVIDIA y compañía)
+#
+# OJO con el "hf_quant_config.json": el "quant_algo" va ANIDADO en
+# "quantization", no en la raiz. Y el "quant_method" puede venir del
+# "producer.name" de ese mismo fichero cuando el config.json no lo dice.
+#
+# OJO con el 404: la respuesta de error de HuggingFace NO es un JSON válido,
+# así que un repo que no existe se lee como "NINGUNO" (que es lo correcto:
+# sin quantization_config no hay quant de fábrica).
 # -----------------------------------------------------------------------------
-_gguffer_repo_ya_cuantizado() {
-    local repo="$1"
-    [[ -n "$repo" && "$repo" == */* ]] || return 1
+_gguffer_quant_fuente() {
+    local src="${1:-}"
+    if [[ -z "$src" ]]; then printf 'NINGUNO\n'; return 0; fi
 
-    local _tmp
-    _tmp="$(mktemp "${TMPDIR:-/tmp}/gguffer-qcfg.XXXXXX")" || return 1
-
-    # hf_quant_config.json: la metadata que ponen los checkpoints de
-    # modelopt (NVIDIA y compañía). Su presencia ya dice "cuantizado".
-    local _hqc=1
-    if curl -fsS --max-time 60 -o "$_tmp" \
-            "https://huggingface.co/$repo/raw/main/hf_quant_config.json" 2>/dev/null \
-       && _gguffer_es_json "$_tmp"; then
-        _hqc=0
-    fi
-
-    # quantization_config en el config.json: la otra forma (AWQ, GPTQ,
-    # bnb, y el mxfp4 del gpt-oss).
-    local _qcfg=1
-    if [[ $_hqc -ne 0 ]] && curl -fsS --max-time 60 -o "$_tmp" \
-            "https://huggingface.co/$repo/raw/main/config.json" 2>/dev/null \
-       && _gguffer_es_json "$_tmp"; then
-        if python3 - "$_tmp" <<'PY' 2>/dev/null
-import json, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        d = json.load(f)
-except Exception:
-    sys.exit(1)
-sys.exit(0 if d.get("quantization_config") else 1)
-PY
-        then
-            _qcfg=0
+    local _tmp="" _cfg="" _hqc="" _limpiar=0
+    if [[ -d "$src" ]]; then
+        # Un directorio local: la metadata está ahí, sin red.
+        [[ -f "$src/config.json" ]] && _cfg="$src/config.json"
+        [[ -f "$src/hf_quant_config.json" ]] && _hqc="$src/hf_quant_config.json"
+    else
+        _tmp="$(mktemp -d "${TMPDIR:-/tmp}/gguffer-qcfg.XXXXXX" 2>/dev/null || true)"
+        if [[ -n "$_tmp" ]]; then
+            _limpiar=1
+            curl -fsS --max-time 60 -o "$_tmp/config.json" \
+                "https://huggingface.co/$src/raw/main/config.json" 2>/dev/null || true
+            curl -fsS --max-time 60 -o "$_tmp/hf_quant_config.json" \
+                "https://huggingface.co/$src/raw/main/hf_quant_config.json" 2>/dev/null || true
+            _gguffer_es_json "$_tmp/config.json" && _cfg="$_tmp/config.json"
+            _gguffer_es_json "$_tmp/hf_quant_config.json" && _hqc="$_tmp/hf_quant_config.json"
         fi
     fi
-    rm -f "$_tmp" 2>/dev/null || true
 
-    if [[ $_hqc -eq 0 ]]; then
-        echo "el repo declara hf_quant_config.json (checkpoint ya cuantizado)" >&2
+    local _clase="NINGUNO"
+    if [[ -n "$_cfg" || -n "$_hqc" ]]; then
+        _clase="$(python3 - "${_cfg:-}" "${_hqc:-}" <<'PY' 2>/dev/null || echo "NINGUNO"
+import json, sys
+
+def leer(ruta):
+    if not ruta:
+        return {}
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+cfg = leer(sys.argv[1] if len(sys.argv) > 1 else "")
+hqc = leer(sys.argv[2] if len(sys.argv) > 2 else "")
+
+qc = cfg.get("quantization_config") or {}
+metodo = qc.get("quant_method")
+algo = qc.get("quant_algo")
+formato = qc.get("format")
+grupos = qc.get("config_groups") or {}
+capas = qc.get("quantized_layers") or {}
+
+hquant = hqc.get("quantization") or {}
+if not metodo:
+    metodo = ((hqc.get("producer") or {}).get("name") or "").strip().lower() or None
+if not algo:
+    algo = hquant.get("quant_algo")
+if not formato:
+    formato = hquant.get("format")
+
+def grupo_es_nvfp4(g):
+    return isinstance(g, dict) and str(g.get("format", "")).lower() == "nvfp4-pack-quantized"
+
+clase = "NINGUNO"
+if metodo == "mxfp4":
+    # El gpt-oss: el motor lo repackea a MXFP4 nativo (MXFP4_MOE).
+    clase = "MXFP4"
+elif metodo == "compressed-tensors":
+    if formato == "nvfp4-pack-quantized":
+        clase = "NVFP4"
+    elif formato == "mixed-precision":
+        gs = [g for g in grupos.values() if isinstance(g, dict)]
+        # Todos los grupos en NVFP4: el motor lo sabe hacer. Con un grupo
+        # de otro tipo (FP8) es el caso MIXTO: el motor actual no.
+        clase = "NVFP4" if (gs and all(grupo_es_nvfp4(g) for g in gs)) else "MIXTO"
+    else:
+        # float-quantized (FP8), int-quantized, mxfp4-pack-quantized...:
+        # todos se dequantizan al convertir.
+        clase = "DEQUANT"
+elif metodo == "modelopt":
+    clase = "NVFP4" if str(algo).upper() == "NVFP4" else "DEQUANT"
+elif metodo in ("awq", "gptq", "bnb", "bitsandbytes", "fp8"):
+    clase = "DEQUANT"
+elif str(algo).upper() == "NVFP4":
+    clase = "NVFP4"
+elif any(str(v.get("quant_algo", "")).upper().endswith("NVFP4")
+         for v in capas.values() if isinstance(v, dict)):
+    clase = "NVFP4"
+
+print(clase)
+PY
+)"
+    fi
+    (( _limpiar == 1 )) && rm -rf "$_tmp" 2>/dev/null
+    printf '%s\n' "$_clase"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_es_quantizado <llama_ftype>
+#
+# 0 si ese file_type es un quant de verdad (los pesos YA están cuantizados),
+# 1 si no (F32=0, F16=1 y BF16=32 son pesos sin quant).
+#
+# Es lo que separa "cuantizar" (de F16 a Q4_K_M) de "re-cuantizar" (de NVFP4
+# a Q4_K_M), que es lo que el motor no permite.
+# -----------------------------------------------------------------------------
+_gguffer_es_quantizado() {
+    case "${1:-}" in
+        ""|0|1|32) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_nombre_ftype <llama_ftype>
+#
+# El nombre canónico de un file_type: "Q4_K_M", no el alias "Q4_K".
+#
+# OJO: el motor imprime el alias ANTES que el canónico ("12 or Q3_K : alias
+# for Q3_K_M" y luego "12 or Q3_K_M"), y los dos tienen el MISMO número. Si
+# se busca el nombre de un número con el primero que aparece, sale el alias,
+# que no es como se llama el quant de verdad.
+# -----------------------------------------------------------------------------
+_gguffer_nombre_ftype() {
+    local ft="${1:-}"
+    [[ -n "$ft" ]] || return 0
+    printf '%s' "${quants_canon:-}" | tr ' ' '\n' | grep -E "^${ft}=" | head -1 | cut -d= -f2
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_que_vamos_a_hacer <llama_ftype_de_partida>
+#
+# Decide, quant a quant, qué va a pasar con los pesos. Fija:
+#
+#   _plan_cuantizar : 1 si hay que cuantizar algo, 0 si no
+#   _plan_error     : el texto del error (vacío si el plan es viable)
+#   _plan_omitidos  : los quants que NO se cuantizan (ya están en ese quant)
+#   _plan_faltan    : los quants que SÍ se cuantizan
+#
+# <llama_ftype_de_partida> es el file_type que se espera en el GGUF de
+# partida: el REAL si ya lo tenemos (--gguf), o el que se deduce de la
+# metadata del repo (39 = NVFP4, 38 = MXFP4_MOE, 1 = F16) y del --intermedio.
+#
+# ── LAS CUATRO SITUACIONES ──────────────────────────────────────────────────
+#
+#   1. El GGUF ya está en el quant pedido → no se cuantiza. Ni imatrix, ni
+#      horas de CPU: el fichero ya está bien.
+#   2. El GGUF está en OTRO quant → no se puede re-cuantizar. El motor lo
+#      rechaza ("requantizing from type nvfp4 is disabled") y con razón:
+#      se pierde calidad sin ganar nada.
+#   3. El GGUF no está cuantizado (F16/BF16) y el pedido es un quant de
+#      verdad → se cuantiza, y hace falta el imatrix.
+#   4. El GGUF no está cuantizado y el pedido es "plano" (F16/F32/BF16) →
+#      es una simple conversión de dtype: no hay quant que hacer, y por
+#      tanto no hace falta imatrix.
+# -----------------------------------------------------------------------------
+_gguffer_que_vamos_a_hacer() {
+    local ftype="${1:-}"
+    _plan_cuantizar=0
+    _plan_error=""
+    _plan_omitidos=""
+    _plan_faltan=""
+
+    local qi qnum_i qname ft_nombre
+    ft_nombre="$(_gguffer_nombre_ftype "$ftype")"
+    [[ -n "$ft_nombre" ]] || ft_nombre="${ftype:-desconocido}"
+
+    for qi in "${!quants[@]}"; do
+        qnum_i="${qnums[$qi]}"
+        qname="${quants[$qi]}"
+
+        # (4) Un quant "plano" no es una cuantización: no hay imatrix que
+        # traer. Pero tampoco se puede aplicar encima de pesos ya
+        # cuantizados (eso sería dequantizar y re-cuantizar).
+        if [[ "$qnum_i" == "0" || "$qnum_i" == "1" || "$qnum_i" == "32" ]]; then
+            if [[ -n "$ftype" && "$ftype" != "$qnum_i" ]] && _gguffer_es_quantizado "$ftype"; then
+                _plan_error="los pesos ya estan en ${ft_nombre} y pides $qname: el motor no puede re-cuantizar."
+                return 1
+            fi
+            continue
+        fi
+
+        # (1) Mismo quant: el GGUF ya está así. No se cuantiza otra vez.
+        if [[ -n "$ftype" && "$ftype" == "$qnum_i" ]]; then
+            _plan_omitidos="${_plan_omitidos:+$plan_omitidos }$qname"
+            continue
+        fi
+
+        # (2) Otro quant y el de partida ya es un quant: imposible.
+        if [[ -n "$ftype" ]] && _gguffer_es_quantizado "$ftype"; then
+            _plan_error="los pesos ya estan en ${ft_nombre} y pides $qname: el motor no puede re-cuantizar."
+            _plan_error="$_plan_error Re-cuantizar es dequantizar y re-cuantizar: se pierde calidad sin ganar nada."
+            return 1
+        fi
+
+        # (3) De verdad hay que cuantizar: hace falta el imatrix.
+        _plan_cuantizar=1
+        _plan_faltan="${_plan_faltan:+$plan_faltan }$qname"
+    done
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_baja_imatrix <repo> <fichero> <cache>
+#
+# Baja el imatrix de un repo de HuggingFace al cache y deja la ruta en la
+# variable "imatrix" (que es local de quien llama, pero que se ve igual desde
+# aqui: bash va de abajo arriba en el ambito de las variables).
+#
+# El cache va por REPO DE IMATRIX, no por repo de pesos: el mismo imatrix
+# sirve para cualquier quant del mismo modelo base.
+#
+# El fichero puede venir con subdirectorio ("imatrix/muse-glimmer.imatrix.gguf"):
+# hf lo deja en <cache>/<subdir>/<fichero>.
+# -----------------------------------------------------------------------------
+_gguffer_baja_imatrix() {
+    local im_repo="$1" im_file="$2" im_cache="$3"
+    local im_dest="$im_cache/$im_file"
+    if [[ -f "$im_dest" ]]; then
+        echo "[gguffer] reutilizo el imatrix: $im_dest"
+        imatrix="$im_dest"
         return 0
     fi
-    if [[ $_qcfg -eq 0 ]]; then
-        echo "el config.json declara quantization_config (checkpoint ya cuantizado)" >&2
-        return 0
+    echo "[gguffer] bajo el imatrix de $im_repo/$im_file..."
+    mkdir -p "$im_cache" 2>/dev/null || true
+    if ! hf download "$im_repo" "$im_file" --local-dir "$im_cache"; then
+        echo "ERROR: no se pudo bajar el imatrix de $im_repo/$im_file" >&2
+        return 1
     fi
-    return 1
+    if [[ ! -f "$im_dest" ]]; then
+        echo "ERROR: el imatrix no esta en $im_dest" >&2
+        echo "       revisa el nombre del fichero en $im_repo" >&2
+        return 1
+    fi
+    imatrix="$im_dest"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# _gguffer_aviso_mixto <repo>
+#
+# El aviso del caso "mixed-precision" (NVFP4 + FP8 en el mismo checkpoint).
+#
+# ── POR QUÉ ─────────────────────────────────────────────────────────────────
+#
+# El conversor del motor tiene una rama de "compressed-tensors" que decide
+# si el checkpoint es NVFP4 con un "all(...)" sobre los grupos. Upstream usa
+# "any(...)" y además dequantiza el grupo FP8 con un "dequant_fp8" anidado
+# que el fork no tiene. Con el motor de ropero (el fork), este checkpoint
+# falla con:
+#
+#     NotImplementedError: Can't handle multiple config groups for
+#     compressed-tensors yet
+#
+# Eso NO es un fallo del gguffer, y no se puede arreglar desde aquí (el
+# motor es otro repo). Lo que sí se puede es decirlo claro, ANTES de bajar
+# 60 GB, y decir dónde está el arreglo.
+# -----------------------------------------------------------------------------
+_gguffer_aviso_mixto() {
+    local repo="${1:-}"
+    echo "[gguffer] AVISO: $repo es un checkpoint 'mixed-precision' (NVFP4 + FP8)." >&2
+    echo "           Los pesos NO son de un solo quant: no se pueden re-cuantizar." >&2
+    echo "           Si el conversor falla con \"Can't handle multiple config groups" >&2
+    echo "           for compressed-tensors yet\", el problema es el MOTOR, no el gguffer:" >&2
+    echo "             conversion/base.py: el fork usa all(...) donde upstream usa any(...)," >&2
+    echo "             y le falta el dequant_fp8(fp8_configs) anidado de upstream." >&2
+    echo "           Mientras tanto, usa el repo hermano sin cuantizar (BF16/F16)." >&2
+    return 0
 }
 
 # _gguffer_hermanos_sin_quantizar <owner/repo>
@@ -341,7 +593,9 @@ _gguffer_hermanos_sin_quantizar() {
         # fichero de salida, y daria un falso positivo.
         if curl -fsS --max-time 30 -o /dev/null \
                 "https://huggingface.co/$hf_repo/raw/main/config.json" 2>/dev/null; then
-            if ! _gguffer_repo_ya_cuantizado "$hf_repo"; then
+            # Y que NO viene cuantizado: un hermano que tambien esta
+            # cuantizado no sirve (habria que cuantizarlo otra vez).
+            if [[ "$(_gguffer_quant_fuente "$hf_repo" 2>/dev/null || true)" == "NINGUNO" ]]; then
                 printf '%s\n' "$hf_repo"
             fi
         fi
@@ -677,17 +931,43 @@ _gguffer_escribe_fuente() {
     _ggufcheck="$ROPERO_ROOT/bin/python/ggufcheck.py"
 
     local dest="${gguf}.fuente.json"
-    local meta="" base_model="" base_name="" quant="" arch="" block_count=""
+    local base_model="" base_name="" quant="" arch="" block_count="" file_type=""
     if [[ -f "$gguf" ]]; then
-        meta="$(python3 "$_ggufcheck" "$gguf" --meta 2>/dev/null || true)"
-        base_model="$(printf '%s\n' "$meta" | sed -n 's/^base_model=//p' | head -1)"
-        base_name="$(printf '%s\n' "$meta" | sed -n 's/^base_model_name=//p' | head -1)"
-        quant="$(printf '%s\n' "$meta" | sed -n 's/^file_type=//p' | head -1)"
-        arch="$(printf '%s\n' "$meta" | sed -n 's/^arch=//p' | head -1)"
-        block_count="$(printf '%s\n' "$meta" | sed -n 's/^block_count=//p' | head -1)"
+        # El "--info" es el unico modo que trae el file_type, el base_model y
+        # el base_model_name. El "--meta" solo trae arch/block_count/nextn:
+        # leer de ahi el "file_type" (que no sale) hacia que el quant de
+        # procedencia cayese SIEMPRE al nombre del fichero.
+        local info="" campos=""
+        info="$(python3 "$_ggufcheck" "$gguf" --info 2>/dev/null || true)"
+        campos="$(printf '%s' "$info" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+ft = d.get("file_type")
+bc = d.get("block_count")
+print("file_type=%s" % ("" if ft is None else ft))
+print("base_model=%s" % (d.get("base_model_repo") or ""))
+print("base_model_name=%s" % (d.get("base_model_name") or ""))
+print("arch=%s" % (d.get("arch") or ""))
+print("block_count=%s" % ("" if bc is None else bc))
+' 2>/dev/null)"
+        file_type="$(printf '%s\n' "$campos" | sed -n 's/^file_type=//p' | head -1)"
+        base_model="$(printf '%s\n' "$campos" | sed -n 's/^base_model=//p' | head -1)"
+        base_name="$(printf '%s\n' "$campos" | sed -n 's/^base_model_name=//p' | head -1)"
+        arch="$(printf '%s\n' "$campos" | sed -n 's/^arch=//p' | head -1)"
+        block_count="$(printf '%s\n' "$campos" | sed -n 's/^block_count=//p' | head -1)"
     fi
-    # El nombre del quant tambien sale del nombre del fichero: "x.Q2_K.gguf".
-    [[ -n "$quant" ]] || quant="${nombre##*.}"
+    # El nombre del quant es el CANONICO del file_type (lo dice el motor:
+    # "Q4_K_M", no el alias "Q4_K"). Si no se ha podido saber el file_type,
+    # se cae al nombre del fichero ("x.Q2_K.gguf").
+    if [[ -n "$file_type" ]]; then
+        quant="$(_gguffer_nombre_ftype "$file_type")"
+    fi
+    if [[ -z "$quant" && "$nombre" == *.* ]]; then
+        quant="${nombre##*.}"
+    fi
 
     local imx_sha=""
     [[ -n "$imatrix" && -f "$imatrix" ]] && imx_sha="$(sha256sum "$imatrix" 2>/dev/null | cut -d' ' -f1)"
@@ -1046,6 +1326,49 @@ rp_cmd_gguffer() {
         esac
     done
 
+    # ── el imatrix: tres formas, y solo una ─────────────────────────────────
+    #
+    # El imatrix (la importance matrix) hace falta para CUANTIZAR, y solo
+    # para eso. Hay tres formas de darlo, y son excluyentes entre si:
+    #
+    #   --imatrix FICHERO                            (el fichero, aqui)
+    #   --imatrix-repo REPO --imatrix-file FICHERO   (a bajarlo de ahi)
+    #
+    # Y un imatrix sin --quant no tiene sentido: no hay nada que cuantizar.
+    # Es un error de argumentario (no de pesos), asi que se dice antes de
+    # bajar nada, que es de donde se puede decir sin coste.
+    #
+    # ── POR QUÉ "quant ⟺ imatrix" ───────────────────────────────────────────
+    #
+    # El imatrix se calcula sobre el modelo base y dice qué tensores
+    # importan. Sin el, el cuantizador va a ciegas. El repo lo trata como
+    # regla dura (el script es la puerta): si vas a cuantizar, el imatrix
+    # tiene que estar, sea local o sea el par del repo. Si no vas a
+    # cuantizar (no hay --quant, o el GGUF ya está en ese quant), el imatrix
+    # no hace falta para nada: bajarlo serían 200 MB para nada.
+    if [[ -n "$imatrix" && ( -n "$imatrix_repo" || -n "$imatrix_file" ) ]]; then
+        echo "ERROR: --imatrix es excluyente con --imatrix-repo/--imatrix-file." >&2
+        echo "       O el fichero local (--imatrix), o el par del repo" >&2
+        echo "       (--imatrix-repo + --imatrix-file). No las dos." >&2
+        return 2
+    fi
+    if [[ -n "$imatrix_repo" && -z "$imatrix_file" ]]; then
+        echo "ERROR: --imatrix-repo necesita su fichero: --imatrix-file" >&2
+        echo "       (los dos van siempre juntos)" >&2
+        return 2
+    fi
+    if [[ -n "$imatrix_file" && -z "$imatrix_repo" ]]; then
+        echo "ERROR: --imatrix-file necesita su repo: --imatrix-repo" >&2
+        echo "       (los dos van siempre juntos)" >&2
+        return 2
+    fi
+    if [[ ( -n "$imatrix" || -n "$imatrix_repo" ) && ${#quants[@]} -eq 0 && $diagnostico -eq 0 ]]; then
+        echo "ERROR: un imatrix solo se usa al cuantizar, y no has pedido --quant." >&2
+        echo "       Sin --quant el gguffer solo convierte y coloca el GGUF." >&2
+        echo "       Con --diagnostico si se puede mirar el imatrix sin cuantizar." >&2
+        return 2
+    fi
+
     # ── ¿de donde sale el motor? ────────────────────────────────────────────
     local _llama_dir="${LLAMA_DIR:-$HOME/llama.cpp}"
     local _convert="$_llama_dir/convert_hf_to_gguf.py"
@@ -1102,10 +1425,15 @@ rp_cmd_gguffer() {
     fi
 
     # ── los quants del motor: numero y nombre ───────────────────────────────
-    # El numero es el GGML_TYPE, que es lo que lleva el GGUF en
-    # general.file_type: con eso se puede saber si un GGUF ya esta en el
-    # quant pedido (y saltarse la cuantizacion).
-    local quants_txt quants_num
+    # El numero de esta lista es el llama_ftype, que es JUSTO lo que lleva el
+    # GGUF en "general.file_type": con eso se puede saber si un GGUF ya esta
+    # en el quant pedido (y saltarse la cuantizacion).
+    #
+    # OJO: hay OTRO espacio de numeros, el ggml_type (el del tensor
+    # predominante), y NO son el mismo: NVFP4 es 39 aqui y 40 alla, MXFP4_MOE
+    # es 38 aqui y 39 alla. Comparar el general.file_type (llama_ftype) con
+    # un ggml_type es comparar peras con manzanas: nunca coincide.
+    local quants_txt quants_num quants_canon
     quants_txt="$("$_quantize" --help 2>&1 | grep -E "or  [A-Z0-9]" || true)"
     if [[ -z "$quants_txt" ]]; then
         echo "ERROR: no se puede leer la lista de quants de $_quantize" >&2
@@ -1113,6 +1441,11 @@ rp_cmd_gguffer() {
     fi
     # "    19  or  IQ2_XXS : ..."  ->  "19=IQ2_XXS"
     quants_num="$(printf '%s\n' "$quants_txt" | sed -nE 's/^[[:space:]]*([0-9]+)[[:space:]]+or[[:space:]]+([A-Z0-9_]+).*/\1=\2/p' | tr '\n' ' ')"
+    # La lista CANONICA: sin los alias. El motor imprime "15 or Q4_K : alias
+    # for Q4_K_M" y despues "15 or Q4_K_M": los dos son el 15, pero el
+    # nombre bueno es el segundo. Para buscar el nombre de un numero (el
+    # file_type -> "NVFP4") hay que quitar los alias, o sale "Q4_K".
+    quants_canon="$(printf '%s\n' "$quants_txt" | grep -v "alias for" | sed -nE 's/^[[:space:]]*([0-9]+)[[:space:]]+or[[:space:]]+([A-Z0-9_]+).*/\1=\2/p' | tr '\n' ' ')"
 
     # ── validar el quant ANTES de descargar 60 GB ───────────────────────────
     local -a qnums=()
@@ -1139,6 +1472,9 @@ rp_cmd_gguffer() {
     # ── donde vive cada cosa ───────────────────────────────────────────────
     local work_root="${GGUF_WORK_DIR:-$HOME/.cache/ropero/gguffer}"
     local out_dir="${GGUF_DIR:-$HOME/models/gguf}"
+    # El cache del imatrix va por REPO DE IMATRIX, no por repo de pesos: el
+    # mismo imatrix sirve para cualquier quant del mismo modelo base.
+    local im_dir="$work_root/imatrix/${imatrix_repo//\//__}"
     # Si --out trae un directorio, el GGUF va ahi. Si trae la ruta exacta del
     # fichero, el directorio es el de esa ruta. El launcher busca cada modelo
     # en $GGUF_DIR/<carpeta_del_modelo>/, asi que esto es lo que hace que el
@@ -1236,46 +1572,6 @@ rp_cmd_gguffer() {
         fi
     fi
 
-    # ── el imatrix: si viene de un repo, se baja aqui ───────────────────────
-    # El imatrix es un fichero aparte del modelo (unos 200 MB) y lo publica
-    # otra gente. Antes habia que bajarlo a mano con hf y pasarle la ruta;
-    # con --imatrix-repo/--imatrix-file se baja solo y se cachea, asi que el
-    # gguffer se encarga de todo el proceso.
-    if [[ -n "$imatrix_repo" || -n "$imatrix_file" ]]; then
-        [[ -n "$imatrix_repo" && -n "$imatrix_file" ]] || {
-            echo "ERROR: --imatrix-repo y --imatrix-file van juntos" >&2; return 2; }
-        if ! command -v hf >/dev/null 2>&1; then
-            echo "ERROR: falta 'hf' (huggingface_hub) para bajar el imatrix" >&2
-            return 1
-        fi
-        # El cache va por repo de imatrix, no por repo de pesos: el mismo
-        # imatrix sirve para cualquier quant del mismo modelo base.
-        local im_dir="$work_root/imatrix/${imatrix_repo//\//__}"
-        # El fichero puede venir con subdirectorio ("imatrix/muse-glimmer.imatrix.gguf"):
-        # hf lo deja en <dir>/<subdir>/<fichero>.
-        local im_dest="$im_dir/$imatrix_file"
-        if [[ -f "$im_dest" ]]; then
-            echo "[gguffer] reutilizo el imatrix: $im_dest"
-            imatrix="$im_dest"
-        else
-            echo "[gguffer] bajo el imatrix de $imatrix_repo/$imatrix_file..."
-            mkdir -p "$im_dir"
-            if ! hf download "$imatrix_repo" "$imatrix_file" --local-dir "$im_dir"; then
-                echo "ERROR: no se pudo bajar el imatrix de $imatrix_repo/$imatrix_file" >&2
-                return 1
-            fi
-            if [[ ! -f "$im_dest" ]]; then
-                echo "ERROR: el imatrix no esta en $im_dest" >&2
-                echo "       revisa el nombre del fichero en $imatrix_repo" >&2
-                return 1
-            fi
-            imatrix="$im_dest"
-        fi
-    fi
-    if [[ -n "$imatrix" && ! -f "$imatrix" ]]; then
-        echo "ERROR: el imatrix no existe: $imatrix" >&2
-        return 1
-    fi
 
     # ── --force: limpiarlo todo y empezar de cero ───────────────────────────
     if (( force == 1 )); then
@@ -1306,40 +1602,131 @@ rp_cmd_gguffer() {
     # es la parte cara e irreversible del proceso (una hora y decenas de GB),
     # y hay fallos que se saben de antemano:
     #
-    #   · el repo ya viene CUANTIZADO (los de NVIDIA, los de modelopt): el
-    #     cuantizador no puede re-cuantizar y falla al final, cuando ya se ha
-    #     gastado todo;
-    #   · el motor no tiene el cuant que se pide;
-    #   · falta el imatrix que ese quant exige.
+    #   · los pesos ya vienen CUANTIZADOS (los de NVIDIA, los de modelopt):
+    #     el motor no puede re-cuantizar, y eso se sabe por la metadata;
+    #   · el motor no tiene el quant que se pide;
+    #   · falta el imatrix que hace falta para cuantizar.
     #
-    # El primero es el que mas duele, porque el error del motor
-    # ("requantizing from type nvfp4 is disabled") no dice de donde sale el
-    # problema, y la respuesta (usar el repo BF16) se puede buscar aqui.
-    if [[ -n "$repo" && -z "$gguf_origen" ]]; then
-        local _motivo=""
-        if _motivo="$(_gguffer_repo_ya_cuantizado "$repo" 2>&1)"; then
-            echo "ERROR: el repo $repo YA VIENE CUANTIZADO ($_motivo)." >&2
-            echo "       Cuantizar encima de eso es dequantizar y re-cuantizar:" >&2
-            echo "       se pierde calidad sin ganar nada, y el motor lo rechaza:" >&2
-            echo "         llama_model_quantize: failed to quantize:" >&2
-            echo "         requantizing from type nvfp4 is disabled" >&2
-            local _hermano
-            _hermanos=()
-            while IFS= read -r _l; do
-                [[ -n "$_l" ]] && _hermanos+=("$_l")
-            done < <(_gguffer_hermanos_sin_quantizar "$repo" 2>/dev/null)
-            if (( ${#_hermanos[@]} > 0 )); then
-                echo "       Usa el repo SIN cuantizar:" >&2
-                local _h
-                for _h in ${_hermanos[@]+"${_hermanos[@]}"}; do
-                    echo "         ropero gguffer --repo $_h --quant <QUANT> ..." >&2
-                done
-            else
-                echo "       No he encontrado un repo hermano sin cuantizar." >&2
-                echo "       Busca uno del mismo modelo en BF16 o F16." >&2
+    # ── EL CASO DE LOS PESOS QUE YA VIENEN CUANTIZADOS ──────────────────────
+    #
+    # No todos los checkpoints que vienen cuantizados son lo mismo, y por eso
+    # hay que mirar la metadata y no solo "tiene quantization_config":
+    #
+    #   · los que el conversor CONSERVA (NVFP4 y MXFP4): el GGUF sale en ese
+    #     mismo quant. Sin --quant: se convierte y se coloca. Con --quant de
+    #     ese mismo tipo: se convierte y se coloca (no se cuantiza dos veces).
+    #     Con OTRO --quant: no se puede, y se dice por qué y qué repo usar.
+    #
+    #   · los que el conversor DEQUANTIZA (FP8, AWQ, GPTQ): el GGUF sale en
+    #     F16. Se puede cuantizar desde ahi, pero avisando de que el quant de
+    #     fábrica se ha perdido por el camino.
+    #
+    #   · los que NO vienen cuantizados (BF16/F16): se cuantiza de verdad, y
+    #     hace falta el imatrix.
+    #
+    # ── POR QUÉ EL NOMBRE DEL INTERMEDIO ────────────────────────────────────
+    #
+    # El intermedio se llama como lo que lleva dentro. Si los pesos vienen
+    # en NVFP4, el intermedio NO es un F16: es un NVFP4. Ponerle "-F16" a un
+    # fichero NVFP4 hace que el resto del proceso (y el usuario) crean que
+    # hay un F16 por ahi que se puede reutilizar para otro quant: no lo hay.
+    local _clase="NINGUNO" _ftype_esp="" _inter_up="${inter^^}" _suf_inter="${inter^^}"
+    local _plan_cuantizar=0 _plan_error="" _plan_omitidos="" _plan_faltan=""
+    local _plan_pendiente=0
+    if [[ -z "$gguf_origen" && ( -n "$repo" || -n "$path" ) ]]; then
+        if [[ -n "$repo" ]]; then
+            _clase="$(_gguffer_quant_fuente "$repo" 2>/dev/null || true)"
+        else
+            _clase="$(_gguffer_quant_fuente "$path" 2>/dev/null || true)"
+        fi
+        [[ -n "$_clase" ]] || _clase="NINGUNO"
+        case "$_clase" in
+            NVFP4|MIXTO)
+                _ftype_esp="39"; _suf_inter="NVFP4" ;;
+            MXFP4)
+                _ftype_esp="38"; _suf_inter="MXFP4_MOE" ;;
+            *)
+                # Sin quant de fábrica el intermedio es el modelo tal cual:
+                # F16 o BF16, según --intermedio.
+                if [[ "$_inter_up" == "BF16" ]]; then _ftype_esp="32"; else _ftype_esp="1"; fi
+                _suf_inter="$_inter_up" ;;
+        esac
+
+        local _que="${repo:-$path}"
+        case "$_clase" in
+            NVFP4)
+                echo "[gguffer] el repo $_que YA VIENE EN NVFP4 (lo dice su metadata)."
+                echo "           El conversor conserva ese quant: el GGUF sale en NVFP4." ;;
+            MXFP4)
+                echo "[gguffer] el repo $_que YA VIENE EN MXFP4 (lo dice su metadata)."
+                echo "           El conversor lo repackea a MXFP4: el GGUF sale en MXFP4_MOE." ;;
+            MIXTO)
+                _gguffer_aviso_mixto "$_que" ;;
+            DEQUANT)
+                echo "[gguffer] aviso: el repo $_que viene en un quant de fabrica (FP8/AWQ/GPTQ)."
+                echo "           El conversor lo DEQUANTIZA a F16: el GGUF sale en F16."
+                echo "           Se puede cuantizar desde ahi, pero se pierde la ventaja del"
+                echo "           quant de fabrica (no es lo mismo que cuantizar el modelo entero)." ;;
+        esac
+
+        if ! _gguffer_que_vamos_a_hacer "$_ftype_esp"; then
+            echo "ERROR: $_plan_error" >&2
+            if [[ -n "$repo" ]]; then
+                local _hermanos=() _l _h
+                while IFS= read -r _l; do
+                    [[ -n "$_l" ]] && _hermanos+=("$_l")
+                done < <(_gguffer_hermanos_sin_quantizar "$repo" 2>/dev/null)
+                if (( ${#_hermanos[@]} > 0 )); then
+                    echo "       Usa el repo SIN cuantizar:" >&2
+                    for _h in ${_hermanos[@]+"${_hermanos[@]}"}; do
+                        echo "         ropero gguffer --repo $_h --quant <QUANT> ..." >&2
+                    done
+                else
+                    echo "       No he encontrado un repo hermano sin cuantizar." >&2
+                    echo "       Busca uno del mismo modelo en BF16 o F16." >&2
+                fi
             fi
             return 1
         fi
+        if (( _plan_cuantizar == 1 )) && [[ -z "$imatrix" && -z "$imatrix_repo" ]]; then
+            echo "ERROR: vas a cuantizar a $_plan_faltan y no hay imatrix." >&2
+            echo "       Para cuantizar hace falta la importance matrix del modelo base:" >&2
+            echo "         --imatrix FICHERO                            (el fichero, aqui)" >&2
+            echo "         --imatrix-repo REPO --imatrix-file FICHERO   (a bajarlo de ahi)" >&2
+            return 2
+        fi
+    elif [[ -n "$gguf_origen" ]]; then
+        # Con --gguf el quant del fichero no se sabe hasta tenerlo delante
+        # (y si viene de un repo, hasta bajarlo): el plan se decide en la
+        # FASE 3, con el file_type REAL.
+        _plan_pendiente=1
+    fi
+    # ── el imatrix: si viene de un repo, se baja aqui ───────────────────────
+    # El imatrix es un fichero aparte del modelo (unos 200 MB) y lo publica
+    # otra gente. Antes habia que bajarlo a mano con hf y pasarle la ruta;
+    # con --imatrix-repo/--imatrix-file se baja solo y se cachea, asi que el
+    # gguffer se encarga de todo el proceso.
+    #
+    # OJO: solo se baja si de verdad se va a cuantizar. Si el GGUF ya esta en
+    # el quant pedido (o no hay quant), el imatrix no sirve para nada, y
+    # bajarlo son 200 MB y un rato de espera por nada.
+    if [[ -n "$imatrix_repo" || -n "$imatrix_file" ]]; then
+        [[ -n "$imatrix_repo" && -n "$imatrix_file" ]] || {
+            echo "ERROR: --imatrix-repo y --imatrix-file van juntos" >&2; return 2; }
+        if ! command -v hf >/dev/null 2>&1; then
+            echo "ERROR: falta 'hf' (huggingface_hub) para bajar el imatrix" >&2
+            return 1
+        fi
+        if (( _plan_cuantizar == 1 || _plan_pendiente == 1 )); then
+            _gguffer_baja_imatrix "$imatrix_repo" "$imatrix_file" "$im_dir" || return 1
+        else
+            echo "[gguffer] aviso: no se va a cuantizar nada, asi que el imatrix no hace falta."
+            echo "           (no lo bajo: son 200 MB que no se usarian)"
+        fi
+    fi
+    if [[ -n "$imatrix" && ! -f "$imatrix" ]]; then
+        echo "ERROR: el imatrix no existe: $imatrix" >&2
+        return 1
     fi
 
     # ── FASE 1: la descarga ─────────────────────────────────────────────────
@@ -1409,15 +1796,31 @@ rp_cmd_gguffer() {
     # ── FASE 2: conversion a GGUF ───────────────────────────────────────────
     local inter_up="${inter^^}"
     [[ "$inter_up" == "F16" || "$inter_up" == "BF16" ]] || { echo "ERROR: --intermedio solo admite f16 o bf16" >&2; return 2; }
-    # El intermedio se reutiliza SEA CUAL SEA el que haya (F16 o BF16): si
-    # te has quedado con uno del paso anterior, no se vuelve a convertir.
-    # Importa porque el nombre depende de --intermedio y cambiar la flag
-    # entre pasos dejaba el intermedio viejo huérfano.
+    # El nombre del intermedio dice lo que lleva DENTRO. Si los pesos vienen
+    # de fábrica en NVFP4 o MXFP4, el intermedio no es un F16: es un NVFP4 (o
+    # un MXFP4). El "_suf_inter" sale del PREFLIGHT, que ya sabe de qué clase
+    # es el checkpoint.
+    #
+    # Y el reuso se busca con ESE nombre, no con el de un F16: un fichero
+    # "-F16" de otro modelo (o de otra corrida) NO es el intermedio de este.
     local out_f16="" _cand
-    for _cand in "$out_dir/${nombre}-F16.gguf" "$out_dir/${nombre}-BF16.gguf"; do
-        if [[ -f "$_cand" ]]; then out_f16="$_cand"; break; fi
-    done
-    [[ -z "$out_f16" ]] && out_f16="$out_dir/${nombre}-${inter_up}.gguf"
+    # Si el nombre del modelo ya trae el sufijo del quant ("Groot-...-NVFP4")
+    # no se repite: "...-NVFP4-NVFP4" no dice nada.
+    local _nombre_inter="$nombre"
+    [[ "$_nombre_inter" == *"-${_suf_inter}" ]] || _nombre_inter="${_nombre_inter}-${_suf_inter}"
+    if [[ "$_suf_inter" == "F16" || "$_suf_inter" == "BF16" ]]; then
+        # El intermedio se reutiliza SEA CUAL SEA el que haya (F16 o BF16): si
+        # te has quedado con uno del paso anterior, no se vuelve a convertir.
+        # Importa porque el nombre depende de --intermedio y cambiar la flag
+        # entre pasos dejaba el intermedio viejo huérfano.
+        for _cand in "$out_dir/${nombre}-F16.gguf" "$out_dir/${nombre}-BF16.gguf"; do
+            if [[ -f "$_cand" ]]; then out_f16="$_cand"; break; fi
+        done
+    else
+        _cand="$out_dir/${_nombre_inter}.gguf"
+        [[ -f "$_cand" ]] && out_f16="$_cand"
+    fi
+    [[ -z "$out_f16" ]] && out_f16="$out_dir/${_nombre_inter}.gguf"
     # Con --gguf el intermedio es el GGUF que trajimos, no uno del out_dir:
     # gana el que ya esta.
     [[ -n "$_gguf_entrada" ]] && out_f16="$_gguf_entrada"
@@ -1541,7 +1944,10 @@ rp_cmd_gguffer() {
             fi
         fi
 
-        echo "[gguffer] convierto $source_dir -> $out_f16 ($inter_up)..."
+        # El "(...)" es el quant REAL del intermedio, no el del --intermedio:
+        # con pesos que ya vienen en NVFP4, el GGUF sale en NVFP4 aunque se
+        # pidiera un F16.
+        echo "[gguffer] convierto $source_dir -> $out_f16 ($_suf_inter)..."
         # El tokenizer se arregla ANTES de convertir, no solo cuando la
         # conversion falla: el chat template que falta NO hace fallar nada,
         # pero deja el GGUF con el template de la comunidad de llama.cpp
@@ -1635,15 +2041,52 @@ rp_cmd_gguffer() {
 
     # ── FASE 3: la cuantizacion ────────────────────────────────────────────
     # El file_type del GGUF dice en que quant estan los pesos. Si ya estan
-    # cuantizados (el gpt-oss viene en MXFP4), cuantizar encima es
-    # dequantizar y re-cuantizar: se pierde calidad sin ganar nada. Por eso
-    # se mira ANTES, con el dato real y no con una suposicion.
+    # cuantizados (el gpt-oss viene en MXFP4, los de NVIDIA en NVFP4),
+    # cuantizar encima es dequantizar y re-cuantizar: se pierde calidad sin
+    # ganar nada. Por eso se mira ANTES, con el dato real y no con una
+    # suposicion.
+    #
+    # OJO: el "general.file_type" es el llama_ftype (39 = NVFP4, 38 =
+    # MXFP4_MOE, 32 = BF16, 1 = F16), que es JUSTO el espacio de los numeros
+    # que imprime "llama-quantize --help". El "--tipo-predominante" es otro
+    # espacio (el ggml_type: NVFP4 = 40, MXFP4 = 39), y comparar uno con
+    # otro no coincide nunca: por eso el atajo de "ya esta en ese quant"
+    # nunca se disparaba.
     local file_type
-    file_type="$(python3 "$_ggufcheck" "$out_f16" --tipo-predominante 2>/dev/null | head -1 | tr -dc '0-9')"
-    # El nombre del tipo predominante: el numero solo no vale (el 30 es BF16
-    # y IQ4_XS a la vez), asi que se busca en la lista del motor.
+    file_type="$(python3 "$_ggufcheck" "$out_f16" --file-type 2>/dev/null | head -1 | tr -dc '0-9')"
+    # El nombre canónico del quant en que están los pesos.
     local tipo_nombre=""
-    [[ -n "$file_type" ]] && tipo_nombre="$(printf '%s' "$quants_num" | tr ' ' '\n' | grep -E "^${file_type}=" | head -1 | cut -d= -f2)"
+    [[ -n "$file_type" ]] && tipo_nombre="$(_gguffer_nombre_ftype "$file_type")"
+
+    # ── el plan DEFINITIVO, con el dato real ───────────────────────────────
+    # El PREFLIGHT (fase 0) hizo el mismo cálculo con lo que se SABE del
+    # repo. Aquí se hace con el file_type REAL del GGUF, que manda: es el
+    # dato, no la suposición. Para --gguf es la primera vez que se puede
+    # saber (el fichero no estaba delante hasta ahora).
+    if ! _gguffer_que_vamos_a_hacer "$file_type"; then
+        echo "ERROR: $_plan_error" >&2
+        if [[ -n "$tipo_nombre" ]]; then
+            echo "       El GGUF ya esta en $tipo_nombre (file_type=$file_type)." >&2
+        fi
+        echo "       Para cuantizarlo de verdad hace falta el modelo SIN quantizar" >&2
+        echo "       (el repo de pesos en BF16, o el subdirectorio 'original/' del repo)." >&2
+        return 1
+    fi
+    if (( _plan_cuantizar == 1 )) && [[ -z "$imatrix" ]]; then
+        # La red de seguridad: si aqui hace falta el imatrix y no lo hay, se
+        # dice. (El preflight ya lo habia comprobado para --repo/--path; esto
+        # cubre el caso de --gguf, donde el quant no se sabia hasta ahora.)
+        if [[ -n "$imatrix_repo" && -n "$imatrix_file" ]]; then
+            _gguffer_baja_imatrix "$imatrix_repo" "$imatrix_file" "$im_dir" || return 1
+        fi
+        if [[ -z "$imatrix" ]]; then
+            echo "ERROR: hay que cuantizar a $_plan_faltan y no hay imatrix." >&2
+            echo "       Para cuantizar hace falta la importance matrix del modelo base:" >&2
+            echo "         --imatrix FICHERO                            (el fichero, aqui)" >&2
+            echo "         --imatrix-repo REPO --imatrix-file FICHERO   (a bajarlo de ahi)" >&2
+            return 2
+        fi
+    fi
 
     # ── la cabeza MTP y el imatrix ─────────────────────────────────────────
     # El imatrix se calcula sobre el modelo base, pero el GGUF lleva la MTP
@@ -1710,31 +2153,32 @@ rp_cmd_gguffer() {
         local out_q="${out_paths[$qi]}"
         out_finals+=("$out_q")
 
-        if [[ -n "$tipo_nombre" && "$tipo_nombre" != "$qnum_i" &&
-              "$tipo_nombre" != "F16" && "$tipo_nombre" != "BF16" && "$tipo_nombre" != "F32" ]]; then
-            echo "[gguffer] aviso: los pesos del repo ya venian en el quant $tipo_nombre ($file_type)."
-            echo "           Cuantizar a $quant_i encima es dequantizar y re-cuantizar:"
-            echo "           se pierde calidad sin ganar nada."
-            if [[ -d "$work/original" ]]; then
-                echo "           Usa --from-subdir original para cuantizar de los pesos SIN quantizar."
-            fi
-        fi
-
-        if [[ -n "$file_type" && "$file_type" == "$qnum_i" ]]; then
-            # El GGUF ya esta en ese quant (el caso del gpt-oss, que se
-            # convierte a MXFP4 sin cuantizar). Cuantizar encima seria
-            # dequantizar y re-cuantizar: se pierde calidad sin ganar nada.
-            echo "[gguffer] el GGUF ya esta en $quant_i (file_type=$file_type): no cuantizo otra vez"
-            if [[ "$out_q" != "$out_f16" ]]; then
-                rm -f "$out_q"
-                mv "$out_f16" "$out_q"
-            fi
-            continue
-        fi
-
         # El que ya existe de una corrida anterior: no se rehace.
         if [[ -f "$out_q" && $force -eq 0 && -z "$path" ]]; then
             echo "[gguffer] ya existe: $out_q (usa --force para rehacerlo)"
+            continue
+        fi
+
+        if [[ -n "$file_type" && "$file_type" == "$qnum_i" ]]; then
+            # (1) El GGUF ya esta en ese quant (los pesos de NVIDIA en NVFP4,
+            # el gpt-oss en MXFP4). Cuantizar encima seria dequantizar y
+            # re-cuantizar: se pierde calidad sin ganar nada. Asi que aqui no
+            # se cuantiza: el fichero ya esta bien y se coloca tal cual.
+            echo "[gguffer] el GGUF ya esta en $quant_i (file_type=$file_type): no cuantizo otra vez"
+            if [[ "$out_q" != "$out_f16" ]]; then
+                rm -f "$out_q"
+                if (( qi == ${#quants[@]} - 1 )) && [[ "$out_f16" != "$_gguf_entrada" ]]; then
+                    # Es el ULTIMO quant de la tirada y el intermedio es
+                    # nuestro: se mueve (son decenas de GB; copiarlo seria
+                    # doble disco).
+                    mv "$out_f16" "$out_q"
+                else
+                    # Con VARIOS quants el intermedio sigue haciendo falta
+                    # para los siguientes, y el GGUF de entrada es del
+                    # usuario (jamás se mueve): en los dos casos, copia.
+                    cp "$out_f16" "$out_q"
+                fi
+            fi
             continue
         fi
 
@@ -1859,7 +2303,7 @@ rp_cmd_gguffer() {
         out_final="$_q"
         _qname="$(basename "$out_final" .gguf)"
         _gguffer_escribe_fuente "$out_final" "$_qname" "$repo" "$imatrix" \
-            "$imatrix_repo" "$imatrix_file" "$_nextn_bloque" "$inter_up"
+            "$imatrix_repo" "$imatrix_file" "$_nextn_bloque" "$_suf_inter"
     done
 
     local _sz
@@ -1869,7 +2313,12 @@ rp_cmd_gguffer() {
         echo "[gguffer] GGUF listo: $out_final (${_sz:-?})"
     done
     if (( ${#quants[@]} == 0 )); then
-        echo "[gguffer] AVISO: NO he cuantizado nada: el GGUF se ha quedado en $inter_up."
+        # El quant REAL del GGUF que ha salido, no el que se suponia: si los
+        # pesos venían en NVFP4, el GGUF se ha quedado en NVFP4 (diciendo
+        # "F16" seria mentira).
+        local _qfinal="$(_gguffer_nombre_ftype "$file_type")"
+        [[ -n "$_qfinal" ]] || _qfinal="${_suf_inter:-F16}"
+        echo "[gguffer] AVISO: NO he cuantizado nada: el GGUF se ha quedado en $_qfinal."
         echo "           Para cuantizarlo (reutilizando este mismo intermedio, sin volver"
         echo "           a descargar los pesos):"
         echo "             ropero gguffer --repo ${repo:-(<repo>)} --quant <QUANT>"

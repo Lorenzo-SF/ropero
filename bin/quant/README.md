@@ -104,7 +104,7 @@ metida. Se cuantiza ese:
 ```bash
 ropero gguffer \
   --gguf bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf \
-  --quant MXFP4 \
+  --quant MXFP4_MOE \
   --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
   --imatrix-file Qwen3.8-27B-imatrix.gguf
 ```

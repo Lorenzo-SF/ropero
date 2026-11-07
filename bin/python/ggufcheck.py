@@ -291,7 +291,7 @@ class Gguf:
 
 def main(argv):
     if len(argv) < 2:
-        print("uso: ggufcheck.py FICHERO [--info] [--lib RUTA] [--nombres] [--bloque N] [--meta] [--tipo-predominante]", file=sys.stderr)
+        print("uso: ggufcheck.py FICHERO [--info] [--lib RUTA] [--nombres] [--bloque N] [--meta] [--file-type] [--tipo-predominante]", file=sys.stderr)
         return 2
     path = argv[1]
     info_only = "--info" in argv
@@ -334,9 +334,21 @@ def main(argv):
         print("bloque_mtp=%s" % b_mtp)
         return 0
 
-    # --tipo-predominante: el tipo de tensor que mas hay. Es el tipo de
-    # los pesos, que es lo que dice si el GGUF ya esta quantizado. No
-    # sirve el 'general.file_type' porque el conversor no lo pone.
+    # --file-type: el "general.file_type", que es el llama_ftype (el MISMO
+    # espacio que los numeros que imprime "llama-quantize --help": NVFP4=39,
+    # MXFP4_MOE=38, BF16=32, F16=1). Es lo que hay que comparar con el quant
+    # pedido para saber si un GGUF ya esta en ese quant.
+    #
+    # OJO: el "--tipo-predominante" de abajo es OTRO espacio (el ggml_type
+    # del tensor: NVFP4=40, MXFP4=39...). Comparar uno con otro no coincide
+    # nunca, que es un bug muy facil de tener.
+    if "--file-type" in argv:
+        print(r["file_type"] if r["file_type"] is not None else "")
+        return 0
+
+    # --tipo-predominante: el tipo de tensor que mas hay (ggml_type: el
+    # espacio del TENSOR, no el del fichero). Sirve para saber de que dtype
+    # son los tensores sueltos, no para compararlo con un quant.
     if "--tipo-predominante" in argv:
         if not g.tensors:
             print(0)

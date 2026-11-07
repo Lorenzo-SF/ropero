@@ -70,6 +70,50 @@
   medir de sí mismo sigue aquí: el banco de motores y el diagnóstico.
 
 ### Arreglado
+- **Los checkpoints que YA vienen cuantizados de fábrica (NVFP4, MXFP4) ya
+  no son un callejón sin salida.** Antes el gguffer abortaba con "el repo
+  YA VIENE CUANTIZADO" para cualquier repo pre-cuantizado, **incluso sin
+  `--quant`**: no había forma de convertir y colocar un NVFP4 sin que se
+  quejara. Y el error, cuando salía, salía después de descargar 40-60 GB.
+  - Ahora se mira la metadata del repo (`config.json` →
+    `quantization_config`, y `hf_quant_config.json` → `quantization.quant_algo`,
+    que va **anidada**) y se distingue lo que el conversor **conserva**
+    (NVFP4, MXFP4) de lo que **dequantiza** (FP8, AWQ, GPTQ → F16):
+    - sin `--quant` → se convierte y se coloca (el GGUF sale en el quant que
+      ya traían);
+    - con `--quant` del **mismo** tipo → se convierte y se coloca, **sin
+      cuantizar otra vez** (y sin pedir imatrix);
+    - con `--quant` **distinto** → error claro, **antes de descargar**, con
+      el repo hermano sin cuantizar que sí serviría;
+    - los que se dequantizan (FP8/AWQ/GPTQ) sí se pueden cuantizar, pero
+      avisando de que el quant de fábrica se pierde por el camino.
+- **El `general.file_type` se comparaba en el espacio de números
+  equivocado.** El `file_type` del GGUF es un **llama_ftype** (el enum de
+  `include/llama.h`: NVFP4 = 39, MXFP4_MOE = 38, Q4_K_M = 15), y es
+  JUSTO el espacio de los números que imprime `llama-quantize --help`. Pero
+  el atajo de "el GGUF ya está en ese quant" comparaba ese número con el
+  **ggml_type** del tensor predominante (otro enum: NVFP4 = 40, MXFP4 = 39):
+  nunca coincidía, así que **el atajo nunca se disparaba**. Y el aviso que
+  comparaba un *nombre* con un *número* salía siempre.
+  - Nuevo modo `--file-type` en `bin/python/ggufcheck.py` (imprime el
+    `general.file_type`), y el gguffer ya compara en el espacio correcto.
+  - `bin/quant/tipos.txt` estaba en espacio **ggml_type** cuando todos sus
+    consumidores (el model card, `subir-hf.sh`, `verificar-gguf.sh`) leen el
+    `general.file_type`, que es **llama_ftype**: por eso un GGUF en NVFP4 se
+    llamaba "MXFP4" y un Q4_K_M se llamaba "Q8_K". La lista está ahora en
+    llama_ftype, con los alias ("Q4_K" es alias de "Q4_K_M") detrás del
+    canónico, y el nombre de un número se busca en la lista sin alias.
+- **La procedencia (`.fuente.json`) decía cosas que no eran ciertas.** Se
+  leía el `file_type`, el `base_model` y el `base_model_name` del modo
+  `--meta` de `ggufcheck.py`, que **solo imprime** `arch`, `block_count`,
+  `nextn_predict_layers` y `bloque_mtp`: esos tres campos salían siempre
+  vacíos y el `quant` caía al nombre del fichero. Ahora se leen del `--info`
+  (JSON) y el `quant` se guarda con el **nombre canónico** del quant.
+- **El intermedio ya no se llama `-F16` cuando no lleva un F16.** Con pesos
+  que vienen en NVFP4, el GGUF intermedio es un NVFP4, y llamarlo `-F16`
+  hacía que el reuso del intermedio (y el nombre final) mintieran.
+
+
 - **`ropero path <modelo-flm>` ya no enseña una ruta inventada.** El `case`
   del path probaba `safetensors/*` antes que `*/fastflowlm`, y como los TOMLs
   de FLM son `format = safetensors`, salía `models/safetensors/gpt-oss:20b`
@@ -171,6 +215,20 @@
   que la config sea la misma → se reinicia y se avisa.
 
 ### Cambiado
+- **`--quant` y el imatrix son una pareja: uno sin el otro no se acepta.**
+  - `--imatrix` (fichero local) es **excluyente** con el par
+    `--imatrix-repo`/`--imatrix-file` (el imatrix de otro repo), y los dos
+    últimos **van siempre juntos**.
+  - **Cuantizar exige imatrix**: sin él el gguffer dice que falta y **no
+    baja los pesos** (el error sale antes de los 60 GB, no después). Con el
+    imatrix ya puesto no hace falta el `--imatrix` local.
+  - Un imatrix **sin** `--quant` es un error ("no hay nada que cuantizar"),
+    salvo con `--diagnostico`, que sí lo usa.
+  - Y al revés: si el GGUF **ya está** en el quant pedido, no se cuantiza
+    (y por tanto **no hace falta imatrix, y no se baja**: son 200 MB).
+- El imatrix de `--imatrix-repo` **solo se baja si de verdad se va a
+  cuantizar**.
+
 - El motor principal pasa de `AtomicBot-ai/atomic-llama-cpp-turboquant` a
   **nuestro motor**, `Lorenzo-SF/ropero-llama-turboquant`, que es **privado**:
   un fork de un repo público no puede ser privado (GitHub responde 422

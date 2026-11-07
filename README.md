@@ -122,8 +122,18 @@ sesión exportada). **Aviso**: el test para el entorno y mata
 ## Fabricar GGUFs
 
 ```bash
-ropero gguffer --repo unsloth/Qwen3.8-27B-GGUF --quant IQ3_XXS
+# Cuantizar: el imatrix va SIEMPRE con el quant (o el fichero local, o el
+# par --imatrix-repo/--imatrix-file). Sin imatrix, el gguffer no cuantiza.
+ropero gguffer --repo unsloth/Qwen3.8-27B-GGUF --quant IQ3_XXS \
+  --imatrix-repo bartowski/Qwen3.8-27B-GGUF --imatrix-file Qwen3.8-27B-imatrix.gguf
+
+# Los pesos que YA vienen cuantizados de fábrica (NVFP4, MXFP4): sin
+# --quant se convierten y se colocan; con --quant del mismo tipo, también
+# (no se cuantiza dos veces). Con un quant DISTINTO no se puede: el motor
+# no re-cuantiza, y el gguffer lo dice antes de bajar los pesos.
+ropero gguffer --repo GrootTeam/Groot-19B-A3B-261023-NVFP4
 ropero gguffer --gguf nvidia/Qwen3.8-27B-NVFP4 --quant NVFP4   # ya aplicada: sólo coloca
+
 ropero gguffer --list-quants
 ```
 

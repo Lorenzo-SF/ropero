@@ -37,6 +37,10 @@ run() { python3 "$CHECK" "$TMP/sint.gguf" "$@" 2>/dev/null; }
 out="$(run --meta)"
 [[ "$out" == $'arch=qwen35\nblock_count=5\nnextn_predict_layers=1\nbloque_mtp=4' ]] && ok "--meta" || mal "--meta: $out"
 [[ "$(run --tipo-predominante)" == "0" ]] && ok "--tipo-predominante" || mal "--tipo-predominante"
+# El --file-type es el general.file_type (un llama_ftype: el mismo numero que
+# lleva en el GGUF y que imprime "llama-quantize --help"). El --tipo-predominante
+# es OTRO espacio (el ggml_type del tensor): para el GGUF de aqui son 1 y 0.
+[[ "$(run --file-type)" == "1" ]] && ok "--file-type" || mal "--file-type: $(run --file-type)"
 [[ "$(run --nombres | tr '\n' ' ')" == "blk.0.w blk.4.w " ]] && ok "--nombres" || mal "--nombres"
 [[ "$(run --bloque 4)" == "blk.4.w" ]] && ok "--bloque" || mal "--bloque"
 run --info | grep -q '"tensores": 2' && ok "--info" || mal "--info"
