@@ -532,72 +532,7 @@ rp_stop_port() {
         fi
     done
     sleep 1
-    # El perfil de energía vuelve al que había (si se movió).
-    _rp_perfil_restaurar "$puerto" || true
     rp_state_clear "$puerto"
-    return 0
-}
-
-# ── Perfil de energía mientras hay un modelo sirviendo ─────────────────────
-#
-# ¿POR QUÉ?
-#
-# Con un modelo cargándose, la CPU hace trabajo de verdad (prompt processing y
-# sobre todo el DEQUANT en el modo low-RAM, donde los expertos del SSD se
-# cuantizan en la CPU). Con el governor en "balanced" el kernel elige frecuencias
-# más conservadoras para ahorrar batería; en un portátil eso no compensa
-# mientras se sirve.
-#
-# POR QUÉ ES OPC-IN Y POR QUÉ SE DEVUELVE
-#
-# El perfil de energía es del usuario (el setup NO lo toca: docs §2.9). Aquí
-# sólo se mueve si se pide (ROPERO_PERFIL_SERVE=performance) y SIEMPRE se
-# guarda el anterior para devolverlo al parar. Si ropero muere con -9, el
-# perfil se queda: por eso el valor anterior está en el fichero de estado
-# (PROFILE_PREV), y `ropero stop` lo devuelve aunque el launch se muriera.
-#
-#   ROPERO_PERFIL_SERVE=performance ropero <modelo>
-#
-_rp_perfil_actual() {
-    command -v powerprofilesctl >/dev/null 2>&1 || return 1
-    local p
-    p="$(powerprofilesctl get 2>/dev/null)" || return 1
-    [[ -n "$p" ]] || return 1
-    printf '%s' "$p"
-}
-
-_rp_perfil_poner() {
-    local puerto="$1" perfil="${2:-}" actual
-    [[ -n "$perfil" ]] || return 0
-    actual="$(_rp_perfil_actual)" || return 0
-    if [[ "$actual" == "$perfil" ]]; then
-        # Ya está en el perfil pedido: se BORRA el "anterior" que quedara de
-        # una puesta anterior, para que al parar no se devuelva un valor
-        # viejo (y se mueva el perfil sin motivo).
-        rp_state_write "$puerto" "PROFILE_PREV=" || true
-        return 0
-    fi
-    # El valor ANTERIOR se guarda en el estado: si el launch muere con -9,
-    # `ropero stop` lo devuelve igual.
-    rp_state_write "$puerto" "PROFILE_PREV=$actual" || true
-    if powerprofilesctl set "$perfil" >/dev/null 2>&1; then
-        rp_msg info "perfil de energía: $actual → $perfil (se vuelve a $actual al parar el modelo)"
-        return 0
-    fi
-    rp_msg warn "no se pudo cambiar el perfil de energía a '$perfil'"
-    return 0
-}
-
-_rp_perfil_restaurar() {
-    local puerto="$1" prev
-    prev="$(rp_state_read "$puerto" PROFILE_PREV 2>/dev/null)" || prev=""
-    [[ -n "$prev" ]] || return 0
-    command -v powerprofilesctl >/dev/null 2>&1 || return 0
-    if powerprofilesctl set "$prev" >/dev/null 2>&1; then
-        rp_msg ok "perfil de energía devuelto a $prev"
-    else
-        rp_msg warn "no se pudo devolver el perfil de energía a '$prev'"
-    fi
     return 0
 }
 
@@ -1156,13 +1091,6 @@ rp_start_model() {
 
     # Estado ANTES de esperar: es lo que consume rp_wait_ready (fallback por
     # estado) y lo que hace que `status` vea el arranque en curso.
-    # El perfil de energía, si el usuario lo ha pedido. Se pone YA (no
-    # cuando el modelo esté listo): durante la carga también hay trabajo
-    # de CPU, y waiting-ready puede tardar minutos con un checkpoint grande.
-    if [[ -n "${ROPERO_PERFIL_SERVE:-}" ]]; then
-        _rp_perfil_poner "$puerto" "$ROPERO_PERFIL_SERVE" || true
-    fi
-
     rp_state_write "$puerto" \
         "MODEL=$real" "ENGINE=$engine" "PID=$pid" "PORT=$puerto" \
         "LEVEL=$nivel" "TS=$(date +%s)" "LOG=$logfile" "STAMP=$sello"
