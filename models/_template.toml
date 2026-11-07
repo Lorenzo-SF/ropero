@@ -20,13 +20,16 @@
 #   name      Identificador único global (activos+fired), kebab-case. Es lo que
 #             se escribe en `ropero <name>`.
 #   engine    Uno de: llama-server | vllm | mlx-serve | airllm | tensorrt-llm
-#             | fastflowlm. El id legacy "mlx_lm" se acepta y se canóniza a
-#             "mlx-serve" con un aviso.
+#             | fastflowlm | strata. El id legacy "mlx_lm" se acepta y se
+#             canóniza a "mlx-serve" con un aviso.
 #   context   int. Tokens de contexto por defecto.
 #   alias     Alias público adicional. El alias responde igual que el nombre.
 #   port      int opcional. Puerto pineado del modelo; si no se declara, se
 #             usa el slot (--port > pineado > slot :9999).
-#   format    "gguf" (default) o "safetensors" (checkpoint).
+#   format    "gguf" (default), "safetensors" (checkpoint), "q4nx" (el
+#             almacén de FLM: [model].path es un TAG) o "strata" (el catálogo
+#             de Strata: [model].path es "<familia>/<paquete>" y los ficheros
+#             los baja Strata, no ropero).
 #   path      OBLIGATORIO si format=safetensors, PROHIBIDO si gguf. Ruta del
 #             checkpoint relativa a $SAFETENSORS_DIR.
 #

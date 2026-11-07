@@ -1,0 +1,60 @@
+# =============================================================================
+# strata-qwen36-q4 — Qwen3.6-35B-A3B UD-Q4_K_XL servido por STRATA
+# =============================================================================
+# El que RINDE en un portátil con 16 GB de VRAM: 22,9 GB de pesos (sin tabla
+# n-gram) → cabe en la RAM y va a 228 t/s medidos en una RTX 5080 Laptop.
+#
+# [model].path NO es una ruta: es el par familia/paquete del catálogo de
+# Strata ("qwen36" + "UD-Q4_K_XL"). Los ficheros los baja y los prepara
+# Strata en su carpeta; ropero sólo apunta.
+#
+# Los pesos NO los baja ropero: los baja Strata al arrancar (no hay modo de
+# "descargar sin arrancar"). Ver docs/strata.md.
+# =============================================================================
+
+[model]
+name    = "strata-qwen36-q4"
+engine  = "strata"
+context = 32768
+format  = "strata"
+path    = "qwen36/UD-Q4_K_XL"
+
+[files]
+
+[limits]
+# 22,9 GB de pesos: por debajo de 24 GB de RAM el modelo no entra entero.
+min_ram_gb = 24
+
+[options]
+list = ["tune", "vision", "mtp", "kv", "parallel", "drafting", "vram-reserve"]
+
+# La base: sólo esta máquina. El TUNING no va aquí porque es opt-in
+# ("--tune quick") y pondría un "--tune skip" duplicado.
+[args]
+base = [
+    "--access", "local",
+]
+
+[args.option.tune]
+base = ["--tune", "${value}"]
+
+[args.option.vision]
+base = ["--vision", "${value}"]
+
+[args.option.mtp]
+base = ["--mtp", "${value}"]
+
+[args.option.kv]
+base = ["--kv", "${value}"]
+
+[args.option.parallel]
+base = ["--parallel", "${value}"]
+
+[args.option.drafting]
+base = ["--drafting", "${value}"]
+
+# La reserva de VRAM: con menos de 512 MiB libres el driver de NVIDIA pagina
+# y la petición no vuelve nunca. 1344 MiB es el valor medido en esta máquina
+# (RTX 5080 Laptop). El motor lo llama --vram-reserve-mib.
+[args.option.vram-reserve]
+base = ["--set", "vram_reserve_mib=${value}"]

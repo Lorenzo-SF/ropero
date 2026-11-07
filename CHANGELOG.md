@@ -3,6 +3,59 @@
 ## Sin publicar
 
 ### Añadido
+- **El motor STRATA (`engine = "strata"`).** Strata (Niko1221/Strata) no es un
+  servidor de inferencia como `llama-server`: es un Terminal que baja un motor
+  (el binario que habla con la GPU), deja el modelo en disco y sirve una API
+  OpenAI-compatible. Su motor reparte los pesos de un MoE entre VRAM, RAM y SSD
+  (lo que no cabe en la memoria se lee del disco: el modo *low-RAM*).
+  - Se instala con su instalador oficial (sin root): `ropero install engines
+    strata` ejecuta el `install.sh` del release, que deja `strata` en
+    `~/.local/bin`. El motor y el modelo NO vienen con el instalador: los baja
+    `strata launch` la primera vez, del mismo release y con la firma
+    comprobada.
+  - Los modelos NO son de ropero: su catálogo es el de Strata (`--family` y
+    `--model`). Un TOML con `engine = "strata"` es un puntero, con
+    `[model].path = "<familia>/<paquete>"` (`qwen/Q2_0`). Se añaden tres:
+    `strata-qwen36-q4` (22,9 GB, el que rinde: 228 t/s medidos en una RTX 5080
+    Laptop), `strata-qwen38-q2` (66,4 GB, el 125B cuantizado al mínimo) y
+    `strata-gyro-s` (58,5 GB, la variante que ahorra memoria: 27,6 GiB de pesos
+    + 28,8 GB de tabla n-gram dentro del fichero).
+  - Va **detrás de `endpoint.py`** (backend `strata`), como trtllm y flm: la
+    clave la pone el proxy (Strata arranca con `--access local --no-api-key`,
+    sólo en 127.0.0.1) y el proxy reescribe el campo `model` al id de ropero.
+  - El arranque va por un **puente** (`bin/server/strata-run.sh`), y no por
+    `strata launch` a secas: `strata launch --no-tui` arranca el motor y
+    DEVUELVE cuando el server ya sirve (el motor sigue vivo, pero lo gestiona
+    Strata). El proxy necesita un proceso que no muera mientras el modelo
+    sirve y que muera cuando hay que pararlo; si no, el proxy daría el backend
+    por caído y el modelo seguiría ocupando la VRAM sin nadie que lo
+    supervise. El puente además para **su** preset (`--save-preset
+    ropero-<modelo>`), no todos los Strata del usuario: `strata launch --stop`
+    a secas pararía también el suyo.
+  - `ropero install models <modelo>` NO baja el modelo: en Strata no hay modo
+    de "descargar sin arrancar". El hook `install_model` enseña el **plan**
+    (qué se bajaría, cuánto y si cabe en esta máquina) y lo dice, en vez de
+    fingir que ha bajado nada.
+  - Guía: `docs/strata.md`.
+- **Modelos para la NPU AMD (FastFlowLM): `models/flm/`.** TOMLs para los
+  modelos del catálogo `llama` que FLM sabe servir: `gptoss-flm`
+  (gpt-oss:20b), `qwen36-flm` (qwen3.6-moe:35b-a3b), `qwen38-flm`
+  (qwen3.8-mtp:27b), `qwen38-dflash2-flm` (qwen3.8-dflash2:27b, el mismo
+  modelo con el draft DFlash 2 de z-lab: 1,16x de decode) y
+  `nemotron-bolt-flm` (nemotron3.5-bolt:e4b, que NO es el nemotron del
+  catálogo sino el Bolt-E4B de 4 GB). También `deepseek-r1-flm`
+  (deepseek-r1:8b) y `deepseek-r1-0528-flm` (deepseek-r1-0528:8b). El
+  `[model].path` de estos TOMLs es el TAG del almacén de FLM, no una ruta.
+  - `ropero install models <modelo-flm>` **no** baja un checkpoint a
+    `models/safetensors`: delega en el engine, que usa `flm pull <tag>`
+    (FLM tiene su propio almacén, `~/.config/flm/models`, y su propio build
+    NPU2). Es el primer engine con su propio "conseguir el modelo"; los
+    demás siguen el camino normal (download/build).
+  - `ropero doctor` los comprueba contra el almacén de FLM (`flm list`) y, si
+    FLM no está instalado, lo dice en vez de afirmar que los modelos faltan.
+  - Los contextos NO son los del catálogo: son los que FLM aguanta. Qwen3.6
+    con más de 32768 tokens devuelve basura (paged attention) y Qwen3.8 con
+    prompts largos también (un passkey se corrompió a 10k y 28k tokens).
 - **Modelos para la NPU AMD (FastFlowLM): `models/flm/`.** TOMLs para los
   modelos del catálogo `llama` que FLM sabe servir: `gptoss-flm`
   (gpt-oss:20b), `qwen36-flm` (qwen3.6-moe:35b-a3b), `qwen38-flm`

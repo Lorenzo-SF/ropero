@@ -64,12 +64,18 @@ FIELD_SEP = "\x1f"
 # validador tiene que aceptarlo o el catálogo da problemas falsos.
 KNOWN_ENGINES = (
     "llama-server", "vllm", "airllm", "mlx-serve", "tensorrt-llm", "fastflowlm",
-    "llama-server-official",
+    "llama-server-official", "strata",
 )
 KNOWN_ENGINE_DIRS = (
     "llama", "vllm", "airllm", "mlx", "tensorrt", "flm", "llama-official",
+    "strata",
 )
-KNOWN_FORMATS = ("gguf", "safetensors", "q4nx")
+# El formato dice de dónde vienen los ficheros del modelo:
+#   gguf        → un GGUF en $GGUF_DIR/<name>/
+#   safetensors → un checkpoint en $SAFETENSORS_DIR
+#   q4nx        → el almacén de FLM (el [model].path es un TAG, no una ruta)
+#   strata      → el almacén de Strata (el [model].path es "familia/paquete")
+KNOWN_FORMATS = ("gguf", "safetensors", "q4nx", "strata")
 
 # ids legacy → id canónico (spec §7.4.1).
 LEGACY_ENGINES = {"mlx_lm": "mlx-serve"}

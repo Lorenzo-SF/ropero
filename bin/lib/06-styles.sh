@@ -105,6 +105,8 @@ rp_colorize() {
             { c(MAIN, line); next }
         if (e == "fastflowlm" && line ~ /(flm|FastFlowLM|serve|listening)/)
             { c(MAIN, line); next }
+        if (e == "strata" && line ~ /(strata|Strata|launch|engine|serving|model loaded)/)
+            { c(MAIN, line); next }
         # 4. Arranque y carga del modelo.
         if (line ~ /(authproxy|proxy.*(listening|started)|loaded|llm_load|CUDA|Metal|GPU|server listening|ready|main: server|model loading|build finished)/)
             { c(MAIN, line); next }

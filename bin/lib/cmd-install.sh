@@ -347,7 +347,7 @@ USO: ropero install engines [engine...] [--force]
 
 Instala los engines elegidos, cada uno SUS dependencias (§6): llama-server
 compila el fork turboquant, vllm/mlx-serve/airllm/tensorrt-llm usan uv o
-brew, fastflowlm su canal oficial. CUDA (en Linux/NVIDIA) la instala el
+brew, fastflowlm y strata su canal oficial. CUDA (en Linux/NVIDIA) la instala el
 engine que la pida: aquí no se toca nada más.
 
 Sin engines abre un MENÚ multi-selección de los compatibles con este SO/hw;
@@ -357,7 +357,7 @@ Opciones:
   --force   reinstala aunque ya estén instalados
 
 Engines: llama-server · vllm · mlx-serve · airllm · tensorrt-llm ·
-         fastflowlm
+         fastflowlm · strata
 
 (El engine "llama-official" está oculto: el motor principal ya es nuestro
 fork con flint y turbo5/6. Se puede instalar a mano: install engines
@@ -742,7 +742,7 @@ _rp_link_engines() {
     local farm="$1"
     local id bin real name dest
 
-    for id in llama-server llama-server-official vllm mlx-serve tensorrt-llm fastflowlm; do
+    for id in llama-server llama-server-official vllm mlx-serve tensorrt-llm fastflowlm strata; do
         if bin="$(rp_engine_call "$id" resolve 2>/dev/null)"; then
             [[ -n "$bin" && -x "$bin" ]] || continue
             name="${bin##*/}"

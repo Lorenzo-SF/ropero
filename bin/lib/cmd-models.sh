@@ -157,6 +157,7 @@ _rp_models_menu() {
             llama-server-official) color="hex:#ff6600" ;;
             mlx-serve)             color="hex:#888888" ;;
             fastflowlm)            color="hex:#FF2B00" ;;
+            strata)                color="hex:#0ab887" ;;
             tensorrt-llm)          color="hex:#aacc00" ;;
             *)                     color="xterm:7" ;;
         esac
@@ -229,6 +230,12 @@ _rp_models_menu() {
     if command -v flm >/dev/null 2>&1 || [[ -x /opt/fastflowlm/bin/flm ]]; then
         rp_msg info "FLM dispone de más modelos con el comando 'flm pull <modelo>'."
         rp_msg info "  Puedes verlos con 'flm list'"
+    fi
+    # Strata tiene su propio catálogo (y su propia carpeta de modelos): los
+    # modelos de Strata no se instalan desde ropero.
+    if command -v strata >/dev/null 2>&1 || [[ -x "$HOME/.local/bin/strata" ]]; then
+        rp_msg info "Strata tiene su propio catálogo: 'strata launch --plan --family <f> --model <m>'"
+        rp_msg info "  dice qué se descargaría y si cabe en esta máquina."
     fi
     return 0
 }
@@ -441,7 +448,7 @@ _rp_models_engine_install_model() {
     rp_engine_load "$motor" >/dev/null 2>&1 || return 1
     declare -F "rp_eng_${canon}_install_model" >/dev/null 2>&1 || return 1
     if [[ "$dry" == "1" ]]; then
-        rp_msg info "el engine '$canon' lo bajaría con su propio mecanismo (flm pull <tag>)"
+        rp_msg info "el engine '$canon' lo bajaría con su propio mecanismo (FLM: 'flm pull <tag>'; Strata: lo baja al arrancar)"
         return 0
     fi
     "rp_eng_${canon}_install_model" "$real"

@@ -1,0 +1,62 @@
+# =============================================================================
+# strata-qwen38-q2 — Qwen3.8-Flash-Next Q2_0 servido por STRATA
+# =============================================================================
+# El modelo grande (125B) en la cuantización más pequeña: 66,4 GB de pesos.
+# En un portátil de 30 GB de RAM NO cabe entero: Strata lo deja en el SSD y
+# va en modo low-RAM (2,9-3,2 t/s medidos: el techo no es el disco, es el
+# camino entero: leer + PCIe + dequantizar).
+#
+# Strata avisa de que "no cabe en este ordenador" al hacer el plan, pero
+# arranca igual. Por eso este modelo NO declara min_ram_gb: que lo decida
+# Strata, que es quien sabe lo que cabe.
+#
+# [model].path NO es una ruta: es el par familia/paquete del catálogo de
+# Strata ("qwen36" + "UD-Q4_K_XL"). Los ficheros los baja y los prepara
+# Strata en su carpeta; ropero sólo apunta.
+#
+# Los pesos NO los baja ropero: los baja Strata al arrancar (no hay modo de
+# "descargar sin arrancar"). Ver docs/strata.md.
+# =============================================================================
+
+[model]
+name    = "strata-qwen38-q2"
+engine  = "strata"
+context = 32768
+format  = "strata"
+path    = "qwen/Q2_0"
+
+[files]
+
+[options]
+list = ["tune", "vision", "mtp", "kv", "parallel", "drafting", "vram-reserve"]
+
+# La base: sólo esta máquina. El TUNING no va aquí porque es opt-in
+# ("--tune quick") y pondría un "--tune skip" duplicado.
+[args]
+base = [
+    "--access", "local",
+]
+
+[args.option.tune]
+base = ["--tune", "${value}"]
+
+[args.option.vision]
+base = ["--vision", "${value}"]
+
+[args.option.mtp]
+base = ["--mtp", "${value}"]
+
+[args.option.kv]
+base = ["--kv", "${value}"]
+
+[args.option.parallel]
+base = ["--parallel", "${value}"]
+
+[args.option.drafting]
+base = ["--drafting", "${value}"]
+
+# La reserva de VRAM: con menos de 512 MiB libres el driver de NVIDIA pagina
+# y la petición no vuelve nunca. 1344 MiB es el valor medido en esta máquina
+# (RTX 5080 Laptop). El motor lo llama --vram-reserve-mib.
+[args.option.vram-reserve]
+base = ["--set", "vram_reserve_mib=${value}"]
