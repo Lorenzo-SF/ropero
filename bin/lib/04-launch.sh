@@ -175,6 +175,7 @@ _rp_launch_puerto_destino() {
         tensorrt-llm)            printf '9959' ;;
         vllm)                    printf '9949' ;;
         airllm)                  printf '9939' ;;
+        strata)                  printf '9929' ;;
         *)                       printf '%s' "$PORT" ;;
     esac
     return 0
@@ -902,9 +903,11 @@ rp_start_model() {
             rp_msg info "  (ropero install models $real)"
             return 1
         fi
-    elif [[ "$engine" != "fastflowlm" ]]; then
+    elif [[ "$engine" != "fastflowlm" && "$engine" != "strata" ]]; then
         # safetensors: checkpoint bajo $SAFETENSORS_DIR. flm recibe un TAG de
-        # su propio almacén: no hay ruta local que comprobar.
+        # su propio almacén: no hay ruta local que comprobar. Strata recibe
+        # un par familia/paquete de SU catálogo: tampoco es una ruta (los
+        # ficheros los baja y prepara Strata en su carpeta).
         local mpath="${MODEL_PATH[$idx]}"
         if [[ -z "$mpath" ]]; then
             rp_msg error "'$real' (safetensors) no declara [model].path"

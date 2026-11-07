@@ -300,6 +300,15 @@ rp_cmd_doctor() {
                         faltan=$((faltan + 1))
                     fi
                     ;;
+                strata)
+                    # El modelo de Strata es un par familia/paquete de SU
+                    # catálogo: los ficheros los tiene Strata, no ropero. Lo
+                    # que se puede comprobar es si Strata está instalado.
+                    if ! rp_engine_call strata resolve >/dev/null 2>&1; then
+                        _rp_doctor_warn "modelo '$nombre' (Strata) no se puede servir: Strata no está instalado (ropero install engines strata)"
+                        faltan=$((faltan + 1))
+                    fi
+                    ;;
                 safetensors)
                     if [[ "${MODEL_ENGINE[$i]}" == "fastflowlm" ]]; then
                         # El modelo de flm es un TAG de su almacén, que SÍ es

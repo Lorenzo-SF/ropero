@@ -287,6 +287,12 @@ def resolve_binary(engine: str, override: str = "") -> str:
             os.path.join(bin_dir, "mlx_lm.server"),
             os.path.join(farm_dir, "mlx_lm.server"),
         ],
+        "strata": [
+            os.path.join(bin_dir, "strata"),
+            os.path.join(farm_dir, "strata"),
+            os.path.expanduser("~/.local/bin/strata"),
+            os.path.expanduser("~/.local/share/strata/terminal/current/bin/strata"),
+        ],
     }.get(engine, [])
     if engine == "mlx":
         for d in glob.glob(os.path.expanduser("~/.asdf/installs/python/*/bin")):
@@ -296,7 +302,8 @@ def resolve_binary(engine: str, override: str = "") -> str:
     for cand in candidates:
         if os.path.isfile(cand) and os.access(cand, os.X_OK):
             return cand
-    name = {"tensorrt": "trtllm-serve", "flm": "flm", "mlx": "mlx_lm.server"}.get(engine, "")
+    name = {"tensorrt": "trtllm-serve", "flm": "flm", "mlx": "mlx_lm.server",
+            "strata": "strata"}.get(engine, "")
     found = shutil.which(name) if name else None
     return found or ""
 
@@ -1259,6 +1266,45 @@ def flm_argv(args, bin_path: str, omit=None):
     return argv
 
 
+def strata_argv(args, bin_path: str, omit=None):
+    """El backend de Strata: NO es un binario que sirva, es un PUENTE.
+
+    `strata launch --no-tui` arranca el motor y DEVUELVE cuando el server ya
+    sirve (el motor queda vivo, pero lo gestiona Strata). El proxy necesita un
+    proceso que siga vivo mientras el modelo sirve, y que muera cuando hay que
+    pararlo: si no, el proxy daría el backend por caído y el modelo seguiría
+    ocupcando la VRAM sin nadie que lo supervise.
+
+    El puente (bin/server/strata-run.sh) hace las tres cosas:
+      1. lanza Strata y espera a que termine (la descarga puede ser de 70 GB);
+      2. se queda vivo mientras el modelo sirve;
+      3. al morir (SIGTERM), para el preset que arrancó y sale.
+
+    El PUENTE es lo que se ejecuta; `bin_path` (el ejecutable de Strata) se le
+    pasa como argumento, y el preset con el que se lanza permite pararlo sin
+    tocar los demás Strata que pueda tener el usuario.
+
+    · El modelo es el PAR familia/paquete del catálogo de Strata (qwen/q2_0),
+      NO una ruta: los archivos los baja y prepara Strata.
+    · El contexto es el de ropero ([model].context), en tokens.
+    · Los flags del modelo (los de [args] del TOML) son flags de
+      `strata launch` y se pasan AL FINAL: en el puente el último gana.
+    """
+    omit = omit or set()
+    wrapper = os.path.join(os.path.dirname(os.path.abspath(__file__)), "strata-run.sh")
+    pack = str(args.model_path)
+    familia, _, paquete = pack.partition("/")
+    if not familia or not paquete:
+        raise ValueError("el modelo de strata debe ser <familia>/<paquete>: %r" % pack)
+    argv = [
+        wrapper, bin_path, familia, paquete,
+        str(args.backend_port), str(args.context or 0),
+        "ropero-%s" % args.model_id,
+    ]
+    argv += expand_extra_flags(getattr(args, "backend_extra_args", None) or [], omit)
+    return argv
+
+
 def mlx_argv(args, bin_path: str, omit=None):
     """`mlx_lm.server --model <path> --host 0.0.0.0.1 --port N` (MLX).
 
@@ -1403,11 +1449,13 @@ def main() -> int:
                "que se expone y el único que exige la API key.",
     )
     ap.add_argument("--backend", required=True,
-                    choices=["airllm", "tensorrt", "flm", "mlx"],
+                    choices=["airllm", "tensorrt", "flm", "mlx", "strata"],
                     help="airllm: genera en este proceso. tensorrt: trtllm-serve. "
-                         "flm: flm serve (el modelo es un TAG, no una ruta)")
+                         "flm: flm serve (el modelo es un TAG, no una ruta). "
+                         "strata: el puente a Strata (el modelo es familia/paquete)")
     ap.add_argument("--model-path", required=True,
-                    help="ruta del checkpoint (airllm, tensorrt) o TAG del modelo (flm)")
+                    help="ruta del checkpoint (airllm, tensorrt), TAG del modelo (flm) "
+                         "o familia/paquete del catálogo de Strata (strata)")
     ap.add_argument("--model-id", required=True,
                     help="nombre que se publica en /v1/models (el de ropero)")
     ap.add_argument("--host", default="0.0.0.0",
@@ -1485,14 +1533,17 @@ def main() -> int:
             sys.stderr.flush()
             return 2
 
-    if args.backend in ("tensorrt", "flm", "mlx"):
+    if args.backend in ("tensorrt", "flm", "mlx", "strata"):
         # El nombre que el backend conoce. Por defecto:
         #   tensorrt → el id de ropero (lo que se le pasa como --served_model_name).
         #   flm      → el TAG: FLM valida el campo "model" (su error es
         #              "Model X is not supported."), así que el id de ropero
         #              no lo aceptaría.
+        #   strata    → el id de ropero: el server de Strata sirve CUALQUIER
+        #              nombre ("Other names are still served"), así que el id
+        #              de ropero vale y el cliente ve el nombre que pidió.
         if not args.rewrite_model:
-            args.rewrite_model = (args.model_id if args.backend == "tensorrt"
+            args.rewrite_model = (args.model_id if args.backend in ("tensorrt", "strata")
                                    else args.model_path)
 
     if not args.api_key:
@@ -1515,6 +1566,9 @@ def main() -> int:
         elif args.backend == "mlx":
             builder = mlx_argv
             label = "mlx_lm"
+        elif args.backend == "strata":
+            builder = strata_argv
+            label = "strata"
         else:
             builder = flm_argv
             label = "fastflowlm"

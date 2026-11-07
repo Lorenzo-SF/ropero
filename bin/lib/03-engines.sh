@@ -30,7 +30,7 @@ if ! declare -F rp_mc_load >/dev/null 2>&1; then
 fi
 
 # Ids canónicos (§6). El orden es el de la tabla de la spec.
-RP_ENGINE_IDS="llama-server vllm mlx-serve airllm tensorrt-llm fastflowlm"
+RP_ENGINE_IDS="llama-server vllm mlx-serve airllm tensorrt-llm fastflowlm strata"
 
 # Engines OCULTOS: existen y se pueden instalar a mano (`ropero install
 # engines llama-official`), pero no se anuncian ni se comprueban.
@@ -57,6 +57,7 @@ rp_engine_canonical() {
         airllm)                                          printf 'airllm' ;;
         tensorrt-llm|tensorrt|trtllm|tensorrt_llm)       printf 'tensorrt-llm' ;;
         fastflowlm|flm|fastflow_lm)                      printf 'fastflowlm' ;;
+        strata|strata-engine|strata_engine)              printf 'strata' ;;
         *)                                               return 1 ;;
     esac
     return 0

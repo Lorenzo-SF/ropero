@@ -52,7 +52,9 @@ Un modelo es un fichero en `models/<engine>/<nombre>.toml`. Los activos están
 directamente en el directorio del motor; los retirados, en
 `models/<engine>/fired/` (informativos: no se instalan ni arrancan).
 
-- `[download]`: repo/file de HF (GGUF o safetensors).
+- `[download]`: repo/file de HF (GGUF o safetensors). Los motores con su
+  propio almacén (FastFlowLM, Strata) no lo usan: su `[model].path` es un
+  TAG (`llama3.2:1b`) o un par familia/paquete (`qwen/Q2_0`).
 - `[download.aux.*]`: mtp, mmproj, chat_template, imatrix, tokenizer, draft,
   cada uno con su repo opcional.
 - `[build]`: receta de fabricación del GGUF (la misma que `ropero gguffer`).
@@ -164,6 +166,7 @@ bin/quant/              pipeline de cuantización y parches del motor
 models/                 TOMLs (activos + fired/)
 test/                   pruebas de modelos + test del symlink (test/test-models-symlink.sh)
 docs/specs/             contrato del refactor 1.0
+docs/strata.md          el motor Strata (MoE entre VRAM/RAM/SSD)
 ```
 
 Añadir un motor = añadir `bin/lib/engines/<id>.sh` (y, si tiene modelos,

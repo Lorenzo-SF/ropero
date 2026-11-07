@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# =============================================================================
+# test/fakes/strata/strata — el CLI de Strata, falseado
+# =============================================================================
+# No habla con la red ni toca el disco: responde lo que el test necesita.
+#
+#   strata launch --plan ... --output json  → el plan (de FAKE_STRATA_PLAN)
+#   strata launch ... --no-tui               → arranca y DEVUELVE (como el
+#                                               de verdad: el motor se queda)
+#   strata launch --status --output json     → quién está sirviendo
+#   strata launch --preset X --stop          → para ese preset
+#
+# Todo lo que se lanza queda anotado en $FAKE_STRATA_LOG (una línea por
+# invocación) para que el test pueda comprobarlo.
+# =============================================================================
+set -u
+
+case "${1:-}" in
+    --version)
+        echo "strata 0.2.12 (falso)"
+        exit 0
+        ;;
+    launch)
+        shift
+        todos="$*"
+        printf 'launch %s\n' "$todos" >>"${FAKE_STRATA_LOG:-/dev/null}"
+        case " $todos " in
+            *" --plan "*)
+                cat "${FAKE_STRATA_PLAN:-/dev/null}"
+                exit 0
+                ;;
+            *" --status "*)
+                echo '{"schema_version": 1, "ok": true, "running": []}'
+                exit 0
+                ;;
+            *" --stop "*)
+                echo "parado"
+                exit 0
+                ;;
+            *)
+                # Un launch de verdad: avisa y DEVUELVE (el motor se queda).
+                echo "strata: sirviendo en http://127.0.0.1"
+                exit 0
+                ;;
+        esac
+        ;;
+    *)
+        echo "strata (falso): $*" >&2
+        exit 0
+        ;;
+esac

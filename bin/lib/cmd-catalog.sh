@@ -102,6 +102,7 @@ rp_cmd_list() {
                 fastflowlm)            color="hex:#FF2B00" ;;
                 tensorrt-llm)          color="hex:#aacc00" ;;
                 vllm)                  color="hex:#cc00cc" ;;
+                strata)                color="hex:#0ab887" ;;
                 *)                     color="xterm:7" ;;
             esac
             alaja_rows+=("$(printf '%s;%s;%s;%s' "$nombre" "$motor" "$ctx" "$desc")")
@@ -130,6 +131,8 @@ rp_cmd_list() {
             --text "[ FLM (NPU) ]" --color "hex:#FF2B00" --reverse \
             --text " " --color "xterm:0" --reverse \
             --text "[ TensorRT-Llm (CUDA) ]" --color "hex:#aacc00" --reverse \
+            --text " " --color "xterm:0" --reverse \
+            --text "[ Strata ]" --color "hex:#0ab887" --reverse \
             --text " " --color "xterm:0" --reverse >&2
         echo "" >&2
         # Tabla ordenada por engine y luego por nombre
@@ -390,6 +393,11 @@ rp_cmd_path() {
             # flm va PRIMERO: su [model].path es un TAG (no una ruta), y el
             # formato "safetensors" no lo convierte en un checkpoint local.
             */fastflowlm)
+                printf 'MODEL_PATH=%s\n' "$mpath"
+                ;;
+            # Strata: el par familia/paquete de SU catálogo. Los ficheros
+            # los baja y prepara Strata, no ropero.
+            */strata)
                 printf 'MODEL_PATH=%s\n' "$mpath"
                 ;;
             safetensors/*)
