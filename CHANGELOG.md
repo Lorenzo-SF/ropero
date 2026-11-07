@@ -3,6 +3,18 @@
 ## Sin publicar
 
 ### Añadido
+- **El perfil de energía se puede poner en `performance` mientras hay un
+  modelo sirviendo (`ROPERO_PERFIL_SERVE=performance`).** Con un modelo
+  cargándose la CPU hace trabajo de verdad: el prompt y, sobre todo, el
+  DEQUANT del modo low-RAM, donde los expertos del SSD se cuantizan en la
+  CPU. En un portátil el governor "balanced" ahorra batería a costa de la
+  inferencia.
+  - Es **opt-in** (sin la variable no se toca nada) porque el perfil de
+    energía es del usuario: el `setup` no lo toca (docs §2.9).
+  - El perfil anterior se guarda en el fichero de estado del puerto y se
+    **devuelve al parar**. Si el launch muere con `-9`, el valor sigue ahí y
+    `ropero stop` lo devuelve igual.
+  - Sin `power-profiles-daemon` no hace nada (ni falla).
 - **El motor STRATA (`engine = "strata"`).** Strata (Niko1221/Strata) no es un
   servidor de inferencia como `llama-server`: es un Terminal que baja un motor
   (el binario que habla con la GPU), deja el modelo en disco y sirve una API
