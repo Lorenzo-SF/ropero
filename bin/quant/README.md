@@ -16,12 +16,12 @@ Todo lo de fabricar GGUFs con `ropero gguffer`, en un sitio y con un guion.
 | `lista-para-generar.md` | La lista de los 8 quants que compensa fabricar, con el porqué. |
 | `que-compensa-cuantizar.md` | El criterio (el filtro de VRAM) y lo que ya existe en HF. |
 | `comandos-cuantizar.md` | Los comandos a mano, para una tirada suelta. |
-| `aplicar-parche-motor.sh` | Aplica al clon del motor los dos parches que necesita (la regla del NVFP4 y los patterns sin anclar). |
+| `aplicar-parche-motor.sh` | Aplica al clon del motor los parches que necesita (la regla del NVFP4, los patterns sin anclar y los checkpoints mixed-precision). |
 | `patches/` | Los parches del motor, como ficheros. |
 
 ## Los parches del motor
 
-Dos cosas del motor (que es un fork de otro dueño) hay que parchearlas, y
+Tres cosas del motor (que es un fork de otro dueño) hay que parchearlas, y
 no se pueden pushear: se entregan como ficheros y se aplican en local.
 
 ```bash
@@ -40,6 +40,18 @@ quant/aplicar-parche-motor.sh --revert   # vuelve atras
   empiezan por `^` y acaban en `$`, y devolvia un 400 a la peticion
   entera. Afecta a los modelos sin plantilla "specialized" (el granite, el
   qwen3).
+- **Los checkpoints "mixed-precision"** (`conversion/base.py`): el conversor
+  decidia si un checkpoint de compressed-tensors era NVFP4 con un `all(...)`
+  sobre los grupos de `config_groups`. Con precision mixta (un grupo NVFP4 y
+  otro FP8, como el **Groot**) el `all` daba falso y la conversion reventaba
+  con `NotImplementedError: Can't handle multiple config groups for
+  compressed-tensors yet`. Upstream usa `any(...)` y ademas dequantiza el
+  grupo FP8 con un `dequant_fp8` anidado que el fork no tenia: con `any()` a
+  secas tampoco basta. El parche trae las dos cosas.
+
+  > En NUESTRO motor (`Lorenzo-SF/ropero-llama-turboquant`) esto ya esta
+  > horneado (commit `009b154`): el parche solo hace falta en los clones
+  > viejos. Un `ropero install engines` nuevo lo trae puesto.
 
 ## El guion
 
@@ -104,7 +116,7 @@ metida. Se cuantiza ese:
 ```bash
 ropero gguffer \
   --gguf bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf \
-  --quant MXFP4 \
+  --quant MXFP4_MOE \
   --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
   --imatrix-file Qwen3.8-27B-imatrix.gguf
 ```

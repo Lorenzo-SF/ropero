@@ -129,7 +129,7 @@ No es por tamano (el Q3_K_M de 11,5 GB ya cabe): es por VELOCIDAD. MXFP4 usa los
 
 ```bash
 ropero gguffer --repo mistralai/Devstral-Small-2-24B-Instruct-2512 \
-    --quant Q3_K_M --quant MXFP4 \
+    --quant Q3_K_M --quant MXFP4_MOE \
     --imatrix-repo unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF \
     --imatrix-file imatrix_unsloth.gguf_file \
     --out-principal "$HOME/models/gguf/devstral/<NOMBRE>.gguf" \
@@ -143,7 +143,7 @@ Tambien por velocidad: MXFP4 en los tensor cores FP4 de Blackwell. No existe par
 
 ```bash
 ropero gguffer --repo Qwen/Qwen3.8-27B \
-    --quant IQ3_XS --quant MXFP4 \
+    --quant IQ3_XS --quant MXFP4_MOE \
     --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
     --imatrix-file Qwen3.8-27B-imatrix.gguf \
     --out-principal "$HOME/models/gguf/qwen/Qwen3.8-27B-IQ3_XS.gguf" \
