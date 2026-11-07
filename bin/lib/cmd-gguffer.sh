@@ -544,8 +544,11 @@ _gguffer_aviso_mixto() {
     echo "           Los pesos NO son de un solo quant: no se pueden re-cuantizar." >&2
     echo "           Si el conversor falla con \"Can't handle multiple config groups" >&2
     echo "           for compressed-tensors yet\", el problema es el MOTOR, no el gguffer:" >&2
-    echo "             conversion/base.py: el fork usa all(...) donde upstream usa any(...)," >&2
-    echo "             y le falta el dequant_fp8(fp8_configs) anidado de upstream." >&2
+    echo "             conversion/base.py: el fork usaba all(...) donde upstream usa any(...)," >&2
+    echo "             y le faltaba el dequant_fp8(fp8_configs) anidado de upstream." >&2
+    echo "           El motor ya lo tiene (ropero-llama-turboquant, commit 009b154) y el" >&2
+    echo "           parche esta en bin/quant/patches/ para los clones viejos:" >&2
+    echo "             ropero/quant/aplicar-parche-motor.sh" >&2
     echo "           Mientras tanto, usa el repo hermano sin cuantizar (BF16/F16)." >&2
     return 0
 }

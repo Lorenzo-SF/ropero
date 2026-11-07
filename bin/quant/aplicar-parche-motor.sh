@@ -42,6 +42,20 @@
 #       tratarlos como anclados no cambia nada: solo deja de rechazar los
 #       que no lo estan.
 #
+# 2. parche-motor-compressed-tensors-mixed-precision.patch
+#
+#    conversion/base.py — los checkpoints "mixed-precision" (NVFP4 + FP8 en
+#    el mismo repo, como el Groot).
+#       El conversor decidia si el checkpoint era NVFP4 con un "all(...)"
+#       sobre los grupos de "config_groups": con precision mixta, un grupo es
+#       FP8 y otro NVFP4, el "all" daba falso y la conversion reventaba:
+#         NotImplementedError: Can't handle multiple config groups for
+#         compressed-tensors yet
+#       Upstream usa "any(...)" y ademas dequantiza el grupo FP8 con un
+#       "dequant_fp8" anidado (que el fork no tenia). El parche trae las dos
+#       cosas: el "any(...)" y el "dequant_fp8" (el grupo NVFP4 lo repackea
+#       "_generate_nvfp4_tensors", que ya sabia hacerlo).
+#
 # USO
 # ───
 #   ropero/quant/aplicar-parche-motor.sh            # aplica (y compila)
@@ -82,7 +96,9 @@ fi
 say "motor: $LLAMA_DIR"
 
 PATCH="$PATCHES_DIR/parche-motor-nvfp4-y-pattern.patch"
+PATCH_MIXED="$PATCHES_DIR/parche-motor-compressed-tensors-mixed-precision.patch"
 [[ -f "$PATCH" ]] || { err "falta el parche: $PATCH"; exit 1; }
+[[ -f "$PATCH_MIXED" ]] || { err "falta el parche: $PATCH_MIXED"; exit 1; }
 
 # ── ¿estan aplicados? ───────────────────────────────────────────────────────
 # Se mira el CODIGO, no el git: el clon puede ser un fork con otros
@@ -97,6 +113,7 @@ estado() {
     local n=0
     ya_aplicado "src/llama-quant.cpp" "ftype == LLAMA_FTYPE_MOSTLY_NVFP4" || n=$((n+1))
     ya_aplicado "common/json-schema-to-grammar.cpp" "Empty pattern" || n=$((n+1))
+    ya_aplicado "conversion/base.py" "def dequant_fp8" || n=$((n+1))
     printf '%d' "$n"
 }
 
@@ -104,27 +121,28 @@ faltan="$(estado)"
 
 if [[ "$MODE" == "check" ]]; then
     if [[ "$faltan" == "0" ]]; then
-        say "los dos parches estan aplicados"
+        say "los parches estan aplicados"
         exit 0
     fi
     say "faltan $faltan parche(s):"
     ya_aplicado "src/llama-quant.cpp" "ftype == LLAMA_FTYPE_MOSTLY_NVFP4" || say "  - la regla del NVFP4 (src/llama-quant.cpp)"
     ya_aplicado "common/json-schema-to-grammar.cpp" "Empty pattern" || say "  - los patterns sin anclar (common/json-schema-to-grammar.cpp)"
+    ya_aplicado "conversion/base.py" "def dequant_fp8" || say "  - los checkpoints mixed-precision (conversion/base.py)"
     exit 1
 fi
 
 if [[ "$MODE" == "revert" ]]; then
     if [[ "$faltan" == "0" ]]; then
         say "revierto con git (en el clon del motor):"
-        ( cd "$LLAMA_DIR" && git checkout -- src/llama-quant.cpp common/json-schema-to-grammar.cpp ) \
+        ( cd "$LLAMA_DIR" && git checkout -- src/llama-quant.cpp common/json-schema-to-grammar.cpp conversion/base.py ) \
             && ok "revertido" || err "fallo el revert"
         exit $?
     fi
-    warn "no estan los dos parches puestos: revierto lo que haya"
+    warn "no estan todos los parches puestos: revierto lo que haya"
 fi
 
 if [[ "$faltan" == "0" ]]; then
-    say "los dos parches ya estan aplicados. No hago nada."
+    say "los parches ya estan aplicados. No hago nada."
     exit 0
 fi
 
@@ -133,24 +151,49 @@ fi
 # otros cambios y "git apply" es mas rigido con el contexto.
 # Con "-R" se revierte.
 say "aplico el parche (copia de seguridad antes)..."
-for f in src/llama-quant.cpp common/json-schema-to-grammar.cpp; do
+for f in src/llama-quant.cpp common/json-schema-to-grammar.cpp conversion/base.py; do
     if [[ -f "$LLAMA_DIR/$f" && ! -f "$LLAMA_DIR/$f.ropero.bak" ]]; then
         cp "$LLAMA_DIR/$f" "$LLAMA_DIR/$f.ropero.bak"
     fi
 done
 
-if patch -p1 -d "$LLAMA_DIR" --forward --batch < "$PATCH" >/dev/null 2>&1; then
-    ok "parche aplicado"
-elif [[ "$faltan" == "1" ]]; then
-    # A lo mejor solo estaba puesto uno de los dos
-    warn "el parche completo no entra (igual ya estaba puesto uno de los dos)"
-    if patch -p1 -d "$LLAMA_DIR" --forward --batch < "$PATCH" 2>&1 | head -5; then
-        :
+# El parche 1 (los dos ficheros de una vez). Cada parche se aplica por
+# separado: si uno ya esta puesto, el otro se aplica igual (el "--forward"
+# del "patch" hace que un hunk ya aplicado se salte en vez de fallar).
+aplicar_patch() {
+    local fichero="$1" etiqueta="$2" salida
+    salida="$(patch -p1 -d "$LLAMA_DIR" --forward --batch <"$fichero" 2>&1)"
+    local rc=$?
+    if (( rc == 0 )); then
+        ok "$etiqueta aplicado"
+        return 0
     fi
+    # Con "--forward", "patch" sale con 1 si el hunk ya estaba puesto.
+    if grep -qE "already applied|Reversed \(or previously applied\)" <<<"$salida"; then
+        warn "$etiqueta: ya estaba puesto"
+        return 0
+    fi
+    warn "$etiqueta: no entra limpio"
+    printf '%s\n' "$salida" | head -5 | sed 's/^/    /'
+    return 1
+}
+
+# Cada parche se aplica solo si falta alguna de SUS piezas: si esta todo
+# puesto, se dice y no se toca el fichero (el "patch" avisaria de "already
+# applied" y quedaria como un fallo).
+faltan_1=0
+ya_aplicado "src/llama-quant.cpp" "ftype == LLAMA_FTYPE_MOSTLY_NVFP4" || faltan_1=1
+ya_aplicado "common/json-schema-to-grammar.cpp" "Empty pattern" || faltan_1=1
+if (( faltan_1 )); then
+    aplicar_patch "$PATCH" "parche 1 (la regla del NVFP4 + los patterns sin anclar)" || true
 else
-    err "el parche no entra limpio"
-    err "  las copias .ropero.bak estan junto a los ficheros"
-    exit 1
+    say "  el parche 1 ya esta aplicado (regla del NVFP4 + patterns sin anclar)"
+fi
+
+if ya_aplicado "conversion/base.py" "def dequant_fp8"; then
+    say "  el parche 2 ya esta aplicado (checkpoints mixed-precision)"
+else
+    aplicar_patch "$PATCH_MIXED" "parche 2 (los checkpoints mixed-precision)" || true
 fi
 
 nuevos="$(estado)"
@@ -158,7 +201,7 @@ if [[ "$nuevos" != "0" ]]; then
     err "despues de aplicar, faltan $nuevos parche(s)"
     exit 1
 fi
-ok "los dos parches estan puestos"
+ok "los parches estan puestos"
 
 # ── compilar ───────────────────────────────────────────────────────────────
 # Sin recompilar, el parche no sirve de nada: el motor que corre es el binario.

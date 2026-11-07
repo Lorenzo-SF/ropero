@@ -214,6 +214,22 @@
   dejando la config vieja para siempre. Ahora, sin sello no se puede probar
   que la config sea la misma → se reinicia y se avisa.
 
+### Arreglado
+- **Los checkpoints "mixed-precision" (NVFP4 + FP8 en el mismo repo) ya se
+  convierten.** El conversor del motor decidia si el checkpoint era NVFP4
+  con un `all(...)` sobre los grupos de `config_groups`: con precision
+  mixta (un grupo NVFP4 y otro FP8, **el caso del Groot**) el `all` daba
+  falso y la conversion reventaba con `NotImplementedError: Can't handle
+  multiple config groups for compressed-tensors yet`. Upstream usa `any(...)`
+  y ademas dequantiza el grupo FP8 con un `dequant_fp8` anidado que el fork
+  no tenia.
+  - El motor (`Lorenzo-SF/ropero-llama-turboquant`, commit `009b154`) ya lo
+    trae: un `ropero install engines` nuevo lo clona con el fix.
+  - Y el parche se entrega tambien como fichero
+    (`bin/quant/patches/parche-motor-compressed-tensors-mixed-precision.patch`),
+    para los clones del motor que ya tenias: `ropero/quant/aplicar-parche-motor.sh`
+    lo pone y recompila.
+
 ### Cambiado
 - **`--quant` y el imatrix son una pareja: uno sin el otro no se acepta.**
   - `--imatrix` (fichero local) es **excluyente** con el par
