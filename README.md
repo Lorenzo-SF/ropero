@@ -177,7 +177,28 @@ Añadir un motor = añadir `bin/lib/engines/<id>.sh` (y, si tiene modelos,
 `GGUF_DIR` (`~/models/gguf`), `SAFETENSORS_DIR` (`~/models/safetensors`),
 `LOG_DIR`, `STATE_DIR`, `HOST` (`0.0.0.0.1`), `PORT` (`9999`),
 `CPU_PORT` (`9998`), `LLAMA_API_KEY` (se genera una si no existe),
-`ROPERO_START_TIMEOUT` (`300`), `HF_TOKEN`.
+`ROPERO_START_TIMEOUT` (`300`), `HF_TOKEN`,
+`ROPERO_PERFIL_SERVE` (vacío = no se toca el perfil de energía; con
+`performance`, ropero lo pone mientras hay un modelo sirviendo y **lo vuelve
+a dejar como estaba** al parar).
+
+### El perfil de energía durante la inferencia
+
+El perfil de energía es tuyo (el `setup` no lo toca). Pero con un modelo
+cargándose la CPU hace trabajo de verdad — el prompt y, sobre todo, el
+**dequant** del modo low-RAM, donde los expertos del SSD se cuantizan en la
+CPU—, y en un portátil el governor "balanced" ahorra batería a costa de la
+inferencia.
+
+Si lo quieres:
+
+```bash
+ROPERO_PERFIL_SERVE=performance ropero <modelo>
+```
+
+ropero guarda el perfil anterior en el fichero de estado y lo **devuelve al
+parar el modelo**. Si el launch muere con `-9`, el valor sigue ahí y
+`ropero stop` lo devuelve igual. Sin `power-profiles-daemon` no hace nada.
 
 ## Desarrollo
 
