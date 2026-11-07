@@ -60,15 +60,43 @@ una hora de trabajo para nada.
 ### El preflight: lo que se sabe antes de bajar 60 GB
 
 ```bash
-ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 --quant NVFP4
+# los pesos que ya vienen en NVFP4, sin --quant: se convierten y se colocan
+ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4
+
+# con un quant DISTINTO: aquí sí es un error, y se dice antes de bajar nada
+ropero gguffer --repo nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 --quant Q4_K_M
 ```
 
-Si el repo **ya viene cuantizado** (los de NVIDIA con `-NVFP4`/`-FP8`, los de
-modelopt), el gguffer lo dice y propone el repo hermano sin cuantizar, sin
-bajar nada. Sin ese preflight, el fallo salía al final del proceso, cuando ya
-se habían bajado 60 GB y convertido, y el mensaje del motor
+Hay que distinguir dos cosas que antes se confundían:
+
+- **Los pesos que el conversor CONSERVA** (los de NVIDIA con `-NVFP4`, el
+  gpt-oss en MXFP4): el GGUF sale en ese mismo quant. Sin `--quant` se
+  convierten y se colocan; con `--quant` **de ese mismo tipo**, también (no se
+  cuantiza dos veces, y no hace falta imatrix). Con un `--quant` **distinto**
+  no se puede —el motor no re-cuantiza— y el gguffer lo dice **antes de
+  bajar nada**, proponiendo el repo hermano sin cuantizar.
+- **Los pesos que el conversor DEQUANTIZA** (FP8, AWQ, GPTQ): el GGUF sale en
+  F16. De esos sí se puede cuantizar, pero avisando de que el quant de
+  fábrica se pierde por el camino.
+
+Sin ese preflight, el fallo salía al final del proceso, cuando ya se habían
+bajado 60 GB y convertido, y el mensaje del motor
 (`requantizing from type nvfp4 is disabled`) no decía de dónde venía el
 problema.
+
+### El imatrix: va con el quant, o no va
+
+La regla del repo es dura, y el script es la puerta:
+
+- `--imatrix` (el fichero local) es **excluyente** con el par
+  `--imatrix-repo`/`--imatrix-file` (el imatrix de otro repo), y esos dos
+  **van siempre juntos**.
+- **Cuantizar exige imatrix**: sin él, el gguffer dice que falta y **no baja
+  los pesos**.
+- Un imatrix **sin** `--quant` es un error (no hay nada que cuantizar), salvo
+  con `--diagnostico`, que sí lo usa.
+- Y al revés: si el GGUF **ya está** en el quant pedido, no se cuantiza, así
+  que **no hace falta imatrix y no se baja** (son 200 MB).
 
 
 La tabla de qué fabricar es **`modelos.tsv`** (este directorio). Es la fuente
@@ -317,7 +345,7 @@ exactamente lo mismo, sin tocar el conversor:
 ```bash
 ropero gguffer \
   --gguf bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf \
-  --quant MXFP4 \
+  --quant MXFP4_MOE \
   --imatrix-repo bartowski/Qwen3.8-27B-GGUF \
   --imatrix-file Qwen3.8-27B-imatrix.gguf \
   --out-principal ~/models/gguf/qwen/

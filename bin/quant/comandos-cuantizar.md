@@ -78,7 +78,7 @@ El `.toml` lo busca en `$HOME/models/gguf/gptoss/openai_gpt-oss-20b-MXFP4.gguf`
 
 ```bash
 ropero gguffer --repo openai/gpt-oss-20b \
-    --quant MXFP4 \
+    --quant MXFP4_MOE \
     --imatrix-repo bartowski/openai_gpt-oss-20b-GGUF \
     --imatrix-file openai_gpt-oss-20b-imatrix.gguf \
     --out "$HOME/models/gguf/gptoss/openai_gpt-oss-20b-MXFP4.gguf" \

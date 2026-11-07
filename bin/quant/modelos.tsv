@@ -62,5 +62,5 @@ agenta1	InternScience/Agents-A1	IQ2_XXS	KikoCis/Agents-A1-IQ2_M-GGUF	Agents-A1.i
 # Los cinco modelos que se fabrican asi son nemotron, granite, qwen3,
 # qwencoder y qwen.
 qwen	Qwen/Qwen3.8-27B	IQ4_XS	bartowski/Qwen3.8-27B-GGUF	Qwen3.8-27B-imatrix.gguf		bartowski/Qwen3.8-27B-GGUF:Qwen3.8-27B-bf16/Qwen3.8-27B-bf16-00001-of-00002.gguf
-devstral	mistralai/Devstral-Small-2-24B-Instruct-2512	Q3_K_M,MXFP4	unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF	imatrix_unsloth.gguf_file
+devstral	mistralai/Devstral-Small-2-24B-Instruct-2512	Q3_K_M,MXFP4_MOE	unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF	imatrix_unsloth.gguf_file
 agenta-tiny	InternScience/Agents-A1-4B	Q8_0,TQ4_1S	bartowski/InternScience_Agents-A1-4B-GGUF	InternScience_Agents-A1-4B-imatrix.gguf

@@ -80,11 +80,15 @@ def _repo_corto(repo):
 
 
 def _tipos():
-    """numero de ggml_type -> nombre del quant.
+    """numero de llama_ftype -> nombre del quant.
 
     La lista esta en tipos.txt, que es la misma que lee quant-tipos.sh: el
-    GGUF solo lleva el NUMERO (general.file_type), y en el card hace falta
-    el nombre.
+    GGUF solo lleva el NUMERO (general.file_type, que es un llama_ftype), y
+    en el card hace falta el nombre.
+
+    OJO: general.file_type es el llama_ftype (el enum de include/llama.h:
+    "Q4_K_M" = 15, "NVFP4" = 39), NO el ggml_type (el de los tensores
+    sueltos). Por eso la lista de tipos.txt esta en ese espacio.
     """
     ruta = os.path.join(_QUANT, "tipos.txt")
     mapa = {}

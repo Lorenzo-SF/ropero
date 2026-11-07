@@ -51,3 +51,31 @@ su JSON, su sesión exportada, su log del engine y su stderr.
   `$FAKE_LOG`): ahí se puede comprobar qué se llamó y con qué argumentos.
 - `FAKE_ROPERO_PORT` cambia el puerto que anuncia el `ropero` falso
   (por defecto 9999).
+
+## Los fakes del gguffer (`test/fakes/gguffer/`)
+
+El gguffer habla con HuggingFace (por `curl` y por `hf`) y con el motor
+(por `convert_hf_to_gguf.py` y `llama-quantize`). Para poder probarlo sin
+red y sin el motor, hay un juego de dobles propio:
+
+| fake                        | qué simula                                                        |
+|-----------------------------|-------------------------------------------------------------------|
+| `gguffer/curl`              | la metadata de los repos (`config.json`, `hf_quant_config.json`) y la API de modelos. Un 404 responde como el curl de verdad (código 22, sin escribir) |
+| `gguffer/hf`                | `hf download`: clona el repo de pesos o baja el imatrix. Registra cada llamada en `$FAKE_HF_LOG` |
+| `gguffer/gguf_fake.py`      | un GGUF sintético con el `general.file_type` que haga falta       |
+| `gguffer/convert_hf_to_gguf.py` | el conversor de pesos: decide el `file_type` de salida por la metadata del repo (NVFP4 → 39, MXFP4 → 38, el resto → F16) |
+| `gguffer/llama-quantize`    | el cuantizador: `--help` imprime la lista real de quants del motor; cuantizar copia el GGUF y le pone el `file_type` del quant pedido; **re-cuantizar falla** con el mensaje del motor ("requantizing from type X is disabled") |
+| `gguffer/motor/`            | el `LLAMA_DIR` falso: el conversor y el `build/bin/llama-quantize` |
+
+El `llama-quantize` falso registra cada cuantización en `$FAKE_QUANT_LOG`,
+que es lo que permite comprobar que **no** se cuantiza lo que ya está en el
+quant pedido.
+
+La metadata de los repos de ejemplo vive en `$FAKE_HF_DIR/<owner>/<repo>/`
+(`config.json` y/o `hf_quant_config.json`).
+
+El test que los usa es `test/test-gguffer.sh`:
+
+```bash
+bash test/test-gguffer.sh
+```
