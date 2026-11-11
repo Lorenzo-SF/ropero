@@ -1950,6 +1950,34 @@ rp_cmd_gguffer() {
         # El "(...)" es el quant REAL del intermedio, no el del --intermedio:
         # con pesos que ya vienen en NVFP4, el GGUF sale en NVFP4 aunque se
         # pidiera un F16.
+        # Parche del motor: el conversor upstream no soporta mixed-precision
+        # (NVFP4 + FP8) y falla con "Can't handle multiple config groups".
+        # El parche esta en bin/quant/patches/. Se aplica una vez si no esta.
+        local _patch="$ROPERO_ROOT/bin/quant/patches/parche-motor-compressed-tensors-mixed-precision.patch"
+        if [[ -f "$_patch" && -f "$_llama_dir/conversion/base.py" ]] \
+           && ! grep -q "dequant_fp8" "$_llama_dir/conversion/base.py" 2>/dev/null; then
+            (cd "$_llama_dir" && patch -p1 < "$_patch" >/dev/null 2>&1) || true
+        fi
+        # Python con transformers (necesario para convert_hf_to_gguf.py).
+        # Se prefiere el venv propio de ropero; si no, el python3 del PATH.
+        local _conv_python=""
+        for _cand in "$HOME/.local/share/ropero/venv/bin/python" "$HOME/.venv-tensorrt/bin/python3" python3; do
+            if [[ "$_cand" == */* ]]; then
+                [[ -x "$_cand" ]] || continue
+            else
+                _cand="$(command -v "$_cand" 2>/dev/null)" || continue
+            fi
+            if "$_cand" -c "import transformers" 2>/dev/null; then
+                _conv_python="$_cand"
+                break
+            fi
+        done
+        if [[ -z "$_conv_python" ]]; then
+            echo "ERROR: no hay un python con 'transformers' instalado." >&2
+            echo "       crea el venv: python3 -m venv ~/.local/share/ropero/venv --system-site-packages" >&2
+            echo "       y luego: ~/.local/share/ropero/venv/bin/python -m pip install transformers" >&2
+            return 1
+        fi
         echo "[gguffer] convierto $source_dir -> $out_f16 ($_suf_inter)..."
         # El tokenizer se arregla ANTES de convertir, no solo cuando la
         # conversion falla: el chat template que falta NO hace fallar nada,
@@ -1959,7 +1987,7 @@ rp_cmd_gguffer() {
         ROPERO_CHAT_TEMPLATE="$chat_template" _gguffer_arreglar_tokenizer "$source_dir" || true
         local conv_log="${TMPDIR:-/tmp}/gguffer-conv.$$.log"
         local conv_ok=0
-        if python3 "$_convert" ${conv_args[@]+"${conv_args[@]}"} >"$conv_log" 2>&1; then
+        if "$_conv_python" "$_convert" ${conv_args[@]+"${conv_args[@]}"} >"$conv_log" 2>&1; then
             conv_ok=1
         elif grep -q "Tokenizer class .* does not exist" "$conv_log" 2>/dev/null \
              && ROPERO_CHAT_TEMPLATE="$chat_template" _gguffer_arreglar_tokenizer "$source_dir"; then
@@ -1972,7 +2000,7 @@ rp_cmd_gguffer() {
             echo "[gguffer] el tokenizer del repo usa una clase que tu transformers no conoce."
             echo "           (TokenizersBackend es de transformers v5)"
             echo "           Lo cambio a PreTrainedTokenizerFast y reintento..."
-            if python3 "$_convert" ${conv_args[@]+"${conv_args[@]}"} >"$conv_log" 2>&1; then
+            if "$_conv_python" "$_convert" ${conv_args[@]+"${conv_args[@]}"} >"$conv_log" 2>&1; then
                 conv_ok=1
             fi
         elif grep -q -- "--mtp / --no-nextn are not supported" "$conv_log" 2>/dev/null \
@@ -1989,7 +2017,7 @@ rp_cmd_gguffer() {
             for _i in "${!conv_args[@]}"; do
                 [[ "${conv_args[$_i]}" == "--no-mtp" ]] && unset 'conv_args[_i]'
             done
-            if python3 "$_convert" ${conv_args[@]+"${conv_args[@]}"} >"$conv_log" 2>&1; then
+            if "$_conv_python" "$_convert" ${conv_args[@]+"${conv_args[@]}"} >"$conv_log" 2>&1; then
                 conv_ok=1
             fi
         fi
@@ -2007,25 +2035,16 @@ rp_cmd_gguffer() {
                 echo "       ==> faltan ficheros en el clon: la descarga esta incompleta." >&2
                 echo "       borra $work y vuelve a lanzar, o baja el repo a mano." >&2
             fi
+            # Al fallar, se mantiene el repo base (safetensors/gguf) para poder
+            # reintentar sin volver a descargar. Solo se borra al terminar con
+            # exito y sin --keep-source.
             if (( keep_source == 1 )); then
                 echo "       conservo los pesos en: $work (--keep-source)" >&2
-                echo "       reintenta solo la conversion:" >&2
-                echo "         python3 $_convert ${conv_args[*]}" >&2
             else
-                # Sin --keep-source, los pesos se borran: 60 GB que se quedan
-                # ahi para siempre y un trabajo de noche que se llena el disco
-                # es peor que volver a bajar. Se avisa de como pedirlos otra
-                # vez, porque el repo es publico.
-                if (( _puede_borrar_work == 1 )); then
-                    echo "       borro los pesos (60 GB) para no dejar el disco lleno." >&2
-                    echo "       no se guardan porque no se paso --keep-source." >&2
-                    rm -rf "$work"
-                else
-                    # El GGUF de entrada es un fichero del usuario, en su
-                    # carpeta: eso no se borra, ni con --force ni al fallar.
-                    echo "       el GGUF de entrada es tuyo: no lo borro." >&2
-                fi
+                echo "       conservo los pesos en: $work (para reintentar)" >&2
             fi
+            echo "       reintenta solo la conversion:" >&2
+            echo "         $_conv_python $_convert ${conv_args[*]}" >&2
             return 1
         fi
     else
@@ -2206,26 +2225,12 @@ rp_cmd_gguffer() {
             # cuantizacion (que es la parte cara).
             rm -f "$out_q"
             echo "ERROR: fallo la cuantizacion a $quant_i" >&2
-            if (( keep_source == 1 )); then
-                echo "       conservo los pesos en: $work (--keep-source)" >&2
-                echo "       conservo el GGUF intermedio en: $out_f16" >&2
-                echo "       reintenta solo la cuantizacion:" >&2
-                echo "         $_quantize ${qargs[*]}" >&2
-            else
-                # Sin --keep-source, los pesos se borran. Un trabajo de noche
-                # que falla many veces seguidas no puede dejar 60 GB por cada
-                # intento: el disco se llena y luego falla TODO, incluso lo
-                # que ya estaba bien.
-                if (( _puede_borrar_work == 1 )); then
-                    echo "       borro los pesos (60 GB) para no dejar el disco lleno." >&2
-                    echo "       no se guardan porque no se paso --keep-source." >&2
-                    rm -rf "$work"
-                else
-                    # El GGUF de entrada es un fichero del usuario, en su
-                    # carpeta: eso no se borra, ni con --force ni al fallar.
-                    echo "       el GGUF de entrada es tuyo: no lo borro." >&2
-                fi
-            fi
+            # Al fallar, se mantiene el repo base y el GGUF intermedio para
+            # poder reintentar sin volver a descargar/convertir.
+            echo "       conservo los pesos en: $work" >&2
+            echo "       conservo el GGUF intermedio en: $out_f16" >&2
+            echo "       reintenta solo la cuantizacion:" >&2
+            echo "         $_quantize ${qargs[*]}" >&2
             # El error mas comun: el imatrix no cubre un tensor. Se dice cual,
             # porque el mensaje del cuantizador ("Missing importance matrix
             # for tensor blk.64.attn_k.weight") no dice de donde sale.
