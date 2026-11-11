@@ -122,12 +122,12 @@ rp_eng_strata_install() {
 }
 
 rp_eng_strata_resolve() {
-    # PATH → BIN_DIR → FARM_DIR → el enlace del instalador → la versión
-    # concreta que hay en la carpeta de Strata.
+    # PATH → BIN_DIR → el enlace del instalador → la versión concreta que
+    # hay en la carpeta de Strata.
     local cand
     cand="$(command -v strata 2>/dev/null)"
     [[ -n "$cand" ]] && { printf '%s\n' "$cand"; return 0; }
-    for cand in "$BIN_DIR/strata" "$FARM_DIR/strata" \
+    for cand in "$BIN_DIR/strata" \
                 "$HOME/.local/bin/strata" \
                 "$HOME/.local/share/strata/terminal/current/bin/strata"; do
         if [[ -x "$cand" ]]; then

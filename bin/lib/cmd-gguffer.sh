@@ -1959,9 +1959,11 @@ rp_cmd_gguffer() {
             (cd "$_llama_dir" && patch -p1 < "$_patch" >/dev/null 2>&1) || true
         fi
         # Python con transformers (necesario para convert_hf_to_gguf.py).
-        # Se prefiere el venv propio de ropero; si no, el python3 del PATH.
+        # Se prefiere el venv propio de ropero (~/.local/state/ropero/venv,
+        # fuera del repo: bajo la share nueva no puede escribirse); si no,
+        # el python3 del PATH.
         local _conv_python=""
-        for _cand in "$HOME/.local/share/ropero/venv/bin/python" "$HOME/.venv-tensorrt/bin/python3" python3; do
+        for _cand in "$HOME/.local/state/ropero/venv/bin/python" "$HOME/.venv-tensorrt/bin/python3" python3; do
             if [[ "$_cand" == */* ]]; then
                 [[ -x "$_cand" ]] || continue
             else
@@ -1974,8 +1976,8 @@ rp_cmd_gguffer() {
         done
         if [[ -z "$_conv_python" ]]; then
             echo "ERROR: no hay un python con 'transformers' instalado." >&2
-            echo "       crea el venv: python3 -m venv ~/.local/share/ropero/venv --system-site-packages" >&2
-            echo "       y luego: ~/.local/share/ropero/venv/bin/python -m pip install transformers" >&2
+            echo "       crea el venv: python3 -m venv ~/.local/state/ropero/venv --system-site-packages" >&2
+            echo "       y luego: ~/.local/state/ropero/venv/bin/python -m pip install transformers" >&2
             return 1
         fi
         echo "[gguffer] convierto $source_dir -> $out_f16 ($_suf_inter)..."

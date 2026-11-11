@@ -71,18 +71,13 @@ rp_eng_vllm_install() {
 }
 
 rp_eng_vllm_resolve() {
-    # PATH → BIN_DIR → FARM_DIR (uv tool instala en ~/.local/bin = BIN_DIR por
-    # defecto; el farm es ~/.local/share/ropero, donde `ropero install link`
-    # deja el enlace al motor).
+    # PATH → BIN_DIR (uv tool instala en ~/.local/bin = BIN_DIR por defecto;
+    # allí deja también `ropero install link` su enlace al motor).
     local ruta
     ruta="$(command -v vllm 2>/dev/null)"
     [[ -n "$ruta" ]] && { printf '%s\n' "$ruta"; return 0; }
     if [[ -x "$BIN_DIR/vllm" ]]; then
         printf '%s\n' "$BIN_DIR/vllm"
-        return 0
-    fi
-    if [[ -x "$FARM_DIR/vllm" ]]; then
-        printf '%s\n' "$FARM_DIR/vllm"
         return 0
     fi
     return 1

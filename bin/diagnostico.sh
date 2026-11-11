@@ -130,7 +130,7 @@ done
 
 # ── 2. El motor: dónde está y con qué flags se compiló ─────────────────────
 seccion "EL MOTOR (llama-server)"
-cmd "which -a llama-server; ls -la '$HOME/.local/bin/llama-server' '$HOME/.local/share/ropero/llama-server' '$HOME/llama.cpp/build/bin/llama-server' 2>/dev/null"
+cmd "which -a llama-server; ls -la '$HOME/.local/bin/llama-server' '$HOME/llama.cpp/build/bin/llama-server' '$HOME/llama.cpp-official/build/bin/llama-server' 2>/dev/null"
 cmd "ls -la '$HOME'/atomic*/llama.cpp/build/bin/llama-server '$HOME'/llama*/build/bin/llama-server 2>/dev/null"
 cmd "find '$HOME' -maxdepth 5 -name 'llama-server' -type f -perm -u+x 2>/dev/null | head -20"
 

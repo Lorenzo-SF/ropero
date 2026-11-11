@@ -49,6 +49,20 @@ _rp_doctor_cmd_ok() {
     fi
 }
 
+# _rp_doctor_realpath <ruta> — ruta absoluta física (siguiendo symlinks).
+# SIN readlink -f: no existe en el bash 3.2 de macOS.
+_rp_doctor_realpath() {
+    local p="$1" dir base
+    while [[ -L "$p" ]]; do
+        dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+        base="$(readlink "$p")"
+        [[ "$base" != /* ]] && base="$dir/$base"
+        p="$base"
+    done
+    dir="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+    printf '%s\n' "$dir/$(basename "$p")"
+}
+
 # _rp_doctor_dir_ok <var> <ruta> — directorio creado y escribible (crítico).
 _rp_doctor_dir_ok() {
     local nombre="$1" ruta="$2" prueba
@@ -75,8 +89,8 @@ USO: ropero doctor
 
 Verifica la instalación: bash, python3>=3.8, binarios de setup (curl/wget,
 tar, git, uv, hf, jq, cmake, ninja), SO y paquetero, directorios de trabajo
-(GGUF/SAFETENSORS/LOG/STATE), layout de instalación (symlink del entrypoint
-en ~/.local/bin y el farm ~/.local/share/ropero), API key, engines
+(GGUF/SAFETENSORS/LOG/STATE), layout de instalación (symlinks de
+~/.local/bin/ropero y ~/.local/share/ropero → <repo>/bin), API key, engines
 (compatibles, instalados y qué hay en el slot :$PORT) y modelos activos
 presentes en disco.
 
@@ -175,10 +189,10 @@ rp_cmd_doctor() {
     _rp_doctor_dir_ok STATE_DIR "$STATE_DIR"
 
     # ── Layout de instalación (avisos; NUNCA crítico) ─────────────────────
-    # Contrato lasaca:
-    #   ~/.local/bin/ropero      → <repo>/bin/ropero   (lo único de ropero)
-    #   ~/.local/share/ropero/    farm: un symlink por entrada de primer
-    #                             nivel del repo + ropero.d → <repo>/bin/lib
+    # Contrato lasaca v2:
+    #   ~/.local/bin/ropero      → <repo>/bin/ropero   (lo único de ropero
+    #                             en el PATH)
+    #   ~/.local/share/ropero    → <repo>/bin          (symlink único)
     #
     # Nada de esto es crítico: ropero funciona igual desde el repo (sin
     # instalar) que desde el symlink. Es información: si el enlace falta,
@@ -228,26 +242,31 @@ rp_cmd_doctor() {
         fi
     fi
 
-    if [[ -L "$FARM_DIR/ropero.d" ]]; then
-        _rp_doctor_ok "farm: $FARM_DIR/ropero.d → $(readlink "$FARM_DIR/ropero.d")"
-    elif [[ -d "$FARM_DIR" ]]; then
-        _rp_doctor_warn "el farm $FARM_DIR no tiene el alias ropero.d (ropero install link)"
+    # ── La share (R12): ~/.local/share/ropero → <repo>/bin ───────────────
+    local share="${ROPERO_DIR:-$HOME/.local/share/ropero}"
+    local share_dest
+    if [[ -L "$share" ]]; then
+        share_dest="$(_rp_doctor_realpath "$share" 2>/dev/null || true)"
+        if [[ -n "$share_dest" && -d "$share_dest" ]]; then
+            if [[ "$share_dest" == "$ROPERO_ROOT" || "$share_dest" == "$ROPERO_ROOT"/* ]]; then
+                _rp_doctor_ok "share: $share → $share_dest"
+            else
+                _rp_doctor_warn "la share $share → $share_dest no apunta dentro del repo ($ROPERO_ROOT)"
+            fi
+        else
+            _rp_doctor_warn "el symlink $share está roto: $(readlink "$share" 2>/dev/null)"
+        fi
+    elif [[ -e "$share" ]]; then
+        _rp_doctor_warn "$share NO es un symlink (layout viejo o ajeno): bash install.sh --local lo arregla"
     else
-        _rp_doctor_warn "no hay farm en $FARM_DIR (ropero install link)"
+        _rp_doctor_warn "no hay share en $share (bash install.sh --local)"
     fi
 
-    # R1: en ~/.local/bin sólo debería vivir el entrypoint de ropero. Lo que
-    # haya de más puede ser de otro programa (uv tool, hugo…) o de un engine
-    # instalado por `ropero install engines`: no es culpa de ropero, pero se
-    # dice para que nadie se confunde.
-    local extra="" e
-    for e in "$BIN_DIR"/* "$BIN_DIR"/.[!.]*; do
-        [[ -e "$e" || -L "$e" ]] || continue
-        [[ "${e##*/}" == "ropero" ]] && continue
-        extra="$extra ${e##*/}"
-    done
-    if [[ -n "$extra" ]]; then
-        _rp_doctor_warn "en $BIN_DIR hay más que el entrypoint de ropero:$extra"
+    # Resto legacy del layout viejo. OJO: los binarios de engines en
+    # ~/.local/bin SÍ son legítimos bajo el contrato v2 (igual que los de
+    # uv/brew); lo que sobra es el alias ropero.d.
+    if [[ -e "$BIN_DIR/ropero.d" ]]; then
+        _rp_doctor_warn "resto legacy en $BIN_DIR/ropero.d (el layout v2 no lo usa; install.sh lo retira)"
     fi
 
     # ── API key (aviso: el primer arranque la genera, §5.5) ──────────────

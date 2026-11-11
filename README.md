@@ -1,7 +1,8 @@
 # ropero
 
 CLI para usar LLMs locales con el motor que mejor rinda en cada máquina:
-**llama-server** (GGUF), **mlx-serve** (Apple Silicon), **vLLM**, y
+**llama-server** (GGUF, fork turboquant), **llama-server-official**
+(llama.cpp de upstream), **mlx-serve** (Apple Silicon), **vLLM**, y
 **airllm / TensorRT-LLM / FastFlowLM** a través de un endpoint OpenAI común.
 
 Funciona en **macOS (Apple Silicon)** y **CachyOS/Arch Linux**. La
@@ -10,16 +11,22 @@ el código no se toca.
 
 ## Instalación
 
+Symlink-only desde el repo clonado (no hay instalador de red):
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Lorenzo-SF/ropero/main/install.sh | bash
+git clone https://github.com/Lorenzo-SF/ropero.git
+bash ropero/install.sh --local
 ```
 
-El instalador **sólo obtiene ropero** y crea `~/.local/bin/ropero`. Después:
+Eso deja `~/.local/bin/ropero → <repo>/bin/ropero` (lo único en el PATH) y
+`~/.local/share/ropero → <repo>/bin`. Es idempotente, verifica con
+`install.sh --check` y migra el layout viejo si lo encuentra (rescatando
+antes los enlaces a engines y el venv de gguffer). Después:
 
 ```bash
 ropero install setup      # dependencias base (python3, git, uv, hf, jq, cmake…)
-ropero install engines     # elige motores e instala SUS dependencias
-ropero install models      # elige modelos (descarga o fabrica el GGUF)
+ropero install engines    # elige motores e instala SUS dependencias
+ropero install models     # elige modelos (descarga o fabrica el GGUF)
 ```
 
 `ropero install` sin argumentos hace las tres cosas en orden.

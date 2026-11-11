@@ -57,11 +57,10 @@ FIELD_SEP = "\x1f"
 # "mlx_lm" es la ortografía legacy y se canóniza al cargar (con aviso en
 # stderr), de modo que los TOML viejos siguen valendo sin edición.
 #
-# "llama-server-official" (el llama.cpp de upstream sin turboquant) está
-# OCULTO en los menús de install (RP_ENGINE_IDS_HIDDEN en 03-engines.sh),
-# pero es un engine de verdad: existe su fichero en bin/lib/engines/ y sus
-# modelos están en models/llama-official/. Oculto NO es desconocido: el
-# validador tiene que aceptarlo o el catálogo da problemas falsos.
+# "llama-server-official" (el llama.cpp de upstream sin turboquant) es un
+# engine visible, como los demás: aparece en el menú de install y en el
+# doctor. Existe su fichero en bin/lib/engines/ y sus modelos están en
+# models/llama-official/ (los que usan el fork están en models/llama/).
 KNOWN_ENGINES = (
     "llama-server", "vllm", "airllm", "mlx-serve", "tensorrt-llm", "fastflowlm",
     "llama-server-official", "strata",

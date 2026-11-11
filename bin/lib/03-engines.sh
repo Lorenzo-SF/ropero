@@ -9,7 +9,7 @@
 #   rp_eng_<id>_deps         → comandos externos, separados por espacio
 #   rp_eng_<id>_install      → [--force] instala SUS deps (rp_msg/rp_step)
 #   rp_eng_<id>_resolve      → ruta absoluta del binario
-#                              (PATH→BIN_DIR→FARM_DIR→rutas largas)
+#                              (PATH→BIN_DIR→rutas largas)
 #   rp_eng_<id>_probe <p>    → ok | down | missing (0 sólo si ok)
 #   rp_eng_<id>_native_auth  → yes | no
 #   rp_eng_<id>_launch <modelo> <puerto> <logfile> <argv...> → PID por stdout
@@ -30,18 +30,14 @@ if ! declare -F rp_mc_load >/dev/null 2>&1; then
 fi
 
 # Ids canónicos (§6). El orden es el de la tabla de la spec.
-RP_ENGINE_IDS="llama-server vllm mlx-serve airllm tensorrt-llm fastflowlm strata"
+RP_ENGINE_IDS="llama-server llama-server-official vllm mlx-serve airllm tensorrt-llm fastflowlm strata"
 
-# Engines OCULTOS: existen y se pueden instalar a mano (`ropero install
-# engines llama-official`), pero no se anuncian ni se comprueban.
-#
-# llama-server-official (el llama.cpp de upstream sin turboquant) se ocultó
-# cuando el motor principal pasó a ser NUESTRO fork
-# (Lorenzo-SF/ropero-llama-turboquant), que ya trae flint, turbo5/turbo6
-# y los parches de ropero. Los modelos que usaban ese engine pasaron a
-# models/llama-official/fired/ ("retirado"): flint, gptoss, groot y qwen38
-# se arrancan con el motor principal.
-RP_ENGINE_IDS_HIDDEN="llama-server-official"
+# NOTA HISTÓRICA: llama-server-official (el llama.cpp de upstream sin
+# turboquant) estuvo OCULTO cuando el motor principal pasó a ser NUESTRO
+# fork (Lorenzo-SF/ropero-llama-turboquant), que ya trae flint,
+# turbo5/turbo6 y los parches de ropero. Hoy vuelve a ser un engine visible
+# como los demás: sus modelos viven en models/llama-official/ y el menú de
+# `ropero install engines` lo ofrece en igualdad de condiciones.
 
 # Los ocho hooks que TODO engine debe definir (spec §5.4).
 RP_ENGINE_HOOKS="label compatible deps install resolve probe native_auth launch"
@@ -63,21 +59,12 @@ rp_engine_canonical() {
     return 0
 }
 
-# rp_engine_list [--all] — un id por línea. Sin --all sólo los visibles
-# (los ocultos no se anuncian; con --all sí, para el que quiera verlos).
+# rp_engine_list — un id por línea (todos los engines son visibles).
 rp_engine_list() {
     local id
-    local incluir_ocultos=0
-    [[ "${1:-}" == "--all" ]] && incluir_ocultos=1
-
     for id in $RP_ENGINE_IDS; do
         printf '%s\n' "$id"
     done
-    if [[ "$incluir_ocultos" == "1" ]]; then
-        for id in $RP_ENGINE_IDS_HIDDEN; do
-            printf '%s\n' "$id"
-        done
-    fi
 }
 
 # rp_engine_load <id> — sourcea engines/<id>.sh (si hace falta) y verifica
