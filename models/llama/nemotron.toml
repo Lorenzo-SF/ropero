@@ -5,7 +5,7 @@
 [model]
 name    = "nemotron"
 engine  = "llama-server"
-context = 131072
+context = 65536
 
 [files]
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"
@@ -22,7 +22,7 @@ repo = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
 file = "chat_template.jinja"
 name = "chat_template.jinja"
 size = "9.87 KB"
-use = "run"
+use  = "run"
 
 [build]
 repo         = "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16"
@@ -30,7 +30,7 @@ quant        = "NVFP4"
 imatrix_repo = "bartowski/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF"
 imatrix_file = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-imatrix.gguf"
 keep_source  = true
-size = "65.8 GB"
+size         = "65.8 GB"
 
 [levels]
 list        = ["instruct", "think"]
@@ -40,11 +40,11 @@ default     = "instruct"
 base = [
     "--n-gpu-layers", "54",
     "--n-cpu-moe", "12",
-    "--moe-cache","soft", 
+    # "--moe-cache","soft", 
     "--kv-unified",
     "--kv-offload",
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
 
     "--repeat-penalty", "1.1",
     "--repeat-last-n", "64",

@@ -1,20 +1,12 @@
 [model]
 name    = "groot"
 engine  = "llama-server"
-context = 262144 
+context = 65536 
 
 [files]
 gguf = "Groot-19B-A3B-261023-NVFP4.gguf"
 
-# NO hay [download]: el repo "GrootTeam/Groot-19B-A3B-261023-GGUF" NO tiene
-# el fichero "Groot-19B-A3B-261023-NVFP4.gguf" (sólo el Q4_K_M y el
-# mmproj). La vía que funciona es la de abajo: el repo de los pesos YA
-# cuantizados en NVFP4, que se convierten y se colocan SIN volver a cuantizar
-# (ver el contrato del gguffer: "sin --quant, convertir y colocar").
-#
-#   ropero install models groot --build
-#
-[build] # solo crear gguf, ya esta cuantizado
+[build] 
 repo         = "GrootTeam/Groot-19B-A3B-261023-NVFP4"
 keep_source  = true
 size = "13.6 GB"
@@ -26,7 +18,7 @@ default = "think"
 [args]
 base = [
     "--n-gpu-layers", "999",
-    "--moe-cache","soft", 
+    # "--moe-cache","soft", 
     "--kv-unified",
     "--kv-offload",
     "--cache-reuse", "512",
@@ -39,10 +31,18 @@ base = [
     "--presence-penalty", "1.5",
     "--repeat-penalty", "1.0",
 
-    "--spec-type", "ngram-map-k4v",
-    "--spec-ngram-map-k4v-size-n", "24",
-    "--spec-ngram-map-k4v-size-m", "48",
-    "--spec-ngram-map-k4v-min-hits", "1",
+
+    "--spec-type", "draft-mtp", 
+    "--spec-draft-n-max", "3",     
+    "--spec-draft-n-min", "0",     
+    "--spec-draft-p-min", "0.8",     
+    "--spec-draft-type-k", "q8_0",  
+    "--spec-draft-type-v", "q8_0",  
+
+    # "--spec-type", "ngram-map-k4v",
+    # "--spec-ngram-map-k4v-size-n", "24",
+    # "--spec-ngram-map-k4v-size-m", "48",
+    # "--spec-ngram-map-k4v-min-hits", "1",
 ]
 
 [args.level.think]

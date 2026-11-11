@@ -5,7 +5,7 @@
 [model]
 name    = "ornith"
 engine  = "llama-server"
-context = 131072
+context = 65536
 
 [files]
 gguf = "Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf"
@@ -32,7 +32,7 @@ default = "instruct"
 base = [
     "--n-gpu-layers", "44",
     "--n-cpu-moe", "14",
-    "--moe-cache","soft",
+    # "--moe-cache","soft",
     "--kv-unified",
     "--kv-offload",
     "--cache-reuse", "512",
