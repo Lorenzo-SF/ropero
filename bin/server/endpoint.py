@@ -259,53 +259,46 @@ def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
 def resolve_binary(engine: str, override: str = "") -> str:
     """Ruta al ejecutable del backend, o "" si no se encuentra.
 
-    El orden NO es arbitrario y es el mismo que usa bin/lib/engines/*.sh:
-    primero lo que ropero linkeó ($BIN_DIR y el farm $FARM_DIR), después las
-    rutas largas conocidas (venv de tensorrt, /opt/fastflowlm) y el PATH al
-    final.
+    El orden NO es arbitrario y es el mismo que usa bin/lib/engines/*.sh
+    (spec §5.4: PATH → BIN_DIR → rutas largas): primero el PATH, después lo
+    que ropero linkeó ($BIN_DIR, ~/.local/bin) y al final las rutas largas
+    conocidas (venv de tensorrt, /opt/fastflowlm, installs de asdf).
     """
     if override:
         return override
+    name = {"tensorrt": "trtllm-serve", "flm": "flm", "mlx": "mlx_lm.server",
+            "strata": "strata"}.get(engine, "")
+    found = shutil.which(name) if name else None
+    if found:
+        return found
     bin_dir = os.environ.get("BIN_DIR") or os.path.expanduser("~/.local/bin")
-    farm_dir = (
-        os.environ.get("FARM_DIR")
-        or os.environ.get("ROPERO_FARM_DIR")
-        or os.path.expanduser("~/.local/share/ropero")
-    )
     candidates = {
         "tensorrt": [
             os.path.join(bin_dir, "trtllm-serve"),
-            os.path.join(farm_dir, "trtllm-serve"),
             os.path.expanduser("~/.venv-tensorrt/bin/trtllm-serve"),
         ],
         "flm": [
-            "/opt/fastflowlm/bin/flm",
             os.path.join(bin_dir, "flm"),
-            os.path.join(farm_dir, "flm"),
+            "/opt/fastflowlm/bin/flm",
         ],
         "mlx": [
             os.path.join(bin_dir, "mlx_lm.server"),
-            os.path.join(farm_dir, "mlx_lm.server"),
         ],
         "strata": [
             os.path.join(bin_dir, "strata"),
-            os.path.join(farm_dir, "strata"),
             os.path.expanduser("~/.local/bin/strata"),
             os.path.expanduser("~/.local/share/strata/terminal/current/bin/strata"),
         ],
     }.get(engine, [])
+    for cand in candidates:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
     if engine == "mlx":
         for d in glob.glob(os.path.expanduser("~/.asdf/installs/python/*/bin")):
             cand = os.path.join(d, "mlx_lm.server")
             if os.path.isfile(cand) and os.access(cand, os.X_OK):
                 return cand
-    for cand in candidates:
-        if os.path.isfile(cand) and os.access(cand, os.X_OK):
-            return cand
-    name = {"tensorrt": "trtllm-serve", "flm": "flm", "mlx": "mlx_lm.server",
-            "strata": "strata"}.get(engine, "")
-    found = shutil.which(name) if name else None
-    return found or ""
+    return ""
 
 
 # -----------------------------------------------------------------------------
@@ -1473,8 +1466,8 @@ def main() -> int:
                     help="puerto INTERNO del backend en 0.0.0.0.1 "
                          "(default: puerto externo + 1000)")
     ap.add_argument("--backend-bin", default="",
-                    help="ruta al ejecutable del backend (si no, se busca donde "
-                         "ropero lo tiene: $BIN_DIR, venv de tensorrt, /opt/fastflowlm, PATH)")
+                    help="ruta al ejecutable del backend (si no, se busca como en "
+                         "los engines: PATH, $BIN_DIR, venv de tensorrt, /opt/fastflowlm)")
     ap.add_argument("--rewrite-model", default="",
                     help="nombre al que se reescribe el campo 'model' del body "
                          "(vacío = el que conoce el backend: el id de ropero para "

@@ -47,9 +47,8 @@ export FAKE_STRATA_LOG="$TMP/strata.log"
 export FAKE_STRATA_PLAN="$TMP/plan.json"
 export HOME="$TMP/home"
 export BIN_DIR="$TMP/bin"
-export FARM_DIR="$TMP/farm"
 export PATH="$FAKES:$PATH"
-mkdir -p "$HOME" "$BIN_DIR" "$FARM_DIR" "$ROPERO_ROOT/bin/server"
+mkdir -p "$HOME" "$BIN_DIR" "$ROPERO_ROOT/bin/server"
 cp "$ROOT/bin/server/strata-run.sh" "$ROPERO_ROOT/bin/server/strata-run.sh"
 chmod +x "$ROPERO_ROOT/bin/server/strata-run.sh"
 cat >"$ROPERO_ROOT/bin/server/endpoint.py" <<'FAKE'
@@ -122,14 +121,14 @@ comprobar "es compatible en Linux" "rp_eng_strata_compatible"
 
 echo "== resolver el ejecutable =="
 comprobar "encuentra el strata del PATH" "[[ \$(rp_eng_strata_resolve) == *strata ]]"
-( PATH="/nonexistent" BIN_DIR=/nonexistent FARM_DIR=/nonexistent
+( PATH="/nonexistent" BIN_DIR=/nonexistent
   if rp_eng_strata_resolve >/dev/null 2>&1; then exit 1; else exit 0; fi ) \
     && ok "sin Strata instalado no resuelve nada" \
     || mal "resuelve algo que no existe"
 
 echo "== el probe =="
 comprobar "con Strata pero sin puerto el probe dice down" "[[ \$(rp_eng_strata_probe 9999) == down ]]"
-( PATH="/nonexistent" BIN_DIR=/nonexistent FARM_DIR=/nonexistent
+( PATH="/nonexistent" BIN_DIR=/nonexistent
   if [[ "$(rp_eng_strata_probe 9999 2>/dev/null)" == "missing" ]]; then exit 0; else exit 1; fi ) \
     && ok "sin Strata el probe dice missing" \
     || mal "sin Strata el probe no dice missing"
@@ -144,7 +143,7 @@ export FAKE_STRATA_INSTALLED="$TMP/instalado.marca"
 mkdir -p "$TMP/curl"
 cp "$FAKES/curl" "$TMP/curl/curl"
 chmod +x "$TMP/curl/curl"
-salida="$( PATH="$TMP/curl:/usr/bin:/bin" BIN_DIR=/nonexistent FARM_DIR=/nonexistent \
+salida="$( PATH="$TMP/curl:/usr/bin:/bin" BIN_DIR=/nonexistent \
             rp_eng_strata_install 2>&1)"
 comprobar "avisa de que no encuentra el ejecutable tras instalar" \
     "printf '%s' \"\$salida\" | grep -qi 'no encuentro el ejecutable'"
