@@ -37,8 +37,8 @@ base = [
     "--kv-offload",
     "--cache-reuse", "512",
 
-    "--cache-type-k", "turbo3",
-    "--cache-type-v", "turbo3",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
 
     "--spec-type", "ngram-map-k4v",
     "--spec-ngram-map-k4v-size-n", "24",
