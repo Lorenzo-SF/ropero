@@ -642,8 +642,21 @@ rp_cmd_link() {
     fi
 
     # 1) El layout v2 (entrypoint + share + migración del viejo): lo hace
-    #    install.sh. Los env ROPERO_DIR/ROPERO_BIN_DIR viajan solos al hijo.
-    if bash "$repo/install.sh" --local; then
+    #    install.sh. El override ROPERO_DIR/ROPERO_BIN_DIR se pasa explícito
+    #    con env: aunque no esté exportado en la shell que llama, install.sh
+    #    debe verlo (mismo patrón que tools/pacool --install).
+    local rc_inst=0
+    if [[ -n "${ROPERO_DIR:-}" && -n "${ROPERO_BIN_DIR:-}" ]]; then
+        env ROPERO_DIR="$ROPERO_DIR" ROPERO_BIN_DIR="$ROPERO_BIN_DIR" \
+            bash "$repo/install.sh" --local || rc_inst=1
+    elif [[ -n "${ROPERO_DIR:-}" ]]; then
+        env ROPERO_DIR="$ROPERO_DIR" bash "$repo/install.sh" --local || rc_inst=1
+    elif [[ -n "${ROPERO_BIN_DIR:-}" ]]; then
+        env ROPERO_BIN_DIR="$ROPERO_BIN_DIR" bash "$repo/install.sh" --local || rc_inst=1
+    else
+        bash "$repo/install.sh" --local || rc_inst=1
+    fi
+    if [[ "$rc_inst" == "0" ]]; then
         rp_msg ok "layout v2 dejado por install.sh --local"
     else
         rp_msg error "install.sh --local falló (ver su salida)"

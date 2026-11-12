@@ -164,6 +164,17 @@ real_path() {
     printf '%s\n' "$dir/$(basename "$p")"
 }
 
+# path_within <hijo> <padre> — 0 si <hijo> está dentro de <padre> (comparación
+# literal de prefijo, como en pacool/tools).
+path_within() {
+    local child="${1%/}" parent="${2%/}"
+    [[ -n "$parent" && -n "$child" ]] || return 1
+    case "$child" in
+        "$parent"/*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # -----------------------------------------------------------------------------
 # FASE 1 — preparar: resolver el origen (el repo de este script, R6).
 # -----------------------------------------------------------------------------
@@ -481,14 +492,23 @@ do_check() {
         rc=1
     fi
 
-    # (4) el entrypoint instalado responde.
+    # (4) el entrypoint instalado responde. Patrón pacool/tools: sólo se
+    #     ejecuta si su destino resuelto está DENTRO del repo de este
+    #     install.sh ($ORIGIN); si apunta a un ejecutable ajeno, [!] y NO se
+    #     ejecuta nada desde aquí. El fallback al entrypoint del propio repo
+    #     queda para el caso en que el symlink instalado no resuelve (ese
+    #     fichero es nuestro: seguro).
     local entry="$phys"
-    [[ -n "$entry" && -f "$entry" ]] || entry="$ORIGIN/$ENTRY"
-    if bash "$entry" --help >/dev/null 2>&1 </dev/null; then
-        ok "$NAME --help responde (salida 0)"
+    if [[ -n "$entry" && -f "$entry" ]] && ! path_within "$entry" "$ORIGIN"; then
+        warn "el entrypoint apunta fuera de este repo ($entry): no ejecuto su --help"
     else
-        err "$NAME --help NO responde"
-        rc=1
+        [[ -n "$entry" && -f "$entry" ]] || entry="$ORIGIN/$ENTRY"
+        if bash "$entry" --help >/dev/null 2>&1 </dev/null; then
+            ok "$NAME --help responde (salida 0)"
+        else
+            err "$NAME --help NO responde"
+            rc=1
+        fi
     fi
 
     # (5) restos legacy del layout viejo (avisos, no fallos).
