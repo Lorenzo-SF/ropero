@@ -212,7 +212,7 @@ _test_probe() {
 _test_parar_entorno() {
     ropero stop all >/dev/null 2>&1 || true
     local p
-    for p in ${TEST_MATAR_AGENTES:-llama-server opencode mcode claude}; do
+    for p in ${TEST_MATAR_AGENTES:-llama-server llama-server-official opencode mcode claude}; do
         pkill -9 -x "$p" >/dev/null 2>&1 || true
     done
     return 0
