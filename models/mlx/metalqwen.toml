@@ -28,11 +28,11 @@ base = [
     "--ctx-size", "${ctx}",
     "--max-resident-models", "1",
     "--no-vision",
-    "--tokenize-cache-entries", "32",
+    "--tokenize-cache-entries", "16",
     "--int8-qk",
-    "--prefill-decode-share", "0.60",
+    "--prefill-decode-share", "0.50",
     "--kv-quant", "4",
     "--skip-mem-preflight",
     "--prefix-cache-disk", "20GB",
-    "--max-tokens", "32768",
-]
+    "--max-tokens", "16384",
+] 
