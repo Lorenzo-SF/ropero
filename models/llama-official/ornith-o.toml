@@ -26,19 +26,19 @@ use = "run"
 
 [levels]
 list    = ["instruct", "think"]
-default = "instruct"
+default = "think"
 
 [args]
 base = [
     "--n-gpu-layers", "44",
-    "--n-cpu-moe", "14",
+    "--n-cpu-moe", "8",
     # "--moe-cache","soft",
     "--kv-unified",
     "--kv-offload",
     "--cache-reuse", "512",
 
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
+    "--cache-type-k", "q4_0",
+    "--cache-type-v", "q4_0",
 
     "--spec-type", "ngram-map-k4v",
     "--spec-ngram-map-k4v-size-n", "24",
