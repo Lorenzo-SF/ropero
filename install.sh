@@ -183,16 +183,24 @@ fase_preparar() {
 # -----------------------------------------------------------------------------
 
 # _rescatar_engines <dir_viejo> — los enlaces a binarios de engines del farm
-# viejo pasan a $BIN_DIR (donde ya viven los de uv/brew). Sólo si NO hay ya
-# uno en $BIN_DIR (como fichero o como symlink): un rescatado nunca pisa.
-# NOTA: no se consulta `command -v` a secas — con HOME sandbox el PATH real
-# puede traer un engine de OTRO home y el rescate seguiría siendo correcto;
-# lo que se evita es duplicar DENTRO del $BIN_DIR de esta instalación.
+# viejo pasan a $BIN_DIR (donde ya viven los de uv/brew). Sólo si el engine
+# NO resuelve ya por `command -v` NI existe en $BIN_DIR (como fichero o como
+# symlink): un rescatado nunca pisa. El `command -v` evita sombrear un
+# binario de brew/sistema que el usuario ya tiene funcionando en su PATH
+# (p. ej. su llama-server compilado a mano); por eso se consulta ANTES de
+# enlazar nada (spec §10.5.1).
+# NOTA para QA: al verificar en sandbox, usa un PATH controlado
+# (env PATH=/usr/bin:/bin HOME=<sandbox> ...) para que `command -v` no vea
+# los binarios reales del HOME del usuario que lanza el test.
 _rescatar_engines() {
     local viejo="$1" name real
     for name in llama-server llama-server-official vllm mlx-serve \
                 trtllm-serve flm strata; do
         [[ -L "$viejo/$name" ]] || continue
+        if command -v "$name" >/dev/null 2>&1; then
+            info "$name ya resuelve por PATH ($(command -v "$name")): no lo rescato"
+            continue
+        fi
         if [[ -e "$BIN_DIR/$name" ]]; then
             info "$name ya está en $BIN_DIR: no lo rescato"
             continue
@@ -244,6 +252,9 @@ _rescatar_venv() {
 #   · no existe            → nada (se crea en enlazar)
 #   · symlink canónico     → nada (idempotente, R3)
 #   · symlink nuestro      → se re-crea en enlazar con ln -sfn
+#   · symlink COLGANTE     → nuestro sólo si su target crudo lleva /ropero/
+#                           como componente de directorio (checkout movido):
+#                           se re-crea; si no, [!] y NO se toca
 #   · symlink ajeno        → [!] y NO se toca (la share no se crea)
 #   · dir real reconocido  → hooks de rescate + mv aparte + rm -rf (R5)
 #   · dir real desconocido → [✗] + exit 1 (R4); fichero real → idem
@@ -261,11 +272,32 @@ fase_migrar() {
     fi
 
     if [[ -L "$DIR" ]]; then
+        if [[ ! -e "$DIR" ]]; then
+            # COLGANTE: el destino ya no existe (el checkout de lasaca se
+            # movió o se borró). R3: lo propio se re-crea, pero sólo si el
+            # target crudo (readlink, sin resolver) lleva el nombre del
+            # repo como componente de directorio (acaba en /ropero/bin,
+            # contiene /ropero/ o es .../ropero): es un enlace nuestro al
+            # checkout viejo. Un colgante sin ese componente (p. ej.
+            # /tmp/otracosa) es ajeno: aviso y no se toca.
+            rel="$(readlink "$DIR")"
+            case "$rel" in
+                */"$NAME"/*|*/"$NAME")
+                    info "$DIR es un symlink colgante nuestro (antes: $rel): se re-crea"
+                    ;;
+                *)
+                    warn "$DIR es un symlink colgante ajeno → $rel: no lo toco (la share no se crea)"
+                    SHARE_SKIP=1
+                    ;;
+            esac
+            return 0
+        fi
         dest="$(real_dir "$DIR" 2>/dev/null || true)"
         if [[ -z "$dest" ]]; then
-            # Colgante: sin destino no hay forma de saber de quién es. R3
-            # manda: un symlink propio colgante se re-crea. Se re-crea.
-            info "$DIR es un symlink colgante: se re-crea"
+            # Existe pero no se deja resolver (permisos): no hay forma de
+            # saber de quién es → ajeno, no se toca.
+            warn "$DIR es un symlink no resoluble: no lo toco (la share no se crea)"
+            SHARE_SKIP=1
             return 0
         fi
         if [[ "$dest" == "$ORIGIN/bin" ]]; then
