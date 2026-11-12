@@ -15,13 +15,15 @@ Symlink-only desde el repo clonado (no hay instalador de red):
 
 ```bash
 git clone https://github.com/Lorenzo-SF/ropero.git
-bash ropero/install.sh --local
+bash ropero/ropero-code/install.sh --local
 ```
 
-Eso deja `~/.local/bin/ropero → <repo>/bin/ropero` (lo único en el PATH) y
-`~/.local/share/ropero → <repo>/bin`. Es idempotente, verifica con
-`install.sh --check` y migra el layout viejo si lo encuentra (rescatando
-antes los enlaces a engines y el venv de gguffer). Después:
+El código vive en `ropero-code/`; la documentación, en `docs-especificacion/`.
+
+Eso deja `~/.local/bin/ropero → <repo>/ropero-code/bin/ropero` (lo único en el
+PATH) y `~/.local/share/ropero → <repo>/ropero-code/bin`. Es idempotente,
+verifica con `install.sh --check` y migra el layout viejo si lo encuentra
+(rescatando antes los enlaces a engines y el venv de gguffer). Después:
 
 ```bash
 ropero install setup      # dependencias base (python3, git, uv, hf, jq, cmake…)
