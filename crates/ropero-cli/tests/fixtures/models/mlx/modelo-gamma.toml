@@ -1,0 +1,21 @@
+# Modelo de prueba (datos ficticios): escribe el motor con el alias legacy
+# "mlx_lm". El catálogo debe canonicalizarlo a "mlx-serve" y avisar.
+
+[model]
+name    = "modelo-gamma"
+engine  = "mlx_lm"
+context = 16384
+
+[files]
+gguf = "modelo-gamma-q4_k_m.gguf"
+
+[download]
+repo = "ejemplo/modelo-gamma"
+file = "modelo-gamma-q4_k_m.gguf"
+size = "~2 GB"
+
+[args]
+base = [
+    "--max-model-len", "${ctx}",
+    "--served-model-name", "modelo-gamma",
+]

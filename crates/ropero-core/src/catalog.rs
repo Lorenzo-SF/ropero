@@ -29,12 +29,20 @@ pub enum ModelError {
         path: PathBuf,
         source: toml::de::Error,
     },
+    /// `[model].engine` no es ni un id canónico ni un alias legacy conocido.
+    UnknownEngine {
+        path: PathBuf,
+        source: crate::UnknownEngine,
+    },
 }
 
 impl std::fmt::Display for ModelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ModelError::Parse { path, source } => {
+                write!(f, "error de parseo en {}: {}", path.display(), source)
+            }
+            ModelError::UnknownEngine { path, source } => {
                 write!(f, "error de parseo en {}: {}", path.display(), source)
             }
         }
@@ -45,6 +53,7 @@ impl std::error::Error for ModelError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ModelError::Parse { source, .. } => Some(source),
+            ModelError::UnknownEngine { source, .. } => Some(source),
         }
     }
 }
@@ -72,17 +81,71 @@ impl std::error::Error for CatalogError {}
 /// `source` es la ruta del fichero de origen: sólo se usa para los mensajes
 /// de error y para [`ModelSpec::source`]. No se lee ningún fichero aquí: el
 /// texto llega como `&str`.
+///
+/// Un `[model].engine` escrito con un alias legacy se canonicaliza al id
+/// canónico y deja un aviso en [`ModelSpec::notices`] (doc B §4.2). Un id
+/// que no es ni canónico ni alias conocido es un error de parseo.
 pub fn parse_model(toml_text: &str, source: &Path) -> Result<ModelSpec, ModelError> {
-    let mut spec: ModelSpec = toml::from_str(toml_text).map_err(|err| ModelError::Parse {
-        path: source.to_path_buf(),
-        source: err,
-    })?;
+    let (value, notices) = canonicalize_engine(toml_text, source)?;
+    let mut spec: ModelSpec =
+        value
+            .try_into()
+            .map_err(|err: toml::de::Error| ModelError::Parse {
+                path: source.to_path_buf(),
+                source: err,
+            })?;
     spec.source = source.to_path_buf();
+    spec.notices = notices;
     // El nombre real se fija aquí: después de materializar un alias la fila
     // pasa a llevar `model.name` = alias, pero el nombre real sigue siendo
     // el del TOML de origen.
     spec.real_name = Some(spec.model.name.clone());
     Ok(spec)
+}
+
+/// Canonicaliza un alias legacy de motor en el TOML, antes de deserializar.
+///
+/// Devuelve el TOML (como `toml::Value`) con `[model].engine` ya canónico y
+/// los avisos del parseo. El TOML se deserializa en dos pasos porque el
+/// aviso tiene que salir de la canonicalización: el enum `EngineId` sólo
+/// acepta los ids canónicos, y el alias se acepta con un aviso, no en
+/// silencio.
+fn canonicalize_engine(
+    toml_text: &str,
+    source: &Path,
+) -> Result<(toml::Value, Vec<String>), ModelError> {
+    let mut value: toml::Value = toml::from_str(toml_text).map_err(|err| ModelError::Parse {
+        path: source.to_path_buf(),
+        source: err,
+    })?;
+    let mut notices = Vec::new();
+    let Some(engine) = value
+        .get("model")
+        .and_then(|model| model.get("engine"))
+        .and_then(|engine| engine.as_str())
+    else {
+        return Ok((value, notices));
+    };
+    let engine = engine.to_string();
+    match crate::EngineId::from_str_legacy(&engine) {
+        Ok((canonical, aviso)) => {
+            if let Some(aviso) = aviso {
+                notices.push(aviso);
+            }
+            if let Some(model) = value.get_mut("model").and_then(|m| m.as_table_mut())
+                && let Some(slot) = model.get_mut("engine")
+            {
+                *slot = toml::Value::String(canonical.as_str().to_string());
+            }
+        }
+        Err(unknown) => {
+            return Err(ModelError::UnknownEngine {
+                path: source.to_path_buf(),
+                source: unknown,
+            });
+        }
+    }
+    Ok((value, notices))
 }
 
 /// Construye el catálogo a partir de los modelos ya parseados.

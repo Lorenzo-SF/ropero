@@ -1,0 +1,208 @@
+//! Tests de los identificadores de motor y de sus alias legacy (T-11).
+//!
+//! Doc B §4.2: ocho motores con ids canónicos y alias legacy. Un alias
+//! legacy se canonicaliza **con un aviso**, nunca en silencio:
+//!
+//! ```text
+//! AVISO: el motor 'mlx_lm' es un alias antiguo; se usa 'mlx-serve'
+//! ```
+//!
+//! Puerta de T-11: "Test de cada alias y de cada id canónico".
+
+use std::path::Path;
+
+use ropero_core::{EngineId, ModelSpec, parse_model};
+
+/// Los ocho ids canónicos y su identificador canónico.
+const CANONICOS: &[(&str, EngineId)] = &[
+    ("llama-server", EngineId::LlamaServer),
+    ("llama-server-official", EngineId::LlamaServerOfficial),
+    ("mlx-serve", EngineId::MlxServe),
+    ("fastflowlm", EngineId::FastFlowLm),
+    ("tensorrt-llm", EngineId::TensorRtLlm),
+    ("vllm", EngineId::Vllm),
+    ("airllm", EngineId::AirLlm),
+    ("strata", EngineId::Strata),
+];
+
+/// Los cinco alias legacy de la tabla de §4.2 y su id canónico.
+const ALIAS_LEGACY: &[(&str, EngineId)] = &[
+    ("llama", EngineId::LlamaServer),
+    ("mlx_lm", EngineId::MlxServe),
+    ("flm", EngineId::FastFlowLm),
+    ("tensorrt", EngineId::TensorRtLlm),
+    ("strata_engine", EngineId::Strata),
+];
+
+/// Un TOML mínimo con el motor dado.
+fn toml_con_motor(engine: &str) -> String {
+    format!(
+        r#"
+[model]
+name = "modelo"
+engine = "{engine}"
+context = 4096
+
+[files]
+gguf = "modelo.gguf"
+"#
+    )
+}
+
+/// Parsea el TOML con el motor dado.
+fn parse(engine: &str) -> Result<ModelSpec, ropero_core::ModelError> {
+    parse_model(
+        &toml_con_motor(engine),
+        Path::new("models/llama/modelo.toml"),
+    )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los ocho ids canónicos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cada id canónico se acepta y se queda como es, sin aviso.
+#[test]
+fn los_ocho_ids_canonicos_se_aceptan_sin_aviso() {
+    for (id, esperado) in CANONICOS {
+        let spec =
+            parse(id).unwrap_or_else(|e| panic!("el id canónico '{id}' debe aceptarse: {e}"));
+        assert_eq!(spec.model.engine, *esperado, "id={id}");
+        assert!(
+            spec.notices.is_empty(),
+            "el id canónico '{id}' no debe avisar: {:?}",
+            spec.notices
+        );
+    }
+}
+
+/// El identificador canónico de cada motor es el que dice la tabla.
+#[test]
+fn cada_motor_expone_su_id_canonico() {
+    for (id, motor) in CANONICOS {
+        assert_eq!(motor.as_str(), *id);
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los cinco alias legacy
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cada alias legacy se canonicaliza al id canónico, **con aviso**.
+#[test]
+fn los_cinco_alias_legacy_se_canonicalizan_con_aviso() {
+    for (alias, esperado) in ALIAS_LEGACY {
+        let spec =
+            parse(alias).unwrap_or_else(|e| panic!("el alias '{alias}' debe aceptarse: {e}"));
+        assert_eq!(spec.model.engine, *esperado, "alias={alias}");
+        assert_eq!(
+            spec.notices,
+            vec![format!(
+                "AVISO: el motor '{alias}' es un alias antiguo; se usa '{}'",
+                esperado.as_str()
+            )],
+            "alias={alias}"
+        );
+    }
+}
+
+/// El aviso lleva **el formato literal del doc** (§4.2).
+#[test]
+fn el_aviso_usa_el_formato_literal_del_doc() {
+    let spec = parse("mlx_lm").expect("el alias 'mlx_lm' debe aceptarse");
+    assert_eq!(
+        spec.notices,
+        vec!["AVISO: el motor 'mlx_lm' es un alias antiguo; se usa 'mlx-serve'".to_string()]
+    );
+}
+
+/// Un alias legacy nunca se canonicaliza **en silencio**: el aviso siempre
+/// está.
+#[test]
+fn un_alias_legacy_nunca_se_canonicaliza_en_silencio() {
+    for (alias, _) in ALIAS_LEGACY {
+        let spec = parse(alias).expect("el alias debe aceptarse");
+        assert!(
+            !spec.notices.is_empty(),
+            "el alias '{alias}' debe avisar: se canonicalizó en silencio"
+        );
+    }
+}
+
+/// `from_str_legacy` acepta los ocho canónicos y los cinco alias, y
+/// devuelve el aviso con el formato del doc.
+#[test]
+fn from_str_legacy_acepta_canonicos_y_alias() {
+    for (id, esperado) in CANONICOS {
+        let (motor, aviso) = EngineId::from_str_legacy(id).expect("id canónico");
+        assert_eq!(motor, *esperado, "id={id}");
+        assert!(aviso.is_none(), "el id canónico '{id}' no debe avisar");
+    }
+    for (alias, esperado) in ALIAS_LEGACY {
+        let (motor, aviso) = EngineId::from_str_legacy(alias).expect("alias legacy");
+        assert_eq!(motor, *esperado, "alias={alias}");
+        assert_eq!(
+            aviso.as_deref(),
+            Some(
+                format!(
+                    "AVISO: el motor '{alias}' es un alias antiguo; se usa '{}'",
+                    esperado.as_str()
+                )
+                .as_str()
+            ),
+            "alias={alias}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El id desconocido
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un id que no es ni canónico ni alias legacy es **error de parseo**, con
+/// un mensaje en español que dice qué hacer.
+#[test]
+fn un_motor_desconocido_es_error_de_parseo_en_espanol() {
+    let err = parse("no-existe").expect_err("un motor desconocido debe fallar");
+    let texto = err.to_string();
+    assert!(texto.contains("motor desconocido"), "mensaje={texto}");
+    assert!(texto.contains("no-existe"), "mensaje={texto}");
+    // El mensaje dice qué hacer: los ids válidos.
+    assert!(
+        texto.contains("llama-server") && texto.contains("mlx-serve"),
+        "mensaje={texto}"
+    );
+}
+
+/// `from_str_legacy` rechaza un id desconocido.
+#[test]
+fn from_str_legacy_rechaza_un_id_desconocido() {
+    let err = EngineId::from_str_legacy("no-existe").expect_err("id desconocido");
+    assert_eq!(err.name(), "no-existe");
+    assert!(err.to_string().contains("motor desconocido"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los directorios de motor
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Los directorios de `models/` se mapean a su motor: `llama/` es
+/// `llama-server`, `mlx/` es `mlx-serve`, etc. (los directorios no son ids
+/// de motor: son carpetas).
+#[test]
+fn los_directorios_de_motor_se_mapean_a_su_motor() {
+    let casos = [
+        ("llama", EngineId::LlamaServer),
+        ("llama-official", EngineId::LlamaServerOfficial),
+        ("mlx", EngineId::MlxServe),
+        ("flm", EngineId::FastFlowLm),
+        ("tensorrt", EngineId::TensorRtLlm),
+        ("vllm", EngineId::Vllm),
+        ("airllm", EngineId::AirLlm),
+        ("strata", EngineId::Strata),
+    ];
+    for (dir, esperado) in casos {
+        assert_eq!(EngineId::from_dir_name(dir), Some(esperado), "dir={dir}");
+    }
+    assert_eq!(EngineId::from_dir_name("no-existe"), None);
+}
