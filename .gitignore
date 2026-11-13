@@ -1,0 +1,9 @@
+# ── Rust / Cargo ─────────────────────────────────────────────────────────────
+# Artefactos de compilación generados por cargo (no son código fuente).
+/target/
+
+# Copias de seguridad de editores sobre ficheros Rust.
+**/*.rs.bk
+
+# Binarios sueltos generados por cargo en la raíz del workspace.
+**/*.rs.out

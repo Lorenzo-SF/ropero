@@ -1,0 +1,13 @@
+[package]
+name = "ropero-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ropero"
+path = "src/main.rs"
+
+[dependencies]
+ropero-core = { path = "../ropero-core" }
+toml = "1.2.1"
