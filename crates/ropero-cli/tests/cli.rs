@@ -228,3 +228,72 @@ fn replace_no_toca_el_base_si_no_se_pide_la_opcion() {
         stdout
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alias legacy de motor (T-11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un motor escrito con un alias legacy se canonicaliza **con aviso**, con
+/// el formato literal del doc B §4.2, y el catálogo guarda el id canónico.
+#[test]
+fn el_alias_legacy_de_motor_se_canonicaliza_con_aviso() {
+    let (code, stdout, stderr) = run(&["list"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    assert!(
+        stderr.contains("AVISO: el motor 'mlx_lm' es un alias antiguo; se usa 'mlx-serve'"),
+        "stderr={}",
+        stderr
+    );
+    // La fila del catálogo lleva ya el id canónico.
+    assert!(stdout.contains("engine=mlx-serve"), "stdout={}", stdout);
+}
+
+/// El aviso de canonicalización no es un error: `validate` sigue en verde.
+#[test]
+fn el_aviso_de_canonicalizacion_no_es_error() {
+    let (code, stdout, stderr) = run(&["validate"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    assert!(stdout.contains("OK:"), "stdout={}", stdout);
+    assert!(
+        stderr.contains("AVISO: el motor 'mlx_lm'"),
+        "stderr={}",
+        stderr
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La ayuda
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// La ayuda sólo anuncia lo que existe: cada comando que anuncia está
+/// implementado, y no anuncia el arranque (que es de la fase F3).
+#[test]
+fn la_ayuda_solo_anuncia_lo_que_existe() {
+    let (code, stdout, stderr) = run(&["help"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    for comando in ["validate", "list", "template", "args", "levels", "path"] {
+        assert!(
+            stdout.contains(comando),
+            "la ayuda no anuncia '{comando}': stdout={}",
+            stdout
+        );
+        // Y el comando está implementado: sin argumentos puede pedir el
+        // modelo (error de uso), pero no puede ser "desconocido".
+        let (_code, _out, stderr) = run(&[comando]);
+        assert!(
+            !stderr.contains("desconocido"),
+            "'{comando}' está anunciado pero no existe: stderr={}",
+            stderr
+        );
+    }
+}
+
+/// La ayuda no promete el arranque de un modelo: `ropero <modelo>` no
+/// existe todavía (es de la fase F3).
+#[test]
+fn la_ayuda_no_anuncia_el_arranque_de_un_modelo() {
+    let (_code, stdout, _stderr) = run(&["help"]);
+    assert!(!stdout.contains("--port"), "stdout={}", stdout);
+    assert!(!stdout.contains("--background"), "stdout={}", stdout);
+    assert!(!stdout.contains("<modelo> [--"), "stdout={}", stdout);
+}

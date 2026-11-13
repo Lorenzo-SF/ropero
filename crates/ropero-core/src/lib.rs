@@ -1,5 +1,6 @@
 mod args;
 mod catalog;
+mod cli;
 mod engine;
 mod format;
 mod model;
@@ -10,6 +11,7 @@ mod validation;
 
 pub use args::*;
 pub use catalog::*;
+pub use cli::*;
 pub use engine::*;
 pub use format::*;
 pub use model::*;
