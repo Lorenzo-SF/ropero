@@ -6,9 +6,17 @@
 //! - `safetensors`  → `$SAFETENSORS_DIR/<[model].path>`
 //! - `q4nx`         → `[model].path` es un TAG (almacén de FLM)
 //! - `strata`       → `[model].path` es `<familia>/<paquete>`
+//!
+//! Aquí vive **una** forma de preguntar dónde está el artefacto
+//! ([`ModelFormat::artifact_path`]) y **una** de preguntar en qué clase de
+//! ubicación vive ([`ModelFormat::artifact_location`]). Los alias de una
+//! misma función son ruido: inflan la API sin añadir nada.
 
 use serde::{Deserialize, Serialize};
 
+/// La clase de ubicación donde vive el artefacto de un formato.
+///
+/// Es la forma tipada de la regla R-MOD-6: no una cadena suelta.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArtifactLocation {
     GgufDir,
@@ -40,22 +48,13 @@ impl ModelFormat {
         }
     }
 
-    /// Regla R-MOD-6: prefijo/categoría de ubicación esperada.
-    pub fn artifact_location_enum(&self) -> ArtifactLocation {
+    /// Regla R-MOD-6: en qué clase de ubicación vive el artefacto principal.
+    pub fn artifact_location(&self) -> ArtifactLocation {
         match self {
             Self::Gguf => ArtifactLocation::GgufDir,
             Self::Safetensors => ArtifactLocation::SafetensorsDir,
             Self::Q4nx => ArtifactLocation::FlmTag,
             Self::Strata => ArtifactLocation::StrataCatalog,
-        }
-    }
-
-    pub fn location_kind(&self) -> &'static str {
-        match self {
-            Self::Gguf => "gguf_dir",
-            Self::Safetensors => "safetensors_dir",
-            Self::Q4nx => "flm_tag",
-            Self::Strata => "strata_catalog",
         }
     }
 
@@ -77,54 +76,10 @@ impl ModelFormat {
             Self::Strata => path.to_string(),
         }
     }
-
-    pub fn artifact_location(&self, model: &str, file: Option<&str>, path: &str) -> String {
-        self.artifact_path(model, file, path)
-    }
-    pub fn expected_location(&self, model: &str, file: Option<&str>, path: &str) -> String {
-        self.artifact_path(model, file, path)
-    }
-    pub fn location(&self, model: &str, file: Option<&str>, path: &str) -> String {
-        self.artifact_path(model, file, path)
-    }
-    pub fn where_lives(&self, model: &str, file: Option<&str>, path: &str) -> String {
-        self.artifact_path(model, file, path)
-    }
-    pub fn path_for(&self, model: &str, file: Option<&str>, path: &str) -> String {
-        self.artifact_path(model, file, path)
-    }
 }
 
 impl std::fmt::Display for ModelFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
-}
-
-// Free functions (alias) para mayor compatibilidad con tests que usen estilo
-// funcional.
-pub fn artifact_location(
-    format: ModelFormat,
-    model: &str,
-    file: Option<&str>,
-    path: &str,
-) -> String {
-    format.artifact_path(model, file, path)
-}
-pub fn expected_location(
-    format: ModelFormat,
-    model: &str,
-    file: Option<&str>,
-    path: &str,
-) -> String {
-    format.artifact_path(model, file, path)
-}
-pub fn location(format: ModelFormat, model: &str, file: Option<&str>, path: &str) -> String {
-    format.artifact_path(model, file, path)
-}
-pub fn where_lives(format: ModelFormat, model: &str, file: Option<&str>, path: &str) -> String {
-    format.artifact_path(model, file, path)
-}
-pub fn artifact_path(format: ModelFormat, model: &str, file: Option<&str>, path: &str) -> String {
-    format.artifact_path(model, file, path)
 }

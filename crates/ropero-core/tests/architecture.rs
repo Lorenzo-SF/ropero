@@ -68,3 +68,70 @@ fn ropero_cli_under_400_lines() {
         "ropero-cli has {lines} lines, expected fewer than 400"
     );
 }
+
+/// `ropero-core` no expone la misma función libre bajo varios nombres.
+///
+/// Los alias de una función (`artifact_location`, `expected_location`,
+/// `location`, `where_lives`, `path_for`…) inflan la API sin añadir nada y
+/// hacen imposible saber cuál es la buena: el mismo cuerpo con otro
+/// nombre. Aquí se comprueba que no reaparezcan.
+///
+/// El examen es el de las **funciones libres** (las de módulo): un método
+/// puede llamarse igual que otro si vive en otro tipo (`as_str` existe en
+/// `ModelFormat` y en `EngineId`, y no son el mismo código).
+#[test]
+fn ropero_core_no_expone_alias_redundantes() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    // Nombres que ya son alias de otra función libre del core. Añadir uno
+    // nuevo es ruido: se comprueba con el nombre, que es lo que un lector
+    // ve.
+    let alias_conocidos = [
+        "artifact_location",
+        "expected_location",
+        "where_lives",
+        "path_for",
+        "artifact_path",
+    ];
+    let mut libres: Vec<(String, PathBuf)> = Vec::new();
+    for file in collect_rs(&src) {
+        let content = fs::read_to_string(&file).expect("read source file");
+        for linea in content.lines() {
+            let trimmed = linea.trim();
+            // Una función libre empieza en el margen: `pub fn <nombre>(`.
+            if linea.starts_with("pub fn ") {
+                let nombre: String = trimmed["pub fn ".len()..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !nombre.is_empty() {
+                    libres.push((nombre, file.clone()));
+                }
+            }
+        }
+    }
+    // 1. El nombre de una función libre es único en todo el core.
+    let mut nombres: Vec<&str> = libres.iter().map(|(n, _)| n.as_str()).collect();
+    nombres.sort_unstable();
+    for par in nombres.windows(2) {
+        assert_ne!(
+            par[0], par[1],
+            "la función libre '{0}' está repetida en ropero-core: la API no lleva \
+             alias redundantes de la misma función",
+            par[0]
+        );
+    }
+    // 2. Y no hay alias de una función que ya existe como método.
+    for alias in alias_conocidos {
+        let hits: Vec<&PathBuf> = libres
+            .iter()
+            .filter(|(n, _)| n == alias)
+            .map(|(_, f)| f)
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "'{alias}' es un alias redundante de una función que ya existe como \
+             método: {:?}",
+            hits
+        );
+    }
+}

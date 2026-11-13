@@ -292,8 +292,10 @@ pub struct ModelMeta {
     #[serde(default)]
     pub alias: Option<String>,
 
+    /// Puerto pineado del modelo (`[model].port`). Si no se declara, el
+    /// runtime usa el slot que toque.
     #[serde(default)]
-    pub port: Option<u16>,
+    pub port: Option<crate::Port>,
 
     #[serde(default)]
     pub format: ModelFormat,
