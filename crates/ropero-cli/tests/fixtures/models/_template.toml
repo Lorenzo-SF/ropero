@@ -1,0 +1,30 @@
+# =============================================================================
+# PLANTILLA DE UN MODELO DE ROPERO — recorte mínimo para los tests de la CLI.
+# =============================================================================
+#
+# Plantilla reducida: conserva la forma del esquema (secciones `[model]`,
+# `[files]`, `[download]`, `[levels]`, `[args]`) pero sin los ejemplos
+# comentados del catálogo real. Los tests de la CLI sólo necesitan que el
+# comando `template` la vuelque y que `[model]` esté presente.
+#
+# Copia este fichero a `<models>/<engine>/<nombre>.toml` y ajústalo.
+
+[model]
+name    = "mi-modelo"
+engine  = "llama-server"
+context = 32768
+
+[files]
+gguf = "mi-modelo-q4_k_m.gguf"
+
+[download]
+repo = "usuario/mi-modelo"
+file = "mi-modelo-q4_k_m.gguf"
+size = "~5 GB"
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--ctx-size", "${ctx}",
+    "--temp", "0.7",
+]

@@ -1,0 +1,20 @@
+# Modelo de prueba (datos ficticios): engine vllm, sin niveles.
+
+[model]
+name    = "modelo-beta"
+engine  = "vllm"
+context = 16384
+
+[files]
+gguf = "modelo-beta-q4_k_m.gguf"
+
+[download]
+repo = "ejemplo/modelo-beta"
+file = "modelo-beta-q4_k_m.gguf"
+size = "~2 GB"
+
+[args]
+base = [
+    "--max-model-len", "${ctx}",
+    "--served-model-name", "modelo-beta",
+]
