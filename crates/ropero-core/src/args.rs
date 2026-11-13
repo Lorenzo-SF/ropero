@@ -22,25 +22,44 @@ pub struct ParsedRequest {
     pub repeated_level: Option<String>,
 }
 
+/// Resuelve un alias de nivel a su nivel canónico.
+///
+/// `[aliases] x = "high"` significa que `--x` es **exactamente** `--high`
+/// (doc B §3.2.2): mismo argv y mismas consecuencias. Devuelve `None` si el
+/// token no es un alias declarado.
+pub fn resolve_level_alias<'a>(spec: &'a ModelSpec, token: &str) -> Option<&'a str> {
+    spec.aliases.get(token).map(|level| level.as_str())
+}
+
 /// Interpreta los tokens de la línea de órdenes según el vocabulario del
-/// modelo: un token que es un nivel declarado es un nivel, `clave=valor` es
-/// una opción y el resto son flags.
+/// modelo: un token que es un nivel declarado (o un alias de nivel) es un
+/// nivel, `clave=valor` es una opción y el resto son flags.
 pub fn parse_request(spec: &ModelSpec, tokens: &[String]) -> ParsedRequest {
     let mut req = ParsedRequest::default();
     for tok in tokens {
         let t = tok.trim_start_matches("--");
         if let Some((key, value)) = t.split_once('=') {
             req.options.push((key.to_string(), value.to_string()));
-        } else if spec.levels.list.iter().any(|l| l == t) {
-            if req.level.as_deref().is_some_and(|l| l != t) {
+        } else if let Some(level) = level_of(spec, t) {
+            if req.level.as_deref().is_some_and(|l| l != level) {
                 req.repeated_level = req.level.clone();
             }
-            req.level = Some(t.to_string());
+            req.level = Some(level.to_string());
         } else {
             req.flags.push(t.to_string());
         }
     }
     req
+}
+
+/// El nivel canónico que corresponde a un token: el propio si es un nivel
+/// declarado, el destino del alias si es un alias de nivel, y `None` si no
+/// es ninguna de las dos cosas.
+fn level_of<'a>(spec: &'a ModelSpec, token: &str) -> Option<&'a str> {
+    if let Some(level) = spec.levels.list.iter().find(|l| l.as_str() == token) {
+        return Some(level.as_str());
+    }
+    resolve_level_alias(spec, token)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -290,6 +309,14 @@ pub fn build_argv(
         && levels_list.contains(def)
     {
         level = Some(def.clone());
+    }
+    // Un alias de nivel ES su nivel (doc B §3.2.2): se resuelve antes de
+    // validar, para que un alias a un nivel inexistente sea el mismo error
+    // de uso que un nivel inexistente.
+    if let Some(lv) = &level
+        && let Some(target) = resolve_level_alias(spec, lv)
+    {
+        level = Some(target.to_string());
     }
     if let Some(lv) = &level
         && (levels_list.is_empty() || !levels_list.contains(lv))
