@@ -164,3 +164,67 @@ fn usage_error_exit2() {
     let (code, _stdout, stderr) = run(&["list", "--bogus"]);
     assert_eq!(code, 2, "stderr={}", stderr);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alias de nivel (`[aliases]`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un alias de nivel se monta como su nivel canónico: mismo argv.
+#[test]
+fn alias_de_nivel_monta_el_nivel_canónico() {
+    let (code_alias, stdout_alias, stderr) = run(&["args", "modelo-alpha", "--alto"]);
+    assert_eq!(code_alias, 0, "stderr={}", stderr);
+    let (code_nivel, stdout_nivel, stderr) = run(&["args", "modelo-alpha", "--high"]);
+    assert_eq!(code_nivel, 0, "stderr={}", stderr);
+    assert_eq!(stdout_alias, stdout_nivel);
+    // El alias apunta a "high": el argv lleva su presupuesto de razonamiento.
+    assert!(
+        stdout_alias.contains("--reasoning-budget"),
+        "stdout={}",
+        stdout_alias
+    );
+    assert!(stdout_alias.contains("16384"), "stdout={}", stdout_alias);
+}
+
+/// Un alias que no existe es error de uso (exit 2).
+#[test]
+fn alias_de_nivel_inexistente_es_error_de_uso() {
+    let (code, _stdout, stderr) = run(&["args", "modelo-alpha", "--no-existe"]);
+    assert_eq!(code, 2, "stderr={}", stderr);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// `replace` en el argv
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `replace` sustituye la pareja del base: "--temp 0.7" no aparece cuando
+/// se pide `--temp=0.9`.
+#[test]
+fn replace_sustituye_la_pareja_del_base() {
+    let (code, stdout, stderr) = run(&["args", "modelo-alpha", "--temp=0.9"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    let rows = list_rows(&stdout);
+    assert_eq!(
+        rows.iter().filter(|r| **r == "--temp").count(),
+        1,
+        "stdout={}",
+        stdout
+    );
+    assert!(rows.contains(&"0.9"), "stdout={}", stdout);
+    assert!(!rows.contains(&"0.7"), "stdout={}", stdout);
+}
+
+/// Sin pedir la opción, el base no se toca: "--temp 0.7" sigue ahí.
+#[test]
+fn replace_no_toca_el_base_si_no_se_pide_la_opcion() {
+    let (code, stdout, stderr) = run(&["args", "modelo-alpha"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    let rows = list_rows(&stdout);
+    assert!(rows.contains(&"0.7"), "stdout={}", stdout);
+    assert_eq!(
+        rows.iter().filter(|r| **r == "--temp").count(),
+        1,
+        "stdout={}",
+        stdout
+    );
+}

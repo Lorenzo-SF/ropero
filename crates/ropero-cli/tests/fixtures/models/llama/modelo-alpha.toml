@@ -17,12 +17,24 @@ size = "~4 GB"
 list    = ["low", "medium", "high"]
 default = "low"
 
+# Alias de nivel: `--alto` es exactamente `--high`.
+[aliases]
+alto = "high"
+
+[options]
+list = ["temp"]
+
 [args]
 base = [
     "--n-gpu-layers", "99",
     "--ctx-size", "${ctx}",
     "--temp", "0.7",
 ]
+
+# `replace` sustituye la pareja "--temp 0.7" del base en vez de duplicarla.
+[args.option.temp]
+base = ["--temp", "${value}"]
+replace = "--temp"
 
 [args.level.low]
 base = ["--reasoning-budget", "0"]

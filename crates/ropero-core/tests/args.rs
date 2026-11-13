@@ -10,6 +10,7 @@ use std::path::Path;
 
 use ropero_core::{
     ArgvError, LaunchRequest, ModelSpec, ResolveContext, ResolvedFiles, build_argv, parse_model,
+    parse_request,
 };
 
 /// Contexto de resolución mínimo y hermético.
@@ -200,6 +201,86 @@ fn replace_quita_el_token_y_su_valor() {
         argv,
         vec!["--temp", "0.9", "--temp", "0.7", "--n-gpu-layers", "99"]
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alias de nivel (`[aliases]`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// TOML con un alias de nivel: `t` es exactamente `high`.
+const TOML_ALIAS: &str = r#"
+[model]
+name = "modelo"
+engine = "llama-server"
+context = 4096
+
+[files]
+gguf = "modelo.gguf"
+
+[levels]
+list = ["low", "high"]
+default = "low"
+
+[aliases]
+t = "high"
+
+[args]
+base = ["--ctx-size", "${ctx}"]
+
+[args.level.low]
+base = ["--reasoning-budget", "0"]
+
+[args.level.high]
+base = ["--reasoning-budget", "16384"]
+"#;
+
+/// Un alias de nivel se monta **exactamente** como el nivel al que apunta:
+/// mismo argv y mismas consecuencias (doc B §3.2.2).
+#[test]
+fn alias_de_nivel_monta_el_nivel_canónico() {
+    let spec = spec(TOML_ALIAS);
+    let por_alias =
+        build_argv(&spec, &request(Some("t"), &[], &[]), &ctx()).expect("argv del alias");
+    let por_nivel =
+        build_argv(&spec, &request(Some("high"), &[], &[]), &ctx()).expect("argv del nivel");
+    assert_eq!(por_alias, por_nivel);
+    assert_eq!(
+        por_alias,
+        vec!["--ctx-size", "4096", "--reasoning-budget", "16384"]
+    );
+}
+
+/// El alias se reconoce como **nivel** al interpretar la línea de órdenes:
+/// `--t` no es un flag (que sería un error de uso).
+#[test]
+fn alias_de_nivel_se_interpreta_como_nivel() {
+    let spec = spec(TOML_ALIAS);
+    let parsed = parse_request(&spec, &["--t".to_string()]);
+    assert_eq!(parsed.level.as_deref(), Some("high"));
+    assert!(parsed.flags.is_empty(), "flags={:?}", parsed.flags);
+}
+
+/// Un alias que apunta a un nivel inexistente es **error de uso**: el argv
+/// no se monta.
+#[test]
+fn alias_de_nivel_a_un_nivel_inexistente_es_error_de_uso() {
+    let toml = TOML_ALIAS.replace(r#"t = "high""#, r#"t = "inexistente""#);
+    let spec = spec(&toml);
+    let err = build_argv(&spec, &request(Some("t"), &[], &[]), &ctx())
+        .expect_err("un alias a un nivel inexistente debe fallar");
+    match err {
+        ArgvError::UnknownLevel { level, .. } => assert_eq!(level, "inexistente"),
+        other => panic!("se esperaba UnknownLevel, llegó {other:?}"),
+    }
+}
+
+/// Un nivel que no existe **y** no es alias es error de uso.
+#[test]
+fn nivel_desconocido_es_error_de_uso() {
+    let spec = spec(TOML_ALIAS);
+    let err = build_argv(&spec, &request(Some("medio"), &[], &[]), &ctx())
+        .expect_err("un nivel desconocido debe fallar");
+    assert!(matches!(err, ArgvError::UnknownLevel { .. }), "{err:?}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
