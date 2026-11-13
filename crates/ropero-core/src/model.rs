@@ -124,7 +124,7 @@ pub struct Download {
     pub aux: BTreeMap<String, Aux>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Build {
     #[serde(default)]
