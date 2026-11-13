@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 pub struct Scan {
     pub catalog: Catalog,
     pub problems: Vec<String>,
+    /// Avisos del parseo (p. ej. la canonicalización de un alias legacy de
+    /// motor). No son errores: no cambian el código de salida.
+    pub notices: Vec<String>,
     pub files: usize,
     pub base: PathBuf,
     pub root: PathBuf,
@@ -16,13 +19,20 @@ fn fail(e: impl std::fmt::Display) -> i32 {
 }
 pub fn scan() -> Result<Scan, i32> {
     let root = find_model_root().map_err(fail)?;
-    scan_root(&root).map_err(fail)
+    let scan = scan_root(&root).map_err(fail)?;
+    // Los avisos del parseo se enseñan siempre: un alias legacy se
+    // canonicaliza con aviso, nunca en silencio (doc B §4.2).
+    for notice in &scan.notices {
+        eprintln!("{}", notice);
+    }
+    Ok(scan)
 }
 fn scan_root(root: &Path) -> Result<Scan, String> {
     let base = ropero_core::models_base(root);
     let mut active: Vec<ModelSpec> = Vec::new();
     let mut fired: Vec<ModelSpec> = Vec::new();
     let mut problems: Vec<String> = Vec::new();
+    let mut notices: Vec<String> = Vec::new();
     let mut texts = BTreeMap::new();
     let mut files = 0;
     let mut dirs = fs::read_dir(&base)
@@ -34,19 +44,28 @@ fn scan_root(root: &Path) -> Result<Scan, String> {
     dirs.sort();
     for dir in dirs {
         let folder = dir.file_name().unwrap_or_default().to_string_lossy();
-        if ropero_core::EngineId::from_str_legacy(&folder).is_err() {
+        // Las carpetas de `models/` se nombran como el motor, pero no siempre
+        // igual (`llama/` → `llama-server`, `flm/` → `fastflowlm`).
+        if ropero_core::EngineId::from_dir_name(&folder).is_none() {
             return Err(format!("motor desconocido '{folder}' en {}", dir.display()));
         }
-        files += collect(&dir, &mut active, &mut problems, &mut texts)?;
+        files += collect(&dir, &mut active, &mut problems, &mut notices, &mut texts)?;
         let retired = dir.join("fired");
         if retired.is_dir() {
-            files += collect(&retired, &mut fired, &mut problems, &mut texts)?;
+            files += collect(
+                &retired,
+                &mut fired,
+                &mut problems,
+                &mut notices,
+                &mut texts,
+            )?;
         }
     }
     let catalog = ropero_core::build_catalog(active, fired).map_err(|e| e.to_string())?;
     Ok(Scan {
         catalog,
         problems,
+        notices,
         texts,
         files,
         base,
@@ -57,6 +76,7 @@ fn collect(
     dir: &Path,
     out: &mut Vec<ModelSpec>,
     problems: &mut Vec<String>,
+    notices: &mut Vec<String>,
     texts: &mut BTreeMap<PathBuf, String>,
 ) -> Result<usize, String> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
@@ -73,7 +93,10 @@ fn collect(
         n += 1;
         texts.insert(path.clone(), text.clone());
         match ropero_core::parse_model(&text, &path) {
-            Ok(spec) => out.push(spec),
+            Ok(spec) => {
+                notices.extend(spec.notices.iter().cloned());
+                out.push(spec);
+            }
             Err(e) => {
                 let msg = format!("{}: {}", path.display(), e);
                 eprintln!("aviso: no se pudo parsear {}", msg);

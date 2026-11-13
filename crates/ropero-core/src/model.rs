@@ -24,12 +24,12 @@
 //!
 //! ### Alias legacy de `engine`
 //!
-//! `EngineId` in the phase of parseado chequedan only the canonical identifiers
-//! (`llama-server`, `llama-server-official`, `mlx-serve`, `fastflowlm`,
-//! `tensorrt-llm`, `vllm`, `airllm`, `strata`). The identifiers legacy
-//! (`llama`, `mlx_lm`, `flm`, `tensorrt`, `strata_engine`) que resolve in the
-//! load phase of catalog (`load_catalog()`), in the phase of definition
-//! (`engine.rs`, `load.rs`) que esta fase.
+//! `EngineId` sólo acepta los identificadores canónicos (`llama-server`,
+//! `llama-server-official`, `mlx-serve`, `fastflowlm`, `tensorrt-llm`,
+//! `vllm`, `airllm`, `strata`). Los alias legacy (`llama`, `mlx_lm`, `flm`,
+//! `tensorrt`, `strata_engine`) los canonicaliza `parse_model` antes de
+//! deserializar, y dejan un aviso en [`ModelSpec::notices`] (doc B §4.2):
+//! un alias legacy se canonicaliza **con un aviso**, nunca en silencio.
 //!
 //! ### Types contract
 //!
@@ -345,6 +345,14 @@ pub struct ModelSpec {
 
     #[serde(default)]
     pub source: PathBuf,
+
+    /// Avisos que emitió el parseo del TOML.
+    ///
+    /// Hoy, uno solo: la canonicalización de un alias legacy de motor (doc B
+    /// §4.2). Core no imprime: los avisos viajan con el modelo y la capa de
+    /// presentación los enseña al usuario.
+    #[serde(skip)]
+    pub notices: Vec<String>,
 
     /// Nombre real del modelo: el de `[model].name` en su TOML de origen.
     ///

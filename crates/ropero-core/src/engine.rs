@@ -2,8 +2,14 @@
 //!
 //! `EngineId` es el tipo que viaja en `[model].engine` del TOML. Los alias
 //! legacy (`llama`, `mlx_lm`, `flm`, `tensorrt`, `strata_engine`) se
-//! canónizan en la fase de carga del catálogo mediante `from_str_legacy`,
-//! emitiendo un aviso (`Some(&'static str)`) cuando se usó un alias.
+//! canónizan en la fase de carga del catálogo mediante [`EngineId::from_str_legacy`],
+//! que devuelve el aviso con el formato del doc B §4.2:
+//!
+//! ```text
+//! AVISO: el motor 'mlx_lm' es un alias antiguo; se usa 'mlx-serve'
+//! ```
+//!
+//! Un alias legacy se canonicaliza **con un aviso**, nunca en silencio.
 
 use serde::{Deserialize, Serialize};
 
@@ -32,7 +38,12 @@ pub struct UnknownEngine(pub String);
 
 impl std::fmt::Display for UnknownEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "motor desconocido: {}", self.0)
+        write!(
+            f,
+            "motor desconocido: '{}'; usa uno de: llama-server, llama-server-official, \
+             mlx-serve, fastflowlm, tensorrt-llm, vllm, airllm, strata",
+            self.0
+        )
     }
 }
 
@@ -46,6 +57,18 @@ impl UnknownEngine {
         &self.0
     }
 }
+
+/// Los ocho ids canónicos, en el orden de la tabla de §4.2.
+pub const CANONICAL_IDS: &[&str] = &[
+    "llama-server",
+    "llama-server-official",
+    "mlx-serve",
+    "fastflowlm",
+    "tensorrt-llm",
+    "vllm",
+    "airllm",
+    "strata",
+];
 
 impl EngineId {
     /// Identificador canónico, tal y como se escribe en el TOML.
@@ -65,44 +88,55 @@ impl EngineId {
     /// Canóniza un identificador de motor, aceptando alias legacy con aviso.
     ///
     /// Devuelve `Ok((engine, None))` para los identificadores canónicos y
-    /// `Ok((engine, Some(aviso)))` para los alias legacy. `Err(UnknownEngine)`
-    /// para cualquier otra cadena.
-    pub fn from_str_legacy(s: &str) -> Result<(Self, Option<&'static str>), UnknownEngine> {
-        match s {
-            "llama-server" => Ok((Self::LlamaServer, None)),
-            "llama" => Ok((
-                Self::LlamaServer,
-                Some("alias legacy 'llama': usar 'llama-server'"),
-            )),
-            "llama-server-official" => Ok((Self::LlamaServerOfficial, None)),
-            "llama-official" => Ok((
-                Self::LlamaServerOfficial,
-                Some("carpeta legacy 'llama-official'"),
-            )),
-            "mlx-serve" => Ok((Self::MlxServe, None)),
-            "mlx" => Ok((Self::MlxServe, Some("carpeta legacy 'mlx'"))),
-            "mlx_lm" => Ok((
-                Self::MlxServe,
-                Some("alias legacy 'mlx_lm': usar 'mlx-serve'"),
-            )),
-            "fastflowlm" => Ok((Self::FastFlowLm, None)),
-            "flm" => Ok((
-                Self::FastFlowLm,
-                Some("alias legacy 'flm': usar 'fastflowlm'"),
-            )),
-            "tensorrt-llm" => Ok((Self::TensorRtLlm, None)),
-            "tensorrt" => Ok((
-                Self::TensorRtLlm,
-                Some("alias legacy 'tensorrt': usar 'tensorrt-llm'"),
-            )),
-            "vllm" => Ok((Self::Vllm, None)),
-            "airllm" => Ok((Self::AirLlm, None)),
-            "strata" => Ok((Self::Strata, None)),
-            "strata_engine" => Ok((
-                Self::Strata,
-                Some("alias legacy 'strata_engine': usar 'strata'"),
-            )),
-            other => Err(UnknownEngine(other.to_string())),
+    /// `Ok((engine, Some(aviso)))` para los alias legacy. El aviso lleva el
+    /// formato literal del doc B §4.2. `Err(UnknownEngine)` para cualquier
+    /// otra cadena.
+    pub fn from_str_legacy(s: &str) -> Result<(Self, Option<String>), UnknownEngine> {
+        let canonical = match s {
+            "llama-server" => Self::LlamaServer,
+            "llama-server-official" => Self::LlamaServerOfficial,
+            "mlx-serve" => Self::MlxServe,
+            "fastflowlm" => Self::FastFlowLm,
+            "tensorrt-llm" => Self::TensorRtLlm,
+            "vllm" => Self::Vllm,
+            "airllm" => Self::AirLlm,
+            "strata" => Self::Strata,
+            // Alias legacy (tabla de §4.2): se canonicalizan CON aviso.
+            "llama" => Self::LlamaServer,
+            "mlx_lm" => Self::MlxServe,
+            "flm" => Self::FastFlowLm,
+            "tensorrt" => Self::TensorRtLlm,
+            "strata_engine" => Self::Strata,
+            other => return Err(UnknownEngine(other.to_string())),
+        };
+        let aviso = if canonical.as_str() == s {
+            None
+        } else {
+            Some(format!(
+                "AVISO: el motor '{s}' es un alias antiguo; se usa '{}'",
+                canonical.as_str()
+            ))
+        };
+        Ok((canonical, aviso))
+    }
+
+    /// El motor de una **carpeta** de `models/`.
+    ///
+    /// Los directorios no son ids de motor: son las carpetas donde viven los
+    /// modelos de cada motor, y su nombre no siempre coincide con él
+    /// (`llama/` → `llama-server`, `mlx/` → `mlx-serve`, `flm/` →
+    /// `fastflowlm`). `None` si el directorio no corresponde a ningún motor.
+    pub fn from_dir_name(dir: &str) -> Option<Self> {
+        match dir {
+            "llama" => Some(Self::LlamaServer),
+            "llama-official" => Some(Self::LlamaServerOfficial),
+            "mlx" => Some(Self::MlxServe),
+            "flm" => Some(Self::FastFlowLm),
+            "tensorrt" => Some(Self::TensorRtLlm),
+            "vllm" => Some(Self::Vllm),
+            "airllm" => Some(Self::AirLlm),
+            "strata" => Some(Self::Strata),
+            _ => None,
         }
     }
 }

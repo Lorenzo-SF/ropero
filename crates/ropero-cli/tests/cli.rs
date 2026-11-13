@@ -57,8 +57,8 @@ fn validate_ok() {
     let (code, stdout, stderr) = run(&["validate"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     assert!(stdout.contains("OK:"), "stdout={}", stdout);
-    // 3 ficheros TOML del fixture: 2 activos + 1 retirado.
-    assert!(stdout.contains("3 modelo(s)"), "stdout={}", stdout);
+    // 4 ficheros TOML del fixture: 3 activos + 1 retirado.
+    assert!(stdout.contains("4 modelo(s)"), "stdout={}", stdout);
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn list_prefix() {
     let (code, stdout, stderr) = run(&["list"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     let rows = list_rows(&stdout);
-    assert_eq!(rows.len(), 2, "stdout={}", stdout);
+    assert_eq!(rows.len(), 3, "stdout={}", stdout);
     for line in rows {
         assert!(line.starts_with("  "), "line={}", line);
     }
@@ -78,8 +78,8 @@ fn list_prefix() {
 fn list_all_count() {
     let (code, stdout, stderr) = run(&["list", "--all"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    // 2 activos + 1 retirado del fixture (no los 45 del catálogo real).
-    assert_eq!(list_rows(&stdout).len(), 3, "stdout={}", stdout);
+    // 3 activos + 1 retirado del fixture (no los 45 del catálogo real).
+    assert_eq!(list_rows(&stdout).len(), 4, "stdout={}", stdout);
     assert!(stdout.contains("modelo-retirado"), "stdout={}", stdout);
 }
 
