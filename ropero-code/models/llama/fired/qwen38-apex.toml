@@ -1,0 +1,143 @@
+# =============================================================================
+# qwen38-apex — Qwen3.8-27B (checkpoint oficial) cuantizado APEX-I de IsValorum
+# =============================================================================
+#
+#   - GGUF         : Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3.gguf  (12,18 GB / 11,35 GiB)
+#   - mmproj       : mmproj-Qwen3.8-27B-Q8_0.gguf               (0,59 GiB)
+#   - repo         : IsValorum/Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3-GGUF
+#
+# ── POR QUÉ ESTE Y NO OTRO ──────────────────────────────────────────────────
+# En el usuario IsValorum hay 58 repos. Para el Qwen3.8-27B, cuatro builds:
+#
+#   build                          base                        tamaño    BPW   PPL
+#   ─────────────────────────────────────────────────────────────────────────────
+#   Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3   Qwen/Qwen3.8-27B      11,35 GiB  3,57  6,2577
+#   Qwen3.8-27B-VAL-APEX-I-MiniPlus-V3   Qwen/Qwen3.8-27B      13,19 GiB  4,15  6,1361
+#   ...-EfficientThink-NanoPlus-V3       nerkyor/...-SFT-RLOO  10,41 GiB
+#   ...-EfficientThink-MiniPlus-V3       nerkyor/...-SFT-RLOO  13,19 GiB
+#
+# · Los dos primeros son del CHECKPOINT OFICIAL (Qwen/Qwen3.8-27B). Los
+#   EfficientThink salen de un fine-tune sintético ("Opus5.5-GPT6Astra-Grok4.7
+#   -K3-SFT-RLOO-MTP-DFlash2") y su propio README documenta el problema:
+#   "severe recurrent state instability, context degradation, and unintended
+#   language mixing during generation" -> de ahí el "comportamiento extraño".
+#   También hay builds abliterated/uncensored, que se comportan distinto por
+#   diseño (sin el alignment de seguridad).
+#
+# · El MiniPlus tiene el mejor PPL de todos (6,1361, +5,90 % sobre su base
+#   BF16) pero con 13,19 GiB NO llega a 128K de contexto en 16 GB de VRAM
+#   (ver la aritmética de abajo). Por eso el NanoPlus es el de aquí y el
+#   MiniPlus vive en `qwen38-apex-hq.toml` con el contexto recortado.
+#
+# · OJO: los PPL de IsValorum y los de bartowski NO son comparables entre sí.
+#   Midieron contra bases distintas (5,7942 frente a 6,7411) con protocolos
+#   distintos. Dentro de cada serie sí valen: NanoPlus +8,00 %, MiniPlus
+#   +5,90 %, bartowski IQ4_XS +0,58 %, bartowski IQ3_XS +3,78 %.
+#
+# ── QUÉ ES EL "APEX-I" ──────────────────────────────────────────────────────
+# Vector-calibrated Asymmetric Layer-wise Outlier-preserving Recurrent-aware
+# Unified Matrix-quantization. No es un quant uniforme: preserva los outliers
+# por capa y protege output.weight en Q6_K y el estado recurrente del DeltaNet
+# (ssm_a en F32, ssm_beta en Q8_0). Eso es justo lo que evita el "state drift"
+# que el README del EfficientThink denuncia.
+#
+# ── ARITMÉTICA DE VRAM (15,32 GiB libres medidos: 15.684 MiB) ──────────────
+#   pesos 11,35 GiB
+#   KV q4_0 @65536   1,05 GB   (16 capas full-attn x (4 KV heads x 256 dim)
+#                             x 2 (K y V) x 0,5625 B (q4_0) = 18,4 B/token)
+#   KV q4_0 @262144  4,18 GB   -> NO CABE (medido en el qwen: 3,95 GB en
+#                             q8_0; el fitter recorta capas y se va a 9 t/s)
+#   compute          ~0,9 GB   (ubatch 256: logits = 248320 x 256 x 4 B)
+#   contexto CUDA    ~0,4 GB
+#   ---------------------------
+#   total           ~14,8 GB   -> el ctx NATIVO ENTERO (262144) cabe
+#
+#   Con KV f16 la KV serían 8,59 GB -> 21 GB -> no cabe -> la KV se va a la
+#   CPU, la atención se calcula en la CPU y los t/s se desploman. De ahí el
+#   q4_0 (el KV cuantizado exige -fa on, que va aquí).
+#   Con KV q8_0 la KV serían 4,29 GB -> 16,9 GB -> tampoco cabe a 262144.
+#
+# ── SPECULATIVE DECODING ────────────────────────────────────────────────────
+# El GGUF lleva la cabeza MTP DENTRO (blk.64.*, 15 tensores, según la ficha
+#   OJO: la cabeza MTP (los tensores nextn) SI esta dentro del GGUF, pero
+#   --spec-type draft-mtp NO se usa. Crea un draft context con su propio
+#   espacio de VRAM (y su KV en f16) y en un portatil de 16 GB no cabe: el
+#   server se queda sin memoria y no arranca (medido en agenta1: con MTP no
+#   arrancaba; sin MTP, 140 t/s). Si tu GGUF es de otro que NO traiga la
+#   cabeza MTP, esto no aplica y no pierdes nada.
+
+[model]
+name    = "qwen38-apex"
+engine  = "llama-server"
+context = 65536
+
+[files]
+gguf   = "Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3.gguf"
+[download]
+repo = "IsValorum/Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3-GGUF"
+file = "Qwen3.8-27B-VAL-APEX-I-NanoPlus-V3.gguf"
+size = "12.18 GB"
+
+
+[levels]
+list    = ["low", "medium", "xhigh"]
+default = "low"
+
+[flags]
+list = []
+
+[args]
+base = [
+    # ---- GPU offload ----
+    # -1 = auto: el fitter reparte solo. NO pongas un numero (--n-gpu-layers
+    # 99): el fitter aborta con "n_gpu_layers already set by user" y el modelo
+    # se va entero a la GPU a pelo -> cudaMalloc failed.
+    "--n-gpu-layers", "66",
+
+    # ---- Attention ----
+    "-fa", "on",                            # obligatorio: el KV q4_0 lo exige
+
+    # ---- KV cache ----
+    "--cache-type-k", "q4_0",                # 2,15 GB a 262144 (f16 = 8,59 GB)
+    "--cache-type-v", "q4_0",
+    "--kv-unified",
+
+    # ---- Sampling oficial en modo thinking (ficha de Qwen3.8) ----
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--repeat-penalty", "1.0",
+
+    # ---- Batch ----
+    "--batch-size", "4096",
+    "--ubatch-size", "1024",                 # compute buffer ~0,9 GB
+
+    "--n-predict", "16384",
+    # ---- Speculative decoding con la cabeza MTP (va dentro del GGUF) ----
+    # ---- Reasoning ----
+    "--reasoning-budget", "12288",           # -1 = sin limite, 0 = fin inmediato
+
+    # ---- Modelo / carga ----
+    "--jinja",
+    "--load-mode", "auto",
+]
+
+# El nivel marca el reasoning_effort. El env ROPERO_QWEN38_APEX_REASONING lo
+# sobreescribe (es la forma de forzar un nivel sin tocar la línea de órdenes).
+[args.level.low]
+reasoning_effort = "${env:ROPERO_QWEN38_APEX_REASONING:-low}"
+
+[args.level.medium]
+reasoning_effort = "${env:ROPERO_QWEN38_APEX_REASONING:-medium}"
+
+[args.level.xhigh]
+reasoning_effort = "${env:ROPERO_QWEN38_APEX_REASONING:-xhigh}"
+
+# Sin --vision el servidor arranca sin torre de visión (menos VRAM) y sólo
+# lee texto. Con --vision hay que tener el mmproj en disco: el mmproj Q8_0
+# son 0,59 GiB, así que con visión activada el ctx de 262144 se queda sin
+# margen; baja a 196608 si la Vision te importa más que el contexto.
+# [args.flag.vision] se ha ido con el mmproj:
+#   base    = ["--mmproj", "${mmproj}"]
+#   requires = ["mmproj"]

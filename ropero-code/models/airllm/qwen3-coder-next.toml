@@ -1,0 +1,27 @@
+# =============================================================================
+# qwen3-coder-next — Qwen3 Coder Next (AirLLM)
+# =============================================================================
+
+[model]
+name    = "qwen3-coder-next"
+engine  = "airllm"
+context = 131072
+format  = "safetensors"
+path    = "Qwen3-Coder-Next"
+
+[files]
+
+[download]
+repo     = "unsloth/Qwen3-Coder-Next"
+file     = "Qwen3-Coder-Next"
+size     = "0 GB"
+excludes = ["*.md", "*.txt"]
+manual   = false
+
+[args]
+base = [
+    "--compression", "4bit",
+    "--max-new-tokens", "4096",
+    "--layer-shards", "${env:ROPERO_QWEN3_CODER_NEXT_SHARDS:-$HOME/models/airllm-shards}",
+]
+

@@ -1,0 +1,24 @@
+[model]
+name    = "lfm3"
+engine  = "fastflowlm"
+context = 131072
+format  = "q4nx"
+path    = "lfm3:1.7b"
+
+[files]
+
+[download]
+repo = "FastFlowLM/LFM3-1.7B-NPU2"
+size = "~1.7 GB"
+
+[limits]
+min_ram_gb = 4
+
+[args]
+base = [
+  "--prefill-chunk-len", "8192",
+  "--prefix-cache-mb", "2048",
+  "--prefix-slots", "4",
+  "--prefix-min-gain", "256",
+  "--decision", "d3:mini",
+]

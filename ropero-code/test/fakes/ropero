@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# =============================================================================
+# test/fakes/ropero — fake del CLI de ropero para la suite de test
+# =============================================================================
+# Reproduce el CONTRATO que el runner consume (bin/lib/cmd-runtime.sh):
+#   · `ropero <modelo> --background` → stdout con la línea máquina
+#     `ROPERO_PORT=<n>` como ÚLTIMA línea (el resto va a stderr, que es lo
+#     que hace el ropero de verdad).
+#   · `ropero stop [modelo|all]`     → para el engine y sale 0.
+#
+# Además escribe un log de engine en $HOME/.logs/ropero/<modelo>.log para que
+# la copia del log al directorio de la batería tenga contenido.
+# =============================================================================
+set -u
+
+FAKE_LOG="${FAKE_LOG:-$HOME/.fake-ropero.log}"
+mkdir -p "$(dirname "$FAKE_LOG")" 2>/dev/null || true
+printf '%s | cwd=%s | %s\n' "$(date '+%H:%M:%S')" "$PWD" "$*" >>"$FAKE_LOG" 2>/dev/null || true
+
+cmd="${1:-}"
+case "$cmd" in
+    stop)
+        printf 'fake ropero: parando %s\n' "${2:-all}" >&2
+        exit 0
+        ;;
+    use)
+        printf 'fake ropero: use %s\n' "${2:-}" >&2
+        printf 'ROPERO_PORT=%s\n' "${FAKE_ROPERO_PORT:-9999}"
+        exit 0
+        ;;
+    '')
+        printf 'fake ropero: falta el modelo\n' >&2
+        exit 2
+        ;;
+    *)
+        modelo="$1"
+        logdir="$HOME/.logs/ropero"
+        mkdir -p "$logdir" 2>/dev/null || true
+        {
+            printf '=== fake llama-server: arranque de %s ===\n' "$modelo"
+            printf 'modelo: %s\n' "$modelo"
+            printf 'puerto: %s\n' "${FAKE_ROPERO_PORT:-9999}"
+            printf 'main: server started (fake)\n'
+        } >>"$logdir/$modelo.log" 2>/dev/null || true
+        printf 'fake ropero: arrancando %s (fake)\n' "$modelo" >&2
+        printf 'fake ropero: %s responde en :%s\n' "$modelo" "${FAKE_ROPERO_PORT:-9999}" >&2
+        printf 'ROPERO_PORT=%s\n' "${FAKE_ROPERO_PORT:-9999}"
+        exit 0
+        ;;
+esac

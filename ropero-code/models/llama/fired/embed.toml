@@ -1,0 +1,39 @@
+# =============================================================================
+# 🔥 FIRED — embed (jina-code-embeddings 1.5B)
+# =============================================================================
+#
+# Retirado: fuera del scope base. Recuperable con
+#   mv models/llama/fired/embed.toml models/llama/
+# y descargando el GGUF.
+#
+# Puerto fijo (modelo pineado a 9990). Con port declarado, ropero usa ESE
+# puerto siempre, haya --cpu o no: así el embed puede convivir con un modelo
+# en la GPU (:9999) y otro en CPU (:9998) sin pelear por los slots.
+#
+# El override puntual del puerto es ROPERO_EMBED_PORT=9991 ropero embed.
+# =============================================================================
+
+[model]
+name    = "embed"
+engine  = "llama-server"
+context = 8192
+port    = 9990
+
+[files]
+gguf = "jina-code-embeddings-1.5b-Q8_0.gguf"
+
+[download]
+repo = "jinaai/jina-code-embeddings-1.5b-GGUF"
+file = "jina-code-embeddings-1.5b-Q8_0.gguf"
+size = "1.6 GB"
+
+[args]
+base = [
+    "--embedding",
+    "--pooling", "last",
+    "--embd-normalize", "2",
+    "--batch-size", "1024",
+    "--ubatch-size", "1024",
+    "--parallel", "4",
+    "--jinja",
+]

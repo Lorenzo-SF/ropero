@@ -1,0 +1,34 @@
+# ── SO y editores ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── Logs y artefactos de runtime ────────────────────────────────────────────
+*.log
+*.lock
+.lock/
+
+# Informes de `ropero test` (dato de una corrida, no código)
+ropero-test-*.md
+
+# Resultados de bench (transcripciones, logs, paquetes del juez)
+tests/resultados/
+
+# ── Artefactos de crash (Erlang, Java, Python, core dumps) ──────────────────
+erl_crash.dump
+hs_err_pid*.log
+replay_pid*.log
+core
+core.*
+
+# Restos del refactor 1.0: la carpeta quant/ se movió a bin/quant/.
+# Estos ficheros son locales (el usuario de HF y los logs de subida).
+/quant/

@@ -1,0 +1,33 @@
+# =============================================================================
+# qwenvision — Qwen2.5-VL-7B-Instruct (UD-Q4_K_XL)
+# =============================================================================
+
+[model]
+name    = "qwenvision"
+engine  = "llama-server"
+context = 128000
+port    = 9991
+
+[files]
+gguf   = "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
+
+[download]
+repo = "unsloth/Qwen2.5-VL-7B-Instruct-GGUF"
+file = "Qwen2.5-VL-7B-Instruct-UD-Q4_K_XL.gguf"
+size = "4.79 GB"
+
+
+[args]
+base = [
+    "--n-gpu-layers", "29",
+    "--temp", "${env:ROPERO_QWENVISION_TEMP:-0.2}",     # baja temperatura para análisis preciso
+    "--top-p", "${env:ROPERO_QWENVISION_TOP_P:-0.9}",
+    "--top-k", "${env:ROPERO_QWENVISION_TOP_K:-20}",
+    "--repeat-penalty", "${env:ROPERO_QWENVISION_REPEAT:-1.05}",
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+    "--n-predict", "4096",
+    "--slot-prompt-similarity", "0.8",
+    "--keep", "8192",
+]
+

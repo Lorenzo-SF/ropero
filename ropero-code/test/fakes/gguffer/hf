@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# =============================================================================
+# test/fakes/gguffer/hf — hf falso: clona un repo de HuggingFace en local
+# =============================================================================
+# El gguffer usa `hf download` para dos cosas:
+#   · clonar el repo de los pesos (FASE 1);
+#   · bajar el imatrix de otro repo (--imatrix-repo/--imatrix-file).
+#
+# Este hf falso copia el fixture del repo a --local-dir. El fixture es el
+# mismo arbol que sirve el curl falso ($FAKE_HF_DIR/<owner>/<repo>), asi que
+# los dos fakes cuentan la misma historia.
+#
+# Uso:
+#   hf download <repo> --local-dir <dir>            (clonar los pesos)
+#   hf download <repo> <fichero> --local-dir <dir>   (bajar un fichero)
+# =============================================================================
+set -u
+
+FAKE_HF_DIR="${FAKE_HF_DIR:-}"
+FAKE_HF_LOG="${FAKE_HF_LOG:-}"
+
+repo=""
+destino=""
+fichero=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        download) shift ;;
+        --local-dir) destino="$2"; shift 2 ;;
+        --include|--exclude) shift 2 ;;
+        -*) shift ;;
+        *)
+            if [[ -z "$repo" ]]; then
+                repo="$1"
+            elif [[ -z "$fichero" ]]; then
+                fichero="$1"
+            fi
+            shift ;;
+    esac
+done
+
+[[ -n "$repo" && -n "$destino" ]] || { echo "hf falso: uso incorrecto" >&2; exit 2; }
+[[ -n "$FAKE_HF_LOG" ]] && printf 'hf download %s %s -> %s\n' "$repo" "$fichero" "$destino" >>"$FAKE_HF_LOG"
+
+mkdir -p "$destino" || exit 1
+origen="$FAKE_HF_DIR/$repo"
+
+# ── bajar un fichero suelto (el imatrix) ────────────────────────────────────
+if [[ -n "$fichero" ]]; then
+    if [[ -f "$origen/$fichero" ]]; then
+        mkdir -p "$(dirname "$destino/$fichero")"
+        cp -f "$origen/$fichero" "$destino/$fichero"
+        exit 0
+    fi
+    echo "hf falso: no existe $repo/$fichero" >&2
+    exit 1
+fi
+
+# ── clonar el repo entero ──────────────────────────────────────────────────
+if [[ ! -d "$origen" ]]; then
+    echo "hf falso: no existe el repo $repo" >&2
+    exit 1
+fi
+cp -R "$origen/." "$destino/" 2>/dev/null || true
+# El marcador de "clon terminado" que el gguffer usa para no volver a bajar.
+exit 0
