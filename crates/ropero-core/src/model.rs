@@ -248,6 +248,19 @@ pub struct OptionArg {
 
     #[serde(default)]
     pub values: BTreeMap<String, Vec<String>>,
+
+    /// Token del `[args].base` que esta opción **sustituye** en vez de
+    /// añadirse detrás (doc B §3.2.3, R-DATA-16).
+    ///
+    /// *"[args.option.temp] base = ["--temp", "${value}"] con
+    /// `replace = "--temp"` elimina la pareja `--temp 0.7` del base y pone
+    /// `--temp <valor>` en su lugar."*
+    ///
+    /// Sólo lo declara la v1 para `[args.option.<o>]`
+    /// (`ropero-code/models/_template.toml:124-129`); los flags no lo
+    /// admiten.
+    #[serde(default)]
+    pub replace: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

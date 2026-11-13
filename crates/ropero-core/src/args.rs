@@ -405,17 +405,50 @@ pub fn build_argv(
     for key in spec.args.option.keys() {
         let entry = resolved.iter().find(|(k, _)| k == key);
         if let Some((_, value)) = entry {
-            let cfg = spec.args.option.get(key).unwrap();
+            let cfg = match spec.args.option.get(key) {
+                Some(cfg) => cfg,
+                None => continue,
+            };
+            let mut items = Vec::with_capacity(cfg.base.len());
             for item in &cfg.base {
-                argv.push(expand(item, ctx, Some(value))?);
+                items.push(expand(item, ctx, Some(value))?);
             }
-            // replace handling: OptionArg has no replace field in current schema.
+            match &cfg.replace {
+                // `replace` SUSTITUYE la pareja del base en vez de añadirse
+                // detrás (doc B §3.2.3, R-DATA-16): la pareja nueva ocupa el
+                // sitio de la vieja, para que el argv no lleve `--temp 0.7 …
+                // --temp 0.9` y el motor no gane "por casualidad".
+                Some(token) => {
+                    let at = argv.iter().position(|a| a == token);
+                    match at {
+                        Some(index) => {
+                            let width = pair_width(&argv, index);
+                            argv.splice(index..index + width, items);
+                        }
+                        // El base no declara ese token: no es error (el
+                        // modelo puede no llevar ese flag en su base); la
+                        // pareja nueva se añade al final.
+                        None => argv.extend(items),
+                    }
+                }
+                None => argv.extend(items),
+            }
         }
     }
 
     // Also handle options declared only in metadata but present in args? already covered.
 
     Ok(argv)
+}
+
+/// Anchura de la pareja que empieza en `index`: el token y su valor.
+///
+/// El base es una lista plana de tokens, así que no se puede saber si el
+/// token lleva valor o no: la regla es la de la v1
+/// (`ropero-code/bin/python/modelconf.py:817-826`): se quitan el token y el
+/// que le sigue. Si el token es el último, sólo se quita él.
+fn pair_width(argv: &[String], index: usize) -> usize {
+    if index + 1 < argv.len() { 2 } else { 1 }
 }
 
 impl std::fmt::Display for ArgvError {
