@@ -1,7 +1,7 @@
 pub fn run(args: &[String]) -> Result<i32, i32> {
     crate::check_no_args(args, "template", "ropero template")?;
     let s = crate::discovery::scan()?;
-    let candidates = ropero_core::template_candidates(&s.root);
+    let candidates = ropero_core::template_candidates(&s.root, &s.base);
     let Some(path) = candidates.into_iter().find(|p| p.is_file()) else {
         eprintln!("error: no encuentro la plantilla");
         return Err(1);

@@ -1,7 +1,14 @@
-use ropero_core::{Catalog, ModelSpec};
+//! El descubrimiento del catálogo: la **frontera de E/S**.
+//!
+//! Aquí se lee el disco y el entorno del proceso; el resto del programa
+//! trabaja con lo que sale de aquí. El dominio puro (`ropero-core`) recibe
+//! todo como dato: el catálogo parseado, los textos leídos y el entorno
+//! capturado ([`ropero_core::Environment`]).
+use ropero_core::{Catalog, Environment, ModelSpec};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
 pub struct Scan {
     pub catalog: Catalog,
     pub problems: Vec<String>,
@@ -12,14 +19,28 @@ pub struct Scan {
     pub base: PathBuf,
     pub root: PathBuf,
     pub texts: BTreeMap<PathBuf, String>,
+    /// El entorno del proceso, ya capturado: lo que el dominio puro necesita
+    /// en lugar de leer el entorno real.
+    pub env: Environment,
 }
 fn fail(e: impl std::fmt::Display) -> i32 {
     eprintln!("error: {}", e);
     1
 }
+/// Captura el entorno del proceso: las variables, el `$HOME` y el directorio
+/// de trabajo. Es la frontera: aquí se lee el entorno real y el resultado se
+/// pasa al dominio puro como dato.
+pub fn capture_environment() -> Environment {
+    Environment::new(
+        std::env::vars().collect(),
+        std::env::var("HOME").unwrap_or_default(),
+        std::env::current_dir().unwrap_or_default(),
+    )
+}
 pub fn scan() -> Result<Scan, i32> {
-    let root = find_model_root().map_err(fail)?;
-    let scan = scan_root(&root).map_err(fail)?;
+    let env = capture_environment();
+    let root = find_model_root(&env).map_err(fail)?;
+    let scan = scan_root(&root, &env).map_err(fail)?;
     // Los avisos del parseo se enseñan siempre: un alias legacy se
     // canonicaliza con aviso, nunca en silencio (doc B §4.2).
     for notice in &scan.notices {
@@ -27,8 +48,10 @@ pub fn scan() -> Result<Scan, i32> {
     }
     Ok(scan)
 }
-fn scan_root(root: &Path) -> Result<Scan, String> {
-    let base = ropero_core::models_base(root);
+fn scan_root(root: &Path, env: &Environment) -> Result<Scan, String> {
+    // La decisión de qué directorio es la base es de E/S: la capa de
+    // presentación pregunta al disco y el dominio puro recibe el nombre.
+    let base = ropero_core::models_base(root, root.join("models").is_dir());
     let mut active: Vec<ModelSpec> = Vec::new();
     let mut fired: Vec<ModelSpec> = Vec::new();
     let mut problems: Vec<String> = Vec::new();
@@ -70,6 +93,7 @@ fn scan_root(root: &Path) -> Result<Scan, String> {
         files,
         base,
         root: root.to_path_buf(),
+        env: env.clone(),
     })
 }
 fn collect(
@@ -106,35 +130,23 @@ fn collect(
     }
     Ok(n)
 }
-pub fn find_model_root() -> Result<PathBuf, String> {
-    for var in ["ROPERO_MODELS_DIR", "ROPERO_ROOT"] {
-        if let Ok(val) = std::env::var(var) {
-            let p = PathBuf::from(val);
-            if let Some(root) = accept(&p) {
-                return Ok(root);
-            }
-            // Una variable de entorno puede apuntar al directorio de trabajo.
-            if p.is_dir() && has_subdir(&p) {
-                return Ok(p);
-            }
-        }
-    }
+/// Busca la raíz del catálogo.
+///
+/// Primero las variables que lo apuntan (`ROPERO_MODELS_DIR`,
+/// `ROPERO_ROOT`), luego la cadena de directorios desde el directorio de
+/// trabajo y desde el propio ejecutable. La **decisión** (qué se prueba, en
+/// qué orden) es del dominio; aquí sólo se responde qué existe en disco.
+pub fn find_model_root(env: &Environment) -> Result<PathBuf, String> {
     let mut chain: Vec<PathBuf> = Vec::new();
-    if let Ok(cur) = std::env::current_dir() {
-        chain.extend(cur.ancestors().map(Path::to_path_buf));
-    }
     if let Ok(exe) = std::env::current_exe()
         && let Some(parent) = exe.parent()
     {
         chain.extend(parent.ancestors().map(Path::to_path_buf));
     }
-    for dir in chain {
-        if let Some(root) = accept(&dir) {
-            return Ok(root);
-        }
-    }
-    Err("no se encontró el directorio de modelos".to_string())
+    ropero_core::find_root(env, &chain, accept, has_subdir)
+        .ok_or_else(|| "no se encontró el directorio de modelos".to_string())
 }
+/// Dice si un directorio es la raíz del catálogo y, si lo es, cuál.
 fn accept(p: &Path) -> Option<PathBuf> {
     let models = p.join("models");
     let known =
@@ -148,7 +160,7 @@ fn accept(p: &Path) -> Option<PathBuf> {
     None
 }
 fn is_models_base(p: &Path) -> bool {
-    ["_template.toml", "llama", "airllm", "mlx", "strata"]
+    ropero_core::MODELS_BASE_NAMES
         .iter()
         .any(|n| p.join(n).exists())
 }

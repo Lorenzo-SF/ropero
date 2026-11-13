@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use crate::Environment;
 use crate::model::ModelSpec;
 use crate::placeholders::resolve_placeholder;
 
@@ -52,6 +53,20 @@ pub fn parse_request(spec: &ModelSpec, tokens: &[String]) -> ParsedRequest {
     req
 }
 
+impl ParsedRequest {
+    /// La petición de lanzamiento que corresponde a esta interpretación.
+    ///
+    /// PURA: sólo translate lo interpretado a lo que el montaje del argv
+    /// entiende.
+    pub fn to_launch_request(self) -> LaunchRequest {
+        LaunchRequest {
+            level: self.level,
+            flags: self.flags,
+            options: self.options,
+        }
+    }
+}
+
 /// El nivel canónico que corresponde a un token: el propio si es un nivel
 /// declarado, el destino del alias si es un alias de nivel, y `None` si no
 /// es ninguna de las dos cosas.
@@ -83,17 +98,22 @@ pub struct ResolvedFiles {
 /// Resuelve el contexto de lanzamiento de un modelo.
 ///
 /// Traduce el modelo (nombre real, formato, ficheros declarados) y el
-/// entorno (`GGUF_DIR`, `SAFETENSORS_DIR`, `ROPERO_<MODELO>_GGUF`,
-/// `ROPERO_<MODELO>_CTX`) a las rutas ya expandidas que usa [`build_argv`].
-pub fn resolve_context(spec: &ModelSpec) -> ResolveContext {
+/// entorno capturado (`GGUF_DIR`, `SAFETENSORS_DIR`,
+/// `ROPERO_<MODELO>_GGUF`, `ROPERO_<MODELO>_CTX`) a las rutas ya
+/// expandidas que usa [`build_argv`].
+///
+/// PURA: no lee disco, no consulta el entorno, no lanza procesos. Todo lo
+/// que necesita entra por parámetro (doc B §3.2.3).
+pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
     use crate::ModelFormat;
 
     let real = crate::catalog::real_name(spec);
-    let gguf_dir = crate::catalog::env_path("GGUF_DIR", "models/gguf");
-    let safetensors_dir = crate::catalog::env_path("SAFETENSORS_DIR", "models/safetensors");
-    let gguf_name = std::env::var(format!("ROPERO_{}_GGUF", crate::catalog::slug(&real)))
-        .ok()
+    let gguf_dir = env.env_path("GGUF_DIR", "models/gguf");
+    let safetensors_dir = env.env_path("SAFETENSORS_DIR", "models/safetensors");
+    let gguf_name = env
+        .get(&format!("ROPERO_{}_GGUF", crate::catalog::slug(&real)))
         .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
         .or_else(|| {
             spec.files
                 .gguf
@@ -131,7 +151,7 @@ pub fn resolve_context(spec: &ModelSpec) -> ResolveContext {
         spec.model.path.clone()
     };
     ResolveContext {
-        context: crate::catalog::effective_context(spec),
+        context: crate::catalog::effective_context(spec, env),
         files: ResolvedFiles {
             gguf,
             mtp,
@@ -141,7 +161,7 @@ pub fn resolve_context(spec: &ModelSpec) -> ResolveContext {
             safetensors_dir: safetensors_dir.to_string_lossy().to_string(),
             model_path,
         },
-        env: std::env::vars().collect(),
+        env: env.vars.clone(),
     }
 }
 

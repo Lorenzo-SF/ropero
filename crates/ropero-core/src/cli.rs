@@ -112,3 +112,51 @@ pub fn unknown_command_message(token: &str) -> String {
     };
     format!("error: {kind} desconocido: '{token}'\n  (ropero help → uso completo)")
 }
+
+/// El resultado de un chequeo de uso: o la ayuda (que es un éxito), o un
+/// error de uso.
+///
+/// Es la forma de que el **qué** (el texto) viva en el core y el **cuándo**
+/// (imprimir y salir con 2) viva en la CLI.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UsageCheck {
+    /// Continúa: los argumentos son válidos.
+    Ok,
+    /// Hay que imprimir el uso y salir con 0.
+    Help,
+    /// Hay que imprimir el error y salir con 2.
+    Error { message: String },
+}
+
+/// Chequea el uso de un comando que opera sobre un modelo: `--help`, modelo
+/// ausente y argumentos de más.
+///
+/// `too_many` es el texto del error de "argumentos de más"; si viene vacío,
+/// el comando no lo tiene.
+pub fn check_model_usage(args: &[String], cmd: &str, too_many: &str) -> UsageCheck {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        return UsageCheck::Help;
+    }
+    if args.is_empty() {
+        return UsageCheck::Error {
+            message: missing_model_message(cmd),
+        };
+    }
+    if !too_many.is_empty() && args.len() > 1 {
+        return UsageCheck::Error {
+            message: too_many.replace("{}", args[1].as_str()),
+        };
+    }
+    UsageCheck::Ok
+}
+
+/// Chequea el uso de un comando que no acepta argumentos: `--help` o error.
+pub fn check_no_args_usage(args: &[String], cmd: &str) -> UsageCheck {
+    match args.first().map(|a| a.as_str()) {
+        Some("--help") | Some("-h") => UsageCheck::Help,
+        Some(a) => UsageCheck::Error {
+            message: format!("{} no acepta '{}'", cmd, a),
+        },
+        None => UsageCheck::Ok,
+    }
+}
