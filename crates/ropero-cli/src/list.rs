@@ -4,7 +4,7 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     for a in args {
         match a.as_str() {
             "--help" | "-h" => {
-                println!("USO: ropero list [--all]");
+                ropero_core::out_line("USO: ropero list [--all]");
                 return Err(0);
             }
             "--all" => all = true,
@@ -14,10 +14,10 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     let s = crate::discovery::scan()?;
     let rows = ropero_core::list_rows(&s.catalog, all);
     for row in &rows {
-        println!("{}", ropero_core::list_row_text(&row.spec, row.fired));
+        ropero_core::out_line(&ropero_core::list_row_text(&row.spec, row.fired));
     }
     if rows.is_empty() {
-        eprintln!("aviso: el catálogo no tiene modelos que listar");
+        ropero_core::err_line("aviso: el catálogo no tiene modelos que listar");
     }
     Ok(0)
 }

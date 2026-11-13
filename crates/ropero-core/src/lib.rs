@@ -10,6 +10,7 @@ mod paths;
 mod placeholders;
 mod types;
 mod validation;
+mod write;
 
 pub use args::*;
 pub use catalog::*;
@@ -23,3 +24,4 @@ pub use paths::*;
 pub use placeholders::*;
 pub use types::*;
 pub use validation::*;
+pub use write::*;

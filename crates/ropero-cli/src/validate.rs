@@ -6,18 +6,18 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     let errors = validate_catalog(&scan.catalog, &scan.texts);
     let mut exit = 0;
     for error in &errors {
-        eprintln!("{}:{}", error.path(), error.line().unwrap_or(0));
-        eprintln!("  {}", error.message());
+        ropero_core::err_line(&format!("{}:{}", error.path(), error.line().unwrap_or(0)));
+        ropero_core::err_line(&format!("  {}", error.message()));
         exit = exit.max(error.exit_code());
     }
     for problem in &scan.problems {
-        eprintln!("{}", problem);
+        ropero_core::err_line(problem);
         exit = exit.max(1);
     }
     if exit == 0 {
-        println!("{}", ropero_core::validate_ok_line(scan.files, &scan.base));
+        ropero_core::out_line(&ropero_core::validate_ok_line(scan.files, &scan.base));
     } else {
-        eprintln!("{}", ropero_core::validate_failed_line(&scan.base));
+        ropero_core::err_line(&ropero_core::validate_failed_line(&scan.base));
     }
     if exit == 0 { Ok(0) } else { Err(exit) }
 }

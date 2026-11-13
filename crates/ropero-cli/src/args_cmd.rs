@@ -14,19 +14,19 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     let parsed = ropero_core::parse_request(spec, &args[1..]);
     if let Some(prev) = &parsed.repeated_level {
         let now = parsed.level.as_deref().unwrap_or_default();
-        eprintln!("{}", ropero_core::repeated_level_notice(prev, now));
+        ropero_core::err_line(&ropero_core::repeated_level_notice(prev, now));
     }
     let req = parsed.to_launch_request();
     let ctx = ropero_core::resolve_context(spec, &s.env);
     match build_argv(spec, &req, &ctx) {
         Ok(argv) => {
             for a in argv {
-                println!("{}", a);
+                ropero_core::out_line(&a);
             }
             Ok(0)
         }
         Err(e) => {
-            eprintln!("{}", ropero_core::argv_error_message(&e.to_string()));
+            ropero_core::err_line(&ropero_core::argv_error_message(&e.to_string()));
             Err(2)
         }
     }
