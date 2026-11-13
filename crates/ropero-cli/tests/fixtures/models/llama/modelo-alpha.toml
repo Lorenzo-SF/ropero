@@ -1,0 +1,34 @@
+# Modelo de prueba (datos ficticios): engine llama-server, con niveles.
+
+[model]
+name    = "modelo-alpha"
+engine  = "llama-server"
+context = 32768
+
+[files]
+gguf = "modelo-alpha-q4_k_m.gguf"
+
+[download]
+repo = "ejemplo/modelo-alpha"
+file = "modelo-alpha-q4_k_m.gguf"
+size = "~4 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "low"
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--ctx-size", "${ctx}",
+    "--temp", "0.7",
+]
+
+[args.level.low]
+base = ["--reasoning-budget", "0"]
+
+[args.level.medium]
+base = ["--reasoning-budget", "4096"]
+
+[args.level.high]
+base = ["--reasoning-budget", "16384"]
