@@ -56,8 +56,22 @@ struct FakeEngine {
     vivo: Mutex<bool>,
     /// Si el spawn falla.
     falla_spawn: bool,
-    /// El PID que dice que tiene.
-    pid: u32,
+    /// El próximo PID que se simula: cada arranque tiene el suyo.
+    siguiente_pid: Mutex<u32>,
+    /// El puerto en el que el motor muere al arrancar.
+    ///
+    /// Es la carrera del *bind*: otro proceso cogió el puerto y el motor
+    /// no pudo hacer bind («address already in use»).
+    ///
+    /// Con `muere_siempre` da igual el puerto: el motor muere en todos.
+    muere_en: Option<u16>,
+    /// Si el motor muere al arrancar en **cualquier** puerto.
+    ///
+    /// Es el caso en el que el rango entero está cogido: el arranque tiene
+    /// que rendirse cuando ya no queda ningún puerto que probar.
+    muere_siempre: bool,
+    /// Los PIDs de los motores que murieron al arrancar.
+    muertos: Mutex<Vec<u32>>,
 }
 
 impl FakeEngine {
@@ -66,7 +80,10 @@ impl FakeEngine {
             acciones: Mutex::new(Vec::new()),
             vivo: Mutex::new(true),
             falla_spawn: false,
-            pid: 4242,
+            siguiente_pid: Mutex::new(4242),
+            muere_en: None,
+            muere_siempre: false,
+            muertos: Mutex::new(Vec::new()),
         }
     }
 
@@ -84,8 +101,23 @@ impl FakeEngine {
             acciones: Mutex::new(Vec::new()),
             vivo: Mutex::new(true),
             falla_spawn: true,
-            pid: 4242,
+            siguiente_pid: Mutex::new(4242),
+            muere_en: None,
+            muere_siempre: false,
+            muertos: Mutex::new(Vec::new()),
         }
+    }
+
+    /// El motor muere al arrancar en ese puerto: no pudo hacer bind.
+    fn que_muere_en(mut self, puerto: u16) -> Self {
+        self.muere_en = Some(puerto);
+        self
+    }
+
+    /// El motor muere al arrancar en **cualquier** puerto.
+    fn que_muere_siempre(mut self) -> Self {
+        self.muere_siempre = true;
+        self
     }
 }
 
@@ -103,13 +135,32 @@ impl Engine for FakeEngine {
             spec.program.display(),
             spec.argv.join(" ")
         ));
+        // Cada arranque es un motor distinto, con su PID.
+        let pid = {
+            let mut siguiente = self.siguiente_pid.lock().expect("el candado del motor");
+            let pid = *siguiente;
+            *siguiente += 1;
+            pid
+        };
+        // Si el motor no pudo hacer bind, muere al instante.
+        if self.muere_siempre || self.muere_en == Some(port) {
+            self.muertos.lock().expect("el candado del motor").push(pid);
+        }
         Ok(ropero_runtime::launch::Spawned {
-            pid: self.pid,
-            identity: ProcIdentity::with_digest(self.pid, 1_000_000, None),
+            pid,
+            identity: ProcIdentity::with_digest(pid, 1_000_000, None),
         })
     }
 
-    fn alive(&self, _pid: u32) -> bool {
+    fn alive(&self, pid: u32) -> bool {
+        if self
+            .muertos
+            .lock()
+            .expect("el candado del motor")
+            .contains(&pid)
+        {
+            return false;
+        }
         *self.vivo.lock().expect("el candado del motor")
     }
 
@@ -409,6 +460,108 @@ fn un_motor_que_muere_durante_el_arranque_es_un_error_distinto() {
         .expect_err("el motor murió: tiene que ser error");
 
     assert!(matches!(error, LaunchError::Died { .. }), "error={error}");
+}
+
+/// Si el motor muere al hacer bind, se prueba con el siguiente puerto.
+///
+/// La carrera: dos procesos que eligen el mismo rango de puertos ven el
+/// mismo puerto libre y los dos lo cogen. El que pierde muere al hacer
+/// bind («address already in use»). Si el arranque no se reintentara, se
+/// quedaría sin motor y sin estado en disco.
+#[test]
+fn si_el_motor_muere_al_hacer_bind_se_prueba_el_siguiente_puerto() {
+    let dir = TempDir::nuevo();
+    // El motor pierde el puerto 8100 (otro proceso lo cogió) y vive en
+    // el siguiente.
+    let engine = FakeEngine::nuevo().que_muere_en(8100);
+    let probe = FakeProbe::siempre();
+    let preflight = preflight_ok();
+    let device = device_vacio();
+    let ctx = contexto(&engine, &probe, &device, &preflight, dir.path());
+
+    let resultado = ropero_runtime::launch::launch(&spec(), &ctx)
+        .expect("el arranque tiene que reintentar con otro puerto");
+
+    // El arranque acaba en el segundo puerto, no en el que se perdió.
+    assert_eq!(
+        resultado.port, 8101,
+        "el arranque tiene que acabar en el puerto que el motor cogió"
+    );
+    // Hubo dos spawns: el que se perdió y el que salió bien.
+    let acciones = engine.acciones();
+    let spawns: Vec<&String> = acciones.iter().filter(|a| a.starts_with("spawn")).collect();
+    assert_eq!(spawns.len(), 2, "acciones={acciones:?}");
+    assert!(spawns[0].contains("--port 8100"), "spawn={}", spawns[0]);
+    assert!(spawns[1].contains("--port 8101"), "spawn={}", spawns[1]);
+    // Y el estado está en el puerto del motor vivo: en el perdido no
+    // puede haber nada, porque ese motor nunca sirvió.
+    assert!(
+        dir.path().join("ports").join("8101").exists(),
+        "el estado tiene que estar en el puerto bueno"
+    );
+    assert!(
+        !dir.path().join("ports").join("8100").exists(),
+        "no puede haber estado en el puerto que se perdió"
+    );
+}
+
+/// Un puerto pedido por el usuario no se reintenta con otro.
+///
+/// Si el usuario pide un puerto, se usa ese: si el motor no puede
+/// hacer bind, es un error, no una señal para coger otro puerto.
+#[test]
+fn un_puerto_pedido_que_el_motor_no_puede_coger_no_se_reintenta() {
+    let dir = TempDir::nuevo();
+    let engine = FakeEngine::nuevo().que_muere_en(9999);
+    let probe = FakeProbe::siempre();
+    let preflight = preflight_ok();
+    let device = device_vacio();
+    let ctx = LaunchContext {
+        port: Some(9999),
+        ..contexto(&engine, &probe, &device, &preflight, dir.path())
+    };
+
+    let error = ropero_runtime::launch::launch(&spec(), &ctx)
+        .expect_err("el motor no pudo hacer bind: tiene que ser error");
+
+    match error {
+        LaunchError::Spawn(mensaje) => {
+            assert!(mensaje.contains("9999"), "mensaje={mensaje}");
+        }
+        otra => panic!("el error tiene que ser de spawn: {otra}"),
+    }
+    // Y sólo se intentó una vez: el puerto pedido no se cambia.
+    let acciones = engine.acciones();
+    let spawns: Vec<&String> = acciones.iter().filter(|a| a.starts_with("spawn")).collect();
+    assert_eq!(spawns.len(), 1, "acciones={acciones:?}");
+}
+
+/// El reintento está acotado por el rango: no se prueba eternamente.
+///
+/// Si el motor muere al hacer bind en **todos** los puertos del rango, el
+/// arranque se rinde cuando ya no queda ninguno. El bucle no puede dar
+/// vueltas: cada intento descarta un puerto.
+#[test]
+fn el_reintento_se_acota_con_el_rango_de_puertos() {
+    let dir = TempDir::nuevo();
+    // El motor no puede hacer bind en ningún puerto: el rango entero
+    // está cogido.
+    let engine = FakeEngine::nuevo().que_muere_siempre();
+    let probe = FakeProbe::siempre();
+    let preflight = preflight_ok();
+    let device = device_vacio();
+    let ctx = contexto(&engine, &probe, &device, &preflight, dir.path());
+
+    let error = ropero_runtime::launch::launch(&spec(), &ctx)
+        .expect_err("el motor no pudo hacer bind en ningún puerto: tiene que ser error");
+
+    assert!(matches!(error, LaunchError::NoPort(..)), "error={error}");
+    // Y se probó cada puerto del rango, y sólo cada uno: 8100-8199.
+    let acciones = engine.acciones();
+    let spawns: Vec<&String> = acciones.iter().filter(|a| a.starts_with("spawn")).collect();
+    assert_eq!(spawns.len(), 100, "acciones={:?}", acciones.len());
+    assert!(spawns[0].contains("--port 8100"), "spawn={}", spawns[0]);
+    assert!(spawns[99].contains("--port 8199"), "spawn={}", spawns[99]);
 }
 
 #[test]

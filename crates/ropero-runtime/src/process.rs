@@ -129,6 +129,31 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
     campos.get(19)?.parse::<u64>().ok()
 }
 
+/// El estado de un proceso, tal y como lo dice el kernel.
+///
+/// En Linux se lee de `/proc/<pid>/stat`: la letra del estado es el
+/// primer campo después del `comm` ('R' ejecutando, 'S' dormido, 'Z'
+/// zombi, 'T' parado…).
+///
+/// `None` si no se puede leer: el proceso no existe, o el sistema no
+/// tiene `/proc`.
+///
+/// ## Por qué importa el zombi
+///
+/// Un proceso que ha muerto pero que su padre todavía no ha recogido
+/// sigue en la tabla de procesos: la señal 0 la acepta y `kill(pid, 0)`
+/// dice que está vivo. El motor que muere al hacer bind es exactamente
+/// eso: un zombi durante el arranque, y sin mirar su estado parecería un
+/// motor sano.
+pub fn estado_del_proceso(pid: u32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // El `comm` va entre paréntesis y puede contener espacios y
+    // paréntesis: el estado es el primer campo **después** del cierre.
+    let fin_comm = stat.rfind(')')?;
+    let resto = stat.get(fin_comm + 1..)?;
+    resto.split_whitespace().next()?.chars().next()
+}
+
 /// El SHA-256 del binario de un proceso, si se puede resolver.
 ///
 /// Se usa el enlace `/proc/<pid>/exe`. Si el proceso es nuestro, el

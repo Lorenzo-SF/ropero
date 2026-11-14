@@ -185,6 +185,10 @@ fn prepara_modelo_descargado() -> TempDir {
 struct Arranque {
     hijo: Child,
     lineas: std::sync::Arc<Mutex<Vec<String>>>,
+    /// El directorio de estado: de aquí sale el PID del motor.
+    estado: PathBuf,
+    /// El puerto en el que sirve el motor.
+    puerto: u16,
 }
 
 impl Arranque {
@@ -196,6 +200,14 @@ impl Arranque {
         cmd.stderr(Stdio::piped());
         let mut hijo = cmd.spawn().expect("arrancar");
 
+        let stderr = hijo.stderr.take().expect("stderr");
+        let errores = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let del_lector_err = std::sync::Arc::clone(&errores);
+        std::thread::spawn(move || {
+            for linea in BufReader::new(stderr).lines().map_while(Result::ok) {
+                del_lector_err.lock().expect("candado").push(linea);
+            }
+        });
         let stdout = hijo.stdout.take().expect("stdout");
         let lineas = std::sync::Arc::new(Mutex::new(Vec::new()));
         let del_lector = std::sync::Arc::clone(&lineas);
@@ -220,8 +232,31 @@ impl Arranque {
             drop(lineas);
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        let puerto = puerto.expect("el motor no arrancó: no salió ROPERO_PORT=");
-        let arranque = Self { hijo, lineas };
+        let logs: Vec<String> = std::fs::read_dir(estado.join("logs"))
+            .map(|d| {
+                d.filter_map(|e| e.ok())
+                    .map(|e| {
+                        format!(
+                            "{}: {}",
+                            e.file_name().to_string_lossy(),
+                            std::fs::read_to_string(e.path()).unwrap_or_default()
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let puerto = puerto.unwrap_or_else(|| {
+            panic!(
+                "el motor no arrancó: no salió ROPERO_PORT=; stderr={:?}; logs={logs:?}",
+                errores.lock().expect("candado")
+            )
+        });
+        let arranque = Self {
+            hijo,
+            lineas,
+            estado: estado.to_path_buf(),
+            puerto,
+        };
         (arranque, puerto)
     }
 
@@ -235,7 +270,36 @@ impl Drop for Arranque {
     fn drop(&mut self) {
         let _ = self.hijo.kill();
         let _ = self.hijo.wait();
+        // El motor es un **nieto** del test: su padre es el `ropero`, y
+        // aquí sólo se mata al `ropero`. Sin parar el motor también, se
+        // queda escuchando en el puerto del rango y el siguiente test —o
+        // la siguiente vuelta de la suite— se lo encuentra ocupado.
+        para_el_motor(&self.estado, self.puerto);
     }
+}
+
+/// Para el motor que sirve en el puerto, si sigue vivo.
+///
+/// Se para con la **misma** parada que usa `ropero stop`: el PID del
+/// estado se verifica con su `start_time` antes de mandar ninguna señal
+/// al grupo, para que un PID reciclado no reciba un SIGKILL que no es
+/// nuestro.
+///
+/// El PID sale del estado en disco: si el estado ya no está, es que un
+/// `stop` ya lo paró.
+fn para_el_motor(estado: &Path, puerto: u16) {
+    let stopper = ropero_runtime::OsStopper;
+    let _ = ropero_runtime::SysStopper::parar_puerto(
+        estado,
+        puerto,
+        &stopper,
+        std::time::Duration::from_secs(2),
+    );
+}
+
+/// Si alguien está escuchando en el puerto.
+fn puerto_escuchando(puerto: u16) -> bool {
+    std::net::TcpStream::connect(("127.0.0.1", puerto)).is_ok()
 }
 
 /// El arranque de un modelo sale con 0 y dice el puerto.
@@ -490,9 +554,43 @@ fn stop_sin_argumento_para_todos() {
     assert!(!ruta.exists(), "el estado tiene que desaparecer");
 }
 
-/// Si un proceso sigue vivo.
+/// Si el motor sigue vivo.
 fn proceso_vivo(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// El motor del test no se queda escuchando.
+///
+/// El motor falso es un nieto del test (su padre es el `ropero`): si no
+/// se para al acabar el test, se queda sirviendo en el puerto del rango
+/// y el siguiente test —o la siguiente vuelta de la suite— se lo
+/// encuentra ocupado.
+#[test]
+fn el_motor_del_test_no_se_queda_escuchando() {
+    let motor = MotorFalso::nuevo();
+    let modelo = prepara_modelo_descargado();
+    let estado = TempDir::nuevo("limpieza");
+
+    let (arranque, puerto) = Arranque::nuevo(
+        estado.path(),
+        motor.path(),
+        modelo.path(),
+        &["modelo-alpha"],
+    );
+    assert!(
+        puerto_escuchando(puerto),
+        "el motor tiene que estar escuchando mientras el test dura"
+    );
+
+    // Al soltar el arranque, el motor tiene que estar parado.
+    drop(arranque);
+    for _ in 0..50 {
+        if !puerto_escuchando(puerto) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("el motor {puerto} tiene que estar parado tras el test");
 }
 
 /// Espera a que el fichero de estado exista y devuelve su contenido.
