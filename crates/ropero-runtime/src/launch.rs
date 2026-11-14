@@ -4,14 +4,14 @@
 //!
 //! ```text
 //! 1. Preflight: engine instalado, modelo instalado, recursos.
-//! 2. Puerto: el del modelo, el pedido con --port, o el primero libre del
-//!    rango del motor.
-//! 3. --force: si hay procesos de ropero en ese device, pararlos (sólo los
+//! 2. --force: si hay procesos de ropero en ese device, pararlos (sólo los
 //!    nuestros: PID + start_time).
-//! 4. Spawn del motor con el argv montado.
+//! 3. Puerto y arranque: el del modelo, el pedido con --port, o el primero
+//!    libre del rango del motor. Si el motor muere al hacer bind, se
+//!    prueba con el siguiente puerto del rango.
+//! 4. Estado en disco (tmp + mv, atómico).
 //! 5. Sonda de readiness, con backoff y deadline.
-//! 6. Estado en disco (tmp + mv, atómico).
-//! 7. En primer plano: esperar al proceso. Ctrl-C propaga el SIGINT y
+//! 6. En primer plano: esperar al proceso. Ctrl-C propaga el SIGINT y
 //!    sale con 130.
 //! ```text
 //!
@@ -303,7 +303,6 @@ pub fn launch(spec: &LaunchSpec, ctx: &LaunchContext<'_>) -> Result<LaunchResult
     let device = ctx.device;
     let preflight = ctx.preflight;
     let port = ctx.port;
-    let occupied_ports = &ctx.occupied_ports;
     let state_dir = ctx.state_dir;
     let options = ctx.options;
 
@@ -311,25 +310,72 @@ pub fn launch(spec: &LaunchSpec, ctx: &LaunchContext<'_>) -> Result<LaunchResult
     //    mata lo que corre.
     preflight.check()?;
 
-    // 2. Puerto.
-    let puerto = match port {
-        Some(p) => p,
-        None => ropero_core::pick_port(spec.port_range, occupied_ports).ok_or(
-            LaunchError::NoPort(spec.port_range.min, spec.port_range.max),
-        )?,
-    };
-
-    // 3. --force: parar lo que haya de ropero en el device.
+    // 2. --force: parar lo que haya de ropero en el device.
+    //
+    //    Va **antes** del arranque y no se repite: si el motor muere al
+    //    hacer bind y se reintenta con otro puerto, lo que se paró sigue
+    //    parado (y no se para dos veces lo mismo).
     if options.force {
         for identidad in device.ropero_processes() {
             engine.terminate(&identidad);
         }
     }
 
-    // 4. Lanzar.
-    let lanzado = engine.spawn(spec, puerto).map_err(LaunchError::Spawn)?;
+    // 3. Puerto y motor, con reintento.
+    //
+    //    Elegir el puerto y arrancar es una carrera: dos procesos que
+    //    usan el mismo rango de puertos ven el mismo puerto libre y los
+    //    dos lo cogen. El que pierde muere al hacer bind («address
+    //    already in use») y, si no hace nada más, se queda sin motor y
+    //    sin estado en disco.
+    //
+    //    Por eso, si el motor muere justo después de arrancar, se prueba
+    //    con el siguiente puerto del rango. El puerto elegido sigue
+    //    siendo el **menor libre**: el reintento sólo cambia el puerto
+    //    cuando el motor ha muerto, y entonces ese puerto ya no es
+    //    nuestro.
+    //
+    //    El bucle está acotado por el **tamaño del rango**: cada intento
+    //    descarta un puerto, y `pick_port` da el menor que queda libre.
+    //    Cuando el rango se agota, no queda ningún puerto que probar.
+    let mut ocupados = ctx.occupied_ports.to_vec();
+    let (puerto, lanzado) = loop {
+        let puerto = match port {
+            Some(p) => p,
+            None => ropero_core::pick_port(spec.port_range, &ocupados).ok_or(
+                LaunchError::NoPort(spec.port_range.min, spec.port_range.max),
+            )?,
+        };
 
-    // 5. Estado en disco: se escribe **antes** de esperar, para que otro
+        let lanzado = engine.spawn(spec, puerto).map_err(LaunchError::Spawn)?;
+
+        // Al motor se le da un momento para hacer bind: si muere en este
+        // plazo, es que el puerto no era suyo.
+        if !sigue_vivo(engine, lanzado.pid, PLAZO_DEL_BIND) {
+            ocupados.push(puerto);
+            if port.is_some() {
+                // El puerto lo pidió el usuario: no se prueba con otro.
+                return Err(LaunchError::Spawn(format!(
+                    "el motor murió al hacer bind en el puerto {puerto}"
+                )));
+            }
+            // Si el puerto lo tiene alguien, fue una carrera: se prueba
+            // con el siguiente. Si no lo tiene nadie, el motor no murió
+            // por una carrera sino porque está roto, y reintentar con
+            // todos los puertos del rango sólo haría esperar más.
+            if !probe.ready(puerto, &spec.model) {
+                return Err(LaunchError::Died {
+                    port: puerto,
+                    model: spec.model.clone(),
+                });
+            }
+            continue;
+        }
+
+        break (puerto, lanzado);
+    };
+
+    // 4. Estado en disco: se escribe **antes** de esperar, para que otro
     //    ropero vea el arranque en curso y para que un `stop` en mitad del
     //    arranque sepa a quién matar.
     let stamp = crate::state::stamp_de(&[
@@ -355,7 +401,7 @@ pub fn launch(spec: &LaunchSpec, ctx: &LaunchContext<'_>) -> Result<LaunchResult
     };
     crate::state::write_state(state_dir, puerto, &estado).map_err(LaunchError::State)?;
 
-    // 6. Sonda de readiness.
+    // 5. Sonda de readiness.
     if !espera_ready(
         engine,
         probe,
@@ -396,6 +442,11 @@ pub fn launch(spec: &LaunchSpec, ctx: &LaunchContext<'_>) -> Result<LaunchResult
 /// La sonda se intenta hasta que pasa o hasta que se acaba el plazo. Si
 /// el proceso muere, no se espera al deadline: el arranque ya está
 /// condenado y esperar sólo hace perder el tiempo del usuario.
+///
+/// El motor se pregunta **antes** que la sonda: si el motor ya está
+/// muerto, la respuesta del puerto no puede ser la suya (puede estar
+/// respondiendo otro motor que cogió el puerto), y aceptarla sería
+/// quedarse sin motor propio creyendo que todo va bien.
 fn espera_ready(
     engine: &dyn Engine,
     probe: &dyn Probe,
@@ -406,18 +457,45 @@ fn espera_ready(
 ) -> bool {
     let mut esperado = Duration::ZERO;
     loop {
-        if probe.ready(puerto, modelo) {
-            return true;
-        }
         // El proceso ya no está: la sonda no va a pasar nunca.
         if !engine.alive(pid) {
             return false;
+        }
+        if probe.ready(puerto, modelo) {
+            return true;
         }
         if esperado >= plan.deadline {
             return false;
         }
         std::thread::sleep(plan.backoff);
         esperado += plan.backoff;
+    }
+}
+
+/// El plazo que se le da al motor para hacer bind.
+///
+/// Si el motor muere en este plazo, es que no pudo hacer bind: otro
+/// proceso cogió el puerto primero (una carrera) o el motor está roto.
+///
+/// El plazo es corto a propósito: un motor que arranca bien hace bind en
+/// los primeros milisegundos; uno que tarda más está tardando en cargar
+/// el modelo, que es otra cosa.
+const PLAZO_DEL_BIND: Duration = Duration::from_millis(500);
+
+/// Si el motor sigue vivo durante el plazo dado.
+///
+/// Se devuelve `false` en cuanto se ve que ha muerto: no se espera al
+/// plazo entero si ya se sabe que el arranque está condenado.
+fn sigue_vivo(engine: &dyn Engine, pid: u32, plazo: Duration) -> bool {
+    let limite = std::time::Instant::now() + plazo;
+    loop {
+        if !engine.alive(pid) {
+            return false;
+        }
+        if std::time::Instant::now() >= limite {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
     }
 }
 

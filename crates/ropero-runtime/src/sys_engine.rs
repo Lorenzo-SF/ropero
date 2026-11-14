@@ -31,6 +31,27 @@ impl SysEngine {
             ultimo: std::sync::Mutex::new(None),
         }
     }
+
+    /// Recoge al motor que ya ha muerto, si es el nuestro.
+    ///
+    /// Un proceso que ha muerto sigue en la tabla de procesos hasta que
+    /// su padre lo recoge: es un **zombi**. Recogerlo aquí evita que el
+    /// reintento de puerto deje zombis detrás, y deja el código de
+    /// salida en el sitio donde `wait` lo puede leer.
+    ///
+    /// `try_wait` no bloquea: si el motor sigue vivo, no hace nada.
+    fn recoge(&self, pid: u32) -> bool {
+        let Ok(mut guard) = self.ultimo.lock() else {
+            return false;
+        };
+        let Some(motor) = guard.as_mut() else {
+            return false;
+        };
+        if motor.id() != pid {
+            return false;
+        }
+        matches!(motor.try_wait(), Ok(Some(_)))
+    }
 }
 
 impl Default for SysEngine {
@@ -82,8 +103,13 @@ impl Engine for SysEngine {
     }
 
     fn alive(&self, pid: u32) -> bool {
-        // Un proceso vivo es el que acepta la señal 0.
-        libc_kill(pid as i32, 0) == 0
+        // Si el motor ya ha muerto, se recoge: mientras su padre (ropero)
+        // no lo recoja, sigue en la tabla de procesos como **zombi**, y
+        // parece vivo.
+        if self.recoge(pid) {
+            return false;
+        }
+        vivo_de_verdad(pid)
     }
 
     fn terminate(&self, identity: &ProcIdentity) {
@@ -145,6 +171,26 @@ fn signal_group(pid: u32, signal: Signal) {
     }
 }
 
+/// Si el proceso está vivo **de verdad**.
+///
+/// `kill(pid, 0)` pregunta si el proceso existe, y un **zombi** —un
+/// proceso muerto que su padre todavía no ha recogido— existe: la señal
+/// 0 la acepta. Por eso, antes de preguntar, se mira el estado que dice
+/// el kernel: un zombi no está vivo.
+///
+/// El motor que muere al hacer bind («address already in use») es
+/// exactamente eso durante el arranque: sin esta comprobación parecería
+/// un motor sano, y el arranque no podría reintentar con otro puerto.
+///
+/// Lo usan los dos «¿sigue vivo?»: el del arranque (`SysEngine`) y el de
+/// la parada (`OsStopper`), para que los dos digan lo mismo.
+fn vivo_de_verdad(pid: u32) -> bool {
+    if crate::process::estado_del_proceso(pid) == Some('Z') {
+        return false;
+    }
+    libc_kill(pid as i32, 0) == 0
+}
+
 /// `kill(pid, 0)`: la señal 0 no hace nada, sólo pregunta si el proceso
 /// existe y si le podemos mandar señales.
 ///
@@ -194,7 +240,7 @@ pub struct OsStopper;
 
 impl crate::stop::Stopper for OsStopper {
     fn alive(&self, pid: u32) -> bool {
-        libc_kill(pid as i32, 0) == 0
+        vivo_de_verdad(pid)
     }
 
     fn identidad(&self, pid: u32) -> Option<crate::process::ProcIdentity> {
