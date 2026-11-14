@@ -272,7 +272,13 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
             }
         }
     }
-    if spec.limits.min_ram_gb < 0.0 {
+    // La regla es **estrictamente mayor que 0** (doc B §4.1.1 / R-DATA-9),
+    // como en la v1 (`ropero-code/bin/python/modelconf.py:1563`, que rechaza
+    // `<= 0`). El campo es **opcional**: si no se declara, no se comprueba
+    // (la v1 sólo mira la clave cuando está presente, línea 1560).
+    if let Some(min_ram_gb) = spec.limits.min_ram_gb
+        && min_ram_gb <= 0.0
+    {
         errors.push(error(
             ValidationRule::MinRamMustBePositive,
             "limits.min_ram_gb",
