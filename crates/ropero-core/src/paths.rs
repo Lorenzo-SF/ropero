@@ -11,6 +11,7 @@
 
 use std::path::PathBuf;
 
+use crate::Environment;
 use crate::ModelSpec;
 
 /// Rutas resueltas de un modelo.
@@ -24,19 +25,24 @@ pub struct ResolvedPaths {
     pub log: String,
 }
 
-/// Resuelve las rutas de un modelo a partir de su TOML y del entorno.
-pub fn resolve_paths(spec: &ModelSpec) -> ResolvedPaths {
+/// Resuelve las rutas de un modelo a partir de su TOML y del entorno
+/// capturado.
+///
+/// PURA: no lee disco, no consulta el entorno, no lanza procesos. El
+/// entorno llega por parámetro (doc B §3.2.3).
+pub fn resolve_paths(spec: &ModelSpec, env: &Environment) -> ResolvedPaths {
     let real = crate::catalog::real_name(spec);
-    let gguf_dir = crate::catalog::env_path("GGUF_DIR", "models/gguf");
-    let safetensors_dir = crate::catalog::env_path("SAFETENSORS_DIR", "models/safetensors");
-    let log_dir = crate::catalog::env_path("LOG_DIR", ".logs/ropero");
+    let gguf_dir = env.env_path("GGUF_DIR", "models/gguf");
+    let safetensors_dir = env.env_path("SAFETENSORS_DIR", "models/safetensors");
+    let log_dir = env.env_path("LOG_DIR", ".logs/ropero");
 
     let in_gguf = |p: &PathBuf| gguf_dir.join(&real).join(p).to_string_lossy().to_string();
 
     let gguf = spec.files.gguf.as_ref().map(|g| {
-        let name = std::env::var(format!("ROPERO_{}_GGUF", crate::catalog::slug(&real)))
-            .ok()
+        let name = env
+            .get(&format!("ROPERO_{}_GGUF", crate::catalog::slug(&real)))
             .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
             .unwrap_or_else(|| g.to_string_lossy().to_string());
         gguf_dir
             .join(&real)

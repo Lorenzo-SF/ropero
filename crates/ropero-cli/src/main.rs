@@ -1,3 +1,9 @@
+//! El dispatcher de la CLI.
+//!
+//! La CLI es fina por contrato (R-ARQ-1): **despacha e imprime**. La lógica
+//! vive en `ropero-core` (dominio puro) y en `discovery` (la frontera de
+//! E/S).
+
 mod args_cmd;
 mod discovery;
 mod levels;
@@ -5,7 +11,7 @@ mod list;
 mod path;
 mod template;
 mod validate;
-use ropero_core::{Catalog, ModelSpec};
+use ropero_core::{Catalog, ModelSpec, UsageCheck};
 use std::env;
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -36,28 +42,23 @@ fn run(args: &[String]) -> i32 {
 /// Chequeos de uso de un comando que opera sobre un modelo: `--help`, modelo
 /// ausente y argumentos de más. El error ya sale impreso.
 pub fn check_usage(args: &[String], cmd: &str, uso: &str, too_many: &str) -> Result<(), i32> {
-    if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("USO: {}", uso);
-        return Err(0);
-    }
-    if args.is_empty() {
-        return Err(usage_error(cmd, &ropero_core::missing_model_message(cmd)));
-    }
-    if !too_many.is_empty() && args.len() > 1 {
-        let msg = too_many.replace("{}", args[1].as_str());
-        return Err(usage_error(cmd, &msg));
-    }
-    Ok(())
+    let check = ropero_core::check_model_usage(args, cmd, too_many);
+    apply_usage(check, cmd, uso)
 }
 /// Chequeo de uso de un comando que no acepta argumentos: `--help` o error.
 pub fn check_no_args(args: &[String], cmd: &str, uso: &str) -> Result<(), i32> {
-    match args.first().map(|a| a.as_str()) {
-        Some("--help") | Some("-h") => {
+    apply_usage(ropero_core::check_no_args_usage(args, cmd), cmd, uso)
+}
+/// Traduce el veredicto del dominio en lo que hace la CLI: imprimir el uso
+/// (y salir con 0) o imprimir el error (y salir con 2).
+fn apply_usage(check: UsageCheck, cmd: &str, uso: &str) -> Result<(), i32> {
+    match check {
+        UsageCheck::Ok => Ok(()),
+        UsageCheck::Help => {
             println!("USO: {}", uso);
             Err(0)
         }
-        Some(a) => Err(usage_error(cmd, &format!("{} no acepta '{}'", cmd, a))),
-        None => Ok(()),
+        UsageCheck::Error { message } => Err(usage_error(cmd, &message)),
     }
 }
 /// Busca un modelo en el catálogo. El error ya sale impreso; el código de

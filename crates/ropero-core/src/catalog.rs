@@ -11,6 +11,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::Environment;
 use crate::ModelSpec;
 
 /// Catálogo materializado: modelos activos y retirados.
@@ -204,8 +205,11 @@ pub fn find_spec<'a>(cat: &'a Catalog, name: &str) -> Option<&'a ModelSpec> {
 }
 
 /// Rutas candidatas de la plantilla del catálogo (`models/_template.toml`).
-pub fn template_candidates(root: &Path) -> Vec<PathBuf> {
-    let base = models_base(root);
+///
+/// `base` es el directorio de modelos ya resuelto por la capa de
+/// presentación (`ropero_core::models_base`): aquí no se pregunta al disco
+/// si existe.
+pub fn template_candidates(root: &Path, base: &Path) -> Vec<PathBuf> {
     vec![
         base.join("_template.toml"),
         root.join("_template.toml"),
@@ -292,48 +296,15 @@ pub fn slug(name: &str) -> String {
 
 /// Contexto efectivo: `ROPERO_<SLUG>_CTX` si está definida, si no el del
 /// TOML.
-pub fn effective_context(spec: &ModelSpec) -> u32 {
+///
+/// El override llega en el entorno ya capturado: el dominio no consulta el
+/// entorno real.
+pub fn effective_context(spec: &ModelSpec, env: &Environment) -> u32 {
     let var = format!("ROPERO_{}_CTX", slug(&real_name(spec)));
-    if let Ok(v) = std::env::var(&var)
+    if let Some(v) = env.get(&var)
         && let Ok(n) = v.parse::<u32>()
     {
         return n;
     }
     spec.model.context
-}
-
-/// Directorio de modelos: `<root>/models` si existe, si no `<root>`.
-pub fn models_base(root: &Path) -> PathBuf {
-    if root.join("models").is_dir() {
-        root.join("models")
-    } else {
-        root.to_path_buf()
-    }
-}
-
-/// Expande `~` y convierte en absoluta una ruta relativa.
-pub fn expand_path(raw: &str) -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_default();
-    let expanded = if raw == "~" {
-        home.clone()
-    } else if let Some(rest) = raw.strip_prefix("~/") {
-        format!("{}/{}", home, rest)
-    } else {
-        raw.to_string()
-    };
-    let p = PathBuf::from(expanded);
-    if p.is_absolute() {
-        p
-    } else {
-        std::env::current_dir().unwrap_or_default().join(p)
-    }
-}
-
-/// Ruta de una variable de entorno, con valor por defecto relativo a `$HOME`.
-pub fn env_path(var: &str, default_rel: &str) -> PathBuf {
-    let raw = std::env::var(var).unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{}/{}", home, default_rel.trim_start_matches("~/"))
-    });
-    expand_path(&raw)
 }

@@ -15,13 +15,9 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
         exit = exit.max(1);
     }
     if exit == 0 {
-        println!(
-            "OK: {} modelo(s) validados en {}",
-            scan.files,
-            scan.base.display()
-        );
+        println!("{}", ropero_core::validate_ok_line(scan.files, &scan.base));
     } else {
-        eprintln!("validación fallida en {}", scan.base.display());
+        eprintln!("{}", ropero_core::validate_failed_line(&scan.base));
     }
     if exit == 0 { Ok(0) } else { Err(exit) }
 }

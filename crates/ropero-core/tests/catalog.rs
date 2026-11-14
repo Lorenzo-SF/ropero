@@ -78,13 +78,12 @@ fn source_is_kept() {
 
 #[test]
 fn models_base_prefers_models_dir() {
-    let root = std::env::temp_dir().join(format!("ropero-base-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("models")).unwrap();
-    assert_eq!(ropero_core::models_base(&root), root.join("models"));
-    let _ = std::fs::remove_dir_all(&root);
-    // sin `models/`, la raíz es la base
-    assert_eq!(ropero_core::models_base(&root), root);
+    let root = Path::new("/catalogo");
+    // Con `models/` presente, la base es `models/`; sin él, la raíz es la
+    // base. La existencia la decide la capa de presentación: aquí sólo se
+    // decide el nombre.
+    assert_eq!(ropero_core::models_base(root, true), root.join("models"));
+    assert_eq!(ropero_core::models_base(root, false), root);
 }
 
 #[test]
