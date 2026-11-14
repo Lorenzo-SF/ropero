@@ -95,7 +95,10 @@ fn engines_help_sale_con_cero() {
 fn engines_con_un_flag_desconocido_es_error_de_uso() {
     let (code, _stdout, stderr) = run(&["engines", "--inventado"]);
     assert_eq!(code, 2, "stderr={stderr}");
-    assert!(stderr.contains("no acepta"), "stderr={stderr}");
+    assert!(
+        stderr.contains("--inventado") || stderr.contains("unexpected argument"),
+        "stderr={stderr}"
+    );
 }
 
 /// El comando `engines` está registrado: no es un comando desconocido.

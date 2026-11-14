@@ -1,77 +1,100 @@
 //! El dispatcher de la CLI.
 //!
 //! La CLI es fina por contrato (R-ARQ-1): **despacha e imprime**. La lógica
-//! vive en `ropero-core` (dominio puro) y en `discovery` (la frontera de
-//! E/S).
-mod args_cmd;
+//! vive en `ropero-core` (dominio puro), en `ropero-runtime` (la E/S) y en
+//! `parser` (la traducción del contrato a `clap`).
+//!
+//! ## Los códigos de salida
+//!
+//! | Código | Significado |
+//! |---:|---|
+//! | `0` | Ok |
+//! | `1` | Error |
+//! | `2` | Uso (argumento o comando inválido) |
+//!
+//! El `130` (Ctrl-C) llega con el runtime (F3).
+//!
+//! ## El arranque de un modelo
+//!
+//! `ropero <modelo>` **no** es un comando con nombre fijo: lo que sigue al
+//! binario puede ser un comando o el nombre de un modelo. La decisión se
+//! toma **antes** de parsear: si el primer token es un comando del
+//! contrato, se parsea con el parser de comandos; si no, se parsea con el
+//! parser del arranque ([`parser::arranque`]), que es el del doc CLI v2 §8.
+
+mod commands;
 mod discovery;
-mod engines_cmd;
-mod levels;
-mod list;
-mod path;
-mod template;
-mod validate;
-use ropero_core::{Catalog, ModelSpec, UsageCheck};
-use std::env;
+mod parser;
+mod summary;
+
+use clap::ArgMatches;
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    std::process::exit(run(&args));
-}
-fn run(args: &[String]) -> i32 {
-    if args.len() <= 1 {
-        return print_help();
-    }
-    match args[1].as_str() {
-        "help" | "-h" | "--help" => print_help(),
-        "--version" | "-V" => {
-            ropero_core::out_line(&format!("ropero {}", env!("CARGO_PKG_VERSION")));
-            0
-        }
-        "validate" => validate::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        "list" => list::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        "engines" => engines_cmd::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        "template" => template::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        "args" => args_cmd::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        "levels" => levels::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        "path" => path::run(&args[2..]).unwrap_or_else(std::convert::identity),
-        c => {
-            ropero_core::err_line(&ropero_core::unknown_command_message(c));
-            2
-        }
-    }
-}
-pub fn check_usage(args: &[String], cmd: &str, uso: &str, too_many: &str) -> Result<(), i32> {
-    let check = ropero_core::check_model_usage(args, cmd, too_many);
-    apply_usage(check, cmd, uso)
-}
-pub fn check_no_args(args: &[String], cmd: &str, uso: &str) -> Result<(), i32> {
-    apply_usage(ropero_core::check_no_args_usage(args, cmd), cmd, uso)
+    let argumentos: Vec<String> = std::env::args().skip(1).collect();
+    std::process::exit(dispatch(&argumentos));
 }
 
-pub fn check_all_flag(args: &[String], cmd: &str, uso: &str) -> Result<bool, i32> {
-    let (check, all) = ropero_core::check_all_flag_usage(args, cmd);
-    apply_usage(check, cmd, uso)?;
-    Ok(all)
-}
-fn apply_usage(check: UsageCheck, cmd: &str, uso: &str) -> Result<(), i32> {
-    match check {
-        UsageCheck::Ok => Ok(()),
-        UsageCheck::Help => {
-            ropero_core::out_line(&format!("USO: {}", uso));
-            Err(0)
+/// Despacha los argumentos de la línea de comandos.
+fn dispatch(argumentos: &[String]) -> i32 {
+    match argumentos.first() {
+        None => summary::run(),
+        // Los flags de la ayuda y de la versión son del **binario**, no de
+        // un comando: los atiende el parser principal (que es el único que
+        // los tiene). `clap` los resuelve y sale con 0.
+        Some(primer) if es_flag_global(primer) => {
+            let _ = parser::build().get_matches_from(
+                std::iter::once("ropero".to_string()).chain(argumentos.iter().cloned()),
+            );
+            0
         }
-        UsageCheck::Error { message } => Err(usage_error(cmd, &message)),
+        Some(primer) if parser::es_comando(primer) => {
+            let matches = parser::build().get_matches_from(
+                std::iter::once("ropero".to_string()).chain(argumentos.iter().cloned()),
+            );
+            comando(&matches)
+        }
+        Some(_) => summary::run_modelo(argumentos),
     }
 }
-pub fn spec_for<'a>(cat: &'a Catalog, name: &str, cmd: &str) -> Result<&'a ModelSpec, i32> {
-    let msg = ropero_core::unknown_model_message(name);
-    ropero_core::find_spec(cat, name).ok_or_else(|| usage_error(cmd, &msg))
+
+/// Despacha el comando que `clap` parseó.
+fn comando(matches: &ArgMatches) -> i32 {
+    let Some((nombre, sub)) = matches.subcommand() else {
+        return summary::run();
+    };
+    match nombre {
+        "install" => pendiente("install"),
+        "stop" => pendiente("stop"),
+        "gguffer" => pendiente("gguffer"),
+        "status" => commands::status(),
+        "doctor" => commands::doctor(),
+        "list" => commands::list(tiene_all(sub)),
+        "engines" => commands::engines(tiene_all(sub)),
+        "template" => commands::template(),
+        "validate" => commands::validate(),
+        "args" => commands::args(&parser::modelo(sub), &parser::tokens(sub)),
+        "levels" => commands::levels(&parser::modelo(sub)),
+        "path" => commands::path(&parser::modelo(sub)),
+        _ => 2,
+    }
 }
-pub fn print_help() -> i32 {
-    ropero_core::out_line(&ropero_core::help_text());
-    0
+
+/// Si el subcomando lleva el `--all`.
+fn tiene_all(matches: &ArgMatches) -> bool {
+    matches.get_flag("all")
 }
-pub fn usage_error(cmd: &str, msg: &str) -> i32 {
-    ropero_core::err_line(&ropero_core::usage_message(cmd, msg));
-    2
+
+/// La respuesta de un comando que se parsea pero todavía no se ejecuta.
+///
+/// El mensaje dice **qué falta** (P-13), y el código de salida es **1**: el
+/// uso es correcto, lo que falta es la implementación.
+pub fn pendiente(cmd: &str) -> i32 {
+    let mensaje = ropero_core::surface::pending_message(cmd);
+    ropero_core::err_line(&mensaje);
+    1
+}
+
+/// Si el token es un flag que pertenece al binario y no a un comando.
+fn es_flag_global(token: &str) -> bool {
+    matches!(token, "--help" | "-h" | "--version" | "-V")
 }

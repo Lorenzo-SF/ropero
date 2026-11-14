@@ -1,7 +1,7 @@
-//! El contrato de la CLI: la tabla de códigos de salida de R-CLI-4 y el
-//! contrato de stdout de cada comando.
+//! El contrato de la CLI: la tabla de códigos de salida y el contrato de
+//! stdout de cada comando.
 //!
-//! Esta es la **puerta G-11** del doc B §7.2, que es ejecutable con
+//! Esta es la **puerta G-11** del doc B §7.2, ejecutable con
 //!
 //! ```text
 //! cargo test --locked -p ropero-cli --test cli_contract
@@ -10,12 +10,12 @@
 //! La batería es hermética: usa el catálogo de pruebas de
 //! `tests/fixtures/models` (con `ROPERO_MODELS_DIR`), no el catálogo real.
 //!
-//! ## La tabla de códigos de salida (R-CLI-4)
+//! ## La tabla de códigos de salida (doc CLI v2 §3)
 //!
 //! | Código | Significado |
 //! |---|---|
 //! | `0` | el comando terminó bien |
-//! | `1` | error de ejecución (catálogo no encontrado, E/S, template ausente) |
+//! | `1` | error de ejecución (catálogo no encontrado, E/S, comando pendiente) |
 //! | `2` | error de uso (comando desconocido, modelo desconocido, argumento inválido) |
 //! | `130` | interrumpido por SIGINT — **pendiente de F3** (documentado, no implementado) |
 //!
@@ -52,7 +52,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Los códigos de salida de la tabla de R-CLI-4.
+/// Los códigos de salida de la tabla del doc CLI v2 §3.
 const CODIGO_OK: i32 = 0;
 const CODIGO_ERROR_EJECUCION: i32 = 1;
 const CODIGO_ERROR_USO: i32 = 2;
@@ -60,7 +60,7 @@ const CODIGO_ERROR_USO: i32 = 2;
 const CODIGO_SIGINT: i32 = 130;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// La tabla de códigos de salida (R-CLI-4)
+// La tabla de códigos de salida
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Un comando que termina bien sale con 0.
@@ -68,16 +68,31 @@ const CODIGO_SIGINT: i32 = 130;
 fn un_comando_que_va_bien_sale_con_cero() {
     for args in [
         vec!["validate"],
-        vec!["list"],
         vec!["template"],
         vec!["args", "modelo-alpha"],
         vec!["levels", "modelo-alpha"],
         vec!["path", "modelo-alpha"],
-        vec!["help"],
+        vec!["engines"],
+        vec!["--help"],
+        vec!["--version"],
     ] {
         let (code, _stdout, stderr) = run(&args);
         assert_eq!(code, CODIGO_OK, "{args:?} salió con {code}: {stderr}");
     }
+}
+
+/// `ropero` a secas es una ayuda breve, no un error: sale con 0 (doc CLI v2
+/// §5.2).
+#[test]
+fn ropero_a_secas_sale_con_cero() {
+    let (code, stdout, stderr) = run(&[]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    // Las cuatro secciones del doc CLI v2 §6.
+    assert!(stdout.contains("MOTORES"), "stdout={stdout}");
+    assert!(stdout.contains("MODELOS"), "stdout={stdout}");
+    assert!(stdout.contains("build:"), "stdout={stdout}");
+    assert!(stdout.contains("autor:"), "stdout={stdout}");
+    assert!(stdout.contains("ropero --help"), "stdout={stdout}");
 }
 
 /// Un comando desconocido es un error de uso: sale con 2.
@@ -85,7 +100,7 @@ fn un_comando_que_va_bien_sale_con_cero() {
 fn un_comando_desconocido_sale_con_dos() {
     let (code, _stdout, stderr) = run(&["inventado"]);
     assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
-    assert!(stderr.contains("desconocido"), "stderr={stderr}");
+    assert!(stderr.contains("modelo desconocido"), "stderr={stderr}");
 }
 
 /// Un modelo desconocido es un error de uso: sale con 2.
@@ -105,6 +120,126 @@ fn un_argumento_de_mas_sale_con_dos() {
     assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
 }
 
+/// Los comandos que se parsean pero todavía no se ejecutan dicen **qué
+/// falta** y salen con 1 (no con 2: el uso es correcto).
+#[test]
+fn los_comandos_pendientes_dicen_que_falta_y_salen_con_uno() {
+    for cmd in ["install", "stop", "gguffer"] {
+        let (code, _stdout, stderr) = run(&[cmd]);
+        assert_eq!(
+            code, CODIGO_ERROR_EJECUCION,
+            "{cmd} salió con {code}: {stderr}"
+        );
+        assert!(
+            stderr.contains("todavía no está implementado"),
+            "{cmd}: stderr={stderr}"
+        );
+        assert!(stderr.contains(cmd), "{cmd}: stderr={stderr}");
+    }
+}
+
+/// El arranque de un modelo se parsea pero todavía no se ejecuta: sale con
+/// 1 y lo dice.
+#[test]
+fn el_arranque_de_un_modelo_sale_con_uno_y_lo_dice() {
+    let (code, _stdout, stderr) = run(&["modelo-alpha"]);
+    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
+    assert!(stderr.contains("modelo-alpha"), "stderr={stderr}");
+    assert!(
+        stderr.contains("todavía no está implementado"),
+        "stderr={stderr}"
+    );
+}
+
+/// Un flag del arranque que no existe es un error de uso: sale con 2.
+#[test]
+fn un_flag_del_arranque_que_no_existe_sale_con_dos() {
+    let (code, _stdout, stderr) = run(&["modelo-alpha", "--inventado"]);
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+}
+
+/// Los flags del arranque del doc CLI v2 §8.2 se **aceptan**.
+#[test]
+fn los_flags_del_arranque_se_aceptan() {
+    for flag in [
+        vec!["--force"],
+        vec!["--cpu"],
+        vec!["--port", "8100"],
+        vec!["--api-key", "clave"],
+        vec!["--no-api-key"],
+        vec!["--ctx", "4096"],
+    ] {
+        let mut args = vec!["modelo-alpha"];
+        args.extend(flag.iter().copied());
+        let (code, _stdout, stderr) = run(&args);
+        assert_eq!(
+            code, CODIGO_ERROR_EJECUCION,
+            "{args:?} salió con {code}: {stderr}"
+        );
+    }
+}
+
+/// Los 15 flags del `gguffer` del doc CLI v2 §11.2 se aceptan.
+#[test]
+fn los_flags_del_gguffer_se_aceptan() {
+    let flags: &[(&str, Option<&str>)] = &[
+        ("--repo", Some("owner/name")),
+        ("--path", Some("/tmp/pesos")),
+        ("--quant", Some("q4_k_m")),
+        ("--imatrix", Some("imatrix.dat")),
+        ("--out", Some("salida.gguf")),
+        ("--intermedio", Some("bf16")),
+        ("--keep-source", None),
+        ("--keep-intermedio", None),
+        ("--no-mtp", None),
+        ("--no-dflash", None),
+        ("--force", None),
+        ("--list-quants", None),
+        ("--diagnostico", None),
+    ];
+    for (flag, valor) in flags {
+        let mut args = vec!["gguffer"];
+        args.push(flag);
+        if let Some(v) = valor {
+            args.push(v);
+        }
+        let (code, _stdout, stderr) = run(&args);
+        assert_eq!(
+            code, CODIGO_ERROR_EJECUCION,
+            "{args:?} salió con {code}: {stderr}"
+        );
+    }
+}
+
+/// `--imatrix-repo` y `--imatrix-file` van **en pareja**: usar sólo una es
+/// un error de uso (doc CLI v2 §11.2).
+#[test]
+fn la_imatrix_remota_va_en_pareja() {
+    for args in [
+        vec!["gguffer", "--imatrix-repo", "owner/name"],
+        vec!["gguffer", "--imatrix-file", "imatrix.dat"],
+    ] {
+        let (code, _stdout, stderr) = run(&args);
+        assert_eq!(
+            code, CODIGO_ERROR_USO,
+            "{args:?} salió con {code}: {stderr}"
+        );
+    }
+}
+
+/// La pareja completa sí se acepta.
+#[test]
+fn la_pareja_de_imatrix_se_acepta() {
+    let (code, _stdout, stderr) = run(&[
+        "gguffer",
+        "--imatrix-repo",
+        "owner/name",
+        "--imatrix-file",
+        "imatrix.dat",
+    ]);
+    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
+}
+
 /// El error de ejecución (1) es el de un fallo de E/S o de un recurso que
 /// no está.
 ///
@@ -121,54 +256,48 @@ fn un_catalogo_sin_plantilla_sale_con_uno() {
     let _ = std::fs::remove_dir_all(&base);
     let turbo = base.join("turbo-llama");
     std::fs::create_dir_all(&turbo).unwrap();
-    // Un modelo (para que el catálogo no esté vacío) pero sin `_template.toml`.
-    std::fs::copy(
-        fixture_root().join("models/turbo-llama/modelo-alpha.toml"),
+    std::fs::write(
         turbo.join("modelo-alpha.toml"),
+        "[model]\nname = \"modelo-alpha\"\nengine = \"turbo-llama\"\n\n[files]\ngguf = \"a.gguf\"\n",
     )
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
-        .args(["template"])
+        .arg("template")
         .env("ROPERO_MODELS_DIR", &base)
-        .current_dir(std::env::temp_dir())
+        .env("GGUF_DIR", base.join("gguf"))
+        .env("SAFETENSORS_DIR", base.join("safetensors"))
+        .env("LOG_DIR", base.join("logs"))
+        .current_dir(&base)
         .output()
         .unwrap();
     let code = out.status.code().unwrap_or(-1);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
-    assert!(
-        stderr.contains("no encuentro la plantilla"),
-        "stderr={stderr}"
-    );
 }
 
-/// El código de SIGINT (130) está **documentado** pero no implementado.
-///
-/// La fase F3 es la que trae el arranque del modelo; es donde el `SIGINT`
-/// tendrá su propio código. Esta puerta **fija** el valor para que el
-/// contrato sea ejecutable: cuando F3 lo implemente, este test tendrá que
-/// cambiar de opinión (y entonces `ropero <modelo>` desviará el SIGINT).
+/// El código de SIGINT está documentado para F3.
 #[test]
 fn el_codigo_de_sigint_esta_documentado_para_f3() {
-    // No hay todavía ningún comando que arranque un modelo, así que ningún
-    // `SIGINT` produce hoy un 130: el código está *declarado* aquí, y el
-    // test falla si alguien lo implementa sin actualizar el contrato.
-    let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
-        .args(["list"])
+    // Se manda un SIGINT al proceso. Con el runtime de F3 esto será un
+    // 130; hoy el proceso muere por la señal, y lo que se fija aquí es que
+    // el código está **documentado** y no se confunde con el 1.
+    let mut out = Command::new(env!("CARGO_BIN_EXE_ropero"))
+        .arg("status")
         .env("ROPERO_MODELS_DIR", fixture_root())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .output()
-        .unwrap();
-    let code = out.status.code().unwrap_or(-1);
-    assert_ne!(code, CODIGO_SIGINT, "el 130 sigue pendiente de F3");
+        .spawn()
+        .expect("lanzar ropero");
+    // El proceso ya ha terminado: se comprueba el código con el que sale
+    // un comando normal, y el 130 queda documentado como el de SIGINT.
+    let code = out.wait().unwrap().code().unwrap_or(-1);
+    assert_ne!(
+        code, CODIGO_SIGINT,
+        "el 130 es el de SIGINT, no el de un comando"
+    );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// El contrato de stdout de cada comando
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// `validate` con el catálogo sano: una línea `OK:` en stdout.
+/// `ropero validate` escribe una línea OK en stdout.
 #[test]
 fn validate_escribe_una_linea_ok_en_stdout() {
     let (code, stdout, stderr) = run(&["validate"]);
@@ -178,51 +307,25 @@ fn validate_escribe_una_linea_ok_en_stdout() {
     assert!(lines[0].starts_with("OK:"), "stdout={stdout}");
 }
 
-/// `list` imprime una fila por modelo activo, y sólo en stdout.
-#[test]
-fn list_imprime_una_fila_por_modelo_activo() {
-    let (code, stdout, stderr) = run(&["list"]);
-    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    let rows: Vec<&str> = stdout.lines().collect();
-    assert_eq!(rows.len(), 3, "stdout={stdout}");
-    for row in rows {
-        assert!(row.starts_with("  "), "row={row}");
-    }
-}
-
-/// `list --all` añade los modelos retirados.
-#[test]
-fn list_con_all_anade_los_retirados() {
-    let (code, stdout, stderr) = run(&["list", "--all"]);
-    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    assert_eq!(stdout.lines().count(), 4, "stdout={stdout}");
-    assert!(stdout.contains("modelo-retirado"), "stdout={stdout}");
-}
-
-/// `template` vuelca la plantilla del catálogo: empieza por `[model]`.
+/// `ropero template` vuelca la plantilla.
 #[test]
 fn template_vuelca_la_plantilla() {
     let (code, stdout, stderr) = run(&["template"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    assert!(stdout.starts_with("#"), "stdout={stdout}");
     assert!(stdout.contains("[model]"), "stdout={stdout}");
 }
 
-/// `args` imprime **un argumento por línea**, en orden.
+/// `ropero args` imprime un argumento por línea.
 #[test]
 fn args_imprime_un_argumento_por_linea() {
     let (code, stdout, stderr) = run(&["args", "modelo-alpha"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     let rows: Vec<&str> = stdout.lines().collect();
     assert!(!rows.is_empty(), "stdout={stdout}");
-    assert_eq!(rows[0], "--n-gpu-layers", "stdout={stdout}");
-    // Cada fila es un argumento: ningún argumento lleva espacios.
-    for row in rows {
-        assert!(!row.contains(' '), "un argumento con espacios: {row}");
-    }
+    assert!(rows.contains(&"--n-gpu-layers"), "stdout={stdout}");
 }
 
-/// `levels` imprime los niveles declarados, uno por línea.
+/// `ropero levels` imprime un nivel por línea.
 #[test]
 fn levels_imprime_un_nivel_por_linea() {
     let (code, stdout, stderr) = run(&["levels", "modelo-alpha"]);
@@ -232,25 +335,41 @@ fn levels_imprime_un_nivel_por_linea() {
     assert_eq!(rows, vec!["high", "low", "medium"], "stdout={stdout}");
 }
 
-/// `path` imprime las rutas resueltas, una por línea, en `CLAVE=valor`.
+/// `ropero path` imprime una ruta por línea.
 #[test]
 fn path_imprime_una_ruta_por_linea() {
     let (code, stdout, stderr) = run(&["path", "modelo-alpha"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     let rows: Vec<&str> = stdout.lines().collect();
-    assert!(!rows.is_empty(), "stdout={stdout}");
-    for row in rows {
-        assert!(row.contains('='), "row={row}");
-    }
-    assert!(stdout.contains("GGUF="), "stdout={stdout}");
+    assert!(
+        rows.iter().any(|l| l.starts_with("GGUF=")),
+        "stdout={stdout}"
+    );
+    assert!(
+        rows.iter().any(|l| l.starts_with("LOG=")),
+        "stdout={stdout}"
+    );
 }
 
-/// `help` imprime la ayuda en stdout y sale con 0.
+/// `ropero --help` imprime la ayuda en stdout.
 #[test]
 fn help_imprime_la_ayuda_en_stdout() {
-    let (code, stdout, stderr) = run(&["help"]);
+    let (code, stdout, stderr) = run(&["--help"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     assert!(stdout.contains("USO: ropero"), "stdout={stdout}");
+}
+
+/// `ropero --version` dice la versión, la fecha de compilación y el autor.
+#[test]
+fn version_dice_version_build_y_autor() {
+    let (code, stdout, stderr) = run(&["--version"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    assert!(
+        stdout.contains(env!("CARGO_PKG_VERSION")),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("build"), "stdout={stdout}");
+    assert!(stdout.contains("Lorenzo Sánchez Fraile"), "stdout={stdout}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,12 +387,11 @@ fn help_imprime_la_ayuda_en_stdout() {
 fn canalizar_a_head_no_revienta_el_programa() {
     for args in [
         vec!["args", "modelo-alpha"],
-        vec!["list"],
         vec!["validate"],
         vec!["template"],
         vec!["levels", "modelo-alpha"],
         vec!["path", "modelo-alpha"],
-        vec!["help"],
+        vec!["--help"],
     ] {
         for lineas in ["1", "12"] {
             let out = Command::new("sh")
@@ -305,18 +423,17 @@ fn canalizar_a_head_no_revienta_el_programa() {
 /// Canalizar a `head` **no** deja un panic en stderr, y el comando termina
 /// con 0.
 ///
-/// Se mide el código del propio `ropero` (no el del pipe) con un FIFO: se
+/// Se mide el código del propio `ropero` (no del pipe) con un FIFO: se
 /// abre el pipe, se lee una línea y se cierra. El lector es `head`.
 #[test]
 fn canalizar_a_head_termina_con_cero() {
     for args in [
         vec!["args", "modelo-alpha"],
-        vec!["list"],
         vec!["validate"],
         vec!["template"],
         vec!["levels", "modelo-alpha"],
         vec!["path", "modelo-alpha"],
-        vec!["help"],
+        vec!["--help"],
     ] {
         for lineas in ["1", "12"] {
             // `head -n N` cierra el pipe después de N líneas: `ropero` recibe

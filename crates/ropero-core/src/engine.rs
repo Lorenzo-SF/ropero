@@ -21,7 +21,7 @@
 use serde::de::{Error as DeError, Unexpected};
 use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub enum EngineId {
     /// El repo **oficial** de llama.cpp (ADR-004).
     #[serde(rename = "llama-server")]
