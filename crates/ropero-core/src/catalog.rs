@@ -24,27 +24,50 @@ pub struct Catalog {
 }
 
 /// Error al parsear el TOML de un modelo.
+///
+/// Los dos fallos de parseo llevan **la línea** del campo culpable
+/// (doc B §4.1.1: «el error de validación debe incluir la ruta y la línea»).
+/// La línea sale del `span` del error de `toml` sobre el texto fuente
+/// ([`crate::parse_error_line`]).
 #[derive(Debug)]
 pub enum ModelError {
     Parse {
         path: PathBuf,
-        source: toml::de::Error,
+        /// El error de `toml`, en una caja: el enum se devuelve en cada
+        /// `Result` del crate y no puede pesar 128 bytes.
+        source: Box<toml::de::Error>,
+        /// Línea 1-based del campo culpable (`None` si el error no trae span).
+        line: Option<usize>,
     },
     /// `[model].engine` no es ni un id canónico ni un alias legacy conocido.
     UnknownEngine {
         path: PathBuf,
         source: crate::UnknownEngine,
+        /// Línea 1-based de la clave `engine` (`None` si no se localiza).
+        line: Option<usize>,
     },
 }
 
 impl std::fmt::Display for ModelError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ModelError::Parse { path, source } => {
-                write!(f, "error de parseo en {}: {}", path.display(), source)
+            ModelError::Parse { path, source, line } => {
+                write!(
+                    f,
+                    "error de parseo en {}:{}: {}",
+                    path.display(),
+                    line.unwrap_or(0),
+                    source
+                )
             }
-            ModelError::UnknownEngine { path, source } => {
-                write!(f, "error de parseo en {}: {}", path.display(), source)
+            ModelError::UnknownEngine { path, source, line } => {
+                write!(
+                    f,
+                    "error de parseo en {}:{}: {}",
+                    path.display(),
+                    line.unwrap_or(0),
+                    source
+                )
             }
         }
     }
@@ -53,7 +76,7 @@ impl std::fmt::Display for ModelError {
 impl std::error::Error for ModelError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ModelError::Parse { source, .. } => Some(source),
+            ModelError::Parse { source, .. } => Some(source.as_ref()),
             ModelError::UnknownEngine { source, .. } => Some(source),
         }
     }
@@ -86,15 +109,18 @@ impl std::error::Error for CatalogError {}
 /// Un `[model].engine` escrito con un alias legacy se canonicaliza al id
 /// canónico y deja un aviso en [`ModelSpec::notices`] (doc B §4.2). Un id
 /// que no es ni canónico ni alias conocido es un error de parseo.
+///
+/// El TOML se deserializa **desde su texto original**: así el error de `toml`
+/// trae el `span` sobre ese texto, y la línea que se calcula es la real del
+/// campo culpable (doc B §4.1.1).
 pub fn parse_model(toml_text: &str, source: &Path) -> Result<ModelSpec, ModelError> {
-    let (value, notices) = canonicalize_engine(toml_text, source)?;
+    let notices = scan_engine(toml_text, source)?;
     let mut spec: ModelSpec =
-        value
-            .try_into()
-            .map_err(|err: toml::de::Error| ModelError::Parse {
-                path: source.to_path_buf(),
-                source: err,
-            })?;
+        toml::from_str(toml_text).map_err(|err: toml::de::Error| ModelError::Parse {
+            path: source.to_path_buf(),
+            line: crate::parse_error_line(toml_text, &err),
+            source: Box::new(err),
+        })?;
     spec.source = source.to_path_buf();
     spec.notices = notices;
     // El nombre real se fija aquí: después de materializar un alias la fila
@@ -104,49 +130,34 @@ pub fn parse_model(toml_text: &str, source: &Path) -> Result<ModelSpec, ModelErr
     Ok(spec)
 }
 
-/// Canonicaliza un alias legacy de motor en el TOML, antes de deserializar.
+/// Mira el motor que declara el TOML y avisa si es un alias legacy.
 ///
-/// Devuelve el TOML (como `toml::Value`) con `[model].engine` ya canónico y
-/// los avisos del parseo. El TOML se deserializa en dos pasos porque el
-/// aviso tiene que salir de la canonicalización: el enum `EngineId` sólo
-/// acepta los ids canónicos, y el alias se acepta con un aviso, no en
-/// silencio.
-fn canonicalize_engine(
-    toml_text: &str,
-    source: &Path,
-) -> Result<(toml::Value, Vec<String>), ModelError> {
-    let mut value: toml::Value = toml::from_str(toml_text).map_err(|err| ModelError::Parse {
+/// El motor **desconocido** es un error de parseo: se devuelve aquí, con la
+/// línea de la clave `engine`, antes de deserializar (el mensaje es el de
+/// §4.2, no el genérico de `serde`).
+///
+/// Devuelve los avisos de canonicalización (vacíos si el motor es canónico).
+fn scan_engine(toml_text: &str, source: &Path) -> Result<Vec<String>, ModelError> {
+    let value: toml::Value = toml::from_str(toml_text).map_err(|err| ModelError::Parse {
         path: source.to_path_buf(),
-        source: err,
+        line: crate::parse_error_line(toml_text, &err),
+        source: Box::new(err),
     })?;
-    let mut notices = Vec::new();
     let Some(engine) = value
         .get("model")
         .and_then(|model| model.get("engine"))
         .and_then(|engine| engine.as_str())
     else {
-        return Ok((value, notices));
+        return Ok(Vec::new());
     };
-    let engine = engine.to_string();
-    match crate::EngineId::from_str_legacy(&engine) {
-        Ok((canonical, aviso)) => {
-            if let Some(aviso) = aviso {
-                notices.push(aviso);
-            }
-            if let Some(model) = value.get_mut("model").and_then(|m| m.as_table_mut())
-                && let Some(slot) = model.get_mut("engine")
-            {
-                *slot = toml::Value::String(canonical.as_str().to_string());
-            }
-        }
-        Err(unknown) => {
-            return Err(ModelError::UnknownEngine {
-                path: source.to_path_buf(),
-                source: unknown,
-            });
-        }
+    match crate::EngineId::from_str_legacy(engine) {
+        Ok((_canonical, aviso)) => Ok(aviso.into_iter().collect()),
+        Err(unknown) => Err(ModelError::UnknownEngine {
+            path: source.to_path_buf(),
+            line: crate::validation::find_engine_line(toml_text),
+            source: unknown,
+        }),
     }
-    Ok((value, notices))
 }
 
 /// Construye el catálogo a partir de los modelos ya parseados.

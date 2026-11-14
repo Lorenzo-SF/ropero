@@ -11,9 +11,10 @@
 //!
 //! Un alias legacy se canonicaliza **con un aviso**, nunca en silencio.
 
-use serde::{Deserialize, Serialize};
+use serde::de::{Error as DeError, Unexpected};
+use serde::{Deserialize, Deserializer, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum EngineId {
     #[serde(rename = "llama-server")]
     LlamaServer,
@@ -31,6 +32,27 @@ pub enum EngineId {
     AirLlm,
     #[serde(rename = "strata")]
     Strata,
+}
+
+/// Deserializa el motor acepta **los ids canónicos y los alias legacy**.
+///
+/// El alias se canonicaliza aquí, en la deserialización, y no antes: así el
+/// TOML se deserializa **desde su texto original**, y el error que salga
+/// lleva el `span` sobre ese texto (la línea real del campo culpable).
+///
+/// El aviso de canonicalización (doc B §4.2) no sale de aquí —el
+/// deserializador no puede avisar—: lo compone `parse_model`, que ya leyó
+/// el valor crudo del motor.
+impl<'de> Deserialize<'de> for EngineId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let crudo = String::deserialize(deserializer)?;
+        EngineId::from_str_legacy(&crudo)
+            .map(|(motor, _)| motor)
+            .map_err(|_| D::Error::invalid_value(Unexpected::Str(&crudo), &"un motor conocido"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
