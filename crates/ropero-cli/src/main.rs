@@ -8,6 +8,7 @@ mod args_cmd;
 mod discovery;
 mod levels;
 mod list;
+
 mod path;
 mod template;
 mod validate;
@@ -24,7 +25,7 @@ fn run(args: &[String]) -> i32 {
     match args[1].as_str() {
         "help" | "-h" | "--help" => print_help(),
         "--version" | "-V" => {
-            println!("ropero {}", env!("CARGO_PKG_VERSION"));
+            ropero_core::out_line(&format!("ropero {}", env!("CARGO_PKG_VERSION")));
             0
         }
         "validate" => validate::run(&args[2..]).unwrap_or_else(std::convert::identity),
@@ -34,7 +35,7 @@ fn run(args: &[String]) -> i32 {
         "levels" => levels::run(&args[2..]).unwrap_or_else(std::convert::identity),
         "path" => path::run(&args[2..]).unwrap_or_else(std::convert::identity),
         c => {
-            eprintln!("{}", ropero_core::unknown_command_message(c));
+            ropero_core::err_line(&ropero_core::unknown_command_message(c));
             2
         }
     }
@@ -55,7 +56,7 @@ fn apply_usage(check: UsageCheck, cmd: &str, uso: &str) -> Result<(), i32> {
     match check {
         UsageCheck::Ok => Ok(()),
         UsageCheck::Help => {
-            println!("USO: {}", uso);
+            ropero_core::out_line(&format!("USO: {}", uso));
             Err(0)
         }
         UsageCheck::Error { message } => Err(usage_error(cmd, &message)),
@@ -68,10 +69,10 @@ pub fn spec_for<'a>(cat: &'a Catalog, name: &str, cmd: &str) -> Result<&'a Model
     ropero_core::find_spec(cat, name).ok_or_else(|| usage_error(cmd, &msg))
 }
 pub fn print_help() -> i32 {
-    println!("{}", ropero_core::help_text());
+    ropero_core::out_line(&ropero_core::help_text());
     0
 }
 pub fn usage_error(cmd: &str, msg: &str) -> i32 {
-    eprintln!("{}", ropero_core::usage_message(cmd, msg));
+    ropero_core::err_line(&ropero_core::usage_message(cmd, msg));
     2
 }

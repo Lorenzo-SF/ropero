@@ -24,7 +24,7 @@ pub struct Scan {
     pub env: Environment,
 }
 fn fail(e: impl std::fmt::Display) -> i32 {
-    eprintln!("error: {}", e);
+    ropero_core::err_line(&format!("error: {}", e));
     1
 }
 /// Captura el entorno del proceso: las variables, el `$HOME` y el directorio
@@ -44,7 +44,7 @@ pub fn scan() -> Result<Scan, i32> {
     // Los avisos del parseo se enseñan siempre: un alias legacy se
     // canonicaliza con aviso, nunca en silencio (doc B §4.2).
     for notice in &scan.notices {
-        eprintln!("{}", notice);
+        ropero_core::err_line(notice);
     }
     Ok(scan)
 }
@@ -123,7 +123,7 @@ fn collect(
             }
             Err(e) => {
                 let msg = format!("{}: {}", path.display(), e);
-                eprintln!("aviso: no se pudo parsear {}", msg);
+                ropero_core::err_line(&format!("aviso: no se pudo parsear {}", msg));
                 problems.push(msg);
             }
         }

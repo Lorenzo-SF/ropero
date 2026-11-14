@@ -5,7 +5,7 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     let s = crate::discovery::scan()?;
     let spec = crate::spec_for(&s.catalog, &args[0], "levels")?;
     for line in ropero_core::level_lines(spec) {
-        println!("{}", line);
+        ropero_core::out_line(&line);
     }
     Ok(0)
 }

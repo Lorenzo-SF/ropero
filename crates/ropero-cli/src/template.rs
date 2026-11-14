@@ -3,16 +3,16 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     let s = crate::discovery::scan()?;
     let candidates = ropero_core::template_candidates(&s.root, &s.base);
     let Some(path) = candidates.into_iter().find(|p| p.is_file()) else {
-        eprintln!("error: no encuentro la plantilla");
+        ropero_core::err_line("error: no encuentro la plantilla");
         return Err(1);
     };
     match std::fs::read_to_string(&path) {
         Ok(c) => {
-            print!("{}", c);
+            ropero_core::out(&c, false);
             Ok(0)
         }
         Err(e) => {
-            eprintln!("error: {}", e);
+            ropero_core::err_line(&format!("error: {}", e));
             Err(1)
         }
     }

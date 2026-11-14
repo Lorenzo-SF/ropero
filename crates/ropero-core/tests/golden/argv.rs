@@ -400,9 +400,7 @@ fn golden_deriva_contra_la_v1() {
                 .collect(),
         )
     };
-    let expected = |argv: &[&str]| -> Vec<String> {
-        argv.iter().map(|s| s.to_string()).collect()
-    };
+    let expected = |argv: &[&str]| -> Vec<String> { argv.iter().map(|s| s.to_string()).collect() };
 
     for (model, frozen) in [
         ("groot", expected(ARGV_GROOT)),

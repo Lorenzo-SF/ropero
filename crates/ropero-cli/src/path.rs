@@ -6,7 +6,7 @@ pub fn run(args: &[String]) -> Result<i32, i32> {
     let spec = crate::spec_for(&s.catalog, &args[0], "path")?;
     let paths = ropero_core::resolve_paths(spec, &s.env);
     for line in ropero_core::path_lines(&paths) {
-        println!("{}", line);
+        ropero_core::out_line(&line);
     }
     Ok(0)
 }
