@@ -1491,9 +1491,24 @@ instalación desatendida de una lista de modelos:
 > `--prio`. Dices directamente lo que quieres seguir y así lo automatizas»
 > — el dueño, 2026-11-12
 
-Si la prioridad pedida no está disponible para ese modelo, es error de uso
-con el nombre del modelo y las dos vías. Evidencia:
+Si la prioridad pedida **no está disponible** para ese modelo, **se ignora**:
+no es error de uso y no aborta la ejecución. También se ignora si el modelo
+sólo tiene un camino y se indica ese, porque ya es su comportamiento por
+defecto. Un `--prio` ignorado **no** impide instalar los demás modelos de la
+lista.
+
+> «ignored if the model doesn't have that path or it's already its default»
+> — el dueño, 2026-11-14 (decisión que prevalece sobre la v1)
+
+**Cambio respecto de la v1**: este caso se documentaba como **error de uso**,
+con el nombre del modelo y las dos vías; la v2 **lo ignora**. Evidencia de la
+v1 (comportamiento que v2 cambia):
 `ropero-code/bin/lib/cmd-models.sh:696-723`, `:730-737`.
+
+El **contrato completo** de `--prio` —valores válidos, ámbito global y por
+modelo, precedencia entre ambos y qué pasa sin TTY— está en el
+[doc B §4.10.7](ropero-construccion.md#4107-el-contrato-de---prio), que es la
+fuente normativa de esta regla.
 
 **R-MOD-30** · En la vía **build**, si el repo de safetensors **ya viene
 cuantizado**, la fase de cuantización **se salta**: se genera el GGUF
@@ -1519,6 +1534,10 @@ no hay modo «descargar sin arrancar»; su hook pide el *plan*
 se ha bajado NADA». Evidencia: `ropero-code/bin/lib/cmd-models.sh:437-455`,
 `ropero-code/bin/lib/engines/fastflowlm.sh:188-259`,
 `ropero-code/bin/lib/engines/strata.sh:188-237`.
+
+El **contrato completo** de `--prio` —valores válidos, ámbito global y por
+modelo, precedencia entre ambos y qué pasa sin TTY— está en el
+[doc B §4.10.7](ropero-construccion.md#4107-el-contrato-de---prio).
 
 ---
 
@@ -2772,6 +2791,7 @@ documentado que ejecute la batería completa**.
 | H-27 | **`R-GGUF-56`**: el gguffer **no comprueba que el motor esté** antes de descargar los pesos. Sin él, la conversión falla y el clasificador la etiqueta como «descarga incompleta» (H-28), así que el diagnóstico **miente** y empuja a borrar y rebajar 60 GB | 1 guard | un fallo de entorno se presenta como un fallo de descarga |
 | H-28 | **`R-GGUF-57`**: con **sólo** `llama-server-official` instalado, el clon está en `~/llama.cpp-official` y el gguffer mira `~/llama.cpp`: **no lo encuentra** salvo `LLAMA_DIR` exportada a mano. Y ninguna variable de entorno de las que gobiernan el gguffer está en `--help` | 1 variable | la mitad de los motores instalados no habilita la fabricación |
 | H-29 | **`R-GGUF-58`**: `llama-quantize` y `llama-gguf-split` **no se enlazan** en `$BIN_DIR` al instalar un engine, así que la alternativa por el PATH que el gguffer contempla no la activa nadie | 2 binarios | el gguffer sólo funciona con el clon en `$LLAMA_DIR` |
+| H-30 | **`R-MOD-29`**: un `--prio` que el modelo **no tiene** (o que ya es su defecto) lo **ignora** en la v2; este catálogo lo documentaba como **error de uso (exit 2)** (decisión del dueño, 2026-11-14) | 1 regla | el código que herede la conducta de la v1 aborta una instalación que debe seguir: los demás modelos se instalan igual |
 
 ### 6.4 Lo que este documento **no** cubre
 

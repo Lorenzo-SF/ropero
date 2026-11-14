@@ -2046,13 +2046,24 @@ Un modelo **puede tener `[download]`, `[build]` o los dos**: los dos es un estad
 válido del TOML (§ 4.1.1). La elección del camino ocurre en
 `ropero install models`, y `--prio` es la forma de **no preguntar**.
 
-**Valor**: `--prio=download` o `--prio=build`. Sólo esos dos valores.
+Este apartado es el **contrato normativo** de `--prio`: el doc A (R-MOD-29) y
+el doc del CLI (§ 9.3) remiten aquí.
+
+**Valor**: `--prio=download` o `--prio=build`. Sólo esos dos valores. Cualquier
+otro valor (p. ej. `--prio=fast`) es **error de uso (exit 2)** y el mensaje
+**incluye el valor recibido**.
 
 **Ámbito**: `--prio` puede ser **global** (toda la ejecución de ese
 `ropero install models`) **o por modelo**.
 
+**Sintaxis global**: el `--prio` global va **antes** de la lista de modelos:
+
+```
+ropero install models --prio=build nemotron groot
+```
+
 **Sintaxis por modelo**: el `--prio` va **detrás** del modelo al que se aplica
-y **hasta el siguiente modelo**. El ejemplo canónico es:
+y su ámbito **termina en el siguiente modelo**. El ejemplo canónico es:
 
 ```
 ropero install models nemotron groot --prio=build qwen --prio=download
@@ -2066,6 +2077,16 @@ que significa exactamente:
 | `groot` | `build` | se usa su camino `build` |
 | `qwen` | `download` | se usa su camino `download` |
 
+**Precedencia**: si hay un `--prio` **global** y otro **por modelo**, **manda
+el por modelo** para ese modelo; el global sólo aplica a los modelos que no
+tengan `--prio` propio. En
+
+```
+ropero install models --prio=build nemotron groot --prio=download
+```
+
+`nemotron` va por `build` (el global) y `groot` por `download` (el suyo).
+
 **Cuándo se ignora el `--prio`** (no es un error, no aborta la ejecución):
 
 - Si el modelo **no tiene** ese camino (p. ej. `--prio=build` sobre un modelo
@@ -2073,9 +2094,32 @@ que significa exactamente:
 - Si el modelo **sólo tiene un camino** y se indica ese `--prio`, **se ignora**:
   ya es su comportamiento por defecto, así que no cambia nada.
 
+Un `--prio` ignorado **no** es un error y **no** aborta: los **demás** modelos
+de la lista se instalan igual y el exit code es el del resultado de la
+instalación completa.
+
 **Sin `--prio` y con las dos vías**: se **pregunta al usuario** qué camino
-tomar. Si no hay TTY, es un error de uso (exit 2) que corresponde a los
-comandos, no al validador.
+tomar. Si no hay TTY, es un **error de uso (exit 2)** que corresponde a los
+comandos, no al validador, y el mensaje dice **qué hacer**: pasar `--prio`, o
+dar una lista de modelos en la que ninguno tenga las dos vías.
+
+**Lo que la v1 hacía y lo que la v2 cambia** (para que F5 no lo copie tal cual):
+
+- El `--prio` de la v1 era **sólo global**: un único valor para toda la
+  invocación (`ropero-code/bin/lib/cmd-models.sh:603`, `:623-628`). La v2
+  añade el ámbito **por modelo** y la **precedencia** entre ambos.
+- La v1 validaba el valor de `--prio` **al parsear**
+  (`ropero-code/bin/lib/cmd-models.sh:623-628`), igual que la v2, pero su
+  mensaje no incluía el valor recibido.
+- La v1 tenía además los flags `--download`/`--build`, que forzaban un camino
+  y sí eran **error de uso** si contradecían al TOML
+  (`ropero-code/bin/lib/cmd-models.sh:730-737`): son **otra cosa** que
+  `--prio`, que se ignora.
+- La rama de «la prioridad no está disponible» de la v1
+  (`ropero-code/bin/lib/cmd-models.sh:711`) **no llegaba a ejecutarse**: con un
+  valor válido, un modelo de un solo camino caía siempre en ese camino
+  (`ropero-code/bin/lib/cmd-models.sh:725-728`). La v2 lo dice sin ambigüedad:
+  **se ignora**.
 
 > **Contrato pendiente de implementación.** La v2 actual no tiene todavía
 > `ropero install models` (llega en F5/T-25). Este apartado fija el
