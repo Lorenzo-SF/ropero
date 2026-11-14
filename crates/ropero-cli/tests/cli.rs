@@ -309,8 +309,11 @@ fn la_ayuda_no_anuncia_el_arranque_de_un_modelo() {
 /// El directorio desconocido se crea **vacío**: el caso que importa es que la
 /// carpeta en sí no corresponde a ningún motor conocido, no lo que haya
 /// dentro.
-fn catalogo_con_motor_desconocido() -> PathBuf {
-    let base = std::env::temp_dir().join("ropero-cli-motor-desconocido");
+///
+/// `nombre` da nombre al directorio: cada caso usa el suyo, porque los tests
+/// corren en paralelo y dos tests con el mismo directorio se pisan.
+fn catalogo_con_motor_desconocido(nombre: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("ropero-cli-motor-desconocido-{nombre}"));
     let models = base.join("models");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(models.join("llama")).unwrap();
@@ -325,8 +328,8 @@ fn catalogo_con_motor_desconocido() -> PathBuf {
 }
 
 /// Corre `ropero` contra el catálogo del motor desconocido.
-fn run_con_motor_desconocido(args: &[&str]) -> (i32, String, String) {
-    let base = catalogo_con_motor_desconocido();
+fn run_con_motor_desconocido(nombre: &str, args: &[&str]) -> (i32, String, String) {
+    let base = catalogo_con_motor_desconocido(nombre);
     let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
         .args(args)
         .env("ROPERO_MODELS_DIR", &base)
@@ -351,7 +354,7 @@ fn run_con_motor_desconocido(args: &[&str]) -> (i32, String, String) {
 /// La v1 acumula el problema y sigue (`ropero-code/bin/python/modelconf.py:1648`).
 #[test]
 fn un_motor_desconocido_no_aborta_el_escaneo() {
-    let (code, stdout, stderr) = run_con_motor_desconocido(&["list"]);
+    let (code, stdout, stderr) = run_con_motor_desconocido("list", &["list"]);
     // `list` no falla por un problema del catálogo (igual que con un TOML
     // roto): lo avisa y sigue.
     assert_eq!(code, 0, "stdout={} stderr={}", stdout, stderr);
@@ -374,7 +377,7 @@ fn un_motor_desconocido_no_aborta_el_escaneo() {
 /// reporta y sale con 1, pero sigue validando el resto de los modelos.
 #[test]
 fn un_motor_desconocido_es_un_problema_del_catalogo() {
-    let (code, stdout, stderr) = run_con_motor_desconocido(&["validate"]);
+    let (code, stdout, stderr) = run_con_motor_desconocido("validate", &["validate"]);
     assert_eq!(code, 1, "stdout={} stderr={}", stdout, stderr);
     assert!(
         stderr.contains("motor desconocido"),

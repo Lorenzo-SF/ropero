@@ -320,7 +320,7 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
     }
     for (flag, args) in &spec.args.flag {
         for required in &args.requires {
-            if !has_file(spec, required) {
+            if !crate::files::has_file(&spec.files, required) {
                 errors.push(error(
                     ValidationRule::FlagRequiresMissingFile,
                     &format!("args.flag.{flag}.requires"),
@@ -480,16 +480,6 @@ fn file_stem(source: &str) -> Option<&str> {
     Path::new(source).file_stem().and_then(|stem| stem.to_str())
 }
 
-fn has_file(spec: &ModelSpec, key: &str) -> bool {
-    match key {
-        "gguf" => spec.files.gguf.is_some(),
-        "mtp" => spec.files.mtp.is_some(),
-        "mmproj" => spec.files.mmproj.is_some(),
-        "chat_template" => spec.files.chat_template.is_some(),
-        _ => false,
-    }
-}
-
 fn check_placeholders(
     spec: &ModelSpec,
     ctx: &ValidationContext,
@@ -527,7 +517,7 @@ fn check_placeholders(
             let Some(placeholder) = file_placeholder(value) else {
                 continue;
             };
-            if !has_file(spec, placeholder) {
+            if !crate::files::has_file(&spec.files, placeholder) {
                 errors.push(error(
                     ValidationRule::UndeclaredFilePlaceholder,
                     key,
