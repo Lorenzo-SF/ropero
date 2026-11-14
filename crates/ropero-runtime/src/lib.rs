@@ -8,6 +8,7 @@ mod machine;
 pub mod probe;
 pub mod process;
 pub mod state;
+pub mod stop;
 mod sys_engine;
 pub mod sysinfo;
 
@@ -19,5 +20,6 @@ pub use machine::*;
 pub use probe::*;
 pub use process::*;
 pub use state::*;
+pub use stop::*;
 pub use sys_engine::*;
 pub use sysinfo::*;

@@ -2,11 +2,11 @@
 //!
 //! ## La jerarquía de niveles
 //!
-//! ```
+//! ```text
 //! 1. Tcp       — el puerto acepta conexiones.
 //! 2. Http      — el endpoint de salud responde 200.
 //! 3. Inference — el motor responde a una inferencia mínima.
-//! ```
+//! ```text
 //!
 //! Se prueban en orden y **el primero que pasa es suficiente**: para un
 //! modelo que carga rápido, esperar a la inferencia es tirar el tiempo
