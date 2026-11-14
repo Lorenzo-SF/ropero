@@ -160,6 +160,38 @@ fn scan_engine(toml_text: &str, source: &Path) -> Result<Vec<String>, ModelError
     }
 }
 
+/// Parsea un TOML de modelo y lo mete en la salida, acumulando los avisos.
+///
+/// Es la parte **pura** del escaneo del catálogo: el texto ya está leído, y
+/// aquí sólo se decide qué modelo sale, qué aviso se acumula y qué problema
+/// se reporta.
+///
+/// Un error de parseo lleva **ruta y línea** (doc B §4.1.1): la línea la
+/// calcula el parseo con el `span` del error de `toml` sobre el texto
+/// fuente.
+pub fn parse_collect(
+    text: &str,
+    source: &Path,
+    out: &mut Vec<ModelSpec>,
+    problems: &mut Vec<String>,
+    notices: &mut Vec<String>,
+) {
+    match parse_model(text, source) {
+        Ok(spec) => {
+            notices.extend(spec.notices.iter().cloned());
+            out.push(spec);
+        }
+        Err(e) => {
+            let violation = crate::parse_error(&e);
+            problems.push(format!(
+                "no se pudo parsear {}:{}: {}",
+                violation.path(),
+                violation.line().unwrap_or(0),
+                violation.message()
+            ));
+        }
+    }
+}
 /// Construye el catálogo a partir de los modelos ya parseados.
 ///
 /// Materializa los aliases como filas extra (una por alias) y detecta

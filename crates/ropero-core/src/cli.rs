@@ -160,3 +160,26 @@ pub fn check_no_args_usage(args: &[String], cmd: &str) -> UsageCheck {
         None => UsageCheck::Ok,
     }
 }
+
+/// Chequea el uso de un comando que sólo admite `--all`.
+///
+/// Devuelve `UsageCheck::Ok` y dice si el `--all` está puesto, o el error
+/// de uso si hay un flag que el comando no conoce.
+pub fn check_all_flag_usage(args: &[String], cmd: &str) -> (UsageCheck, bool) {
+    let mut all = false;
+    for a in args {
+        match a.as_str() {
+            "--help" | "-h" => return (UsageCheck::Help, false),
+            "--all" => all = true,
+            otro => {
+                return (
+                    UsageCheck::Error {
+                        message: format!("{} no acepta '{}'", cmd, otro),
+                    },
+                    false,
+                );
+            }
+        }
+    }
+    (UsageCheck::Ok, all)
+}

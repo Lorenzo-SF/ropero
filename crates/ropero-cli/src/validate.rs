@@ -1,14 +1,19 @@
-use ropero_core::validate_catalog;
+use ropero_core::{validate_catalog, validate_engine_set};
 
 pub fn run(args: &[String]) -> Result<i32, i32> {
     crate::check_no_args(args, "validate", "ropero validate")?;
     let scan = crate::discovery::scan()?;
     let errors = validate_catalog(&scan.catalog, &scan.texts);
+    let engine_errors = validate_engine_set(&scan.engines);
     let mut exit = 0;
     for error in &errors {
         ropero_core::err_line(&format!("{}:{}", error.path(), error.line().unwrap_or(0)));
         ropero_core::err_line(&format!("  {}", error.message()));
         exit = exit.max(error.exit_code());
+    }
+    for error in &engine_errors {
+        ropero_core::err_line(&format!("engines: {error}"));
+        exit = exit.max(1);
     }
     for problem in &scan.problems {
         ropero_core::err_line(problem);

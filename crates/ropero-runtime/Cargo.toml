@@ -8,3 +8,6 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+# ropero-runtime es la capa de E/S que le pasa al dominio los datos ya
+# capturados (aquí, la información de la máquina).
+ropero-core = { path = "../ropero-core" }

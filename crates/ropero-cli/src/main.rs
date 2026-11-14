@@ -3,12 +3,11 @@
 //! La CLI es fina por contrato (R-ARQ-1): **despacha e imprime**. La lógica
 //! vive en `ropero-core` (dominio puro) y en `discovery` (la frontera de
 //! E/S).
-
 mod args_cmd;
 mod discovery;
+mod engines_cmd;
 mod levels;
 mod list;
-
 mod path;
 mod template;
 mod validate;
@@ -30,6 +29,7 @@ fn run(args: &[String]) -> i32 {
         }
         "validate" => validate::run(&args[2..]).unwrap_or_else(std::convert::identity),
         "list" => list::run(&args[2..]).unwrap_or_else(std::convert::identity),
+        "engines" => engines_cmd::run(&args[2..]).unwrap_or_else(std::convert::identity),
         "template" => template::run(&args[2..]).unwrap_or_else(std::convert::identity),
         "args" => args_cmd::run(&args[2..]).unwrap_or_else(std::convert::identity),
         "levels" => levels::run(&args[2..]).unwrap_or_else(std::convert::identity),
@@ -40,18 +40,19 @@ fn run(args: &[String]) -> i32 {
         }
     }
 }
-/// Chequeos de uso de un comando que opera sobre un modelo: `--help`, modelo
-/// ausente y argumentos de más. El error ya sale impreso.
 pub fn check_usage(args: &[String], cmd: &str, uso: &str, too_many: &str) -> Result<(), i32> {
     let check = ropero_core::check_model_usage(args, cmd, too_many);
     apply_usage(check, cmd, uso)
 }
-/// Chequeo de uso de un comando que no acepta argumentos: `--help` o error.
 pub fn check_no_args(args: &[String], cmd: &str, uso: &str) -> Result<(), i32> {
     apply_usage(ropero_core::check_no_args_usage(args, cmd), cmd, uso)
 }
-/// Traduce el veredicto del dominio en lo que hace la CLI: imprimir el uso
-/// (y salir con 0) o imprimir el error (y salir con 2).
+
+pub fn check_all_flag(args: &[String], cmd: &str, uso: &str) -> Result<bool, i32> {
+    let (check, all) = ropero_core::check_all_flag_usage(args, cmd);
+    apply_usage(check, cmd, uso)?;
+    Ok(all)
+}
 fn apply_usage(check: UsageCheck, cmd: &str, uso: &str) -> Result<(), i32> {
     match check {
         UsageCheck::Ok => Ok(()),
@@ -62,8 +63,6 @@ fn apply_usage(check: UsageCheck, cmd: &str, uso: &str) -> Result<(), i32> {
         UsageCheck::Error { message } => Err(usage_error(cmd, &message)),
     }
 }
-/// Busca un modelo en el catálogo. El error ya sale impreso; el código de
-/// salida es el de un error de uso (2).
 pub fn spec_for<'a>(cat: &'a Catalog, name: &str, cmd: &str) -> Result<&'a ModelSpec, i32> {
     let msg = ropero_core::unknown_model_message(name);
     ropero_core::find_spec(cat, name).ok_or_else(|| usage_error(cmd, &msg))

@@ -1,0 +1,40 @@
+# Manifiesto del motor `mlx-serve` (doc B §4.3).
+#
+# MLX-LM + mlx-server: sólo macOS ARM. Su formato nativo es la estructura
+# MLX (safetensors); también acepta los cuantizados de MLX (4-bit, 8-bit…).
+
+id = "mlx-serve"
+label = "MLX (Apple Silicon)"
+color = "gris"
+description = "MLX-LM + mlx-server (sólo macOS ARM)"
+
+# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
+maturity = "proven"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["safetensors", "mlx-quantized"]
+
+# El rango de puertos propio (doc CLI v2 §5.1).
+port_min = 8300
+port_max = 8399
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["uv", "brew"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Las reglas son **alternativas** (basta con que una encaje) y dentro de
+# cada una las condiciones son **acumulativas**: el Metal es parte de la
+# vía de macOS, no una alternativa aparte. Por eso van en la misma regla.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["macos"], metal = true },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["mlx-serve"]
+paths = ["/opt/homebrew/bin/mlx-serve", "/usr/local/bin/mlx-serve"]
