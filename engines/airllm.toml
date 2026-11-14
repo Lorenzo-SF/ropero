@@ -1,0 +1,39 @@
+# Manifiesto del motor `airllm` (doc B §4.3).
+#
+# AirLLM es el **único** motor sin gateway: es ropero quien integra uno.
+#
+# El modelo vive en el proceso del proxy, no en un subproceso: el flujo de
+# datos es radicalmente distinto del de los demás motores.
+
+id = "airllm"
+label = "AirLLM"
+color = "blanco"
+description = "AirLLM (compresión propia 4-bit y 8-bit)"
+
+# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
+maturity = "proven"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["safetensors", "pytorch-bin"]
+
+# El rango de puertos propio (doc CLI v2 §5.1).
+port_min = 8700
+port_max = 8799
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["uv"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"] },
+  { os = ["macos"] },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["airllm"]
+paths = ["/usr/local/bin/airllm", "/opt/ropero/bin/airllm"]

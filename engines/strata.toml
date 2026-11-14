@@ -1,0 +1,45 @@
+# Manifiesto del motor `strata` (doc B §4.3).
+#
+# Strata: Linux y macOS. No es un servidor de plantilla: necesita un *pack*
+# propio, un *expert-profile* y un *tune*, y el arranque real lo hace
+# `bin/server/strata-run.sh`.
+#
+# Strata no descarga modelos por sí mismo: la descarga, la preparación y el
+# afinado se hacen con los scripts de referencia (`groot.sh`,
+# `qwen-abliterated.sh`, `qwen36.sh`) de la raíz del repo.
+
+id = "strata"
+label = "Strata"
+color = "verde-pálido"
+description = "Strata (Linux y macOS)"
+
+# R-CTX-3: `integrated` = **integrado pero nunca arrancado**. El doc A
+# mide seis motores probados y dos sin probar: Strata es el otro.
+maturity = "integrated"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["gguf", "strata-pack"]
+
+# El rango de puertos propio (doc CLI v2 §5.1). Incluye el 9999 que usan
+# por defecto los scripts de referencia, para que un motor lanzado por ropero
+# y otro lanzado a mano no se pisen.
+port_min = 9900
+port_max = 9999
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["curl", "python3"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"] },
+  { os = ["macos"] },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["strata"]
+paths = ["/usr/local/bin/strata", "/opt/ropero/bin/strata"]

@@ -1,0 +1,41 @@
+# Manifiesto del motor `tensorrt-llm` (doc B §4.3).
+#
+# TensorRT-LLM: sólo Linux y sólo dGPU RTX. Es el motor más exigente: sin
+# NVIDIA no tiene sentido ni instalarlo.
+
+id = "tensorrt-llm"
+label = "TensorRT-LLM (RTX)"
+color = "verde-pistacho"
+description = "TensorRT-LLM (sólo Linux, sólo dGPU RTX)"
+
+# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
+maturity = "proven"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["safetensors", "pytorch-bin", "trt-checkpoint", "trt-engine"]
+
+# El rango de puertos propio (doc CLI v2 §5.1).
+port_min = 8500
+port_max = 8599
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["uv", "nvidia-smi"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Las reglas son **alternativas** (basta con que una encaje) y dentro de
+# cada una las condiciones son **acumulativas**: la NVIDIA y los 32 GB de
+# RAM son parte de la vía de Linux, no alternativas sueltas. Por eso van en
+# la misma regla.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"], nvidia_smi = true, min_ram_gb = 32.0 },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["trtllm-serve"]
+paths = ["/usr/local/bin/trtllm-serve", "/opt/ropero/bin/trtllm-serve"]

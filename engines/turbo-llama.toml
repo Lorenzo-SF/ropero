@@ -1,0 +1,41 @@
+# Manifiesto del motor `turbo-llama` (doc B §4.3).
+#
+# Es el **fork privado** del dueño (turboquant). Antes de ADR-004 este motor
+# se llamaba `llama-server`, y el oficial `llama-server-official`: el
+# renombrado invierte los dos nombres para que `llama-server` sea el oficial.
+#
+# Comparte binario y familia con el oficial, pero no son el mismo motor:
+# el fork trae sus propios parches y cuantizaciones.
+
+id = "turbo-llama"
+label = "turbo-llama (fork)"
+color = "amarillo"
+description = "llama.cpp (fork privado del dueño, turboquant)"
+
+# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
+maturity = "proven"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["gguf"]
+
+# El rango de puertos propio (doc CLI v2 §5.1).
+port_min = 8200
+port_max = 8299
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["git", "cmake", "ninja", "curl", "cc"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"] },
+  { os = ["macos"] },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["llama-server"]
+paths = ["/usr/local/bin/llama-server", "/opt/homebrew/bin/llama-server"]

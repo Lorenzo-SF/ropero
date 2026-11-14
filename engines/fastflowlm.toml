@@ -1,0 +1,44 @@
+# Manifiesto del motor `fastflowlm` (doc B §4.3).
+#
+# FastFlowLM: sólo Linux y sólo CPU AMD compatible. Su formato nativo es
+# Q4NX (el almacén de la NPU XDNA2); el GGUF entra por los backends
+# compatibles, con conversiones.
+#
+# No encaja en `kind = "template"`: el arranque lo hace su propia CLI, con
+# su modelo de datos y su comprobación de NPU.
+
+id = "fastflowlm"
+label = "FLM (NPU)"
+color = "rojo"
+description = "FastFlowLM (sólo Linux, sólo CPU AMD compatible)"
+
+# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
+maturity = "proven"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["q4nx", "gguf"]
+
+# El rango de puertos propio (doc CLI v2 §5.1).
+port_min = 8400
+port_max = 8499
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["git", "cmake", "ninja"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Las reglas son **alternativas** (basta con que una encaje) y dentro de
+# cada una las condiciones son **acumulativas**: la NPU AMD es parte de la
+# vía de Linux, no una alternativa aparte. Por eso van en la misma regla.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"], amd_xnpu = true },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["flm"]
+paths = ["/usr/local/bin/flm", "/opt/ropero/bin/flm"]

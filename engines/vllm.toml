@@ -1,0 +1,38 @@
+# Manifiesto del motor `vllm` (doc B §4.3).
+#
+# vLLM: Linux y macOS. Es el motor con más formatos: safetensors es el
+# principal, y el GGUF va experimental.
+
+id = "vllm"
+label = "vLLM"
+color = "morado"
+description = "vLLM (Linux y macOS)"
+
+# R-CTX-3: `integrated` = **integrado pero nunca arrancado**. El doc A
+# mide seis motores probados y dos sin probar: vLLM es uno de los dos.
+maturity = "integrated"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["safetensors", "pytorch-bin", "gguf", "awq", "gptq"]
+
+# El rango de puertos propio (doc CLI v2 §5.1).
+port_min = 8600
+port_max = 8699
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["uv", "python3"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"] },
+  { os = ["macos"] },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["vllm"]
+paths = ["/usr/local/bin/vllm", "/opt/ropero/bin/vllm"]

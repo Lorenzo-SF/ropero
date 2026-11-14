@@ -10,3 +10,5 @@ path = "src/main.rs"
 
 [dependencies]
 ropero-core = { path = "../ropero-core" }
+# ropero-runtime: la capa de E/S que captura los datos de la máquina.
+ropero-runtime = { path = "../ropero-runtime" }

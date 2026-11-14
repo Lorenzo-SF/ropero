@@ -1,0 +1,41 @@
+# Manifiesto del motor `llama-server` (doc B §4.3).
+#
+# Es el repo **oficial** de llama.cpp. El fork privado del dueño es
+# `turbo-llama` (ADR-004).
+#
+# No es un motor con lógica propia: es una plantilla de argv sobre el
+# binario `llama-server`, que habla el protocolo OpenAI de forma nativa.
+
+id = "llama-server"
+label = "llama-server (oficial)"
+color = "naranja"
+description = "llama.cpp (repo oficial de Meta y la comunidad)"
+
+# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
+maturity = "proven"
+
+# Los formatos que el motor acepta (doc CLI v2 §4).
+formats = ["gguf"]
+
+# El rango de puertos propio (doc CLI v2 §5.1), para que varios motores
+# puedan servir a la vez sin pisarse.
+port_min = 8100
+port_max = 8199
+
+# Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
+deps = ["git", "cmake", "ninja", "curl", "cc"]
+
+# Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
+#
+# Ojo: la tabla `[detect]` va **al final** del fichero. En TOML las tablas
+# son "pegajosas": todo lo que va después de `[detect]` pertenece a
+# `[detect]`, y `compat` acabaría dentro de ella.
+compat = [
+  { os = ["linux"] },
+  { os = ["macos"] },
+]
+
+# Cómo se sabe que está instalado.
+[detect]
+binaries = ["llama-server"]
+paths = ["/usr/local/bin/llama-server", "/opt/homebrew/bin/llama-server"]
