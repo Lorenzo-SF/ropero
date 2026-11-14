@@ -192,6 +192,9 @@ dependencies = [
 [[package]]
 name = "ropero-download"
 version = "0.1.0"
+dependencies = [
+ "ropero-core",
+]
 
 [[package]]
 name = "ropero-forge"
