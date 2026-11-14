@@ -13,8 +13,22 @@ use ropero_core::Catalog;
 /// "Disponible" son las dos cosas a la vez (doc CLI v2 §15): el motor está
 /// instalado y el modelo está descargado.
 pub fn list(all: bool) -> i32 {
-    let _ = all;
-    crate::pendiente("list")
+    let Ok(s) = crate::discovery::scan() else {
+        return 1;
+    };
+    let foto = crate::discovery::snapshot(&s);
+    let sistema = ropero_runtime::capture_system_info();
+    let razones = ropero_core::snapshot::razones_por_motor(&s.engines, &sistema);
+    let paleta = ropero_core::Palette::color();
+    let lineas = ropero_core::listing::list_lines(&foto, all, &paleta, &razones);
+    if lineas.is_empty() {
+        ropero_core::err_line(&ropero_core::listing::empty_notice());
+        return 0;
+    }
+    for linea in &lineas {
+        ropero_core::out_line(linea);
+    }
+    0
 }
 
 /// `ropero status`: el estado de la máquina, tipo `nvidia-smi`.
