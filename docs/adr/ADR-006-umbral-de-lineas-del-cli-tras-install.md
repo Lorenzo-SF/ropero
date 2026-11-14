@@ -35,16 +35,16 @@ La medición, sobre el código de este ciclo (no estimada):
 
 | Fichero | Antes (F3) | Ahora (F5) | Qué es |
 |---|---:|---:|---|
-| `parser.rs` | 243 | 276 | la traducción del contrato a `clap` + el orden de los tokens de `install` |
+| `parser.rs` | 243 | 273 | la traducción del contrato a `clap` + el orden de los tokens de `install` |
 | `commands.rs` | 287 | 287 | los comandos que hacen su trabajo |
-| `install.rs` | — | 196 | `ropero install`: los dos menús y las dos preguntas |
+| `install.rs` | — | 195 | `ropero install`: los dos menús y las dos preguntas |
 | `summary.rs` | 53 | 53 | `ropero` a secas y el arranque de un modelo |
 | `main.rs` | 100 | 101 | el dispatcher y los códigos de salida |
 | `discovery.rs` | 96 | 96 | la frontera entre la CLI y el runtime |
-| **total** | **779** | **1009** | |
+| **total** | **779** | **1005** | |
 
-Sin comentarios ni líneas vacías son **608** líneas de código (ADR-005
-medía 529 con 770): el crecimiento son **230** líneas de las cuales 121
+Sin comentarios ni líneas vacías son **604** líneas de código (ADR-005
+medía 529 con 770): el crecimiento son **226** líneas de las cuales 118
 son comentarios. Lo que crece es **pegamento**, no lógica de negocio: por
 cada línea de lógica hay una de explanatory.
 
@@ -68,7 +68,7 @@ recalibra el umbral, en vez de saltárselo.
 
 ### Por qué 1100 y no 1200
 
-Con 1009 líneas, un umbral de 1100 deja **91** de margen: es lo que crece
+Con 1005 líneas, un umbral de 1100 deja **95** de margen: es lo que crece
 el CLI con **un comando más** de la misma tamaño, y lo que hace que el
 test siga mordiendo. Un umbral de 1200 dejaría 191, y a ese ritmo el
 umbral dejaría de ser un límite antes de que llegue la siguiente fase.
@@ -116,9 +116,9 @@ que no se negocian:
 ## Alternativas consideradas
 
 - **Subir el umbral a 1200.** Da holgura de sobra, pero deja de ser un
-  límite: con 1009 líneas, un margen de 191 es el que hace que el test
+  límite: con 1005 líneas, un margen de 195 es el que hace que el test
   duela cuando se acumula código de más.
-- **Contar sólo las líneas de código (608).** Da un número más fino y
+- **Contar sólo las líneas de código (604).** Da un número más fino y
   más honesto sobre la lógica, pero **cambia la métrica** en lugar de
   calibrarla, y el cambio coincidiría con el momento en que el total se pasa. Queda para una revisión posterior, con su propio ADR.
 - **Dejar el umbral en 800 y mover `install` al runtime.** Descartado: la
@@ -131,10 +131,10 @@ que no se negocian:
 
 - El test `ropero_cli_under_800_lines` pasa a `ropero_cli_under_1100_lines`,
   con un mensaje que dice el número real.
-- El CLI del ciclo F5 se queda en **1009** líneas, con **91** de margen.
+- El CLI del ciclo F5 se queda en **1005** líneas, con **95** de margen.
   La fase siguiente (F6, la descarga de modelos con `hf`) tiene que
   escribir su pegamento en `ropero-core` y `ropero-runtime`, no en el CLI:
-  si necesita más de 91 líneas de pegamento, lo que hay que mover es el
+  si necesita más de 95 líneas de pegamento, lo que hay que mover es el
   pegamento, no el contrato.
 - La decisión de que la superficie del contrato viva en
   `ropero_core::surface` (y el parser sea una traducción de ella) sigue
