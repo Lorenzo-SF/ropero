@@ -21,11 +21,15 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   `rustfmt.toml`, `clippy.toml`, `deny.toml` y un workflow para Linux y macOS.
   Fijan las versiones y hacen comparables los cambios que siguen la
   especificación de construcción.
-- **Dos ADR aceptados**: [ADR-001](docs/adr/ADR-001-por-que-rust.md) decide
+- **Tres ADR aceptados**: [ADR-001](docs/adr/ADR-001-por-que-rust.md) decide
   usar Rust; [ADR-002](docs/adr/ADR-002-extraccion-vs-reescritura.md) decide
-  extraer por capas y mantener la convivencia v1/v2 hasta F9. La segunda evita
-  un salto único que rompería contratos y estado en disco.
-- **Modelo de datos tipado y validador del catálogo** con 16 reglas y errores
+  extraer por capas y mantener la convivencia v1/v2 hasta F9; y
+  [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md) decide que
+  `ropero-code/` es **referencia, no dependencia**, y que el catálogo de la v2
+  es nuevo e independiente. La segunda evita un salto único que rompería
+  contratos y estado en disco; la tercera evita que la v2 herede la forma de
+  la v1 y sus datos defectuosos.
+- **Modelo de datos tipado y validador del catálogo** con 15 reglas y errores
   `ruta:línea`. La validación pura comprueba nombres, formato, ficheros,
   descarga, placeholders, niveles, alias, opciones y claves desconocidas.
   Los errores de parseo de clave desconocida y motor desconocido se
@@ -51,7 +55,10 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   tiene `models/`. `ROPERO_MODELS_DIR` y `ROPERO_ROOT` se siguen honrando, y
   la búsqueda por ancestrales funciona igual. La v1 queda como **referencia**
   (aprender, consultar, contrastar): la v2 se desarrolla como si esa carpeta
-  no existiera.
+  no existiera. Es la decisión de
+  [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md): `ropero-code/` es
+  referencia, **no dependencia**, y el catálogo de la v2 es nuevo e independiente
+  (`models/`), **no se integra en el ejecutable**.
 - **Montaje del argv** en el orden `base → level → flags → options`, con
   placeholders, comprobación de `requires`, alias de nivel y `replace`.
   `replace` sustituye la pareja del base en su posición para no duplicar una
@@ -70,7 +77,7 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   el alcance del enum `EngineId` de T-11.
 - **Test de arquitectura real**: `ropero-core` no depende de E/S prohibidas ni
   de crates superiores, el grafo no admite ciclos y el CLI permanece por debajo
-  de 400 líneas (actualmente, 389). Cierra `R-ARQ-1` y la puerta T-02.
+  de 400 líneas (actualmente, 394). Cierra `R-ARQ-1` y la puerta T-02.
 
 ### Cambiado
 
@@ -107,25 +114,39 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   (`models/`) ya no está ignorado: `crates/ropero-core/tests/catalogo_real.rs`
   corre siempre y afirma 45 modelos (17 activos + 28 retirados) que validan
   sin violaciones.
-- `ropero validate` sobre el **catálogo nuevo de la v2** (`models/`) informa
-  `OK: 45 modelo(s) validados` y termina con código 0. El catálogo de la v1
-  (`ropero-code/models`) ya no se valida: es sólo referencia, y la v2 se
-  desarrolla como si esa carpeta no existiera.
-- **Un modelo puede declarar las dos vías** (`[download]` **y** `[build]`) a la
-  vez: **no es un error**. El doc B §4.1.1 la daba como error de uso (código 2)
-  y R-DATA-6 situaba la elección entre `--download` y `--build` en el momento
-  de instalar, no como defecto del TOML. Resuelto (decisión del dueño,
-  2026-11-14): la fila del doc B §4.1.1 se borró y el validador acepta ambas
-  tablas. La elección del camino es de `ropero install models` (F5/T-25,
-  R-MOD-29): con las dos vías se pregunta al usuario, y `--prio=download|build`
-  la elige sin preguntar (global o por modelo; si el modelo no tiene ese
-  camino, se ignora). El exit 2 —error de uso— lo reservan los comandos, no el
-  validador.
+- **Las seis violaciones del catálogo de la v1 están resueltas.** `ropero
+  validate` sobre el catálogo nuevo de la v2 (`models/`) informa
+  `OK: 45 modelo(s) validados` y termina con **código 0**. El desglose de las
+  seis de la v1 y su cierre:
+  - **Tres** eran la regla de «`[download]` **y** `[build]` presentes ⇒ error de
+    uso (código 2)» (`llama/nemotron.toml`, `llama-official/nemotron-o.toml` y
+    `llama/fired/granite.toml`). La regla **se eliminó**: tener las dos vías es
+    un estado válido del TOML. El doc B §4.1.1 lo dice así y el validador lo
+    acepta; la elección del camino es de `ropero install models` (F5/T-25,
+    R-MOD-29).
+  - **Dos** eran el typo de `context`: `mlx/metalnemotron.toml` y
+    `mlx/metalqwen.toml` pasaban de `133072` a `131072` (el valor estándar
+    2¹⁷ = 128 K, múltiplo de 32).
+  - **Una** era `tensorrt/groot.toml`, cuyo `name = "groot-trt"` no coincidía
+    con el nombre del fichero. El fichero se renombró a
+    `tensorrt/groot-trt.toml`; el **nombre no se toca** (los nombres son únicos
+    globales y `llama/groot.toml` ya ocupa `groot`).
+- El catálogo de la v1 (`ropero-code/models`) **ya no se valida**: es sólo
+  referencia, y la v2 se desarrolla como si esa carpeta no existiera. Es la
+  decisión de [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md).
 - **La regla de `context` múltiplo de 32 sólo aparece en el doc B §4.1.1.** La
   v1 acepta `133072`, que no es múltiplo de 32, y la v2 es más estricta. En el
   catálogo nuevo de la v2 se corrigió el typo: `mlx/metalnemotron.toml` y
   `mlx/metalqwen.toml` pasan de `133072` a `131072` (el valor estándar 2¹⁷ =
   128 K). Queda pendiente promover la regla a R-DATA en el doc A o retirarla.
+- **El contrato de `--prio` está escrito pero no implementado.** El doc B
+  §4.10.7 fija el contrato completo: `--prio=download|build` puede ser global
+  o **por modelo** (`ropero install models nemotron groot --prio=build qwen
+  --prio=download` → nemotron se procesa con lo que tenga, groot por `build`,
+  qwen por `download`); se **ignora** si el modelo no tiene ese camino o si
+  ese camino ya es su único comportamiento por defecto; y con las dos vías y
+  sin `--prio` se **pregunta al usuario**. La implementación llega en F5/T-25,
+  con `ropero install models`.
 - **La tabla del doc B §4.1.1 es el contrato de la v2, no el contrato completo
   de la v1.** La v1 comprueba además que `[args.level.<n>]` esté declarado en
   `[levels].list`, que `[args.flag.<f>]` y `[args.option.<o>]` estén

@@ -12,24 +12,30 @@ construcción:
 
 | Capa | Dónde vive | Estado |
 |---|---|---|
-| **v1** | [`ropero-code/`](ropero-code/) | Funcional. Bash + Python. Es la versión que se instala y se usa hoy. |
+| **v1** | [`ropero-code/`](ropero-code/) | Funcional. Bash + Python. Es la versión que se instala y se usa hoy. **Es sólo referencia** para la v2 (ver [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md)): la v2 se desarrolla como si esa carpeta no existiera. |
 | **v2** | [`crates/`](crates/) | En construcción. Workspace Rust de seis crates; F0 y F1 terminadas. |
 
 La v1 y la v2 conviven hasta F9, como decide
 [`ADR-002`](docs/adr/ADR-002-extraccion-vs-reescritura.md). El plan construye la
 v2 por capas para conservar los contratos y el estado en disco de la v1.
 
+El **catálogo de modelos de la v2 es propio**: vive en [`models/`](models/) en
+la raíz del workspace, **no** en `ropero-code/models`. Es un catálogo nuevo e
+independiente, generado desde los TOML de la v1 como fuente de referencia, y
+**no se integra en el ejecutable**. Contiene 45 modelos: 17 activos y 28
+retirados en `fired/`.
+
 ### Qué tiene ya la v2
 
 - Workspace de seis crates: `ropero-core`, `ropero-runtime`, `ropero-download`,
   `ropero-forge`, `ropero-server` y `ropero-cli`.
 - Toolchain fijado a Rust 1.100.0 y edition 2024.
-- CI, los dos ADR y el test de arquitectura.
+- CI, los tres ADR y el test de arquitectura.
 - Modelo de datos, validador del TOML y catálogo, con errores `ruta:línea`.
 - Montaje del argv, incluidos `replace`, `requires`, placeholders y alias.
 - Comandos `validate`, `list`, `template`, `args`, `levels` y `path`.
 - Golden master del argv contra la v1 y dominio puro verificado por test.
-- Batería actual: 152 tests pasados y 4 ignorados; `ropero-cli` tiene 389
+- Batería actual: 156 tests pasados y 2 ignorados; `ropero-cli` tiene 394
   líneas y `ropero-core` no usa E/S.
 
 La siguiente fase es F2 (motores): los identificadores de motor ya existen,
@@ -68,12 +74,11 @@ cargo test --locked --workspace
 cargo build --locked --workspace --release
 ```
 
-El catálogo de la v2 es **propio**: vive en [`models/`](models/) en la raíz
-del workspace (45 modelos: 17 activos y 28 retirados en `fired/`). Se
-descubre por ancestrales, así que la CLI funciona desde cualquier subdirectorio:
+El catálogo de la v2 se descubre por ancestrales, así que la CLI funciona desde
+cualquier subdirectorio:
 
 ```bash
-cargo run --locked -p ropero-cli -- validate   # OK: 45 modelo(s) validados
+cargo run --locked -p ropero-cli -- validate   # OK: 45 modelo(s) validados (exit 0)
 cargo run --locked -p ropero-cli -- list --all  # 45 líneas
 ```
 
@@ -101,6 +106,7 @@ Las decisiones de arquitectura están en:
 
 - [`ADR-001: Por qué Rust`](docs/adr/ADR-001-por-que-rust.md).
 - [`ADR-002: Extracción vs reescritura`](docs/adr/ADR-002-extraccion-vs-reescritura.md).
+- [`ADR-003: `ropero-code` es referencia, no dependencia`](docs/adr/ADR-003-ropero-code-es-referencia.md).
 
 El [CHANGELOG de la v2](CHANGELOG.md) registra los cambios de esta
 construcción. El [CHANGELOG de la v1](ropero-code/CHANGELOG.md) sigue vigente
