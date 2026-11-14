@@ -30,7 +30,14 @@ pub fn run(sub: &ArgMatches) -> i32 {
     };
     let tokens = crate::parser::install_tokens(sub);
     match sub.get_one::<String>("que").map(String::as_str) {
-        Some("engines") => engines(&s, &tokens),
+        Some("engines") => {
+            // El `--prio` sólo vale para los modelos (doc CLI §9.3): aquí
+            // no hay vías que elegir, así que no se ignora en silencio.
+            if tokens.iter().any(|t| matches!(t, Token::Prio(_))) {
+                return uso(&install::prio_solo_para_models());
+            }
+            engines(&s, &tokens)
+        }
         Some("models") => models(&s, &tokens),
         Some(otro) => uso(&format!(
             "'install' sólo acepta 'engines' o 'models' (recibido: '{otro}')"
@@ -204,8 +211,11 @@ fn baja_modelo(
 }
 
 /// Informa de un error de descarga: la línea del modelo y su pista.
+///
+/// La línea va a **stderr**: stdout es para los datos (R-MOD-11) y un
+/// error es todo lo humano.
 fn informa_error(nombre: &str, e: &ropero_download::Error) -> i32 {
-    ropero_core::out_line(&ropero_download::linea_error(nombre, Via::Download, e));
+    ropero_core::err_line(&ropero_download::linea_error(nombre, Via::Download, e));
     if let Some(pista) = e.pista() {
         ropero_core::err_line(&pista);
     }

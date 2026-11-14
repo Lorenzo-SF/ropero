@@ -62,13 +62,14 @@ impl Via {
     /// Parsea el valor de un `--prio`.
     ///
     /// Sólo valen `download` y `build`. Cualquier otra cosa es un **error
-    /// de uso** cuyo mensaje lleva el **valor recibido** (doc B §4.10.7).
+    /// de uso** cuyo mensaje lleva el **valor recibido** tal cual (doc B
+    /// §4.10.7): no se recorta.
     pub fn parse(texto: &str) -> Result<Self, Error> {
         match texto.trim() {
             "download" => Ok(Self::Download),
             "build" => Ok(Self::Build),
-            otro => Err(Error::PrioInvalido {
-                valor: otro.to_string(),
+            _ => Err(Error::PrioInvalido {
+                valor: texto.to_string(),
             }),
         }
     }
@@ -337,7 +338,9 @@ pub fn resuelve_modelo<'a>(cat: &'a Catalog, nombre: &str) -> Result<&'a ModelSp
         0 => Err(Error::ModeloDesconocido {
             nombre: nombre.to_string(),
         }),
-        1 => Ok(elegido(&candidatos, &reales[0])),
+        1 => elegido(&candidatos, &reales[0]).ok_or(Error::ModeloDesconocido {
+            nombre: reales[0].clone(),
+        }),
         _ => Err(Error::AliasEnConflicto {
             alias: nombre.to_string(),
             modelos: reales,
@@ -354,13 +357,16 @@ fn reclama(spec: &ModelSpec, nombre: &str) -> bool {
 }
 
 /// El modelo que se devuelve: la fila **real**, no la del alias.
-fn elegido<'a>(candidatos: &[&'a ModelSpec], real: &str) -> &'a ModelSpec {
+///
+/// Si no hay ninguna fila con ese nombre real, no hay modelo: se devuelve
+/// `None` (en el core no hay panics: un `unreachable!` sería un `panic`
+/// en medio de la resolución de un nombre).
+fn elegido<'a>(candidatos: &[&'a ModelSpec], real: &str) -> Option<&'a ModelSpec> {
     candidatos
         .iter()
         .find(|spec| spec.model.name == real)
         .copied()
         .or_else(|| candidatos.first().copied())
-        .unwrap_or_else(|| unreachable!("un modelo resuelto tiene al menos un candidato"))
 }
 
 /// Resuelve un nombre de motor —id o alias legacy— a su id canónico.
@@ -654,6 +660,16 @@ pub fn resuelve_seleccion(respuesta: &str, opciones: &[String]) -> Result<Vec<St
 // Los mensajes
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// El mensaje del `--prio` en `install engines`.
+///
+/// El flag sólo vale para `ropero install models` (doc CLI §9.3): en los
+/// motores no hay vías que elegir. El mensaje dice **qué hacer**.
+pub fn prio_solo_para_models() -> String {
+    "--prio sólo vale para `ropero install models`\n  \
+     (en `install engines` no hay vías: los motores se instalan siempre)"
+        .to_string()
+}
+
 /// El mensaje de `install engines` **sin terminal**.
 ///
 /// Sin TTY no hay menú: un menú que se traga un EOF acabaría eligiendo
@@ -826,11 +842,20 @@ pub enum Error {
 }
 
 impl Error {
-    /// El código de salida del error: **2** (uso) o **1** (ejecución).
+    /// El código de salida del error: **2** (error de uso).
+    ///
+    /// Todos los errores de este módulo son de uso: un valor de `--prio`
+    /// que no existe, un modelo desconocido, un alias en conflicto, un
+    /// modelo sin vías… (R-MOD-26: el modelo sin vías sale con 2, porque
+    /// su artefacto se consigue a mano).
     pub fn exit_code(&self) -> i32 {
         match self {
-            Error::SinVias { .. } => 1,
-            _ => 2,
+            Error::PrioInvalido { .. }
+            | Error::SinVias { .. }
+            | Error::ModeloDesconocido { .. }
+            | Error::MotorDesconocido { .. }
+            | Error::AliasEnConflicto { .. }
+            | Error::SeleccionFueraDeRango { .. } => 2,
         }
     }
 }
@@ -845,7 +870,7 @@ impl fmt::Display for Error {
             Error::SinVias { modelo } => write!(
                 f,
                 "el modelo '{modelo}' no declara ni [download] ni [build]: \
-                 no hay forma de instalarlo"
+                 no hay forma de instalarlo (su artefacto se consigue a mano)"
             ),
             Error::ModeloDesconocido { nombre } => {
                 write!(f, "modelo desconocido: '{nombre}' (ropero list)")

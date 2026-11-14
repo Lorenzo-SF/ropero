@@ -6,9 +6,11 @@
 //!    entorno, no lanza procesos y no habla con la red (doc B §3.2.3).
 //! 2. **El grafo de dependencias del workspace no tiene ciclos** y
 //!    `ropero-core` no depende de ningún crate del workspace.
-//! 3. **`ropero-cli` mide menos de 800 líneas** (R-ARQ-1): es un
+//! 3. **`ropero-cli` mide menos de 1100 líneas** (R-ARQ-1): es un
 //!    dispatcher, no un sitio donde viva la lógica. El umbral subió de 400
-//!    a 800 en el [ADR-005](../../docs/adr/ADR-005-umbral-de-lineas-del-cli.md).
+//!    a 800 en el [ADR-005](../../docs/adr/ADR-005-umbral-de-lineas-del-cli.md)
+//!    y a 1100 en el
+//!    [ADR-006](../../docs/adr/ADR-006-umbral-de-lineas-del-cli-tras-install.md).
 //!
 //! ## Cómo se detecta la E/S de verdad
 //!
@@ -250,7 +252,7 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
     }
 }
 
-/// `ropero-cli` mide menos de 800 líneas.
+/// `ropero-cli` mide menos de 1100 líneas.
 ///
 /// Es un dispatcher: la lógica vive en `ropero-core` (doc B §3.3) y la E/S
 /// en `ropero-runtime`.
@@ -260,6 +262,10 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
 /// `ropero install`: la primera superficie con **menús interactivos**, que
 /// son pegamento y no lógica. Lo que el umbral sigue vigilando es lo
 /// mismo de siempre: que el CLI **no** se llene de lógica.
+///
+/// La medición vigente es **1070** líneas (ADR-006, «Recalibración»), así
+/// que el margen es de 30: la fase siguiente tiene que escribir su
+/// pegamento en el dominio y en el runtime.
 #[test]
 fn ropero_cli_under_1100_lines() {
     let cli_src = repo_root().join("crates").join("ropero-cli").join("src");

@@ -511,13 +511,25 @@ fn hf_que_no_deja_el_fichero_es_error() {
 
     let resultado = descarga(&plan, &env, Modo::Desatendido);
 
-    match resultado {
-        Err(Error::HfSinFichero { modelo, file }) => {
+    match &resultado {
+        Err(Error::HfSinFichero {
+            modelo,
+            file,
+            destino,
+        }) => {
             assert_eq!(modelo, "modelo");
             assert_eq!(file, "en-el-repo.gguf");
+            assert_eq!(*destino, plan.dest.to_string_lossy());
         }
         otro => panic!("el error no es el de `hf` sin fichero: {otro:?}"),
     }
+    // El wording es el de R-MOD-19: «hf terminó pero <destino> está
+    // incompleto».
+    let texto = resultado.unwrap_err().to_string();
+    assert!(
+        texto.contains("hf terminó pero") && texto.contains("está incompleto"),
+        "el mensaje no dice que el destino está incompleto: {texto}"
+    );
     assert!(
         !plan.dest.exists(),
         "no puede haber un modelo instalado sin fichero"

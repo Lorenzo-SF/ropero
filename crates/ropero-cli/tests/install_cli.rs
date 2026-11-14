@@ -670,8 +670,12 @@ fn install_models_sin_hf_dice_que_falta_hf_y_no_pregunta() {
     let (code, stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(
-        stdout.contains("falta 'hf'"),
-        "el mensaje debe nombrar hf: stdout={stdout}"
+        stderr.contains("falta 'hf'"),
+        "el mensaje debe nombrar hf: stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("falta 'hf'"),
+        "el error no va a stdout (R-MOD-11): stdout={stdout}"
     );
     assert!(
         stderr.contains("huggingface_hub"),
@@ -697,12 +701,12 @@ fn install_models_con_hf_que_no_deja_el_checkpoint_dice_que_esta_incompleto() {
     let (code, stdout, stderr) = fake.corre(&["install", "models", "checkpoint"]);
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(
-        stdout.contains("hf terminó pero"),
-        "el mensaje debe decir que hf terminó pero está incompleto: stdout={stdout}"
+        stderr.contains("hf terminó pero"),
+        "el mensaje debe decir que hf terminó pero está incompleto: stderr={stderr}"
     );
     assert!(
-        stdout.contains("está incompleto"),
-        "el mensaje debe decir que está incompleto: stdout={stdout}"
+        stderr.contains("está incompleto"),
+        "el mensaje debe decir que está incompleto: stderr={stderr}"
     );
     assert!(
         !stdout.contains("descargado"),
@@ -716,15 +720,15 @@ fn install_models_con_hf_que_no_deja_el_checkpoint_dice_que_esta_incompleto() {
 fn install_models_con_hf_que_deja_el_gguf_vacio_dice_que_esta_incompleto() {
     let fake = Fake::nuevo("hf-vacio").con_hf();
     fake.modo_hf("vacio");
-    let (code, stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
+    let (code, _stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(
-        stdout.contains("hf terminó pero"),
-        "el mensaje debe decir que hf terminó pero está incompleto: stdout={stdout}"
+        stderr.contains("hf terminó pero"),
+        "el mensaje debe decir que hf terminó pero está incompleto: stderr={stderr}"
     );
     assert!(
-        stdout.contains("está incompleto"),
-        "el mensaje debe decir que está incompleto: stdout={stdout}"
+        stderr.contains("está incompleto"),
+        "el mensaje debe decir que está incompleto: stderr={stderr}"
     );
 }
 
@@ -735,9 +739,11 @@ fn install_models_con_hf_que_no_deja_el_gguf_falla_diciendo_que_no_aparece() {
     fake.modo_hf("nada");
     let (code, stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
     assert_eq!(code, 1, "stderr={stderr}");
+    // El wording es el de R-MOD-19: «hf terminó pero <destino> está
+    // incompleto».
     assert!(
-        stdout.contains("hf dijo OK pero no aparece"),
-        "stdout={stdout}"
+        stderr.contains("hf terminó pero") && stderr.contains("está incompleto"),
+        "stderr={stderr}"
     );
     assert!(
         !stdout.contains("descargado"),
@@ -1307,5 +1313,49 @@ fn en_el_menu_elegir_el_modelo_es_consentir_la_descarga() {
     assert!(
         fake.gguf_de("nemotron").is_file(),
         "el GGUF no está: {salida}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los menores: el `--prio` de los motores y el modelo sin vías
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `--prio` en `install engines` es un **error de uso** (exit 2): el flag
+/// sólo vale para `ropero install models` (doc CLI §9.3).
+#[test]
+fn install_engines_con_prio_es_error_de_uso() {
+    let fake = Fake::nuevo("prio-engines").con_binario("llama-server");
+    let (code, stdout, stderr) = fake.corre(&["install", "engines", "turbo-llama", "--prio=build"]);
+    assert_eq!(code, 2, "stderr={stderr}");
+    assert!(
+        stderr.contains("--prio") && stderr.contains("install models"),
+        "el mensaje no dice qué hacer: stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("enlace creado"),
+        "no debía instalar nada: stdout={stdout}"
+    );
+}
+
+/// Un modelo **sin vías** es un error de uso (exit 2, R-MOD-26): su
+/// artefacto se consigue a mano.
+#[test]
+fn install_models_con_un_modelo_sin_vias_sale_con_2() {
+    let fake = Fake::nuevo("sin-vias").con_hf();
+    fake.modelo(
+        "vacio",
+        r#"
+[model]
+name = "vacio"
+engine = "turbo-llama"
+
+[files]
+"#,
+    );
+    let (code, _stdout, stderr) = fake.corre(&["install", "models", "vacio"]);
+    assert_eq!(code, 2, "stderr={stderr}");
+    assert!(
+        stderr.contains("a mano"),
+        "el mensaje no dice cómo se consigue el artefacto: stderr={stderr}"
     );
 }
