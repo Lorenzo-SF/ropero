@@ -255,14 +255,13 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
 /// Es un dispatcher: la lógica vive en `ropero-core` (doc B §3.3) y la E/S
 /// en `ropero-runtime`.
 ///
-/// El umbral subió de 400 a 800 en el ADR-005, y el motivo está medido:
-/// la superficie del contrato pasó de siete invocaciones a doce (los once
-/// comandos del doc CLI v2 más `ropero <modelo>`), y el parser pasó de
-/// escrito a mano a `clap`, que son 239 líneas de traducción de la
-/// superficie. Lo que el umbral sigue vigilando es lo mismo de siempre: que
-/// el CLI **no** se llene de lógica.
+/// El umbral subió de 400 a 800 en el ADR-005 (con el parser de `clap` y
+/// las doce invocaciones del contrato), y de 800 a 1100 en el ADR-006, con
+/// `ropero install`: la primera superficie con **menús interactivos**, que
+/// son pegamento y no lógica. Lo que el umbral sigue vigilando es lo
+/// mismo de siempre: que el CLI **no** se llene de lógica.
 #[test]
-fn ropero_cli_under_800_lines() {
+fn ropero_cli_under_1100_lines() {
     let cli_src = repo_root().join("crates").join("ropero-cli").join("src");
     let mut lines = 0usize;
     for file in collect_rs(&cli_src) {
@@ -270,8 +269,8 @@ fn ropero_cli_under_800_lines() {
         lines += content.lines().count();
     }
     assert!(
-        lines < 800,
-        "ropero-cli has {lines} lines, expected fewer than 800 (ADR-005)"
+        lines < 1100,
+        "ropero-cli has {lines} lines, expected fewer than 1100 (ADR-006)"
     );
 }
 

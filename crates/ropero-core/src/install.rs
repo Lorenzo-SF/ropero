@@ -28,6 +28,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::PathBuf;
 
 use crate::EngineId;
 use crate::EngineManifest;
@@ -69,6 +70,19 @@ impl Via {
             otro => Err(Error::PrioInvalido {
                 valor: otro.to_string(),
             }),
+        }
+    }
+}
+
+impl Via {
+    /// La vía que dice una **respuesta** del menú.
+    ///
+    /// Se acepta la primera letra: `d` (download) o `b` (build).
+    pub fn de_respuesta(texto: &str) -> Option<Self> {
+        match texto.trim().chars().next() {
+            Some('d') | Some('D') => Some(Self::Download),
+            Some('b') | Some('B') => Some(Self::Build),
+            _ => None,
         }
     }
 }
@@ -362,6 +376,144 @@ pub fn resuelve_motor(nombre: &str) -> Result<EngineId, Error> {
 // Los menús
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Un token de la invocación de `install`: un modelo o un `--prio`.
+///
+/// El **orden** de los tokens es lo que decide el ámbito de cada `--prio`
+/// (doc B §4.10.7), así que la invocación se conserva tal y como la
+/// escribió el usuario.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Token {
+    /// Un modelo de la lista (puede traer varios separados por comas).
+    Modelo(String),
+    /// Un `--prio` con su valor.
+    Prio(String),
+}
+
+/// Asocia los `--prio` de una invocación completa.
+///
+/// La lista puede traer **varios nombres en un token** (separados por
+/// comas): cada nombre es un modelo, y el `--prio` que viene detrás se
+/// aplica al **último** de ellos (su ámbito termina en el siguiente
+/// modelo, doc B §4.10.7).
+pub fn asocia_tokens(tokens: &[Token]) -> Result<Prios, Error> {
+    let mut modelos = Vec::new();
+    let mut prios = Vec::new();
+    let mut posicion = 0usize;
+    for token in tokens {
+        match token {
+            Token::Prio(valor) => {
+                prios.push(PrioEnPosicion {
+                    posicion,
+                    valor: valor.clone(),
+                });
+                posicion += 1;
+            }
+            Token::Modelo(nombre) => {
+                for n in parse_lista(std::slice::from_ref(nombre)) {
+                    modelos.push(ModeloEnPosicion {
+                        posicion,
+                        nombre: n,
+                    });
+                    posicion += 1;
+                }
+            }
+        }
+    }
+    asocia_prios(&modelos, &prios)
+}
+
+/// Los nombres de modelo de una invocación, en orden y sin repetidos.
+pub fn nombres_de(tokens: &[Token]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for token in tokens {
+        if let Token::Modelo(nombre) = token {
+            for n in parse_lista(std::slice::from_ref(nombre)) {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Los motores que hay que instalar, ya resueltos.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MotoresElegidos<'a> {
+    /// Los motores que se instalan.
+    pub instalar: Vec<&'a crate::EngineRow>,
+    /// Los avisos de los que se **omiten** (incompatibles, R-INST-26).
+    pub avisos: Vec<String>,
+}
+
+/// Resuelve la lista de motores: ids o alias legacy.
+///
+/// Un motor **desconocido** es un error de uso; uno **incompatible** con
+/// la máquina se **omite con aviso** (R-INST-26).
+pub fn motores_elegidos<'a>(
+    filas: &'a [crate::EngineRow],
+    nombres: &[String],
+) -> Result<MotoresElegidos<'a>, Error> {
+    let mut instalar = Vec::new();
+    let mut avisos = Vec::new();
+    for nombre in nombres {
+        let motor = resuelve_motor(nombre)?;
+        let Some(fila) = filas.iter().find(|f| f.manifest.id == motor) else {
+            return Err(Error::MotorDesconocido {
+                nombre: nombre.clone(),
+            });
+        };
+        if !fila.compatible {
+            avisos.push(format!(
+                "'{}' no encaja con esta máquina ({}); se omite",
+                motor.as_str(),
+                fila.reasons.join("; ")
+            ));
+            continue;
+        }
+        instalar.push(fila);
+    }
+    Ok(MotoresElegidos { instalar, avisos })
+}
+
+/// Un modelo de la lista, con su `--prio` y el aviso si se ignora.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModeloElegido<'a> {
+    /// El nombre con el que lo escribió el usuario.
+    pub nombre: String,
+    /// El modelo del catálogo.
+    pub spec: &'a ModelSpec,
+    /// El `--prio` que le toca a este modelo.
+    pub prio: Option<Via>,
+    /// El aviso de un `--prio` que se ignora.
+    pub aviso: Option<String>,
+}
+
+/// Resuelve la lista de modelos con su `--prio`.
+///
+/// Un modelo **desconocido** es un error de uso; un `--prio` que se
+/// ignora **no** lo es: sale en el aviso (doc B §4.10.7).
+pub fn modelos_elegidos<'a>(
+    cat: &'a Catalog,
+    nombres: &[String],
+    prios: &Prios,
+) -> Result<Vec<ModeloElegido<'a>>, Error> {
+    let mut out = Vec::new();
+    for nombre in nombres {
+        let spec = resuelve_modelo(cat, nombre)?;
+        let prio = prios.de(nombre);
+        let aviso =
+            prio_ignorado(spec, prio).map(|ignorado| aviso_prio_ignorado(nombre, &ignorado));
+        out.push(ModeloElegido {
+            nombre: nombre.clone(),
+            spec,
+            prio,
+            aviso,
+        });
+    }
+    Ok(out)
+}
+
 /// Un motor del menú de instalación.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MotorDelMenu<'a> {
@@ -448,13 +600,27 @@ pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palett
     menu
 }
 
+/// Separa un **texto** en nombres.
+///
+/// Los separadores son los espacios, las tabulaciones y las comas; los
+/// huecos vacíos se ignoran. Es lo que se usa para la **respuesta** de un
+/// menú (una línea) y para el texto que el usuario escribe.
+pub fn parse_texto(texto: &str) -> Vec<String> {
+    texto
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .map(|parte| parte.trim())
+        .filter(|parte| !parte.is_empty())
+        .map(|parte| parte.to_string())
+        .collect()
+}
+
 /// Convierte la respuesta de un menú en la lista de nombres elegidos.
 ///
 /// Admite los **números** del menú (1, 2, 3…) y los **nombres** (ids o
 /// alias), separados por espacios o comas.
 pub fn resuelve_seleccion(respuesta: &str, opciones: &[String]) -> Result<Vec<String>, Error> {
     let mut out = Vec::new();
-    for token in parse_lista(&[respuesta.to_string()]) {
+    for token in parse_texto(respuesta) {
         match token.parse::<usize>() {
             Ok(numero) if numero >= 1 && numero <= opciones.len() => {
                 out.push(opciones[numero - 1].clone());
@@ -468,6 +634,144 @@ pub fn resuelve_seleccion(respuesta: &str, opciones: &[String]) -> Result<Vec<St
         }
     }
     Ok(out)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los mensajes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// El mensaje de `install engines` **sin terminal**.
+///
+/// Sin TTY no hay menú: un menú que se traga un EOF acabaría eligiendo
+/// por su cuenta (R-INST-26). El mensaje dice **qué hacer**: pasar la
+/// lista.
+pub fn falta_tty_engines() -> String {
+    "install engines necesita una terminal para el menú\n  \
+     (pasa la lista: ropero install engines llama-server turbo-llama)"
+        .to_string()
+}
+
+/// El mensaje de `install models` **sin terminal**.
+pub fn falta_tty_models() -> String {
+    "install models necesita una terminal para el menú\n  \
+     (pasa la lista: ropero install models nemotron qwen)"
+        .to_string()
+}
+
+/// El mensaje de un modelo con **las dos vías** sin `--prio` y sin terminal.
+///
+/// El mensaje dice **qué hacer**: pasar `--prio`, o dar una lista de
+/// modelos en la que ninguno tenga las dos vías (doc B §4.10.7).
+pub fn falta_prio(modelo: &str) -> String {
+    format!(
+        "el modelo '{modelo}' declara las dos vías y no hay terminal para preguntar\n  \
+         (pasa --prio=download o --prio=build, o usa una lista de modelos en la que \
+         ninguno tenga las dos vías)"
+    )
+}
+
+/// La pregunta de qué vía se usa para un modelo.
+pub fn pregunta_de_via(modelo: &str) -> String {
+    format!("'{modelo}' se puede descargar o fabricar. ¿Cuál? [d]ownload / [b]uild: ")
+}
+
+/// El aviso de un `--prio` **ignorado**.
+///
+/// Ignorarlo no es un error y no aborta la instalación de los demás
+/// modelos: sólo se dice (doc B §4.10.7).
+pub fn aviso_prio_ignorado(modelo: &str, ignorado: &Ignorado) -> String {
+    let motivo = match ignorado.motivo {
+        Motivo::SinCamino => format!("'{modelo}' no tiene esa vía"),
+        Motivo::YaEsElDefecto => format!("'{modelo}' sólo tiene esa vía: ya es su defecto"),
+    };
+    format!(
+        "aviso: --prio={} se ignora: {motivo}",
+        ignorado.via.as_str()
+    )
+}
+
+/// Lo que pasó al instalar un motor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EstadoMotor {
+    /// Ya estaba enlazado en `$BIN_DIR`: **no se toca nada**.
+    YaEnlazado(PathBuf),
+    /// Se acaba de crear el enlace.
+    Enlazado {
+        /// El binario real.
+        origen: PathBuf,
+        /// El enlace creado.
+        destino: PathBuf,
+    },
+    /// En el destino hay un fichero real: no se toca.
+    Ocupado(PathBuf),
+    /// No se encontró el binario del motor.
+    SinBinario,
+}
+
+/// El mensaje y el **código de salida** de un motor instalado.
+///
+/// El mensaje va a stdout cuando la instalación fue bien (0) y a stderr
+/// cuando no (1).
+pub fn mensaje_motor(motor: &str, estado: &EstadoMotor) -> (String, i32) {
+    match estado {
+        EstadoMotor::YaEnlazado(destino) => {
+            (motor_ya_enlazado(motor, &destino.to_string_lossy()), 0)
+        }
+        EstadoMotor::Enlazado { origen, destino } => (
+            motor_enlazado(motor, &origen.to_string_lossy(), &destino.to_string_lossy()),
+            0,
+        ),
+        EstadoMotor::Ocupado(destino) => (motor_ocupado(motor, &destino.to_string_lossy()), 1),
+        EstadoMotor::SinBinario => (motor_sin_binario(motor), 1),
+    }
+}
+
+/// El mensaje de un motor que **ya estaba enlazado**.
+pub fn motor_ya_enlazado(motor: &str, destino: &str) -> String {
+    format!("{motor}: ya está enlazado en {destino} (no se toca nada)")
+}
+
+/// El mensaje de un motor que **se acaba de enlazar**.
+pub fn motor_enlazado(motor: &str, origen: &str, destino: &str) -> String {
+    format!("{motor}: enlace creado · {destino} → {origen}")
+}
+
+/// El mensaje de un motor cuyo **binario no se encuentra**.
+///
+/// El mensaje dice **qué hacer** (P-13): el instalador sólo crea enlaces,
+/// así que el binario lo pone el instalador del motor.
+pub fn motor_sin_binario(motor: &str) -> String {
+    format!(
+        "no encuentro el binario de '{motor}': ni en el PATH, ni en el directorio de \
+         binarios, ni en las rutas declaradas\n  \
+         (instálalo con el instalador de su motor y vuelve a intentarlo: \
+         ropero install engines sólo crea enlaces)"
+    )
+}
+
+/// El mensaje de un motor cuyo destino **está ocupado** por un fichero real.
+pub fn motor_ocupado(motor: &str, destino: &str) -> String {
+    format!("{motor}: hay un fichero real en {destino}: no lo toco (quítalo o renómbralo)")
+}
+
+/// La línea de un modelo que se ha resuelto pero **no está instalado**.
+pub fn modelo_pendiente(modelo: &str, via: Via, descargado: bool) -> String {
+    if descargado {
+        format!("{modelo}: vía {via} · ya está descargado")
+    } else {
+        format!("{modelo}: vía {via} · no está descargado")
+    }
+}
+
+/// El error honesto de `install models`: la descarga **no** está hecha.
+///
+/// No dice "instalado" porque no lo está: la descarga es el bloque 3 (con
+/// `hf`), y aquí sólo se resuelve el modelo y se decide su vía.
+pub fn descarga_pendiente() -> String {
+    "no he instalado ningún modelo: la descarga con `hf` todavía no está implementada\n  \
+     (ropero install models resuelve los modelos y decide su vía; \
+     ningún peso se ha descargado)"
+        .to_string()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

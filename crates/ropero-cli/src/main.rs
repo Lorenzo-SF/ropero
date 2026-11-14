@@ -24,6 +24,7 @@
 
 mod commands;
 mod discovery;
+mod install;
 mod parser;
 mod summary;
 
@@ -63,7 +64,7 @@ fn comando(matches: &ArgMatches) -> i32 {
         return summary::run();
     };
     match nombre {
-        "install" => pendiente("install"),
+        "install" => install::run(sub),
         "stop" => commands::stop(&parser::modelo(sub)),
         "gguffer" => pendiente("gguffer"),
         "status" => commands::status(),

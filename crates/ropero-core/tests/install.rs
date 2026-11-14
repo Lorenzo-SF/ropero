@@ -8,10 +8,11 @@
 use std::path::Path;
 
 use ropero_core::install::{
-    Decision, Error, ModeloEnPosicion, Motivo, PrioEnPosicion, Via, asocia_prios, elegir_via,
-    parse_lista, prio_ignorado, resuelve_modelo, vias_de,
+    Decision, Error, ModeloEnPosicion, Motivo, MotorDelMenu, PrioEnPosicion, Via, asocia_prios,
+    elegir_via, menu_engines, menu_modelos, parse_lista, prio_ignorado, resuelve_modelo,
+    resuelve_seleccion, vias_de,
 };
-use ropero_core::{ModelSpec, build_catalog, parse_model};
+use ropero_core::{ModelSpec, Palette, build_catalog, parse_engine_manifest, parse_model};
 
 /// Un modelo con las dos vías: `[download]` y `[build]`.
 const DOS_VIAS: &str = r#"
@@ -68,7 +69,13 @@ gguf = "vacio.gguf"
 "#;
 
 fn spec(toml: &str) -> ModelSpec {
-    parse_model(toml, Path::new("models/llama-server/modelo.toml")).expect("parse model")
+    spec_en(toml, "modelo.toml")
+}
+
+/// Un modelo con **su ruta de origen**: el catálogo deduplica las filas
+/// por ruta, así que dos modelos con la misma ruta serían uno.
+fn spec_en(toml: &str, ruta: &str) -> ModelSpec {
+    parse_model(toml, Path::new(ruta)).expect("parse model")
 }
 
 /// Las posiciones de los modelos y de los `--prio` de una invocación.
@@ -355,4 +362,93 @@ fn dos_modelos_con_el_mismo_alias_nombran_el_conflicto() {
     }
     assert!(texto.contains("nemotron"), "{texto}");
     assert!(texto.contains("dos"), "{texto}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El menú de modelos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// El manifiesto de un motor, tal y como lo escribe el catálogo.
+fn motor(id: &str, color: &str) -> ropero_core::EngineManifest {
+    let toml = format!(
+        "id = \"{id}\"\nlabel = \"{id}\"\ncolor = \"{color}\"\n\
+         description = \"d\"\nmaturity = \"proven\"\nformats = [\"gguf\"]\n\
+         port_min = 8100\nport_max = 8199\n\n[detect]\nbinaries = [\"{id}\"]\npaths = []\n"
+    );
+    parse_engine_manifest(&toml, Path::new("engines/motor.toml")).expect("manifiesto")
+}
+
+/// El menú de modelos sólo ofrece los de los motores **instalados** (T-25).
+#[test]
+fn el_menu_de_modelos_solo_ofrece_los_de_los_motores_instalados() {
+    let llama = motor("llama-server", "naranja");
+    let vllm = motor("vllm", "morado");
+    let cat = build_catalog(
+        vec![
+            spec(DOS_VIAS),
+            spec_en(
+                &SOLO_DOWNLOAD
+                    .replace("nemotron", "groot")
+                    .replace("llama-server", "vllm"),
+                "groot.toml",
+            ),
+        ],
+        vec![],
+    )
+    .expect("catálogo");
+    let paleta = Palette::plain();
+    let motores = [
+        MotorDelMenu {
+            manifest: &llama,
+            instalado: true,
+        },
+        MotorDelMenu {
+            manifest: &vllm,
+            instalado: false,
+        },
+    ];
+    let menu = menu_modelos(&cat, &motores, &paleta);
+    assert_eq!(menu.nombres, vec!["nemotron".to_string()]);
+    // Con el motor **no** instalado, su modelo no se ofrece.
+    let motores = [MotorDelMenu {
+        manifest: &vllm,
+        instalado: false,
+    }];
+    let menu = menu_modelos(&cat, &motores, &paleta);
+    assert!(menu.nombres.is_empty(), "{:?}", menu.nombres);
+}
+
+/// El menú de motores numera sus opciones y lleva su color.
+#[test]
+fn el_menu_de_motores_numera_y_colorea() {
+    let llama = motor("llama-server", "naranja");
+    let motores = [MotorDelMenu {
+        manifest: &llama,
+        instalado: true,
+    }];
+    let menu = menu_engines(&motores, &Palette::plain());
+    assert_eq!(menu.nombres, vec!["llama-server".to_string()]);
+    assert!(menu.lineas[0].contains("  1"), "{:?}", menu.lineas);
+    assert!(menu.lineas[0].contains("llama-server"), "{:?}", menu.lineas);
+    assert!(menu.lineas[0].contains("naranja"), "{:?}", menu.lineas);
+    assert!(menu.lineas[0].contains("ya instalado"), "{:?}", menu.lineas);
+}
+
+/// La respuesta del menú acepta **números** y **nombres**.
+#[test]
+fn la_respuesta_del_menu_acepta_numeros_y_nombres() {
+    let opciones = vec!["llama-server".to_string(), "vllm".to_string()];
+    assert_eq!(
+        resuelve_seleccion("2", &opciones).expect("selección"),
+        vec!["vllm".to_string()]
+    );
+    assert_eq!(
+        resuelve_seleccion("1 2", &opciones).expect("selección"),
+        vec!["llama-server".to_string(), "vllm".to_string()]
+    );
+    assert_eq!(
+        resuelve_seleccion("vllm", &opciones).expect("selección"),
+        vec!["vllm".to_string()]
+    );
+    assert!(resuelve_seleccion("9", &opciones).is_err());
 }

@@ -75,7 +75,7 @@ pub const COMMANDS: &[Command] = &[
         usage: "install [engines|models] [modelo...]",
         summary: "instala motores y modelos",
         phase: None,
-        state: CommandState::Parsed,
+        state: CommandState::Ready,
     },
     Command {
         name: "stop",
@@ -240,10 +240,14 @@ impl Flag {
 }
 
 /// Los flags de `ropero install`.
-pub const FLAGS_INSTALL: &[Flag] = &[Flag::value(
+///
+/// El `--prio` es **repetible**: puede ser global (antes de la lista) o
+/// por modelo (detrás del modelo), y en una invocación puede haber varios
+/// (doc B §4.10.7).
+pub const FLAGS_INSTALL: &[Flag] = &[Flag::many(
     "prio",
     "VIA",
-    "la vía de instalación: download o build",
+    "la vía de instalación: download o build (repetible)",
 )];
 
 /// Los flags de `ropero stop`.
