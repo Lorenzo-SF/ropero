@@ -7,6 +7,7 @@ mod engines_out;
 mod environment;
 mod files;
 mod format;
+pub mod install;
 pub mod listing;
 mod manifest;
 mod model;
