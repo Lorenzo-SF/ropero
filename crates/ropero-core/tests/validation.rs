@@ -219,9 +219,47 @@ fn regla_14_rechaza_requires_de_file_inexistente() {
 #[test]
 fn regla_15_rechaza_min_ram_gb_no_positivo() {
     let mut model = valid();
-    model.limits.min_ram_gb = -1.0;
+    model.limits.min_ram_gb = Some(-1.0);
     let errors = validate(&model, &ctx());
     assert_eq!(rule(&errors), ValidationRule::MinRamMustBePositive);
+}
+
+/// `min_ram_gb = 0` también es un error: la regla es **estrictamente
+/// mayor que 0** (doc B §4.1.1 / R-DATA-9), como en la v1
+/// (`ropero-code/bin/python/modelconf.py:1563`, que rechaza `<= 0`).
+#[test]
+fn regla_15_rechaza_min_ram_gb_cero() {
+    let mut model = valid();
+    model.limits.min_ram_gb = Some(0.0);
+    let errors = validate(&model, &ctx());
+    assert_eq!(rule(&errors), ValidationRule::MinRamMustBePositive);
+    assert!(errors[0].message().contains("mayor que 0"));
+}
+
+/// Un `min_ram_gb` positivo **no** es un error.
+#[test]
+fn regla_15_admite_min_ram_gb_positivo() {
+    let mut model = valid();
+    model.limits.min_ram_gb = Some(4.0);
+    assert!(
+        !validate(&model, &ctx())
+            .iter()
+            .any(|error| error.rule() == ValidationRule::MinRamMustBePositive)
+    );
+}
+
+/// `min_ram_gb` **no declarado** no es un error: el campo es opcional (como
+/// en la v1, que sólo comprueba la clave cuando está presente:
+/// `ropero-code/bin/python/modelconf.py:1560`).
+#[test]
+fn regla_15_admite_min_ram_gb_ausente() {
+    let model = valid();
+    assert!(model.limits.min_ram_gb.is_none());
+    assert!(
+        !validate(&model, &ctx())
+            .iter()
+            .any(|error| error.rule() == ValidationRule::MinRamMustBePositive)
+    );
 }
 
 #[test]

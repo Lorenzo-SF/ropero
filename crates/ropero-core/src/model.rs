@@ -39,7 +39,8 @@
 //!
 //! ## Notación
 //!
-//! - `limits.min_ram_gb` is `f64` y `limits.min_ram_note` is `String`.
+//! - `limits.min_ram_gb` is `Option<f64>` (opcional: si no se declara, no se
+//!   comprueba) y `limits.min_ram_note` is `String`.
 //! - `download.aux` is `Vec<Aux>`.
 //! - `chat_template_kwargs` is `BTreeMap<String, toml::Value>` (value can be
 //!   `bool` in `enable_thinking` o `string` in `reasoning_effort`), not a scalar.
@@ -223,8 +224,15 @@ pub struct LevelSpec {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Limits {
+    /// La RAM mínima del modelo, en GiB. Es **opcional**: si no se declara,
+    /// no se comprueba nada (como en la v1, que sólo mira la clave cuando
+    /// está presente: `ropero-code/bin/python/modelconf.py:1560`).
+    ///
+    /// Cuando **sí** se declara tiene que ser `> 0` (R-DATA-9): por eso es
+    /// `Option<f64>` y no `f64` — con un `f64` a cero no se distinguiría
+    /// "no declarado" de "declarado con 0".
     #[serde(default)]
-    pub min_ram_gb: f64,
+    pub min_ram_gb: Option<f64>,
 
     #[serde(default)]
     pub min_ram_note: String,
