@@ -28,8 +28,9 @@
 //! los binarios del sistema: el `hf` falso se invoca con `sh` y sólo usa
 //! *builtins*.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // El catálogo de pruebas
@@ -228,6 +229,21 @@ exit 0
 /// El separador que el `hf` falso pone delante de cada invocación.
 const SEPARADOR: &str = "== invocacion ==";
 
+/// El programa que da un **pty** para probar el menú.
+///
+/// Sin terminal no hay menú (R-INST-26), así que el flujo interactivo se
+/// prueba con un pty: `script` lo da sin dependencias (util-linux en Linux,
+/// BSD en macOS).
+fn script() -> PathBuf {
+    for dir in ["/usr/bin", "/bin", "/usr/local/bin"] {
+        let ruta = Path::new(dir).join("script");
+        if ruta.is_file() {
+            return ruta;
+        }
+    }
+    panic!("no se encuentra 'script', que es lo que da el pty del menú");
+}
+
 /// La máquina de pruebas: catálogo, rutas y `PATH` controlados.
 struct Fake {
     /// La raíz del temporal.
@@ -349,6 +365,49 @@ impl Fake {
             out.status.code().unwrap_or(-1),
             String::from_utf8_lossy(&out.stdout).into_owned(),
             String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    }
+
+    /// Corre `ropero` **con terminal**, para poder probar el menú.
+    ///
+    /// Sin terminal no hay menú (R-INST-26), así que el flujo del menú se
+    /// prueba con un **pty**: `script` lo da sin dependencias (util-linux en
+    /// Linux, BSD en macOS). Devuelve todo lo que salió por el pty.
+    fn corre_con_tty(&self, args: &[&str], entrada: &str) -> String {
+        let exe = env!("CARGO_BIN_EXE_ropero");
+        let mut cmd = Command::new(script());
+        #[cfg(target_os = "macos")]
+        {
+            cmd.arg("-q").arg("/dev/null").arg(exe).args(args);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let linea = format!("{} {}", exe, args.join(" "));
+            cmd.arg("-qec").arg(linea).arg("/dev/null");
+        }
+        let mut hijo = cmd
+            .env("ROPERO_MODELS_DIR", &self.root)
+            .env("ROPERO_BIN_DIR", &self.bin)
+            .env("GGUF_DIR", &self.gguf)
+            .env("SAFETENSORS_DIR", &self.safetensors)
+            .env("LOG_DIR", self.base.join("logs"))
+            .env("HOME", &self.base)
+            .env("PATH", &self.path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("correr ropero con terminal");
+        {
+            let mut tubo = hijo.stdin.take().expect("stdin");
+            tubo.write_all(entrada.as_bytes())
+                .expect("escribir la respuesta");
+        }
+        let salida = hijo.wait_with_output().expect("esperar a ropero");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&salida.stdout),
+            String::from_utf8_lossy(&salida.stderr)
         )
     }
 
@@ -1220,5 +1279,33 @@ size = "~4 GB"
     assert!(
         destino.is_file(),
         "el GGUF no está donde lo busca el runtime: {destino:?}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El menú: elegir un modelo ES consentir su descarga (R-MOD-27)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// En el **menú**, elegir un modelo **es** consentir su descarga: no se
+/// pregunta el tamaño (con su default «no») y el modelo **se descarga**.
+#[test]
+fn en_el_menu_elegir_el_modelo_es_consentir_la_descarga() {
+    let fake = Fake::nuevo("menu-consentimiento")
+        .con_hf()
+        .con_binario("llama-server");
+
+    let salida = fake.corre_con_tty(&["install", "models"], "nemotron\n");
+
+    assert!(
+        !salida.contains("¿Descargar"),
+        "no debía preguntar el tamaño: {salida}"
+    );
+    assert!(
+        salida.contains("nemotron: vía download · descargado"),
+        "elegir el modelo no ha sido consentir la descarga: {salida}"
+    );
+    assert!(
+        fake.gguf_de("nemotron").is_file(),
+        "el GGUF no está: {salida}"
     );
 }

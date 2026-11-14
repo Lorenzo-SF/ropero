@@ -124,7 +124,6 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
     let lista = install::nombres_de(tokens);
     // Con lista se instala **directo** (desatendido): el usuario ya ha
     // dicho qué quiere, así que no se pregunta (doc CLI v2 §9.2).
-    let desatendido = !lista.is_empty();
     let eleccion = if lista.is_empty() {
         match elegir_modelos(s) {
             Ok(elegidos) => elegidos,
@@ -137,11 +136,11 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
         Ok(elegidos) => elegidos,
         Err(e) => return uso(&e.to_string()),
     };
-    let modo = if desatendido {
-        ropero_download::Modo::Desatendido
-    } else {
-        ropero_download::Modo::Interactivo
-    };
+    // R-MOD-27: **elegir un modelo ES consentir su descarga**. En el menú
+    // y con lista, la pregunta del tamaño (con su default «no») no se
+    // repite: la biblioteca conserva el modo interrogativo, pero el
+    // comando no lo pide.
+    let modo = ropero_download::Modo::Desatendido;
     let mut codigo = 0;
     for elegido in elegidos {
         // Un `--prio` ignorado **se avisa** y no aborta (doc B §4.10.7).
