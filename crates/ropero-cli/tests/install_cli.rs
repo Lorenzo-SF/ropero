@@ -1073,3 +1073,107 @@ fn install_engines_crea_el_enlace_y_no_copia_ni_descarga() {
         fake.entradas(&fake.gguf)
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Las rutas del catálogo, acotadas al directorio de modelos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un `[download].file` que **se sale** del directorio del modelo es un
+/// error del catálogo (exit 1): el mensaje dice el campo y el valor, y el
+/// fichero de fuera **no se toca**.
+#[test]
+fn install_models_con_un_file_que_se_sale_dice_el_campo_y_el_valor() {
+    let fake = Fake::nuevo("file-fuera").con_hf();
+    fake.modelo(
+        "nemotron",
+        r#"
+[model]
+name = "nemotron"
+engine = "turbo-llama"
+
+[files]
+gguf = "nemotron.gguf"
+
+[download]
+repo = "ejemplo/nemotron"
+file = "../../secreto.txt"
+size = "~4 GB"
+"#,
+    );
+    // La «víctima»: un fichero de fuera del directorio del modelo.
+    let victima = fake.base.join("secreto.txt");
+    std::fs::write(&victima, "VICTIMA ORIGINAL").expect("víctima");
+
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
+
+    let todo = format!("{stdout}{stderr}");
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert!(
+        todo.contains("[download].file"),
+        "el mensaje no dice el campo: {todo}"
+    );
+    assert!(
+        todo.contains("../../secreto.txt"),
+        "el mensaje no dice el valor recibido: {todo}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victima).expect("leer la víctima"),
+        "VICTIMA ORIGINAL",
+        "el fichero de fuera se ha movido o sobrescrito"
+    );
+    assert!(
+        fake.llamadas_hf().is_empty(),
+        "hf no debía llamarse: {:?}",
+        fake.llamadas_hf()
+    );
+    assert!(
+        !stdout.contains("descargado"),
+        "no podía descargarse nada: stdout={stdout}"
+    );
+}
+
+/// Un `[download.aux.*].name` que se sale **sobrescribiría** el fichero de
+/// fuera: es un error del catálogo y el fichero no se toca.
+#[test]
+fn install_models_con_un_aux_que_se_sale_no_sobrescribe_el_fichero_de_fuera() {
+    let fake = Fake::nuevo("aux-fuera").con_hf();
+    fake.modelo(
+        "nemotron",
+        r#"
+[model]
+name = "nemotron"
+engine = "turbo-llama"
+
+[files]
+gguf = "nemotron.gguf"
+
+[download]
+repo = "ejemplo/nemotron"
+file = "nemotron.gguf"
+size = "~4 GB"
+
+[download.aux.chat_template]
+repo = "ejemplo/nemotron"
+file = "chat_template.jinja"
+name = "../../victima.txt"
+size = "9 KB"
+use = "run"
+"#,
+    );
+    let victima = fake.base.join("victima.txt");
+    std::fs::write(&victima, "VICTIMA ORIGINAL").expect("víctima");
+
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
+
+    let todo = format!("{stdout}{stderr}");
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert!(
+        todo.contains("[download.aux.chat_template].name"),
+        "el mensaje no dice el campo: {todo}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&victima).expect("leer la víctima"),
+        "VICTIMA ORIGINAL",
+        "el fichero de fuera se ha sobrescrito"
+    );
+}

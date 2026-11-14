@@ -700,3 +700,125 @@ fn los_auxiliares_de_un_checkpoint_se_descargan() {
         "el auxiliar no va al directorio del GGUF: {aux:?}"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Las rutas del catálogo, acotadas al directorio de modelos
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// El error de una ruta que se sale: dice **qué campo** es y **qué valor**
+/// tenía (P-13).
+fn ruta_fuera(error: &Error) -> (&str, &str) {
+    match error {
+        Error::RutaFuera { campo, valor, .. } => (campo, valor),
+        otro => panic!("el error no es el de ruta fuera: {otro:?}"),
+    }
+}
+
+/// Un `[download].file` con `..` **sube**: con `Path::join` el `mv` de
+/// R-MOD-16.2 movería un fichero de fuera del directorio del modelo.
+///
+/// Es un defecto del catálogo: el error nombra el campo y el valor.
+#[test]
+fn un_file_con_puntos_suspensivos_es_error() {
+    let fake = Fake::nuevo("file-fuera");
+    let env = fake.entorno();
+    let toml = GGUF.replace(
+        "file = \"en-el-repo.gguf\"",
+        "file = \"../../../secreto.txt\"",
+    );
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    let (campo, valor) = ruta_fuera(&error);
+    assert_eq!(campo, "[download].file");
+    assert_eq!(valor, "../../../secreto.txt");
+    // El mensaje dice **qué hacer**.
+    let texto = error.to_string();
+    assert!(
+        texto.contains("[download].file") && texto.contains("../../../secreto.txt"),
+        "el mensaje no dice el campo y el valor: {texto}"
+    );
+    assert!(
+        error.pista().is_some_and(|p| p.contains("[download].file")),
+        "la pista no dice qué arreglar: {error:?}"
+    );
+}
+
+/// Un `[download].file` **absoluto** absorbe el base del `join`: también
+/// se sale del directorio del modelo.
+#[test]
+fn un_file_absoluto_es_error() {
+    let fake = Fake::nuevo("file-absoluto");
+    let env = fake.entorno();
+    let toml = GGUF.replace("file = \"en-el-repo.gguf\"", "file = \"/etc/secreto.txt\"");
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    let (campo, valor) = ruta_fuera(&error);
+    assert_eq!(campo, "[download].file");
+    assert_eq!(valor, "/etc/secreto.txt");
+}
+
+/// Un `[download].name` que se sale tampoco vale: es el nombre **final**
+/// del fichero en disco.
+#[test]
+fn un_name_que_se_sale_es_error() {
+    let fake = Fake::nuevo("name-fuera");
+    let env = fake.entorno();
+    let toml = GGUF.replace(
+        "file = \"en-el-repo.gguf\"",
+        "file = \"en-el-repo.gguf\"\nname = \"../../../secreto.txt\"",
+    );
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    let (campo, valor) = ruta_fuera(&error);
+    assert_eq!(campo, "[download].name");
+    assert_eq!(valor, "../../../secreto.txt");
+}
+
+/// Un auxiliar con un `name` fuera del directorio **sobrescribe** el
+/// fichero de fuera: también es un error.
+#[test]
+fn un_aux_que_se_sale_es_error() {
+    let fake = Fake::nuevo("aux-fuera");
+    let env = fake.entorno();
+    let toml = GGUF_CON_AUX.replace(
+        "name = \"chat_template.jinja\"",
+        "name = \"../../../victima.txt\"",
+    );
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    let (campo, valor) = ruta_fuera(&error);
+    assert_eq!(campo, "[download.aux.chat_template].name");
+    assert_eq!(valor, "../../../victima.txt");
+}
+
+/// Un `[model].path` con `..` saca el checkpoint del directorio de los
+/// checkpoints.
+#[test]
+fn un_model_path_que_se_sale_es_error() {
+    let fake = Fake::nuevo("path-fuera");
+    let env = fake.entorno();
+    let toml = SAFETENSORS.replace(
+        "path = \"ejemplo/checkpoint\"",
+        "path = \"../../../victima\"",
+    );
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    let (campo, valor) = ruta_fuera(&error);
+    assert_eq!(campo, "[model].path");
+    assert_eq!(valor, "../../../victima");
+}
+
+/// El fichero de fuera **no se toca**: la ruta se comprueba **antes** de
+/// mover nada (el `mv` de R-MOD-16.2 no puede sacar un fichero de fuera).
+#[test]
+fn una_ruta_fuera_no_toca_el_fichero_de_fuera() {
+    let fake = Fake::nuevo("file-fuera-no-toca");
+    let env = fake.entorno();
+    // La «víctima»: un fichero de fuera del directorio del modelo.
+    let victima = fake.base.join("secreto.txt");
+    std::fs::write(&victima, "VICTIMA ORIGINAL").expect("víctima");
+    let toml = GGUF.replace("file = \"en-el-repo.gguf\"", "file = \"../secreto.txt\"");
+
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    assert!(matches!(error, Error::RutaFuera { .. }), "{error:?}");
+    assert_eq!(
+        std::fs::read_to_string(&victima).expect("leer la víctima"),
+        "VICTIMA ORIGINAL",
+        "el fichero de fuera se ha tocado"
+    );
+}

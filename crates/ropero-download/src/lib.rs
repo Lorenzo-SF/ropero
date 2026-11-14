@@ -46,11 +46,13 @@ use std::fmt;
 
 pub mod download;
 pub mod plan;
+pub mod rutas;
 
 pub use download::{
     Modo, Resultado, descarga, descarga_con, linea, linea_error, pregunta_de_descarga,
 };
 pub use plan::{AuxPlan, Formato, Plan, plan_de_descarga};
+pub use rutas::ruta_dentro;
 
 /// Los errores de la descarga.
 ///
@@ -95,6 +97,18 @@ pub enum Error {
         /// El fichero que se esperaba.
         file: String,
     },
+    /// Una ruta del catálogo **se sale** del directorio de destino.
+    ///
+    /// Es un defecto del catálogo: un `..` sube y una ruta absoluta
+    /// absorbe el base (ver [`crate::rutas`]).
+    RutaFuera {
+        /// El modelo.
+        modelo: String,
+        /// El campo del TOML (p. ej. `[download].file`).
+        campo: String,
+        /// El valor recibido.
+        valor: String,
+    },
     /// `hf` ha terminado pero el destino está incompleto.
     Incompleto {
         /// El modelo que se iba a bajar.
@@ -133,6 +147,14 @@ impl Error {
             Error::HfSinFichero { .. } => {
                 Some("hf dijo que sí pero no dejó el fichero: revisa el repo".to_string())
             }
+            Error::RutaFuera {
+                modelo,
+                campo,
+                valor,
+            } => Some(format!(
+                "arregla el TOML de '{modelo}': {campo} = \"{valor}\" tiene que estar \
+                 dentro del directorio del modelo (sin '..' ni ruta absoluta)"
+            )),
             Error::DatosIncompletos { modelo, falta } => {
                 Some(format!("arregla el TOML de '{modelo}': le falta {falta}"))
             }
@@ -173,6 +195,15 @@ impl fmt::Display for Error {
             Error::HfSinFichero { modelo, file } => {
                 write!(f, "falló {modelo} (hf dijo OK pero no aparece {file})")
             }
+            Error::RutaFuera {
+                modelo,
+                campo,
+                valor,
+            } => write!(
+                f,
+                "{campo} = \"{valor}\" no es válido en el modelo '{modelo}': \
+                 la ruta se sale del directorio del modelo"
+            ),
             Error::Incompleto { destino, falta, .. } => {
                 write!(f, "hf terminó pero {destino} está incompleto")?;
                 for linea in falta {

@@ -32,6 +32,7 @@ use ropero_core::real_name;
 use ropero_core::{Download, Environment, ModelFormat, ModelSpec, resolve_paths};
 
 use crate::Error;
+use crate::rutas::ruta_dentro;
 
 /// El marcador que ocupa el staging en los argumentos del plan.
 ///
@@ -143,7 +144,7 @@ pub fn plan_de_descarga(spec: &ModelSpec, env: &Environment) -> Result<Plan, Err
     let paths = resolve_paths(spec, env);
     match spec.model.format {
         ModelFormat::Gguf => plan_gguf(download, &paths, env, modelo),
-        ModelFormat::Safetensors => plan_safetensors(download, &paths, env, modelo),
+        ModelFormat::Safetensors => plan_safetensors(spec, download, env, modelo),
         otro => Err(Error::FormatoNoDescargable {
             modelo,
             formato: otro.as_str().to_string(),
@@ -173,15 +174,19 @@ fn plan_gguf(
         .as_deref()
         .and_then(|ruta| Path::new(ruta).file_name())
         .map(|n| n.to_string_lossy().to_string())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| {
-            if download.name.is_empty() {
-                download.file.clone()
-            } else {
-                download.name.clone()
-            }
-        });
-    let dest = dest_dir.join(&nombre_final);
+        .filter(|n| !n.is_empty());
+    let (nombre_final, campo) = match nombre_final {
+        Some(nombre) => (nombre, "[files].gguf"),
+        None if !download.name.is_empty() => (download.name.clone(), "[download].name"),
+        None => (download.file.clone(), "[download].file"),
+    };
+    let dest = ruta_dentro(&dest_dir, &nombre_final, campo, &modelo)?;
+    // El fichero del repo tampoco puede salirse: el `mv` de R-MOD-16.2 lo
+    // mueve desde el directorio del modelo.
+    let _ = ruta_dentro(&dest_dir, &download.file, "[download].file", &modelo)?;
+    if !download.name.is_empty() {
+        let _ = ruta_dentro(&dest_dir, &download.name, "[download].name", &modelo)?;
+    }
     let hf_args = vec![
         "download".to_string(),
         download.repo.clone(),
@@ -207,18 +212,25 @@ fn plan_gguf(
 
 /// El plan de un checkpoint.
 fn plan_safetensors(
+    spec: &ModelSpec,
     download: &Download,
-    paths: &ropero_core::ResolvedPaths,
     env: &Environment,
     modelo: String,
 ) -> Result<Plan, Error> {
-    let Some(destino) = paths.model_path.as_ref() else {
+    if spec.model.path.is_empty() {
         return Err(Error::DatosIncompletos {
             modelo,
-            falta: "path".to_string(),
+            falta: "[model].path".to_string(),
         });
-    };
-    let dest_dir = PathBuf::from(destino);
+    }
+    // El checkpoint va a `$SAFETENSORS_DIR/<[model].path>` (R-MOD-6), y su
+    // ruta tampoco puede salirse de ese directorio.
+    let dest_dir = ruta_dentro(
+        &env.env_path("SAFETENSORS_DIR", "models/safetensors"),
+        &spec.model.path,
+        "[model].path",
+        &modelo,
+    )?;
     let mut excludes: Vec<String> = EXCLUDES_POR_DEFECTO
         .iter()
         .map(|e| (*e).to_string())
@@ -278,11 +290,20 @@ fn plan_aux(download: &Download, dest_dir: &Path, modelo: &str) -> Result<Vec<Au
         } else {
             aux.repo.clone()
         };
-        let name = if aux.name.is_empty() {
-            aux.file.clone()
+        // El auxiliar va al **mismo directorio** que el GGUF (R-MOD-23), y
+        // su ruta tampoco puede salirse de ahí.
+        let (nombre, campo) = if aux.name.is_empty() {
+            (aux.file.clone(), format!("[download.aux.{kind}].file"))
         } else {
-            aux.name.clone()
+            (aux.name.clone(), format!("[download.aux.{kind}].name"))
         };
+        let dest = ruta_dentro(dest_dir, &nombre, &campo, modelo)?;
+        let _ = ruta_dentro(
+            dest_dir,
+            &aux.file,
+            &format!("[download.aux.{kind}].file"),
+            modelo,
+        )?;
         let hf_args = vec![
             "download".to_string(),
             repo.clone(),
@@ -294,12 +315,8 @@ fn plan_aux(download: &Download, dest_dir: &Path, modelo: &str) -> Result<Vec<Au
             kind: kind.clone(),
             repo,
             file: aux.file.clone(),
-            name,
-            dest: dest_dir.join(if aux.name.is_empty() {
-                aux.file.clone()
-            } else {
-                aux.name.clone()
-            }),
+            name: nombre,
+            dest,
             size: aux.size.clone(),
             hf_args,
         });
