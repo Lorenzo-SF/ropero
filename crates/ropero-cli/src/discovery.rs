@@ -69,8 +69,18 @@ fn scan_root(root: &Path, env: &Environment) -> Result<Scan, String> {
         let folder = dir.file_name().unwrap_or_default().to_string_lossy();
         // Las carpetas de `models/` se nombran como el motor, pero no siempre
         // igual (`llama/` → `llama-server`, `flm/` → `fastflowlm`).
+        //
+        // Una carpeta que no corresponde a ningún motor es un **problema**
+        // del catálogo (R-DATA-12), no el fin del escaneo: se acumula y se
+        // sigue, como hace la v1
+        // (`ropero-code/bin/python/modelconf.py:1648`, que acumula el
+        // problema y sigue). Antes esta carpeta abortaba el `scan()`
+        // entero y **ningún** modelo se validaba.
         if ropero_core::EngineId::from_dir_name(&folder).is_none() {
-            return Err(format!("motor desconocido '{folder}' en {}", dir.display()));
+            let msg = format!("motor desconocido '{folder}' en {}", dir.display());
+            ropero_core::err_line(&format!("aviso: {msg}"));
+            problems.push(msg);
+            continue;
         }
         files += collect(&dir, &mut active, &mut problems, &mut notices, &mut texts)?;
         let retired = dir.join("fired");

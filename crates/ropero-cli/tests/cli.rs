@@ -297,3 +297,102 @@ fn la_ayuda_no_anuncia_el_arranque_de_un_modelo() {
     assert!(!stdout.contains("--background"), "stdout={}", stdout);
     assert!(!stdout.contains("<modelo> [--"), "stdout={}", stdout);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Un motor desconocido no aborta el escaneo (R-DATA-12)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Monta un catálogo en el disco con un directorio de motor **desconocido**
+/// (`motor-novedoso/`) junto a los modelos válidos del fixture, y devuelve
+/// su raíz.
+///
+/// El directorio desconocido se crea **vacío**: el caso que importa es que la
+/// carpeta en sí no corresponde a ningún motor conocido, no lo que haya
+/// dentro.
+fn catalogo_con_motor_desconocido() -> PathBuf {
+    let base = std::env::temp_dir().join("ropero-cli-motor-desconocido");
+    let models = base.join("models");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(models.join("llama")).unwrap();
+    std::fs::create_dir_all(models.join("motor-novedoso")).unwrap();
+    // Un modelo válido, para que el escaneo tenga algo que validar.
+    std::fs::copy(
+        fixture_root().join("models/llama/modelo-alpha.toml"),
+        models.join("llama/modelo-alpha.toml"),
+    )
+    .unwrap();
+    base
+}
+
+/// Corre `ropero` contra el catálogo del motor desconocido.
+fn run_con_motor_desconocido(args: &[&str]) -> (i32, String, String) {
+    let base = catalogo_con_motor_desconocido();
+    let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
+        .args(args)
+        .env("ROPERO_MODELS_DIR", &base)
+        .env("GGUF_DIR", base.join("gguf"))
+        .env("SAFETENSORS_DIR", base.join("safetensors"))
+        .env("LOG_DIR", base.join("logs"))
+        .current_dir(std::env::temp_dir())
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// Un directorio de motor desconocido **no aborta el escaneo**: los modelos
+/// válidos se siguen listando.
+///
+/// Antes, el `return Err` del descubrimiento cancelaba el `scan()` entero:
+/// con un `motor-novedoso/` en `models/`, la v2 no listaba **ningún** modelo.
+/// La v1 acumula el problema y sigue (`ropero-code/bin/python/modelconf.py:1648`).
+#[test]
+fn un_motor_desconocido_no_aborta_el_escaneo() {
+    let (code, stdout, stderr) = run_con_motor_desconocido(&["list"]);
+    // `list` no falla por un problema del catálogo (igual que con un TOML
+    // roto): lo avisa y sigue.
+    assert_eq!(code, 0, "stdout={} stderr={}", stdout, stderr);
+    // El modelo válido se lista: el escaneo continuó.
+    assert!(
+        stdout.contains("modelo-alpha"),
+        "el modelo válido no se lista: stdout={} stderr={}",
+        stdout,
+        stderr
+    );
+    // Y el problema se reporta (el aviso va a stderr, como el de un TOML roto).
+    assert!(
+        stderr.contains("motor desconocido"),
+        "el motor desconocido no se reporta: stderr={}",
+        stderr
+    );
+}
+
+/// El motor desconocido es un **problema** del catálogo: `validate` lo
+/// reporta y sale con 1, pero sigue validando el resto de los modelos.
+#[test]
+fn un_motor_desconocido_es_un_problema_del_catalogo() {
+    let (code, stdout, stderr) = run_con_motor_desconocido(&["validate"]);
+    assert_eq!(code, 1, "stdout={} stderr={}", stdout, stderr);
+    assert!(
+        stderr.contains("motor desconocido"),
+        "el motor desconocido no se reporta: stderr={}",
+        stderr
+    );
+    // El escaneo llegó hasta el final: el catálogo se construyó y se
+    // validó (y por eso hay resumen, no un aborto del `scan()`).
+    assert!(
+        stderr.contains("validación fallida"),
+        "el escaneo se abortó antes de validar: stderr={}",
+        stderr
+    );
+    // El modelo válido no dio error: sólo el directorio desconocido es el
+    // problema.
+    assert!(
+        !stderr.contains("modelo-alpha"),
+        "el modelo válido se validó con error: stderr={}",
+        stderr
+    );
+}
