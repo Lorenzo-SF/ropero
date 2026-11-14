@@ -8,3 +8,5 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+# ropero-core: el dominio puro (el modelo, el entorno y las rutas resueltas).
+ropero-core = { path = "../ropero-core" }
