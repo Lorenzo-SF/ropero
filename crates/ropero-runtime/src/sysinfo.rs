@@ -1,29 +1,13 @@
 // ropero-runtime: procesos, puertos y estado en disco.
 
 use ropero_core::SystemInfo;
-/// La captura de la información de la máquina (la frontera de E/S).
-///
-/// `ropero-core` es dominio puro: no lee disco, no consulta el entorno, no
-/// lanza procesos (doc B §3.2.3). La información de la máquina —el SO, la
-/// GPU, la NPU, la RAM— llega al dominio como **dato**, y esta es la capa
-/// que lo lee de verdad.
-///
-/// ## Degradación elegante
-///
-/// Ninguna de las consultas es obligatoria: si `/proc/meminfo` no existe, o
-/// `nvidia-smi` no está, o `sysctl` falla, el campo se queda en su valor por
-/// defecto y se sigue. Un motor se declara incompatible por lo que
-/// **falta**, así que un dato que no se pudo leer se trata como ausente: es
-/// el mismo criterio que usa la v1 (`ropero-code/bin/lib/engines/*.sh`).
-///
-/// ## Dónde vive cada mitad
+use ropero_core::sysinfo;
+
+/// Captura la información de la máquina.
 ///
 /// La **decisión** (qué SO es, si esto es una NPU, cuántos GB son) es del
 /// dominio: vive en [`ropero_core::sysinfo`]. Aquí sólo se **lee** el disco
 /// y el entorno, y se le pasa el texto.
-use ropero_core::sysinfo;
-
-/// Captura la información de la máquina.
 pub fn capture_system_info() -> SystemInfo {
     SystemInfo {
         os: sysinfo::detect_os(std::env::consts::OS),
