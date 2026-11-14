@@ -9,7 +9,7 @@ date: "2026-11-12"
 
 > Documento **de construcción**, no de requerimientos. Los requerimientos —qué debe
 > hacer el sistema, con qué semántica exacta y con qué evidencia— están en
-> `ropero-especificacion.md` (316 requisitos, R-ARQ…R-GGUF). Este documento
+> `ropero-especificacion.md` (317 requisitos, R-ARQ…R-GGUF). Este documento
 > responde a la pregunta distinta: **con qué se construye, cómo se organiza, en
 > qué orden, y cómo se sabe que está terminado.**
 >
@@ -38,7 +38,7 @@ comportamiento descrito en el otro, la tarea está mal y hay que corregirla, no
 implementarla.
 
 **Regla de completitud.** Una IA que sólo disponga de este documento no puede
-construir ropero: le faltan los 316 requisitos, el vocabulario exacto
+construir ropero: le faltan los 317 requisitos, el vocabulario exacto
 (`nivel`/`flag`/`opción`, `[args].base → level → flags → options`), los ocho
 hooks del contrato de motor, el orden de montaje del argv y las 29 deudas conocidas. Y una IA que sólo disponga del de requerimientos no puede
 construirlo tampoco: no sabe con qué lenguaje, con qué versiones, en qué
@@ -132,7 +132,7 @@ gestor de modelos que mata procesos ajenos. De aquí P-3 y la identidad
 
 - **No es un tutorial de Rust.** No explica qué es un `enum` ni cómo funciona un
   `async fn`. Asume que quien lo ejecuta sabe Rust.
-- **No es la especificación de requerimientos.** No repite los 316 requisitos:
+- **No es la especificación de requerimientos.** No repite los 317 requisitos:
   los cita. Repetir 140 KB de semántica en dos sitios es la forma más rápida de
   que los dos sitios digan cosas distintas.
 - **No es un plan de negocio.** No decide precio, empaquetado comercial, ni
@@ -1115,6 +1115,12 @@ producción. Esa es una tarea de la fase F1 (T-05).
 | `[limits].min_ram_gb > 0` | error | 1 |
 | Clave desconocida en cualquier tabla | error | 1 |
 | `context` debe ser > 0 y múltiplo de 32 | error | 1 |
+
+Esta tabla es el contrato de validación de la v2. Las cuatro comprobaciones
+adicionales que hace la v1 —niveles, flags, opciones y presencia de
+`[download]`/`[build]`— aún no están implementadas y están registradas como
+deuda en el CHANGELOG. La regla `[download]` + `[build]` está en tensión con
+R-DATA-6: contradicción documentada según §6.7, pendiente de decisión.
 
 **La regla de `name` == nombre de fichero** es una de las deudas medidas (H-23):
 hoy el validador **no** la comprueba. Se añade aquí.
@@ -2383,7 +2389,7 @@ su puerta. **Una tarea = un PR.**
 | Tarea | Qué hace | Cierra | Depende de | Puerta |
 |---|---|---|---|---|
 | **T-06** | `ModelSpec` y todos sus tipos con `serde` + `deny_unknown_fields` | R-DATA-1…16 | T-05 | Cada tabla del doc A tiene su tipo y su test |
-| **T-07** | Validador: las 15 reglas de § 4.1.1, cada una con un test que falla | R-DATA-17…23 | T-06 | 15 tests, uno por regla, todos rojos antes |
+| **T-07** | Validador: las 16 reglas de § 4.1.1, cada una con un test que falla | R-DATA-17…23 | T-06 | 16 tests, uno por regla, todos rojos antes |
 | **T-08** | `ArgvBuilder`: base → level → flags → options, `replace`, `requires`, placeholders | R-DATA-16…21 | T-06 | Golden tests contra el argv real de los TOML |
 | **T-09** | Catálogo: descubrimiento de `models/`, `fired/`, unicidad de nombres, alias | R-MOD-1…8 | T-06 | El catálogo de 45 (17 activos + 28 fired) se carga |
 | **T-10** | `ropero validate`, `ropero list`, `ropero template`, `ropero args`, `ropero levels`, `ropero path` | R-CLI-6…13 | T-09 | Los seis comandos con salida esperada |
