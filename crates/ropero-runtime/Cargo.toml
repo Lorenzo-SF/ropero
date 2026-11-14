@@ -11,3 +11,4 @@ path = "src/lib.rs"
 # ropero-runtime es la capa de E/S que le pasa al dominio los datos ya
 # capturados (aquí, la información de la máquina).
 ropero-core = { path = "../ropero-core" }
+signal-hook = "0.4.5"
