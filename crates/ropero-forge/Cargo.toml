@@ -8,3 +8,5 @@ rust-version.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+# ropero-core: el entorno capturado (las variables, el $HOME y el cwd).
+ropero-core = { path = "../ropero-core" }
