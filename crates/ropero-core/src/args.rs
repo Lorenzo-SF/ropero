@@ -95,6 +95,19 @@ pub struct ResolvedFiles {
     pub model_path: String,
 }
 
+impl crate::files::FileTable for ResolvedFiles {
+    fn file(&self, key: &str) -> Option<&std::path::Path> {
+        let valor = match key {
+            "gguf" => self.gguf.as_deref(),
+            "mtp" => self.mtp.as_deref(),
+            "mmproj" => self.mmproj.as_deref(),
+            "chat_template" => self.chat_template.as_deref(),
+            _ => None,
+        };
+        valor.map(std::path::Path::new)
+    }
+}
+
 /// Resuelve el contexto de lanzamiento de un modelo.
 ///
 /// Traduce el modelo (nombre real, formato, ficheros declarados) y el
@@ -185,16 +198,6 @@ pub enum ArgvError {
     MissingEnv {
         var: String,
     },
-}
-
-fn file_available(ctx: &ResolveContext, key: &str) -> bool {
-    match key {
-        "gguf" => ctx.files.gguf.is_some(),
-        "mtp" => ctx.files.mtp.is_some(),
-        "mmproj" => ctx.files.mmproj.is_some(),
-        "chat_template" => ctx.files.chat_template.is_some(),
-        _ => true,
-    }
 }
 
 fn slug_upper(s: &str) -> String {
@@ -376,7 +379,11 @@ pub fn build_argv(
         }
         if let Some(cfg) = spec.args.flag.get(name) {
             for req in &cfg.requires {
-                if !file_available(ctx, req) {
+                // Un requisito que **no** nombra una clave de `[files]` no
+                // se puede comprobar: se acepta (como antes). El TOML
+                // inválido lo caza `validate`, que sí conoce el
+                // vocabulario de `[files]`.
+                if crate::files::is_file_key(req) && !crate::files::has_file(&ctx.files, req) {
                     return Err(ArgvError::MissingFile { key: req.clone() });
                 }
             }
