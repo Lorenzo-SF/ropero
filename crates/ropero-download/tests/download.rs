@@ -822,3 +822,43 @@ fn una_ruta_fuera_no_toca_el_fichero_de_fuera() {
         "el fichero de fuera se ha tocado"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El GGUF va donde el runtime lo busca (R-MOD-6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un `[files].gguf` **con ruta** se descarga en esa ruta: el runtime lo
+/// busca en `$GGUF_DIR/<modelo>/<[files].gguf>` (R-MOD-6), no en el
+/// `basename`.
+#[test]
+fn el_gguf_con_ruta_propia_va_a_su_subdirectorio() {
+    let fake = Fake::nuevo("gguf-subdir");
+    let env = fake.entorno();
+    let toml = GGUF.replace("gguf = \"final.gguf\"", "gguf = \"carpeta/final.gguf\"");
+    let plan = plan_de_descarga(&spec(&toml), &env).expect("plan");
+
+    let esperado = env
+        .env_path("GGUF_DIR", "models/gguf")
+        .join("modelo")
+        .join("carpeta")
+        .join("final.gguf");
+    assert_eq!(
+        plan.dest, esperado,
+        "el GGUF no va donde lo busca el runtime: {plan:?}"
+    );
+
+    descarga(&plan, &env, Modo::Desatendido).expect("descarga");
+    assert!(plan.dest.is_file(), "no se ha descargado: {plan:?}");
+}
+
+/// Un `[files].gguf` que se sale del directorio del modelo es un error.
+#[test]
+fn un_gguf_que_se_sale_es_error() {
+    let fake = Fake::nuevo("gguf-fuera");
+    let env = fake.entorno();
+    let toml = GGUF.replace("gguf = \"final.gguf\"", "gguf = \"../../../secreto.gguf\"");
+    let error = plan_de_descarga(&spec(&toml), &env).expect_err("debe fallar");
+    let (campo, valor) = ruta_fuera(&error);
+    assert_eq!(campo, "[files].gguf");
+    assert_eq!(valor, "../../../secreto.gguf");
+}

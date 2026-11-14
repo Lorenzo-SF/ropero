@@ -1177,3 +1177,48 @@ use = "run"
         "el fichero de fuera se ha sobrescrito"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El GGUF va donde el runtime lo busca (R-MOD-6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Un `[files].gguf` **con ruta** se descarga en esa ruta: el runtime lo
+/// busca en `$GGUF_DIR/<modelo>/<[files].gguf>` (R-MOD-6), no en su
+/// `basename`.
+#[test]
+fn install_models_descarga_el_gguf_en_su_subdirectorio() {
+    let fake = Fake::nuevo("gguf-subdir").con_hf();
+    fake.modelo(
+        "nemotron",
+        r#"
+[model]
+name = "nemotron"
+engine = "turbo-llama"
+
+[files]
+gguf = "carpeta/nemotron.gguf"
+
+[download]
+repo = "ejemplo/nemotron"
+file = "nemotron.gguf"
+size = "~4 GB"
+"#,
+    );
+
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "nemotron"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("nemotron: vía download · descargado"),
+        "stdout={stdout}"
+    );
+    let destino = fake
+        .gguf
+        .join("nemotron")
+        .join("carpeta")
+        .join("nemotron.gguf");
+    assert!(
+        destino.is_file(),
+        "el GGUF no está donde lo busca el runtime: {destino:?}"
+    );
+}

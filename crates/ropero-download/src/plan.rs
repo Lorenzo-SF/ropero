@@ -166,21 +166,29 @@ fn plan_gguf(
         });
     }
     let dest_dir = env.env_path("GGUF_DIR", "models/gguf").join(&modelo);
-    // El nombre final es el que dice el runtime (`[files].gguf`), no el
-    // que tiene el fichero en el repo: el archivo del repo se renombra al
-    // final (R-MOD-16.7) y lo que busca el arranque es el final.
-    let nombre_final = paths
-        .gguf
-        .as_deref()
-        .and_then(|ruta| Path::new(ruta).file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .filter(|n| !n.is_empty());
-    let (nombre_final, campo) = match nombre_final {
-        Some(nombre) => (nombre, "[files].gguf"),
-        None if !download.name.is_empty() => (download.name.clone(), "[download].name"),
-        None => (download.file.clone(), "[download].file"),
+    // El destino es donde lo busca el runtime: `$GGUF_DIR/<modelo>/<[files].gguf>`
+    // (R-MOD-6), con su ruta **completa**: un `carpeta/mi.gguf` se descarga
+    // en `…/<modelo>/carpeta/mi.gguf` (y el subdirectorio se crea).
+    let (relativo, campo) = match paths.gguf.as_deref() {
+        Some(gguf) => {
+            let ruta = Path::new(gguf);
+            let relativo = ruta.strip_prefix(&dest_dir).map_err(|_| Error::RutaFuera {
+                modelo: modelo.clone(),
+                campo: "[files].gguf".to_string(),
+                valor: gguf.to_string(),
+            })?;
+            (relativo.to_string_lossy().to_string(), "[files].gguf")
+        }
+        // Sin `[files].gguf` se usa el nombre de la descarga (como antes).
+        None => {
+            if download.name.is_empty() {
+                (download.file.clone(), "[download].file")
+            } else {
+                (download.name.clone(), "[download].name")
+            }
+        }
     };
-    let dest = ruta_dentro(&dest_dir, &nombre_final, campo, &modelo)?;
+    let dest = ruta_dentro(&dest_dir, &relativo, campo, &modelo)?;
     // El fichero del repo tampoco puede salirse: el `mv` de R-MOD-16.2 lo
     // mueve desde el directorio del modelo.
     let _ = ruta_dentro(&dest_dir, &download.file, "[download].file", &modelo)?;
