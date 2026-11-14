@@ -37,6 +37,7 @@ use ropero_core::install::Via;
 
 use crate::Error;
 use crate::plan::{AuxPlan, Formato, MARCADOR, Plan, STAGING};
+use crate::rutas::ruta_dentro;
 
 /// Cómo se hace la descarga.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,22 +92,40 @@ pub fn descarga_con(
 ) -> Result<Resultado, Error> {
     // (1) El estado de cada cosa que hay que bajar: el artefacto principal
     // y los auxiliares (R-MOD-23).
-    let mut principal = estado_principal(plan);
-    let mut aux: Vec<(AuxPlan, Estado)> = plan
-        .aux
-        .iter()
-        .map(|a| (a.clone(), estado_fichero(&a.dest, &plan.aux_dir, &a.file)))
-        .collect();
+    let mut principal = estado_principal(plan)?;
+    let mut aux: Vec<(AuxPlan, Estado)> = Vec::new();
+    for a in &plan.aux {
+        let estado = estado_fichero(
+            &a.dest,
+            &plan.aux_dir,
+            &a.file,
+            &format!("[download.aux.{}].file", a.kind),
+            &plan.modelo,
+        )?;
+        aux.push((a.clone(), estado));
+    }
 
     // (2) El que está con el nombre del repo se renombra y se da por
     // bueno: no hace falta `hf` ni preguntar.
     if principal == Estado::Renombrar {
-        renombra(&plan.dest_dir, &plan.file, &plan.dest, &plan.modelo)?;
+        renombra(
+            &plan.dest_dir,
+            &plan.file,
+            &plan.dest,
+            &plan.modelo,
+            "[download].file",
+        )?;
         principal = Estado::Presente;
     }
     for (a, estado) in aux.iter_mut() {
         if *estado == Estado::Renombrar {
-            renombra(&plan.aux_dir, &a.file, &a.dest, &plan.modelo)?;
+            renombra(
+                &plan.aux_dir,
+                &a.file,
+                &a.dest,
+                &plan.modelo,
+                &format!("[download.aux.{}].file", a.kind),
+            )?;
             *estado = Estado::Presente;
         }
     }
@@ -139,7 +158,14 @@ pub fn descarga_con(
     // fijo (sin staging: es reanudable, R-MOD-17).
     if principal == Estado::Falta {
         match plan.formato {
-            Formato::Gguf => baja_fichero(&hf, plan, &plan.file, &plan.dest, &plan.hf_args)?,
+            Formato::Gguf => baja_fichero(
+                &hf,
+                plan,
+                &plan.file,
+                &plan.dest,
+                &plan.hf_args,
+                "[download].file",
+            )?,
             Formato::Safetensors => baja_checkpoint(&hf, plan)?,
         }
     }
@@ -147,7 +173,14 @@ pub fn descarga_con(
     // checkpoint (R-MOD-23).
     for (a, estado) in &aux {
         if *estado == Estado::Falta {
-            baja_fichero(&hf, plan, &a.file, &a.dest, &a.hf_args)?;
+            baja_fichero(
+                &hf,
+                plan,
+                &a.file,
+                &a.dest,
+                &a.hf_args,
+                &format!("[download.aux.{}].file", a.kind),
+            )?;
         }
     }
     Ok(Resultado::Descargado)
@@ -157,14 +190,20 @@ pub fn descarga_con(
 ///
 /// - **GGUF**: el fichero final (presente y no vacío).
 /// - **Checkpoint**: los pesos **y** el `config.json` (R-MOD-18).
-fn estado_principal(plan: &Plan) -> Estado {
+fn estado_principal(plan: &Plan) -> Result<Estado, Error> {
     match plan.formato {
-        Formato::Gguf => estado_fichero(&plan.dest, &plan.dest_dir, &plan.file),
+        Formato::Gguf => estado_fichero(
+            &plan.dest,
+            &plan.dest_dir,
+            &plan.file,
+            "[download].file",
+            &plan.modelo,
+        ),
         Formato::Safetensors => {
             if tiene_pesos(&plan.dest) && tiene_config(&plan.dest) {
-                Estado::Presente
+                Ok(Estado::Presente)
             } else {
-                Estado::Falta
+                Ok(Estado::Falta)
             }
         }
     }
@@ -215,20 +254,35 @@ fn baja_checkpoint(hf: &Path, plan: &Plan) -> Result<(), Error> {
 /// - **Renombrar**: no está el final, pero sí el del repo (una descarga a
 ///   medio renombrar): con un `mv` se da por buena.
 /// - **Falta**: no está ninguno de los dos.
-fn estado_fichero(dest: &Path, dest_dir: &Path, file: &str) -> Estado {
+///
+/// La ruta del repo **se acota** al directorio de destino: un `..` o una
+/// ruta absoluta podrían sacar el `mv` de fuera (ver [`crate::rutas`]).
+fn estado_fichero(
+    dest: &Path,
+    dest_dir: &Path,
+    file: &str,
+    campo: &str,
+    modelo: &str,
+) -> Result<Estado, Error> {
     if es_fichero_no_vacio(dest) {
-        return Estado::Presente;
+        return Ok(Estado::Presente);
     }
-    let del_repo = dest_dir.join(file);
+    let del_repo = ruta_dentro(dest_dir, file, campo, modelo)?;
     if del_repo != dest && es_fichero_no_vacio(&del_repo) {
-        return Estado::Renombrar;
+        return Ok(Estado::Renombrar);
     }
-    Estado::Falta
+    Ok(Estado::Falta)
 }
 
 /// Renombra el fichero que tiene el nombre del repo por el final.
-fn renombra(dest_dir: &Path, file: &str, dest: &Path, modelo: &str) -> Result<(), Error> {
-    let origen = dest_dir.join(file);
+fn renombra(
+    dest_dir: &Path,
+    file: &str,
+    dest: &Path,
+    modelo: &str,
+    campo: &str,
+) -> Result<(), Error> {
+    let origen = ruta_dentro(dest_dir, file, campo, modelo)?;
     if let Some(dir) = dest.parent() {
         std::fs::create_dir_all(dir).map_err(|e| Error::Disco {
             modelo: modelo.to_string(),
@@ -254,6 +308,7 @@ fn baja_fichero(
     file: &str,
     dest: &Path,
     args: &[String],
+    campo: &str,
 ) -> Result<(), Error> {
     let dest_dir = dest.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dest_dir).map_err(|e| Error::Disco {
@@ -262,7 +317,7 @@ fn baja_fichero(
         detalle: e.to_string(),
     })?;
     let staging = crea_staging(dest_dir, &plan.modelo)?;
-    let resultado = baja_en_staging(hf, plan, file, dest, args, &staging);
+    let resultado = baja_en_staging(hf, plan, file, dest, args, &staging, campo);
     // (8) `rm -rf` del staging: siempre, incluso en error.
     let _ = std::fs::remove_dir_all(&staging);
     resultado
@@ -276,13 +331,14 @@ fn baja_en_staging(
     dest: &Path,
     args: &[String],
     staging: &Path,
+    campo: &str,
 ) -> Result<(), Error> {
     // (5) `hf download` al staging.
     hf_descarga(hf, &args_del_staging(args, staging), &plan.modelo)?;
 
     // (6) Si `hf` dice OK pero el fichero no aparece, se busca por
     // `basename`: hf a veces normaliza el nombre.
-    let esperado = staging.join(file);
+    let esperado = ruta_dentro(staging, file, campo, &plan.modelo)?;
     let descargado = if es_fichero_no_vacio(&esperado) {
         Some(esperado)
     } else {
