@@ -22,12 +22,24 @@ jobs:
       - name: rustfmt
         run: cargo fmt --all -- --check
       - name: clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
       - name: tests
-        run: cargo test --workspace
+        run: cargo test --workspace --all-features
       - name: nextest
         uses: taiki-e/install-action@nextest
       - name: run nextest
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --all-features
+      - name: install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: coverage
+        # Sin umbrales todavía: los crates stubs tienen 0% de cobertura; activar
+        # los umbrales de §9.4 cuando exista implementación real.
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      - name: upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-${{ matrix.os }}
+          path: lcov.info
+          if-no-files-found: error
