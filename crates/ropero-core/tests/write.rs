@@ -66,7 +66,10 @@ fn otro_error_de_es_si_se_reporta() {
 #[test]
 fn una_escritura_normal_llega_entera() {
     let mut contador = Contador::default();
-    assert_eq!(write_tolerante(&mut contador, "hola"), WriteOutcome::Written);
+    assert_eq!(
+        write_tolerante(&mut contador, "hola"),
+        WriteOutcome::Written
+    );
     assert_eq!(contador.texto, "hola");
 }
 
