@@ -94,7 +94,14 @@ pub fn models_base(root: &Path, has_models_dir: bool) -> PathBuf {
 ///
 /// La lista es del dominio: qué nombres significan "aquí hay modelos" es una
 /// regla del catálogo, no una pregunta al disco.
-pub const MODELS_BASE_NAMES: &[&str] = &["_template.toml", "llama", "airllm", "mlx", "strata"];
+pub const MODELS_BASE_NAMES: &[&str] = &[
+    "_template.toml",
+    "turbo-llama",
+    "llama-server",
+    "airllm",
+    "mlx",
+    "strata",
+];
 
 /// Las variables de entorno que pueden apuntar a la raíz del catálogo.
 pub const ROOT_VARS: &[&str] = &["ROPERO_MODELS_DIR", "ROPERO_ROOT"];

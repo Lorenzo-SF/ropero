@@ -68,7 +68,7 @@ fn scan_root(root: &Path, env: &Environment) -> Result<Scan, String> {
     for dir in dirs {
         let folder = dir.file_name().unwrap_or_default().to_string_lossy();
         // Las carpetas de `models/` se nombran como el motor, pero no siempre
-        // igual (`llama/` → `llama-server`, `flm/` → `fastflowlm`).
+        // igual (`turbo-llama/` → `turbo-llama`, `flm/` → `fastflowlm`).
         //
         // Una carpeta que no corresponde a ningún motor es un **problema**
         // del catálogo (R-DATA-12), no el fin del escaneo: se acumula y se
@@ -176,8 +176,9 @@ pub fn find_model_root(env: &Environment) -> Result<PathBuf, String> {
 /// existiera.
 fn accept(p: &Path) -> Option<PathBuf> {
     let models = p.join("models");
-    let known =
-        models.is_dir() || models.join("_template.toml").is_file() || models.join("llama").is_dir();
+    let known = models.is_dir()
+        || models.join("_template.toml").is_file()
+        || models.join("turbo-llama").is_dir();
     if known || is_models_base(p) {
         return Some(p.to_path_buf());
     }

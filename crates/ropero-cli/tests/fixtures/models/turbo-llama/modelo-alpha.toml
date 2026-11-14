@@ -1,0 +1,46 @@
+# Modelo de prueba (datos ficticios): engine turbo-llama, con niveles.
+
+[model]
+name    = "modelo-alpha"
+engine  = "turbo-llama"
+context = 32768
+
+[files]
+gguf = "modelo-alpha-q4_k_m.gguf"
+
+[download]
+repo = "ejemplo/modelo-alpha"
+file = "modelo-alpha-q4_k_m.gguf"
+size = "~4 GB"
+
+[levels]
+list    = ["low", "medium", "high"]
+default = "low"
+
+# Alias de nivel: `--alto` es exactamente `--high`.
+[aliases]
+alto = "high"
+
+[options]
+list = ["temp"]
+
+[args]
+base = [
+    "--n-gpu-layers", "99",
+    "--ctx-size", "${ctx}",
+    "--temp", "0.7",
+]
+
+# `replace` sustituye la pareja "--temp 0.7" del base en vez de duplicarla.
+[args.option.temp]
+base = ["--temp", "${value}"]
+replace = "--temp"
+
+[args.level.low]
+base = ["--reasoning-budget", "0"]
+
+[args.level.medium]
+base = ["--reasoning-budget", "4096"]
+
+[args.level.high]
+base = ["--reasoning-budget", "16384"]

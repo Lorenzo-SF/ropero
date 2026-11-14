@@ -195,7 +195,7 @@ const ARGV_GROOT: &[&str] = &[
 
 #[test]
 fn golden_argv_groot() {
-    let spec = spec_frozen("llama/groot.toml");
+    let spec = spec_frozen("turbo-llama/groot.toml");
     let ctx = ctx_golden(
         65536,
         files_golden("groot", "Groot-19B-A3B-261023-NVFP4.gguf"),
@@ -254,7 +254,7 @@ const ARGV_NEMOTRON: &[&str] = &[
 
 #[test]
 fn golden_argv_nemotron() {
-    let spec = spec_frozen("llama/nemotron.toml");
+    let spec = spec_frozen("turbo-llama/nemotron.toml");
     let mut files = files_golden(
         "nemotron",
         "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf",
@@ -314,7 +314,7 @@ const ARGV_QWEN38: &[&str] = &[
 
 #[test]
 fn golden_argv_qwen38() {
-    let spec = spec_frozen("llama/qwen38.toml");
+    let spec = spec_frozen("turbo-llama/qwen38.toml");
     let ctx = ctx_golden(
         65536,
         files_golden("qwen38", "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"),
@@ -436,6 +436,18 @@ fn golden_deriva_contra_la_v1() {
 /// Si el catálogo real cambia, hay que re-congelar los fixtures: este test
 /// lo dice (no falla), porque la deriva del *contenido* del TOML no es
 /// necesariamente un error (la v1 puede evolucionar sin que el argv cambie).
+///
+/// ## La nomenclatura vieja de la v1 (ADR-004)
+///
+/// Los fixtures congelados están **migrados** a la nomenclatura canónica
+/// (`turbo-llama/`), pero la v1 sigue con la suya (`llama/`: el fork). Por
+/// eso cada par se declara con sus dos rutas: la de la v1 (`llama/…`) y la
+/// del fixture migrado (`turbo-llama/…`).
+///
+/// La comparación sigue siendo byte a byte sobre el TOML, salvo en el id del
+/// motor: el `engine` es la **única** línea que el renombrado de ADR-004
+/// toca, y se normaliza para que la deriva real (cualquier otra línea) siga
+/// viéndose.
 #[test]
 #[ignore = "compara los fixtures congelados con el catálogo real; ejecutar con `cargo test --locked --workspace -- --ignored`"]
 fn los_fixtures_congelados_coinciden_con_el_catalogo_real() {
@@ -447,17 +459,17 @@ fn los_fixtures_congelados_coinciden_con_el_catalogo_real() {
         );
         return;
     }
-    for model in [
-        "llama/groot.toml",
-        "llama/nemotron.toml",
-        "llama/qwen38.toml",
-        "strata/gyro-m.toml",
+    for (real_rel, frozen_rel) in [
+        ("llama/groot.toml", "turbo-llama/groot.toml"),
+        ("llama/nemotron.toml", "turbo-llama/nemotron.toml"),
+        ("llama/qwen38.toml", "turbo-llama/qwen38.toml"),
+        ("strata/gyro-m.toml", "strata/gyro-m.toml"),
     ] {
-        let real = base.join(model);
-        let frozen = base_frozen().join(model);
+        let real = base.join(real_rel);
+        let frozen = base_frozen().join(frozen_rel);
         let real_text = std::fs::read_to_string(&real).expect("leer el TOML real");
         let frozen_text = std::fs::read_to_string(&frozen).expect("leer el TOML congelado");
-        if real_text != frozen_text {
+        if normaliza_motor(&real_text) != normaliza_motor(&frozen_text) {
             eprintln!(
                 "aviso: el fixture congelado {} ha divergido del catálogo real {}: \
                  re-congélalo si el cambio es intencionado",
@@ -466,4 +478,33 @@ fn los_fixtures_congelados_coinciden_con_el_catalogo_real() {
             );
         }
     }
+}
+
+/// Normaliza el id del motor de un TOML, para comparar un catálogo con
+/// nomenclatura vieja contra uno con nomenclatura nueva (ADR-004).
+///
+/// Sólo se toca la línea `engine`: es la única que el renombrado cambia, y
+/// el resto del TOML tiene que seguir siendo idéntico byte a byte.
+fn normaliza_motor(toml_text: &str) -> String {
+    toml_text
+        .lines()
+        .map(|line| {
+            let Some(resto) = line.trim_start().strip_prefix("engine") else {
+                return line.to_string();
+            };
+            let Some((clave, valor)) = resto.split_once('=') else {
+                return line.to_string();
+            };
+            let valor = valor.trim().trim_matches('"');
+            let canonico = match valor {
+                "llama-server" | "llama" | "llama-server-official" | "llama-official" => {
+                    "llama-server"
+                }
+                "turbo-llama" | "turbo" => "turbo-llama",
+                otro => otro,
+            };
+            format!("{clave}= \"{canonico}\"")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }

@@ -115,12 +115,16 @@ fn un_argumento_de_mas_sale_con_dos() {
 #[test]
 fn un_catalogo_sin_plantilla_sale_con_uno() {
     let base = std::env::temp_dir().join("ropero-cli-contract-sin-plantilla");
-    let llama = base.join("llama");
-    std::fs::create_dir_all(&llama).unwrap();
+    // El directorio se limpia antes: si una corrida anterior dejó un motor
+    // viejo dentro, el catálogo tendría dos copias del mismo modelo y el
+    // escaneo fallaría por el choque de alias (no por la plantilla).
+    let _ = std::fs::remove_dir_all(&base);
+    let turbo = base.join("turbo-llama");
+    std::fs::create_dir_all(&turbo).unwrap();
     // Un modelo (para que el catálogo no esté vacío) pero sin `_template.toml`.
     std::fs::copy(
-        fixture_root().join("models/llama/modelo-alpha.toml"),
-        llama.join("modelo-alpha.toml"),
+        fixture_root().join("models/turbo-llama/modelo-alpha.toml"),
+        turbo.join("modelo-alpha.toml"),
     )
     .unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_ropero"))

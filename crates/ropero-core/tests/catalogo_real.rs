@@ -104,6 +104,73 @@ fn catalogo_real_tiene_plantilla() {
     assert!(text.contains("[model]"), "la plantilla no declara [model]");
 }
 
+/// El catálogo real usa la nomenclatura canónica de ADR-004: el fork es
+/// `turbo-llama` y el oficial es `llama-server`.
+///
+/// Antes del renombrado, `models/llama/` (el fork) declaraba `llama-server`
+/// y `models/llama-official/` (el oficial) declaraba `llama-server-official`.
+/// Este test fija la cuenta: 30 TOML del fork y 4 del oficial.
+#[test]
+fn catalogo_real_usa_la_nomenclatura_de_adr_004() {
+    let base = base_real();
+    let (active, fired) = recoge(&base);
+    let mut por_motor: std::collections::BTreeMap<String, usize> = Default::default();
+    for path in active.iter().chain(fired.iter()) {
+        let text = std::fs::read_to_string(path).expect("leer el TOML del modelo");
+        let spec = ropero_core::parse_model(&text, path)
+            .unwrap_or_else(|e| panic!("no se pudo parsear {}: {}", path.display(), e));
+        assert!(
+            spec.notices.is_empty(),
+            "{} avisa de un alias legacy: {:?}",
+            path.display(),
+            spec.notices
+        );
+        *por_motor
+            .entry(spec.model.engine.as_str().to_string())
+            .or_default() += 1;
+    }
+    assert_eq!(
+        por_motor.get("turbo-llama").copied(),
+        Some(30),
+        "el fork (turbo-llama) tiene 30 TOML: {:?}",
+        por_motor
+    );
+    assert_eq!(
+        por_motor.get("llama-server").copied(),
+        Some(4),
+        "el oficial (llama-server) tiene 4 TOML: {:?}",
+        por_motor
+    );
+    assert!(
+        !por_motor.contains_key("llama-server-official"),
+        "ya no existe el id 'llama-server-official': {:?}",
+        por_motor
+    );
+}
+
+/// Los directorios del catálogo real son los de ADR-004: `turbo-llama/` y
+/// `llama-server/`.
+#[test]
+fn catalogo_real_tiene_los_directorios_de_adr_004() {
+    let base = base_real();
+    assert!(
+        base.join("turbo-llama").is_dir(),
+        "falta models/turbo-llama/"
+    );
+    assert!(
+        base.join("llama-server").is_dir(),
+        "falta models/llama-server/"
+    );
+    assert!(
+        !base.join("llama").exists(),
+        "models/llama/ ya no existe (es turbo-llama/)"
+    );
+    assert!(
+        !base.join("llama-official").exists(),
+        "models/llama-official/ ya no existe (es llama-server/)"
+    );
+}
+
 /// Todos los TOML del catálogo de la v2 pasan el validador.
 ///
 /// Es el mismo contrato que `ropero validate` sobre `models/`: 45 modelos

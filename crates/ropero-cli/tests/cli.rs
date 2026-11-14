@@ -7,7 +7,7 @@
 //! `ropero_cli::discovery::find_model_root`).
 //!
 //! El catálogo de pruebas contiene, exactamente:
-//! - 2 modelos activos: `modelo-alpha` (motor `llama-server`) y `modelo-beta`
+//! - 2 modelos activos: `modelo-alpha` (motor `turbo-llama`) y `modelo-beta`
 //!   (motor `vllm`).
 //! - 1 modelo retirado en `fired/`: `modelo-retirado`.
 //! - 1 `_template.toml` que el comando `template` vuelca.
@@ -316,12 +316,12 @@ fn catalogo_con_motor_desconocido(nombre: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("ropero-cli-motor-desconocido-{nombre}"));
     let models = base.join("models");
     let _ = std::fs::remove_dir_all(&base);
-    std::fs::create_dir_all(models.join("llama")).unwrap();
+    std::fs::create_dir_all(models.join("turbo-llama")).unwrap();
     std::fs::create_dir_all(models.join("motor-novedoso")).unwrap();
     // Un modelo válido, para que el escaneo tenga algo que validar.
     std::fs::copy(
-        fixture_root().join("models/llama/modelo-alpha.toml"),
-        models.join("llama/modelo-alpha.toml"),
+        fixture_root().join("models/turbo-llama/modelo-alpha.toml"),
+        models.join("turbo-llama/modelo-alpha.toml"),
     )
     .unwrap();
     base
@@ -410,10 +410,10 @@ fn un_motor_desconocido_es_un_problema_del_catalogo() {
 /// tests no se pisen el fichero.
 ///
 /// `contenido` es el texto del TOML; se escribe en
-/// `models/llama/modelo-roto.toml`.
+/// `models/turbo-llama/modelo-roto.toml`.
 fn catalogo_con_toml_roto(nombre: &str, contenido: &str) -> PathBuf {
     let base = std::env::temp_dir().join(format!("ropero-cli-toml-roto-{nombre}"));
-    let models = base.join("models/llama");
+    let models = base.join("models/turbo-llama");
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&models).unwrap();
     std::fs::write(models.join("modelo-roto.toml"), contenido).unwrap();
@@ -443,7 +443,7 @@ fn run_con_toml_roto(nombre: &str, contenido: &str) -> (i32, String, String) {
 fn ruta_toml_roto(nombre: &str) -> String {
     std::env::temp_dir()
         .join(format!("ropero-cli-toml-roto-{nombre}"))
-        .join("models/llama/modelo-roto.toml")
+        .join("models/turbo-llama/modelo-roto.toml")
         .display()
         .to_string()
 }

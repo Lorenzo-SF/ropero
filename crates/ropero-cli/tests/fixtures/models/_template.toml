@@ -11,7 +11,7 @@
 
 [model]
 name    = "mi-modelo"
-engine  = "llama-server"
+engine  = "turbo-llama"
 context = 32768
 
 [files]

@@ -330,9 +330,9 @@ fn acepta_un_toml_valido() {
 #[test]
 fn valida_catalogo_completo_y_detecta_unicidad_global() {
     let mut first = valid();
-    first.source = std::path::PathBuf::from("models/llama/groot.toml");
+    first.source = std::path::PathBuf::from("models/turbo-llama/groot.toml");
     let mut second = valid();
-    second.source = std::path::PathBuf::from("models/llama-official/groot.toml");
+    second.source = std::path::PathBuf::from("models/llama-server/groot.toml");
     let catalog = ropero_core::Catalog {
         models: vec![first],
         fired: vec![second],
