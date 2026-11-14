@@ -4,7 +4,7 @@
 **Fecha**: 2026-11-12
 
 ## Contexto
-Existe un v1 que funciona y que 316 requisitos describen con evidencia en código. Hacer un big bang rewrite arriesga perder comportamiento observable y romper la compatibilidad del estado en disco.
+Existe un v1 que funciona y que 317 requisitos describen con evidencia en código. Hacer un big bang rewrite arriesga perder comportamiento observable y romper la compatibilidad del estado en disco.
 
 ## Decisión
 Extraer el comportamiento a crates Rust por capas (dominio, runtime, descargas, forja, servidor, CLI), conservando contratos y estado, en lugar de reescribir desde cero.

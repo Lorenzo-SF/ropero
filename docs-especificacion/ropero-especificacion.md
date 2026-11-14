@@ -42,7 +42,9 @@ quedó fuera del repo. Este documento la reconstruye.
    gestión de modelos (`cmd-install.sh`, `cmd-models.sh`, `install.sh`) y la
    batería de pruebas (`test/*.sh`).
 3. Lectura del script adjunto `groot-strata.sh`, que se integra como
-   requisito del camino «GGUF externo servido por Strata» (§ 4.13).
+   requisito del camino «GGUF externo servido por Strata» (§ 4.13). Este
+   script es **externo y no está versionado en este repositorio**; por eso
+   sus 13 citas no pueden verificarse localmente contra un fichero del repo.
 4. **Entrevista al dueño** (2026-11-12): el origen del proyecto (llama.cpp
    oficial → fork propio con TurboQuant/NextN/NVFP4 → MLX, FLM, TensorRT,
    AirLLM, vLLM, Strata), las dos plataformas (macOS y CachyOS), el sentido
@@ -92,7 +94,7 @@ De ahí se derivan las dos mitades del producto:
   `bin/lib/engines/`.
 
 > «Si el motor cambia, cambia el dato; el código no se toca.»
-> — `README.md:9-10`
+> — `ropero-code/README.md:9-10`
 
 **De dónde viene.** Ropero nació para el **llama.cpp oficial** (el de
 `ggml-org`), y de ahí le fueron Growing los motores: el fork propio con
@@ -130,12 +132,12 @@ Ropero resuelve cinco cosas:
 
 | Ropero NO… | Por qué | Evidencia |
 |---|---|---|
-| …baja modelos de Strata | No hay modo «descargar sin arrancar» en Strata: el modelo se baja al arrancar el motor. Ropero enseña el **plan** y lo dice. | `bin/lib/engines/strata.sh:214-233` |
+| …baja modelos de Strata | No hay modo «descargar sin arrancar» en Strata: el modelo se baja al arrancar el motor. Ropero enseña el **plan** y lo dice. | `ropero-code/bin/lib/engines/strata.sh:214-233` |
 | …toca los ficheros de Strata | Pesos, tabla n-gram, motor y carpeta son de Strata. | `docs/strata.md` § «Lo que NO hace ropero» |
 | …gestiona los presets de Strata del usuario | Los que crea ropero se llaman `ropero-<modelo>` y se para sólo ese preset. | `docs/strata.md` § «Las tres piezas» |
 | …ajusta el sistema operativo | Swappiness, THP, THP, DPM, cmdline del kernel y ananicy son de `Lorenzo-SF/setup`. | `CHANGELOG.md` § «Fuera de ropero» |
-| …es sourceable como librería | Es una CLI pura. Sourceado no hace nada y no altera opciones de shell. | `bin/ropero:41-55` |
-| …mata procesos que no son suyos | `stop` mata **por puerto**, con verificación de que el PID es el engine. | `bin/lib/04-launch.sh:450-536` |
+| …es sourceable como librería | Es una CLI pura. Sourceado no hace nada y no altera opciones de shell. | `ropero-code/bin/ropero:41-55` |
+| …mata procesos que no son suyos | `stop` mata **por puerto**, con verificación de que el PID es el engine. | `ropero-code/bin/lib/04-launch.sh:450-536` |
 
 ---
 
@@ -151,7 +153,7 @@ El código no supone el estado del sistema: lo **mide** o lo **pregunta**.
 Un `command -v` no basta: se prueba que el intérprete arranca de verdad.
 
 > «un shim de asdf roto pasa `command -v` y luego falla: se prueba, no se
-> supone» — `bin/lib/02-modelconf.sh:60-63`
+> supone» — `ropero-code/bin/lib/02-modelconf.sh:60-63`
 
 ### P-2 · Un fallo silencioso es peor que un error visible
 
@@ -161,7 +163,7 @@ existir, y entonces `lsof -iTCP` falla y siempre dice «libre» → ropero
 arranca un server encima del que ya está, y «stop» no mata nada.
 
 > «Es un fallo SILENCIOSO que se lee como ‘los modelos no arrancan’»
-> — `bin/lib/04-launch.sh:52-64`
+> — `ropero-code/bin/lib/04-launch.sh:52-64`
 
 Por eso hay **tres** formas de preguntar quién escucha en un puerto: `lsof` →
 `ss` → `fuser` → `/proc/net/tcp` + `/proc/*/fd`.
@@ -172,7 +174,7 @@ Por eso hay **tres** formas de preguntar quién escucha en un puerto: `lsof` →
 paralelos). Y antes de matar, comprueba que el PID del estado **es** el engine:
 el SO recicla los PIDs, y un estado viejo apuntaría a un navegador.
 
-> «Matarlo sería matar a un inocente» — `bin/lib/04-launch.sh:474-483`
+> «Matarlo sería matar a un inocente» — `ropero-code/bin/lib/04-launch.sh:474-483`
 
 ### P-4 · El estado en disco es la fuente de verdad
 
@@ -182,7 +184,7 @@ ese fichero, `status`, `stop` y la idempotencia de `use` no funcionarían desde
 otro proceso.
 
 > «lo que escucha en el puerto no dice a quién lo lanzó (y a veces ni siquiera
-> publica un id mapeable al catálogo)» — `bin/lib/04-launch.sh:16-20`
+> publica un id mapeable al catálogo)» — `ropero-code/bin/lib/04-launch.sh:16-20`
 
 ### P-5 · Un arranque que falla, se limpia
 
@@ -191,7 +193,7 @@ limpia el estado. Antes avisaba y lo dejaba vivo: el server terminaba de
 cargar y se ponía a servir peticiones, dejando un zombi en el puerto.
 
 > «ropero se comía los 300s del timeout y luego mataba a un server
-> perfectamente sano» — `bin/lib/04-launch.sh:725-736`
+> perfectamente sano» — `ropero-code/bin/lib/04-launch.sh:725-736`
 
 ### P-6 · Idempotencia por defecto
 
@@ -207,7 +209,7 @@ modelo con `[args].base` vacío en un engine con servidor propio es un
 olvido, no un error: se avisa y se deja pasar.
 
 > «Los problemas hacen fallar el validate (salida 1). Los avisos se imprime
-> pero no rompen» — `bin/python/modelconf.py:1417-1421`
+> pero no rompen» — `ropero-code/bin/python/modelconf.py:1417-1421`
 
 ### P-8 · La clave la pone ropero, una sola
 
@@ -254,7 +256,7 @@ que se puede defender en voz alta y uno que no.
 | Instalador de deps | `brew` | `pacman` |
 
 Detección: `rp_detect_os()` → `macos | cachyos | arch | linux | otro`
-(`bin/lib/01-env.sh:80-99`).
+(`ropero-code/bin/lib/01-env.sh:80-99`).
 
 ### 3.2 Motores soportados
 
@@ -269,8 +271,8 @@ Detección: `rp_detect_os()` → `macos | cachyos | arch | linux | otro`
 | `airllm` | AirLLM (librería pura, sin server) | macOS / Linux | `:9939` | no |
 | `strata` | Strata (MoE entre VRAM/RAM/SSD) | Linux / macOS | `:9929` | no |
 
-*(tabla de `bin/lib/04-launch.sh:167-180` y `bin/lib/03-engines.sh:38`;
-el orden de ids canónicos y sus alias legacy en `03-engines.sh:54-64`;
+*(tabla de `ropero-code/bin/lib/04-launch.sh:167-180` y `ropero-code/bin/lib/03-engines.sh:38`;
+el orden de ids canónicos y sus alias legacy en `ropero-code/bin/lib/03-engines.sh:54-64`;
 la columna de plataforma es la **compatibility declarada** por cada engine
 en `bin/lib/engines/<id>.sh`, hook `compatible`)*
 
@@ -278,12 +280,12 @@ en `bin/lib/engines/<id>.sh`, hook `compatible`)*
 SO y el hardware de la máquina**: en Linux no aparece Metal; en macOS no
 aparecen FLM, TensorRT-LLM ni vLLM. La compatibilidad la declara el propio
 engine (hook `compatible`), no una tabla central. Evidencia:
-`bin/lib/03-engines.sh:5-17`, `bin/lib/cmd-install.sh:495-499`.
+`ropero-code/bin/lib/03-engines.sh:5-17`, `ropero-code/bin/lib/cmd-install.sh:495-499`.
 
 **R-CTX-2** · `install models` **sólo ofrece los modelos de los engines que
 están instalados**: si el catálogo tiene 80 modelos pero sólo hay un engine
 instalado, se ofrecen los 15 de ese engine. Evidencia:
-`bin/lib/cmd-models.sh:136-145`, `:602-767`.
+`ropero-code/bin/lib/cmd-models.sh:136-145`, `:602-767`.
 
 **R-CTX-3** · 🔶 **Los motores y los modelos no están todos en el mismo
 grado de madurez**, y la especificación no debe fingir lo contrario. En el
@@ -315,12 +317,12 @@ combinación hardware↔motor verificada de extremo a extremo en la NPU.
 
 | id | Restricción | Evidencia |
 |---|---|---|
-| R-NF-1 | **Bash 3.2**: sin `nameref`, `declare -A`, `mapfile`, `readlink -f`, `${var^^}` | `README.md:197-198`, `bin/ropero:20-22` |
-| R-NF-2 | **Comentarios y mensajes en español** | `bin/ropero:23-24` |
-| R-NF-3 | El dispatcher no altera opciones de shell: ni `errexit` ni `nounset` | `bin/ropero:39-55` |
-| R-NF-4 | Todo módulo es seguro de sourcear (sólo definiciones) | `bin/lib/01-env.sh:5-8`, `02-modelconf.sh:26` |
-| R-NF-5 | `shellcheck -S warning` limpio sobre `bin/ropero bin/lib/*.sh bin/lib/engines/*.sh` | `README.md:193-195` |
-| R-NF-6 | Los datos del modelo son **datos**: nada de lo que hay en un TOML se ejecuta | `models/_template.toml:9` |
+| R-NF-1 | **Bash 3.2**: sin `nameref`, `declare -A`, `mapfile`, `readlink -f`, `${var^^}` | `ropero-code/README.md:199-200`, `ropero-code/bin/ropero:20-22` |
+| R-NF-2 | **Comentarios y mensajes en español** | `ropero-code/bin/ropero:23-24` |
+| R-NF-3 | El dispatcher no altera opciones de shell: ni `errexit` ni `nounset` | `ropero-code/bin/ropero:39-55` |
+| R-NF-4 | Todo módulo es seguro de sourcear (sólo definiciones) | `ropero-code/bin/lib/01-env.sh:5-8`, `ropero-code/bin/lib/02-modelconf.sh:26` |
+| R-NF-5 | `shellcheck -S warning` limpio sobre `bin/ropero bin/lib/*.sh bin/lib/engines/*.sh` | `ropero-code/README.md:195-197` |
+| R-NF-6 | Los datos del modelo son **datos**: nada de lo que hay en un TOML se ejecuta | `ropero-code/models/_template.toml:9` |
 
 ---
 
@@ -332,21 +334,21 @@ combinación hardware↔motor verificada de extremo a extremo en la NPU.
 ~200 líneas) y módulos con carga diferida. El dispatcher no contiene lógica de
 negocio: resuelve la raíz, sourcea `00-utils.sh` y `01-env.sh`, y delega.
 
-> «Este fichero SOLO enruta» — `bin/ropero:14-19`
+> «Este fichero SOLO enruta» — `ropero-code/bin/ropero:14-19`
 
 **R-ARQ-2** · La tabla de ruteo es **completa desde el primer día** y no se
 toca: cada fase posterior sólo añade `cmd-*.sh` y su función `rp_cmd_<comando>`.
 
-> «NADIE vuelve a tocar este dispatcher» — `bin/ropero:25-28`
+> «NADIE vuelve a tocar este dispatcher» — `ropero-code/bin/ropero:25-28`
 
 **R-ARQ-3** · Un comando no portado responde `aún no portado (fase N)` y sale
 con **2**; un comando cuyo módulo no define la función sale con **1**.
-Evidencia: `bin/ropero:252-263`.
+Evidencia: `ropero-code/bin/ropero:252-263`.
 
 **R-ARQ-4** · `ROPERO_ROOT` se resuelve siguiendo la cadena de symlinks de `$0`
 con un bucle de `readlink` + `cd/pwd`, **sin `readlink -f`** (no existe en el
 bash 3.2 de macOS). El bucle tiene un tope de **40 saltos** para que un ciclo
-de symlinks no cuelgue el arranque. Evidencia: `bin/ropero:66-99`.
+de symlinks no cuelgue el arranque. Evidencia: `ropero-code/bin/ropero:66-99`.
 
 **R-ARQ-5** · Los módulos son: `00-utils` (utilidades y presentación),
 `01-env` (entorno), `02-modelconf` (wrapper del catálogo), `03-engines`
@@ -357,33 +359,33 @@ de symlinks no cuelgue el arranque. Evidencia: `bin/ropero:66-99`.
 Python (`bin/python/modelconf.py`). El shell no re-implementa el parser: lee su
 *dump* (formato v1, separador `0x1F`, **31 campos por registro`) y lo deja en
 arrays paralelas. Un consumidor nuevo ante un dump de otra versión **se niega
-a leer a ciegas**. Evidencia: `bin/lib/02-modelconf.sh:5-7`, `176-184`.
+a leer a ciegas**. Evidencia: `ropero-code/bin/lib/02-modelconf.sh:5-7`, `176-184`.
 
 **R-ARQ-7** · El parser es **autocontenido**: trae su propio lector de TOML
-(`parse_toml`, `bin/python/modelconf.py:478`) y sólo usa `tomllib` si está
+(`parse_toml`, `ropero-code/bin/python/modelconf.py:478`) y sólo usa `tomllib` si está
 disponible (`_tomllib()`, línea 519). Esto es lo que permite correr en el
 Python del sistema de macOS.
 
 **R-ARQ-8** · El **interprete de Python se prueba, no se supone**: se
 recorren los candidatos y se ejecuta `python -c 'import sys'`; un shim de asdf
 roto pasa `command -v` y luego falla. `$ROPERO_PYTHON` gana si se fija.
-Evidencia: `bin/lib/02-modelconf.sh:60-90`.
+Evidencia: `ropero-code/bin/lib/02-modelconf.sh:60-90`.
 
 **R-ARQ-9** · El estado runtime vive en `$STATE_DIR/ports/<puerto>`, un
 fichero de líneas `CLAVE=valor` con `MODEL=`, `ENGINE=`, `PID=`, `PORT=`,
 `LEVEL=`, `TS=`, `LOG=`, `STAMP=`. La escritura es **atómica** (tmp + `mv`) y
 **conserva** las claves que no vienen en la llamada. Evidencia:
-`bin/lib/04-launch.sh:249-302`.
+`ropero-code/bin/lib/04-launch.sh:249-302`.
 
 **R-ARQ-10** · El directorio de modelos tiene dos niveles: `models/<engine>/`
 (activos) y `models/<engine>/fired/` (retirados). **La diferencia es la
 carpeta, no el esquema**: un modelo retirado usa exactamente el mismo formato.
-Evidencia: `models/_template.toml:5-7`.
+Evidencia: `ropero-code/models/_template.toml:5-7`.
 
 **R-ARQ-11** · El estado de la herramienta se puede reconstruir desde el
 disco: los puertos gestionados se derivan de `$PORT`, `$CPU_PORT`, los
 `[model].port` de los TOML activos y los ficheros que hay en
-`$STATE_DIR/ports/`. Evidencia: `bin/lib/04-launch.sh:304-334`.
+`$STATE_DIR/ports/`. Evidencia: `ropero-code/bin/lib/04-launch.sh:304-334`.
 
 ---
 
@@ -391,7 +393,7 @@ disco: los puertos gestionados se derivan de `$PORT`, `$CPU_PORT`, los
 
 > La fuente de verdad del esquema es el **validador**:
 > `python3 bin/python/modelconf.py validate --root models`
-> — `models/_template.toml:10-11`
+> — `ropero-code/models/_template.toml:10-11`
 
 #### 4.2.1 Tablas y reglas
 
@@ -401,14 +403,14 @@ obligatorios; `alias`, `port` y `path` son opcionales; `format` vale `gguf`
 (por defecto), `safetensors`, `q4nx` o `strata`.
 
 - `[model].path` es **obligatorio** con `format = safetensors` y **prohibido**
-  con `format = gguf`. Evidencia: `bin/python/modelconf.py:1474-1477`.
+  con `format = gguf`. Evidencia: `ropero-code/bin/python/modelconf.py:1474-1477`.
 - El id legacy `mlx_lm` se acepta y se canóniza a `mlx-serve` con aviso.
-  Evidencia: `models/_template.toml:22-24`.
+  Evidencia: `ropero-code/models/_template.toml:22-24`.
 
 **R-DATA-2** · `[files]` es obligatoria. Los valores son **nombres de
 fichero**, nunca rutas absolutas (error explícito del validador). `gguf` es
 obligatoria con `format = gguf`. Claves: `gguf`, `mtp`, `mmproj`,
-`chat_template`. Evidencia: `bin/python/modelconf.py:1479-1494`.
+`chat_template`. Evidencia: `ropero-code/bin/python/modelconf.py:1479-1494`.
 
 **R-DATA-3** · `[download]` es obligatoria salvo que el modelo se fabrique
 con `[build]`. `repo` es obligatorio; `file` es obligatoria **sólo** con
@@ -416,53 +418,53 @@ con `[build]`. `repo` es obligatorio; `file` es obligatoria **sólo** con
 nombre no significa nada; si aparece, se avisa pero no rompe). `name`,
 `size`, `excludes` y `manual` son opcionales. `manual = true` saca el modelo
 de la oferta de `ropero install models` (checkpoints enormes que el instalador
-no baja por sorpresa). Evidencia: `bin/python/modelconf.py:1496-1529`,
-`models/_template.toml:47-58`.
+no baja por sorpresa). Evidencia: `ropero-code/bin/python/modelconf.py:1496-1529`,
+`ropero-code/models/_template.toml:47-58`.
 
 **R-DATA-4** · `[download.aux.<tipo>]` describe auxiliares; tipo ∈ `mtp`,
 `mmproj`, `chat_template`, `imatrix`, `tokenizer`. `file` es obligatorio;
 `repo` puede ser otro repo; `use` ∈ `run` | `build` (por defecto, `run` para
 los de runtime y `build` para los de fabricación). Evidencia:
-`models/_template.toml:60-68`.
+`ropero-code/models/_template.toml:60-68`.
 
 **R-DATA-5** · `[build]` declara **cómo se fabrica** el GGUF: `repo`, `gguf`,
 `gguf_file`, `quant`, `imatrix`, `imatrix_repo`, `imatrix_file`, `out`,
 `out_principal`, `from_subdir`, `include`, `intermedio` (`f16`|`bf16`),
 `keep_source`, `keep_intermedio`, `no_mtp`, `force`, `size`. Una clave
 **desconocida** genera aviso (no error). Evidencia:
-`models/_template.toml:71-93`.
+`ropero-code/models/_template.toml:71-93`.
 
 **R-DATA-6** · Si un TOML tiene `[download]` **y** `[build]`,
 `ropero install models <modelo>` exige `--download` o `--build` para elegir
-camino; en el menú interactivo se pregunta. Evidencia: `README.md:72-73`,
-`models/_template.toml:72-73`.
+camino; en el menú interactivo se pregunta. Evidencia: `ropero-code/README.md:74-75`,
+`ropero-code/models/_template.toml:72-73`.
 
 **R-DATA-7** · `[levels]`, `[flags]` y `[options]` declaran **lo que el modelo
 acepta por línea de comandos**. Un nivel, flag u opción **no declarados son
 error de uso (exit 2)**: no se ignoran en silencio. Evidencia:
-`models/_template.toml:96-98`, `bin/lib/cmd-runtime.sh:143`, `cmd-catalog.sh:272`.
+`ropero-code/models/_template.toml:96-98`, `ropero-code/bin/lib/cmd-runtime.sh:143`, `ropero-code/bin/lib/cmd-catalog.sh:272`.
 
 **R-DATA-8** · `[levels].default` tiene que estar en `[levels].list`;
 `[options.default].<k>` tiene que estar en `[options].list`; un
 `[aliases].<x>` tiene que apuntar a un nivel de `[levels].list`. Evidencia:
-`bin/python/modelconf.py:1531-1555`.
+`ropero-code/bin/python/modelconf.py:1531-1555`.
 
 **R-DATA-9** · `[limits].min_ram_gb` es un número > 0. Es **orientativo**: al
 arrancar, si la RAM no da, ropero **avisa y sigue** (macOS pagina en vez de
 fallar: mejor que el usuario pueda intentarlo). Evidencia:
-`bin/python/modelconf.py:1557-1565`, `bin/lib/04-launch.sh:598-617`.
+`ropero-code/bin/python/modelconf.py:1557-1565`, `ropero-code/bin/lib/04-launch.sh:598-617`.
 
 **R-DATA-10** · `[args]` es **obligatoria para `engine = llama-server`** y
 debe traer `base` como lista. Para los demás engines, un `[args].base` vacío
 es un **aviso**, no un error (un modelo con servidor propio puede no llevar
-flags). Evidencia: `bin/python/modelconf.py:1567-1582`.
+flags). Evidencia: `ropero-code/bin/python/modelconf.py:1567-1582`.
 
 **R-DATA-11** · Un `${fichero}` usado en `[args]` pero no declarado en
-`[files]` es error. Evidencia: `bin/python/modelconf.py:1625-1644`.
+`[files]` es error. Evidencia: `ropero-code/bin/python/modelconf.py:1625-1644`.
 
 **R-DATA-12** · La carpeta del TOML tiene que ser un `engine_dir` conocido
 (`llama`, `llama-official`, `mlx`, `airllm`, `flm`, `tensorrt`, `vllm`,
-`strata`). Evidencia: `bin/python/modelconf.py:1646-1649`.
+`strata`). Evidencia: `ropero-code/bin/python/modelconf.py:1646-1649`.
 
 #### 4.2.2 Montaje del argv
 
@@ -473,7 +475,7 @@ flags). Evidencia: `bin/python/modelconf.py:1567-1582`.
 [args].base → [args.level.<nivel>] → [args.flag.<f>] (en el orden pedido) → [args.option.<o>]
 ```
 
-Evidencia: `models/_template.toml:144-146`.
+Evidencia: `ropero-code/models/_template.toml:144-146`.
 
 **R-DATA-14** · Un elemento de la lista = **un** argumento. Un argumento con
 espacios es un error de uso del TOML, no un argumento con comillas.
@@ -481,27 +483,40 @@ espacios es un error de uso del TOML, no un argumento con comillas.
 **R-DATA-15** · `[args.level.<n>]` admite tres formas equivalentes de
 expresar el nivel: `base` (args literales), `reasoning_effort` (atajo que se
 traduce a `--chat-template-kwargs <json>`) y `chat_template_kwargs` (el json
-completo). Evidencia: `models/_template.toml:118-122`.
+completo). Evidencia: `ropero-code/models/_template.toml:118-122`.
 
 **R-DATA-16** · `[args.flag.<f>]` puede declarar `requires = [<claves de
 [files]>]`: si el fichero no está en disco, el flag es error. Y
 `[args.option.<o>]` admite `replace = "--flag"`, que **sustituye** la pareja
 del base en vez de añadirla detrás (para no duplicar `--temp`). Evidencia:
-`models/_template.toml:124-129`, `bin/python/modelconf.py:1608-1623`.
+`ropero-code/models/_template.toml:124-129`, `ropero-code/bin/python/modelconf.py:1608-1623`.
+
+> **Fix pendiente · orden del argv al usar `replace` (R-DATA-16).** La v1
+> elimina la pareja del base y **añade la nueva al final**, aunque la
+> alternativa correcta es **sustituirla en su lugar**, manteniendo el orden del
+> argv. La v2 congela este último comportamiento, porque es el que fija
+> R-DATA-16 y evita que el valor reemplazado dependa de su posición. Este
+> cambio de comportamiento queda documentado como `fix` y **pendiente de su
+> propio PR**; no forma parte de la extracción de la v1.
+
+> **Fix pendiente · anchura de la pareja reemplazada (R-DATA-16).** Si el token
+> a reemplazar es el último del base, la v2 quita un solo token, mientras que
+> la v1 quita dos o uno según `_drop_flag_pair`. La diferencia queda cubierta
+> por tests sintéticos y pendiente de reconciliación en un PR propio.
 
 #### 4.2.3 Placeholders
 
 **R-DATA-17** · Los placeholders válidos en cualquier `base[]` son:
 `${gguf}`, `${mtp}`, `${mmproj}`, `${chat_template}`, `${ctx}`, `${value}`
 (sólo en `[args.option]`), `${gguf_dir}`, `${safetensors_dir}`, `${model_path}`,
-`${env:VAR}` y `${env:VAR:-def}`. Evidencia: `models/_template.toml:131-142`.
+`${env:VAR}` y `${env:VAR:-def}`. Evidencia: `ropero-code/models/_template.toml:131-142`.
 
 **R-DATA-18** · Se pueden **sobrescribir sin tocar el TOML** con variables de
 entorno: `ROPERO_<NOMBRE>_CTX` (contexto efectivo), `ROPERO_<NOMBRE>_GGUF`
 (apunta `${gguf}` a otra cuantización del mismo repo) y
 `ROPERO_MODEL_OPT_<K>` (default de una opción). El nombre se normaliza a
 mayúsculas con guiones y puntos convertidos en `_`. Evidencia:
-`models/_template.toml:148-151`, `bin/lib/04-launch.sh:895`.
+`ropero-code/models/_template.toml:148-151`, `ropero-code/bin/lib/04-launch.sh:895`.
 
 #### 4.2.4 Formatos
 
@@ -509,12 +524,12 @@ mayúsculas con guiones y puntos convertidos en `_`. Evidencia:
 `gguf` (fichero local), `safetensors` (checkpoint bajo `$SAFETENSORS_DIR`),
 `q4nx` (el almacén de FLM: `[model].path` es un **TAG**) y `strata` (el
 catálogo de Strata: `[model].path` es `<familia>/<paquete>` y los ficheros los
-baja Strata, no ropero). Evidencia: `models/_template.toml:29-32`.
+baja Strata, no ropero). Evidencia: `ropero-code/models/_template.toml:29-32`.
 
 **R-DATA-20** · Un modelo `format = gguf` **sin** `[download]` y **sin**
 `[build]` es un modelo **sólo-local**: su GGUF tiene que estar ya en disco.
 Ropero lo avisa, no lo rompe (un catálogo entero no se cae por un TOML con el
-`[download]` comentado). Evidencia: `bin/python/modelconf.py:1521-1529`.
+`[download]` comentado). Evidencia: `ropero-code/bin/python/modelconf.py:1521-1529`.
 
 **R-DATA-21** · 🔶 **`[model].name` DEBE ser igual al nombre del fichero
 TOML, sin extensión**, y ese valor es el **alias** con el que se arranca y
@@ -544,7 +559,7 @@ El **nivel por defecto** hace que `ropero <modelo>` sin argumentos sea
 equivalente a `ropero <modelo> --<nivel-por-defecto>`. Un nivel, un flag o
 una opción **no declarados** son error de uso (R-CLI-9). Los alias de nivel
 (`[aliases]`) son atajos: `ropero modelo --x` ≡ `ropero modelo --high`.
-Evidencia: `bin/python/modelconf.py:1487-1529`, `:1549-1554`;
+Evidencia: `ropero-code/bin/python/modelconf.py:1487-1529`, `:1549-1554`;
 `models/_template.toml` (ejemplo comentado, líneas 230-289).
 
 **R-DATA-23** · Un modelo puede tener **distintos ficheros para la vía
@@ -554,7 +569,7 @@ imatrix se declaran como auxiliares `[download.aux.<tipo>]`, cada uno con su
 `file`, su `repo` opcional y su `use` (`run` = lo carga el arranque;
 `build` = sólo lo usa el gguffer). La plantilla lo soporta entero:
 `[download.aux.imatrix]` con `repo = "otro-usuario/imatrices"`. Evidencia:
-`models/_template.toml:205-224`; `bin/lib/cmd-models.sh:321-336`.
+`ropero-code/models/_template.toml:205-224`; `ropero-code/bin/lib/cmd-models.sh:321-336`.
 
 ---
 
@@ -574,33 +589,33 @@ imatrix se declaran como auxiliares `[download.aux.<tipo>]`, cada uno con su
 | `rp_eng_<id>_native_auth` | `yes` \| `no` |
 | `rp_eng_<id>_launch <modelo> <puerto> <logfile> <argv...>` | **PID** por stdout |
 
-Evidencia: `bin/lib/03-engines.sh:6-25`.
+Evidencia: `ropero-code/bin/lib/03-engines.sh:6-25`.
 
 **R-ENG-2** · El cargador **verifica los ocho** y, si falta uno, error
 nombrándolo: `engine 'x': falta el hook rp_eng_x_label`. Evidencia:
-`bin/lib/03-engines.sh:93-105`.
+`ropero-code/bin/lib/03-engines.sh:93-105`.
 
 **R-ENG-3** · Los ids de motor llevan guiones y **no se traducen**: son
 identificadores bash legales (`rp_eng_llama-server_label`). Se aceptan ids
 legacy y se canónizan (`llama`→`llama-server`, `mlx_lm`→`mlx-serve`,
 `flm`→`fastflowlm`, `tensorrt`→`tensorrt-llm`, `strata_engine`→`strata`).
-Evidencia: `bin/lib/03-engines.sh:26-33`, `54-64`.
+Evidencia: `ropero-code/bin/lib/03-engines.sh:26-33`, `54-64`.
 
 **R-ENG-4** · **Añadir un motor = añadir un fichero** (y, si tiene modelos,
-`models/<dir>/`). Nada más. Evidencia: `README.md:179-180`.
+`models/<dir>/`). Nada más. Evidencia: `ropero-code/README.md:181-182`.
 
 **R-ENG-5** · Un motor roto **no tumba el install**: `_rp_engine_deps_ok`
 devuelve 1 con la lista de lo que falta y quien llama decide. Evidencia:
-`bin/lib/03-engines.sh:186-195`.
+`ropero-code/bin/lib/03-engines.sh:186-195`.
 
 **R-ENG-6** · El **probe mira el puerto de ropero**, no el interno del motor:
 lo que tiene que contestar es el endpoint de ropero con su `/health`. Esto
 importa en los motores que van detrás de `endpoint.py` (Strata, FLM, TRT).
-Evidencia: `bin/lib/engines/strata.sh:143-156`.
+Evidencia: `ropero-code/bin/lib/engines/strata.sh:143-156`.
 
 **R-ENG-7** · Un motor que no tiene auth nativa (`native_auth = no`) arranca
 **sin clave** y lo pone el proxy de ropero delante. Evidencia:
-`bin/lib/engines/strata.sh:158-167`.
+`ropero-code/bin/lib/engines/strata.sh:158-167`.
 
 ---
 
@@ -613,13 +628,13 @@ ropero <modelo> [--port N] [--cpu] [--background] [--force]
 ropero <comando> [opciones]
 ```
 
-Evidencia: `bin/ropero:8-11`.
+Evidencia: `ropero-code/bin/ropero:8-11`.
 
 **R-CLI-2** · Los comandos son: `use`, `stop`, `status`, `list`, `template`,
 `args`, `levels`, `path`, `models`, `install` (con `setup`/`engines`/`link`/
 `opencode-plugin`), `engines`, `doctor`/`check`, `config`, `gguffer`, `test`.
 `engines` y `models` son alias de `install engines` / `install models`.
-Evidencia: `bin/ropero:150-168`, tabla de ruteo `160-179`.
+Evidencia: `ropero-code/bin/ropero:150-168`, tabla de ruteo `160-179`.
 
 **R-CLI-14** · 🔶 **La superficie pública de `install` son dos comandos**:
 `ropero install engines` y `ropero install models`. `setup`, `link` y
@@ -636,15 +651,15 @@ El código actual ofrece las cinco. La divergencia está en § 6 (H-22).
 **R-CLI-15** · `ropero install` **a secas ejecuta el proceso completo**:
 preflight del entorno → engines → models, en ese orden. Sin TTY es **error de
 uso** (exit 2): nada de menús que se traguen un EOF y elijan por su cuenta.
-Evidencia: `bin/lib/cmd-install.sh:117-130` (bare: `setup` → `engines` →
+Evidencia: `ropero-code/bin/lib/cmd-install.sh:117-130` (bare: `setup` → `engines` →
 `models`), `:463-467`.
 
 **R-CLI-16** · `ropero install engines <id>...` y
 `ropero install models <alias>...` aceptan una **lista explícita** y son el
 **modo desatendido**: sin TTY no hay menú, se exige la lista. Es lo que
 permite automatizar la instalación de un conjunto de engines y de modelos.
-Evidencia: `bin/lib/cmd-install.sh:91-96`, `:464-467`;
-`bin/lib/cmd-models.sh:641-645`.
+Evidencia: `ropero-code/bin/lib/cmd-install.sh:91-96`, `:464-467`;
+`ropero-code/bin/lib/cmd-models.sh:641-645`.
 
 **R-CLI-17** · 🔶 **`ropero stats [--watch]`** es un comando de **estado del
 sistema**: CPU, RAM y GPU, con refresco automático en `--watch`. No existe en
@@ -656,52 +671,52 @@ fuentes en un fichero). Lo que se quiere es un comando de métricas en vivo,
 **R-CLI-3** · **Códigos de salida**:
 `0` éxito · `1` error de ejecución · `2` error de uso (incluido «comando
 aún no portado») · `130` Ctrl-C en primer plano. Evidencia:
-`bin/lib/00-utils.sh:170-182`, `bin/ropero:252-263`,
-`bin/lib/04-launch.sh:1159-1161`.
+`ropero-code/bin/lib/00-utils.sh:170-182`, `ropero-code/bin/ropero:252-263`,
+`ropero-code/bin/lib/04-launch.sh:1159-1161`.
 
 **R-CLI-4** · Un error de uso **imprime el error y un puntero a la ayuda**
 (`ropero <cmd> --help → uso de <cmd>`), no un volcado de veinte líneas.
-Evidencia: `bin/lib/00-utils.sh:170-182`, `bin/ropero:236-241`.
+Evidencia: `ropero-code/bin/lib/00-utils.sh:170-182`, `ropero-code/bin/ropero:236-241`.
 
 **R-CLI-5** · La ayuda general está **en línea** en el dispatcher: tiene que
 funcionar aunque sólo existan `00-utils.sh`/`01-env.sh`, e incluso sin `alaja`
-y sin ANSI. Evidencia: `bin/ropero:20-22`, `199-213`.
+y sin ANSI. Evidencia: `ropero-code/bin/ropero:20-22`, `199-213`.
 
 **R-CLI-6** · Un comando no conocido que **no empieza por `-`** se interpreta
 como **arranque directo de modelo** (no como error). Evidencia:
-`bin/ropero:265-278`.
+`ropero-code/bin/ropero:265-277`.
 
 **R-CLI-7** · `ropero list` muestra los modelos activos; `--all` incluye los
 retirados. Los retirados son **informativos**: no se instalan ni se arrancan
 (`ropero <modelo-retirado>` falla con «está retirado»). Evidencia:
-`README.md:37`, `bin/lib/04-launch.sh:848-852`.
+`ropero-code/README.md:39`, `ropero-code/bin/lib/04-launch.sh:848-852`.
 
 **R-CLI-8** · `ropero args <modelo>` imprime el **argv final**, un argumento
 por línea. `ropero levels <modelo>` imprime los niveles declarados.
 `ropero path <modelo>` imprime las rutas resueltas. Los tres rechazan
-argumentos que no son el modelo. Evidencia: `bin/lib/cmd-catalog.sh:221`,
+argumentos que no son el modelo. Evidencia: `ropero-code/bin/lib/cmd-catalog.sh:221`,
 `299`, `346`.
 
 **R-CLI-9** · Los niveles, flags y opciones se validan **contra el TOML**: un
 nivel no declarado, un flag no declarado o una opción no declarada son error
 de uso, con el mensaje que enumera lo que sí hay. Evidencia:
-`bin/lib/cmd-runtime.sh:143`, `bin/lib/cmd-catalog.sh:258`, `272`.
+`ropero-code/bin/lib/cmd-runtime.sh:143`, `ropero-code/bin/lib/cmd-catalog.sh:258`, `272`.
 
 **R-CLI-10** · La gramática de los argumentos tras el nombre del modelo: el
 primer argumento que no es `k=v` es el **nivel**; los `k=v` son **opciones**;
 el resto son **flags** (con o sin `--`). Evidencia:
-`bin/lib/02-modelconf.sh:269-307`.
+`ropero-code/bin/lib/02-modelconf.sh:269-307`.
 
 **R-CLI-11** · `ropero status <modelo>` devuelve **0 sirviéndose · 1 no ·
-2 desconocido**. Evidencia: `README.md:43`.
+2 desconocido**. Evidencia: `ropero-code/README.md:45`.
 
 **R-CLI-12** · `--cpu` sólo existe en Linux (en macOS es error de uso) y sólo
 funciona con `engine = llama-server` (es `--n-gpu-layers 0`, un flag suyo).
-Evidencia: `bin/lib/cmd-runtime.sh:85-92`, `bin/lib/04-launch.sh:865-870`.
+Evidencia: `ropero-code/bin/lib/cmd-runtime.sh:85-92`, `ropero-code/bin/lib/04-launch.sh:865-870`.
 
 **R-CLI-13** · `--port` repetido: gana el último, con aviso. `--port=N`
 también vale. Un puerto inválido (fuera de 1-65535) es error. Evidencia:
-`bin/lib/cmd-runtime.sh:94-113`, `bin/lib/04-launch.sh:142-145`.
+`ropero-code/bin/lib/cmd-runtime.sh:94-113`, `ropero-code/bin/lib/04-launch.sh:142-145`.
 
 ---
 
@@ -714,18 +729,18 @@ condenado (artefacto ausente, argv inválido, motor sin instalar) **no mata lo
 que está corriendo**.
 
 > «preflight ANTES de tocar el puerto — no se mata lo que corre por un
-> lanzamiento condenado» — `bin/lib/04-launch.sh:833-835`
+> lanzamiento condenado» — `ropero-code/bin/lib/04-launch.sh:833-835`
 
 El orden del preflight es: (1) motor instalado, (2) `--cpu` compatible con el
 motor, (3) argv del modelo válido, (4) artefacto en disco, (5) chat template
-existente, (6) `[limits]` como aviso. Evidencia: `bin/lib/04-launch.sh:857-972`.
+existente, (6) `[limits]` como aviso. Evidencia: `ropero-code/bin/lib/04-launch.sh:857-972`.
 
 **R-RUN-2** · El **chat template se comprueba en disco** antes de arrancar:
 llama-server, si no lo encuentra, aborta con el muro de sus plantillas
 built-in y el error real queda enterrado arriba del log.
 
 > «se corta aquí, con una línea que sí dice qué pasa y dónde»
-> — `bin/lib/04-launch.sh:770-775`
+> — `ropero-code/bin/lib/04-launch.sh:770-775`
 
 **R-RUN-3** · El **contexto del modelo tiene que llegar al motor**: se
 inyecta `-c <contexto>` (o `--ctx-size`) antes de los args del TOML, para que
@@ -733,18 +748,18 @@ un TOML con su propio `-c` gane. Sin esto, llama-server arranca con el
 contexto nativo del modelo, la KV cache se come la VRAM, los expertos se
 quedan en la CPU y el modelo va a la mitad de velocidad.
 
-> «nemotron: 60 t/s en vez de 100-120» — `bin/lib/04-launch.sh:934-950`
+> «nemotron: 60 t/s en vez de 100-120» — `ropero-code/bin/lib/04-launch.sh:934-950`
 
 **R-RUN-4** · Para `engine = llama-server`, ropero añade `--model <ruta-del-gguf>`
 al argv: el TOML declara flags, no la ruta; sin esto el server arranca en
 *router mode* y no carga nada. Y `--cpu` se añade **al final** (gana a los
 `--n-gpu-layers`/`--threads` del TOML) como `--n-gpu-layers 0 --threads <nproc>`.
-Evidencia: `bin/lib/04-launch.sh:928-933`, `957-963`.
+Evidencia: `ropero-code/bin/lib/04-launch.sh:928-933`, `957-963`.
 
 **R-RUN-5** · El override `ROPERO_<NOMBRE>_GGUF` se resuelve **en el
 preflight**, con el mismo fichero que acabará en `${gguf}`: si no, el
 preflight daría por bueno un cuantizado distinto del que se sirve.
-Evidencia: `bin/lib/04-launch.sh:888-900`.
+Evidencia: `ropero-code/bin/lib/04-launch.sh:888-900`.
 
 #### 4.5.2 Readiness
 
@@ -755,23 +770,23 @@ también válido si el **estado** dice `MODEL=<esperado>` con el PID vivo
 (algunos servers no publican un id mapeable al catálogo).
 
 > «ropero se comía los 300s del timeout y luego mataba a un server
-> perfectamente sano» — `bin/lib/04-launch.sh:725-736`
+> perfectamente sano» — `ropero-code/bin/lib/04-launch.sh:725-736`
 
 **R-RUN-7** · Si el proceso **muere** antes de escuchar, el fallo es
 **inmediato**: no se esperan los N segundos. Evidencia:
-`bin/lib/04-launch.sh:704-709`.
+`ropero-code/bin/lib/04-launch.sh:704-709`.
 
 **R-RUN-8** · El timeout por defecto es `ROPERO_START_TIMEOUT=300 s`, con
 poll cada 2 s. Para un modelo que se descarga al arrancar (Strata: hasta
 72 GB) la receta documentada es subirlo a `7200`. Evidencia:
-`bin/lib/01-env.sh:63`, `bin/lib/04-launch.sh:698`, `docs/strata.md:67-72`.
+`ropero-code/bin/lib/01-env.sh:63`, `ropero-code/bin/lib/04-launch.sh:698`, `ropero-code/docs/strata.md:67-72`.
 
 **R-RUN-9** · `/v1/models` se consulta **con la API key**: llama-server exige
-la clave hasta para listar. Evidencia: `bin/lib/04-launch.sh:338-351`.
+la clave hasta para listar. Evidencia: `ropero-code/bin/lib/04-launch.sh:338-351`.
 
 **R-RUN-10** · Un arranque fallido **mata el proceso que arrancó** y limpia
 el estado; el error va **con las últimas 15 líneas del log** (que es donde
-está la causa, no en el mensaje). Evidencia: `bin/lib/04-launch.sh:650-682`.
+está la causa, no en el mensaje). Evidencia: `ropero-code/bin/lib/04-launch.sh:650-682`.
 
 **R-RUN-11** · El **PID se captura por fichero temporal**, nunca por
 sustitución de comandos: con `$( )` el proceso lo crea el *subshell*, el
@@ -780,7 +795,7 @@ shell» con rc 127 — que ropero leía como «el modelo terminó con código 12
 mientras el engine seguía vivo.
 
 > «Con el PID en un fichero temporal, el proceso lo crea ESTE shell»
-> — `bin/lib/04-launch.sh:1061-1070`
+> — `ropero-code/bin/lib/04-launch.sh:1061-1070`
 
 #### 4.5.3 El sello (STAMP)
 
@@ -789,7 +804,7 @@ los args** (no `sha256sum`, que macOS no trae). Sirve para detectar que el
 TOML cambió mientras el modelo ya corría.
 
 > «el server vivo queda con la config VIEJA y ‘ya está corriendo’ sería mentir
-> en silencio» — `bin/lib/04-launch.sh:753-757`
+> en silencio» — `ropero-code/bin/lib/04-launch.sh:753-757`
 
 **R-RUN-13** · Si el modelo ya corre en el puerto destino:
 - con **sello idéntico** → no se toca nada («ya está corriendo»), salida 0;
@@ -797,14 +812,14 @@ TOML cambió mientras el modelo ya corría.
 - **sin sello en el estado** (lo escribió otra versión) → **se reinicia**, porque
   no se puede *probar* que la config sea la misma.
 
-Evidencia: `bin/lib/04-launch.sh:986-1010`.
+Evidencia: `ropero-code/bin/lib/04-launch.sh:986-1010`.
 
 #### 4.5.4 Primer plano y Ctrl-C
 
 **R-RUN-14** · En primer plano, el engine **siempre** arranca en background con
 salida al logfile, y lo que se ve en la terminal es el **log en vivo
 coloreado** desde el offset del arranque actual (para no repetir el
-historial). Evidencia: `bin/lib/04-launch.sh:1040-1048`, `1113-1123`.
+historial). Evidencia: `ropero-code/bin/lib/04-launch.sh:1040-1048`, `1113-1123`.
 
 **R-RUN-15** · La espera en primer plano es un **bucle `kill -0`**, no un
 `wait`: bash aplaza el trap INT hasta que el comando esperado acaba, y el
@@ -813,18 +828,18 @@ control → `SigIgn 0x7`). El trap corre en cuanto llega la señal y es quien
 mata al engine con SIGTERM.
 
 > «Ni el Ctrl-C de la terminal ni un ‘kill -INT’ posterior lo matan: un
-> SIG_IGN no se puede ‘des-ignorar’ con kill» — `bin/lib/04-launch.sh:1134-1141`
+> SIG_IGN no se puede ‘des-ignorar’ con kill» — `ropero-code/bin/lib/04-launch.sh:1134-1141`
 
 **R-RUN-16** · Ctrl-C sale con **130**, y el 130 se reconoce **por el código
 del proceso**, no por el trap (que puede no llegar a correr). El trap mata el
 engine, el *tail* y el colorizador (si no, el tail se queda bloqueado en
-inotify sin dueño). Evidencia: `bin/lib/04-launch.sh:1127-1128`, `1159-1161`,
-`bin/lib/06-styles.sh:12-20`.
+inotify sin dueño). Evidencia: `ropero-code/bin/lib/04-launch.sh:1127-1128`, `1159-1161`,
+`ropero-code/bin/lib/06-styles.sh:12-20`.
 
 **R-RUN-17** · El arranque se **bloquea por puerto** mientras dura: un
 directorio `.lock` con el PID dentro (`mkdir` es atómico). El lock **caduça**
 si el ropero que lo tenía muere (un `kill -9` no debe dejar el puerto
-bloqueado para siempre). Evidencia: `bin/lib/04-launch.sh:216-247`.
+bloqueado para siempre). Evidencia: `ropero-code/bin/lib/04-launch.sh:216-247`.
 
 ---
 
@@ -832,63 +847,63 @@ bloqueado para siempre). Evidencia: `bin/lib/04-launch.sh:216-247`.
 
 **R-EST-1** · La precedencia del puerto destino es:
 `--port N` > `[model].port` pineado > slot CPU (`:9998`, sólo Linux) > slot base
-del engine. Evidencia: `bin/lib/04-launch.sh:147-182`.
+del engine. Evidencia: `ropero-code/bin/lib/04-launch.sh:147-182`.
 
 **R-EST-2** · Los puertos gestionados son la lista canónica de `status`,
 `stop all` y la idempotencia de `use`: `$PORT` + `$CPU_PORT` (sólo Linux) +
 los `[model].port` de los TOML **activos** + los puertos con fichero de estado
-(los ad-hoc de `--port`). Evidencia: `bin/lib/04-launch.sh:304-334`.
+(los ad-hoc de `--port`). Evidencia: `ropero-code/bin/lib/04-launch.sh:304-334`.
 
 **R-EST-3** · Para preguntar «¿quién escucha en este puerto?» hay **cuatro
 métodos en cascada**: `lsof` → `ss` → `fuser` → `/proc/net/tcp` + `/proc/*/fd`
 (inodo del socket). Sin `lsof`, `lsof -iTCP` falla y siempre dice «libre».
-Evidencia: `bin/lib/04-launch.sh:52-123`.
+Evidencia: `ropero-code/bin/lib/04-launch.sh:52-123`.
 
 **R-EST-4** · La identidad del modelo en un puerto tiene una **jerarquía de
 cuatro niveles**: (1) id de `/v1/models` mapeado al catálogo; (2) fichero de
 estado con `MODEL=` y PID vivo; (3) id crudo publicado por el server; (4) `"?"`
 si el puerto está arriba pero `/v1/models` no responde. Evidencia:
-`bin/lib/04-launch.sh:391-426`.
+`ropero-code/bin/lib/04-launch.sh:391-426`.
 
 **R-EST-5** · Un id publicado casa con el modelo si es el nombre, el GGUF
 (con o sin extensión) o el path del checkpoint (basename o ruta completa).
-Evidencia: `bin/lib/04-launch.sh:353-372`.
+Evidencia: `ropero-code/bin/lib/04-launch.sh:353-372`.
 
 **R-EST-6** · `stop` mata **por puerto**, nunca con `pkill -f` global (que
 mataría los slots paralelos). El árbol de objetivos es: PID del estado + PIDs
-que escuchan + sus hijos directos. Evidencia: `bin/lib/04-launch.sh:450-500`.
+que escuchan + sus hijos directos. Evidencia: `ropero-code/bin/lib/04-launch.sh:450-500`.
 
 **R-EST-7** · **El PID del estado se mata aunque el puerto no escuche
 todavía**: un server que está cargando el modelo todavía no escucha, y antes
 quedaba vivo y se ponía a servir peticiones al terminar. Evidencia:
-`bin/lib/04-launch.sh:458-465`.
+`ropero-code/bin/lib/04-launch.sh:458-465`.
 
 **R-EST-8** · **Antes de matar, se verifica que el PID no esté reciclado**:
 el SO recicla PIDs y un estado viejo apuntaría a un navegador. Se comprueba
 que `/proc/<pid>/cmdline` mencione el binario del motor; si no lo es, **no se
 mata** y se avisa. Sin `/proc` (no es Linux) se asume que sí. Evidencia:
-`bin/lib/04-launch.sh:430-448`, `474-484`.
+`ropero-code/bin/lib/04-launch.sh:430-448`, `474-484`.
 
 **R-EST-9** · La parada es escalonada: `SIGTERM` a todo el árbol → hasta
 **10 s** de margen (mirando el puerto **y** los PIDs) → `SIGKILL` de red de
-seguridad → borrado del estado. Evidencia: `bin/lib/04-launch.sh:508-536`.
+seguridad → borrado del estado. Evidencia: `ropero-code/bin/lib/04-launch.sh:508-536`.
 
 **R-EST-10** · `stop` de un puerto libre devuelve **1** (no había nada que
-parar), no 0. Evidencia: `bin/lib/04-launch.sh:502-506`.
+parar), no 0. Evidencia: `ropero-code/bin/lib/04-launch.sh:502-506`.
 
 **R-EST-11** · La **API key** es única para todos los motores y se resuelve
 por precedencia: variable de entorno `LLAMA_API_KEY` > `$STATE_DIR/api_key` >
 generación `sk-ropero-<hex>` (openssl, fallback `od`+`/dev/urandom`), escrita
-con `chmod 600`. Evidencia: `bin/lib/04-launch.sh:184-214`.
+con `chmod 600`. Evidencia: `ropero-code/bin/lib/04-launch.sh:184-214`.
 
 **R-EST-12** · El **estado es la fuente de verdad** y se escribe de forma
 **atómica** (tmp + `mv`), conservando las claves no presentes en la llamada.
-Evidencia: `bin/lib/04-launch.sh:268-296`.
+Evidencia: `ropero-code/bin/lib/04-launch.sh:268-296`.
 
 **R-EST-13** · `ropero use <modelo>` es **idempotente por (modelo, nivel)** y
 emite `ROPERO_PORT=<n>` como **última línea de stdout**. Ese es el contrato
 estable que consume el plugin de opencode. Evidencia:
-`bin/lib/cmd-runtime.sh:265-292`, `opencode-plugin/README.md:161-162`.
+`ropero-code/bin/lib/cmd-runtime.sh:265-292`, `ropero-code/README.md:163-164`.
 
 **R-EST-14** · `ropero stop` **sin argumentos** para **todos los puertos
 gestionados** por ropero; `ropero stop <alias>` para uno solo.
@@ -898,8 +913,8 @@ lanzó a mano, en su propia terminal, **no se toca nunca**.
 > «porque a lo mejor has arrancado un llama-server por tu cuenta, pues esos
 > no, sólo los de Ropero» — el dueño, 2026-11-12
 
-Evidencia: `bin/lib/cmd-runtime.sh:314-324` (destino por defecto `all`),
-`:325-360`; `bin/lib/04-launch.sh:304-334` (puertos gestionados).
+Evidencia: `ropero-code/bin/lib/cmd-runtime.sh:314-324` (destino por defecto `all`),
+`:325-360`; `ropero-code/bin/lib/04-launch.sh:304-334` (puertos gestionados).
 
 **R-EST-15** · 🔶 **Detectar los motores ajenos es una pregunta abierta.**
 La capacidad de **informar** («estos procesos están usando la GPU y no son
@@ -924,7 +939,7 @@ Los motivos concretos: `airllm` es una librería pura (no tiene `serve`),
 `trtllm-serve` no tiene `--api_key` (el `api_key` del SDK de OpenAI es un
 campo del *cliente*, no una comprobación de servidor) y `flm serve` no
 comprueba la clave. Con `HOST=0.0.0.0` esos tres quedarían **sin auth
-expuestos a la LAN**. Evidencia: `bin/server/endpoint.py:13-20`.
+expuestos a la LAN**. Evidencia: `ropero-code/bin/server/endpoint.py:13-20`.
 
 **R-API-2** · Las rutas son exactamente cinco:
 
@@ -938,109 +953,109 @@ expuestos a la LAN**. Evidencia: `bin/server/endpoint.py:13-20`.
 
 `/v1/chat/completions` y `/v1/completions` comparten la misma función; la
 distinción se hace por la ruta. No hay `/docs` ni `/openapi.json`.
-Evidencia: `bin/server/endpoint.py:1326-1429`.
+Evidencia: `ropero-code/bin/server/endpoint.py:1326-1429`.
 
 **R-API-3** · `/health` **siempre devuelve 200**, incluso con el modelo sin
 cargar o el backend muerto: el estado real va en `backend.ready` y
 `backend.error`. Es un chequeo de vida, no información.
 
 > «ropero lo abre antes de que el modelo haya terminado de cargar»
-> — `bin/server/endpoint.py:1352-1354`
+> — `ropero-code/bin/server/endpoint.py:1352-1354`
 
 **R-API-4** · `/v1/models` devuelve **exactamente un modelo**, con `id` = el
 nombre de ropero (no el del backend). Es lo que hace que `ropero stop
 <modelo>` y la columna MODELO del `status` funcionen. Evidencia:
-`bin/server/endpoint.py:1362-1378`, `bin/server/README.md:17-18`.
+`ropero-code/bin/server/endpoint.py:1362-1378`, `ropero-code/bin/server/README.md:17-18`.
 
 **R-API-5** · El campo `model` del body se reescribe **siempre** al que el
 backend conoce: a `model_id` para `tensorrt` y `strata`, y al **TAG** para
 `flm` (FLM valida el campo: reescribirlo al id de ropero rompería la
-petición). Evidencia: `bin/server/endpoint.py:886-903`, `1532-1540`.
+petición). Evidencia: `ropero-code/bin/server/endpoint.py:886-903`, `1532-1540`.
 
 **R-API-6** · `/v1/completions` se **traduce a `/v1/chat/completions`** hacia
 el backend (FLM no implementa la primera), de modo que los cuatro backends
-tienen la misma semántica. Evidencia: `bin/server/endpoint.py:1408-1423`.
+tienen la misma semántica. Evidencia: `ropero-code/bin/server/endpoint.py:1408-1423`.
 
 **R-API-7** · Los errores usan **el formato OpenAI**:
 `{"error":{"message":…,"type":…,"code":…}}`, con `type` ∈ `invalid_request_error`
 | `server_error` | `upstream_unavailable` y `code` ∈ `invalid_api_key` |
 `invalid_json` | `invalid_messages` | `model_loading` | `backend_down` |
-`backend_error`. Evidencia: `bin/server/endpoint.py:198-204`, tabla en § 8.1
+`backend_error`. Evidencia: `ropero-code/bin/server/endpoint.py:198-204`, tabla en § 8.1
 de la nota de análisis.
 
 **R-API-8** · Un body que no es un objeto JSON, o un JSON inválido, es
 **400 `invalid_json`** — nunca un 500. Un `messages` malformado es
-**400 `invalid_messages`**. Evidencia: `bin/server/endpoint.py:228-243`,
+**400 `invalid_messages`**. Evidencia: `ropero-code/bin/server/endpoint.py:228-243`,
 `1419-1422`.
 
 **R-API-9** · El `content` de un mensaje puede ser una **lista de partes
 VLM**: `{"type":"text"}` pasa su texto y `{"type":"image_url"}` se sustituye
 por el literal `"[imagen]"`. Motivo: un endpoint de texto que hace `str()`
 produce `{"type": " text"...}` dentro del prompt. Evidencia:
-`bin/server/endpoint.py:158-175`.
+`ropero-code/bin/server/endpoint.py:158-175`.
 
 **R-API-10** · `airllm` **no implementa tool calling** y el endpoint lo dice
 con un 400 explícito en vez de fingir soporte (el cliente colgaría).
-Evidencia: `bin/server/endpoint.py:556-563`.
+Evidencia: `ropero-code/bin/server/endpoint.py:556-563`.
 
 **R-API-11** · La autenticación acepta **dos cabeceras**:
 `Authorization: Bearer <clave>` y `X-Api-Key: <clave>`. La comparación es en
 **tiempo constante** (`hmac.compare_digest`) y sobre bytes UTF-8. El prefijo
 `Bearer` es **case-sensitive** (`bearer` en minúscula → 401) y el valor se
-recorta con `strip()`. Evidencia: `bin/server/endpoint.py:207-225`,
-`test/test-endpoint-auth.sh:66-70`.
+recorta con `strip()`. Evidencia: `ropero-code/bin/server/endpoint.py:207-225`,
+`ropero-code/test/test-endpoint-auth.sh:66-70`.
 
 **R-API-12** · **Sin clave configurada el endpoint queda abierto**, y lo dice
 en el log. Es el único caso fail-open del sistema, y es explícito.
-Evidencia: `bin/server/endpoint.py:213-214`, `1542-1544`.
+Evidencia: `ropero-code/bin/server/endpoint.py:213-214`, `1542-1544`.
 
 **R-API-13** · **La clave nunca se reenvía al backend**: `authorization` está
 en el set `HOP_BY_HOP` y se elimina de las cabeceras hacia el upstream.
 El backend no la valida (por eso existe el proxy), así que reenviar una
 credencial a un componente que no la necesita sólo amplía la superficie.
-Evidencia: `bin/server/endpoint.py:127-129`, `141`, `864-884`.
+Evidencia: `ropero-code/bin/server/endpoint.py:127-129`, `141`, `864-884`.
 
 **R-API-14** · La clave **jamás aparece en un log**, y el endpoint loguea
 **siempre a stderr** (stdout lo consume ropero). Evidencia:
-`bin/server/endpoint.py:145-152`.
+`ropero-code/bin/server/endpoint.py:145-152`.
 
 **R-API-15** · El **sub-proceso del backend siempre escucha en `0.0.0.0.1`**:
 el único proceso expuesto a la red es el proxy. Evidencia:
-`bin/server/endpoint.py:44-45`, `1226`, `1251`, `1313`.
+`ropero-code/bin/server/endpoint.py:44-45`, `1226`, `1251`, `1313`.
 
 **R-API-16** · El proxy **puede vivir sin backend**: el puerto externo abre
 antes de que el modelo esté listo y responde `503 model_loading` en vez de
-colgarse. Evidencia: `bin/server/endpoint.py:332-337`, `549-554`.
+colgarse. Evidencia: `ropero-code/bin/server/endpoint.py:332-337`, `549-554`.
 
 **R-API-17** · Un solo worker de uvicorn: con backend proxied el modelo vive
 en el sub-proceso, y con airllm vive en el proceso del proxy y no se puede
-compartir entre workers. Evidencia: `bin/server/endpoint.py:1576-1583`.
+compartir entre workers. Evidencia: `ropero-code/bin/server/endpoint.py:1576-1583`.
 
 **R-API-18** · `airllm` **serializa las generaciones** con un lock global:
 mueve el modelo entero capa a capa, y dos generaciones a la vez no es «más
 rápido», es el mismo throughput repartido y el doble de swap. Evidencia:
-`bin/server/endpoint.py:326-329`, `531`.
+`ropero-code/bin/server/endpoint.py:326-329`, `531`.
 
 **R-API-19** · Si el binario del backend **rechaza un flag** (`No such
 option`), el proxy lo quita del argv, lo **cachea** y **se relanza**. La
 caché está atada a la identidad del binario (ruta + `mtime_ns` + tamaño): si
 el binario cambia, la caché se ignora. Evidencia:
-`bin/server/endpoint.py:678-717`, `773-813`.
+`ropero-code/bin/server/endpoint.py:678-717`, `773-813`.
 
 **R-API-20** · El log del motor y el del proxy **comparten fichero**
 (`$LOG_DIR/<modelo>.log`); el `stderr` del hijo se lee por un pipe y se
 re-escribe, guardando las **últimas 40 líneas** para detectar el
-`No such option`. Evidencia: `bin/server/endpoint.py:742-769`,
-`bin/lib/04-launch.sh:1035`.
+`No such option`. Evidencia: `ropero-code/bin/server/endpoint.py:742-769`,
+`ropero-code/bin/lib/04-launch.sh:1035`.
 
 **R-API-21** · El error de un 4xx/5xx del backend se **reenvía tal cual**
 (mismo status, mismos bytes); los errores de *contacto* se traducen a 502/503
 con un motivo claro, **nunca a un cuelgue**. Evidencia:
-`bin/server/endpoint.py:922-936`, `996-1006`.
+`ropero-code/bin/server/endpoint.py:922-936`, `996-1006`.
 
 **R-API-22** · En streaming SSE, el proxy emite `data: [DONE]` en el `finally`
 aunque el upstream se corte a mitad (airllm no tiene servidor que lo haga).
-Evidencia: `bin/server/endpoint.py:628-632`.
+Evidencia: `ropero-code/bin/server/endpoint.py:628-632`.
 
 **R-API-23** · 🔶 **El proxy no se decide globalmente: lo decide el engine.**
 Cada engine sabe si necesita el proxy, y su hook `launch` monta el comando
@@ -1055,9 +1070,9 @@ con el que arranca —con o sin proxy—. El engine **no necesita que ropero
 
 Consecuencia: **integrar un engine nuevo es desarrollo** (escribir su
 fichero en `bin/lib/engines/`); **usar un modelo nuevo no lo es** (escribir
-su TOML). Evidencia: `bin/lib/engines/airllm.sh:121`, `strata.sh:278`,
-`tensorrt-llm.sh:169` (los tres lanzan `endpoint.py`); `mlx-serve.sh:5` y
-`fastflowlm.sh:292` (directos).
+su TOML). Evidencia: `ropero-code/bin/lib/engines/airllm.sh:121`, `ropero-code/bin/lib/engines/strata.sh:278`,
+`ropero-code/bin/lib/engines/tensorrt-llm.sh:169` (los tres lanzan `endpoint.py`); `ropero-code/bin/lib/engines/mlx-serve.sh:5` y
+`ropero-code/bin/lib/engines/fastflowlm.sh:292` (directos).
 
 **R-API-24** · 🔶 **Qué engines pasan por el proxy hoy** (medido):
 
@@ -1071,10 +1086,10 @@ su TOML). Evidencia: `bin/lib/engines/airllm.sh:121`, `strata.sh:278`,
 | `llama-server` / `-official` | **no** | server propio con auth nativa |
 | `vllm` | **no** | server propio |
 
-⚠ **Contradicción abierta**: la cabecera de `fastflowlm.sh:6-8` dice «va
-detrás de endpoint.py» y el `CHANGELOG.md:23-25` lo agrupa con trtllm y
-strata, pero el launch real (`fastflowlm.sh:292`) es **`flm serve` directo**
-y el test lo **exige** (`test/test-endpoint-auth.sh:109-122`). El código y el
+⚠ **Contradicción abierta**: la cabecera de `ropero-code/bin/lib/engines/fastflowlm.sh:6-8` dice «va
+detrás de endpoint.py» y el `ropero-code/CHANGELOG.md:23-25` lo agrupa con trtllm y
+strata, pero el launch real (`ropero-code/bin/lib/engines/fastflowlm.sh:292`) es **`flm serve` directo**
+y el test lo **exige** (`ropero-code/test/test-endpoint-auth.sh:109-122`). El código y el
 test mandan; las cabeceras mienten (H-24).
 
 **R-API-25** · 🔶 **El endpoint está sin probar.** El dueño lo dice
@@ -1097,20 +1112,20 @@ semántico de modelo. Consulta el endpoint de decisión de FastFlowLM
 (`D3_URL`, por defecto `http://127.0.0.1:9991/v1/systemone`), pide un modelo
 para la tarea y **imprime un nombre por stdout**. Si el clasificador no
 responde, **nunca falla**: devuelve un id de fallback y sale 0. Evidencia:
-`bin/router.sh:9-38`.
+`ropero-code/bin/router.sh:9-38`.
 
 **R-ROUTE-3** · El fallback de `router.sh` es `minimax/m3.1-flash`, que **no
 corresponde a ningún modelo del catálogo de ropero**. Es un residuo.
-Evidencia: `bin/router.sh:31-38` frente a `models/`.
+Evidencia: `ropero-code/bin/router.sh:31-38` frente a `models/`.
 
 **R-ROUTE-4** · `router.sh` **no tiene consumidor en el repo** y su cabecera
 promete consultar `MODELS.md`, un fichero que **no existe** en este
-repositorio. Evidencia: `bin/router.sh:6`, `grep` sin resultados.
+repositorio. Evidencia: `ropero-code/bin/router.sh:6`, `grep` sin resultados.
 
 **R-ROUTE-5** · El cuerpo de la petición al clasificador se construye por
 **interpolación sin escapar**: una descripción con comillas dobles rompe el
 JSON y la petición cae al fallback sin mensaje. Evidencia:
-`bin/router.sh:27-35`.
+`ropero-code/bin/router.sh:27-35`.
 
 ---
 
@@ -1122,7 +1137,7 @@ JSON y la petición cae al fallback sin mensaje. Evidencia:
 compila, no genera *farms* de entradas, no borra el repo.
 
 > «R1 — sólo symlinks: no copia, no descarga, no compila, no farms de
-> entradas, no borra el repo» — `install.sh:23-24`
+> entradas, no borra el repo» — `ropero-code/install.sh:23-24`
 
 **R-INST-2** · La instalación deja **exactamente dos symlinks**:
 
@@ -1131,32 +1146,32 @@ compila, no genera *farms* de entradas, no borra el repo.
 ~/.local/share/ropero    → <repo>/bin
 ```
 
-La share **es** el `bin` del repo. Evidencia: `install.sh:5-20`, `:367-392`;
-idéntico contrato en `bin/lib/cmd-install.sh:530-537`.
+La share **es** el `bin` del repo. Evidencia: `ropero-code/install.sh:5-20`, `:367-392`;
+idéntico contrato en `ropero-code/bin/lib/cmd-install.sh:530-537`.
 
 **R-INST-3** · El repo es la **fuente de verdad**: `git pull` actualiza el
-código instalado de inmediato, sin reinstalar. Evidencia: `install.sh:25-28`
+código instalado de inmediato, sin reinstalar. Evidencia: `ropero-code/install.sh:25-28`
 (regla R3).
 
 **R-INST-4** · **El instalador nunca escribe dentro de `<repo>/`**. La razón
 no es estética: como la share es un symlink al `bin` del repo, escribir en
 la share **es** escribir en el repo. Por eso los binarios de los motores
 viven en `$BIN_DIR` (`~/.local/bin`), igual que los de `uv` o `brew`.
-Evidencia: `install.sh:45-47` (R11), `bin/lib/cmd-install.sh:538-549`.
+Evidencia: `ropero-code/install.sh:45-47` (R11), `ropero-code/bin/lib/cmd-install.sh:538-549`.
 
 **R-INST-5** · **Sin red**: no hay modo red, ni `--tarball`, ni bootstrap por
 stdin. `--tarball` y `--version` se **rechazan con exit 2** y el mensaje
-explica por qué. Evidencia: `install.sh:35-36` (R6), `:556-557`.
+explica por qué. Evidencia: `ropero-code/install.sh:35-36` (R6), `:556-557`.
 
 **R-INST-6** · El **PATH del usuario no se modifica nunca**: si
 `~/.local/bin` no está en el PATH, ropero avisa e imprime el `export` que
-falta, pero no edita ficheros de shell. Evidencia: `install.sh:408-415`
+falta, pero no edita ficheros de shell. Evidencia: `ropero-code/install.sh:408-415`
 (R13).
 
 **R-INST-7** · El instalador **sólo crea** `$BIN_DIR` y `dirname "$DIR"`. Los
 demás directorios (`~/models/gguf`, `~/.local/state/ropero`, `~/.logs/ropero`)
-los crea el runtime, no el instalador. Evidencia: `install.sh:363-364`,
-`bin/lib/01-env.sh:75-78`.
+los crea el runtime, no el instalador. Evidencia: `ropero-code/install.sh:363-364`,
+`ropero-code/bin/lib/01-env.sh:75-78`.
 
 #### 4.9.2 Los flags y sus códigos
 
@@ -1173,25 +1188,25 @@ los crea el runtime, no el instalador. Evidencia: `install.sh:363-364`,
 | cualquier otro | **exit 2** |
 
 Precedencia: *flag > variable de entorno > default* (`ROPERO_DIR`,
-`ROPERO_BIN_DIR`). Evidencia: `install.sh:69-75`, `:535-562`.
+`ROPERO_BIN_DIR`). Evidencia: `ropero-code/install.sh:69-75`, `:535-562`.
 
 **R-INST-9** · `--local` junto a `--check` → **gana `--check`**: la
 comprobación se evalúa antes de migrar o enlazar. Evidencia:
-`install.sh:563`, `:567-570`.
+`ropero-code/install.sh:563`, `:567-570`.
 
 **R-INST-10** · El instalador usa **sólo `pipefail`**: sin `errexit` ni
 `nounset`, para que un fallo implícito no aborte la instalación a medias sin
 mensaje. Los abortes son **explícitos** (`|| die`). Evidencia:
-`install.sh:61-66`.
+`ropero-code/install.sh:61-66`.
 
 **R-INST-11** · La salida va a **stderr** con marcadores `[✓] [!] [✗] [-]`, en
 español, con recuento final «N ok · M avisos · K fallos»; el color sólo si
 stderr es TTY y `NO_COLOR` no está. Códigos: 0 ok · 1 fallo · 2 uso.
-Evidencia: `install.sh:41-42`, `:86-108`.
+Evidencia: `ropero-code/install.sh:41-42`, `:86-108`.
 
 **R-INST-12** · El instalador **verifica su propio resultado**: tras enlar,
 ejecuta `bash <repo>/bin/ropero --help` y si no sale 0, es un fallo
-(instalación **exit 1**), no un aviso. Evidencia: `install.sh:423-434` (R9).
+(instalación **exit 1**), no un aviso. Evidencia: `ropero-code/install.sh:423-434` (R9).
 
 #### 4.9.3 La migración del layout viejo y el rescate
 
@@ -1209,28 +1224,28 @@ ejecuta `bash <repo>/bin/ropero --help` y si no sale 0, es un fallo
 | **directorio real reconocido** | rescate → `mv` a `$DIR.old.$$` → `rm -rf` |
 | **directorio real desconocido** | `[✗]` + **exit 1** («no lo toco») |
 
-Evidencia: `install.sh:275-356`.
+Evidencia: `ropero-code/install.sh:275-356`.
 
 **R-INST-14** · Los **hooks de rescate** se ejecutan **antes de borrar nada**:
 `_rescatar_engines` (por cada binario de motor que sea symlink dentro del
 farm viejo) y `_rescatar_venv` (el venv del gguffer a
-`$HOME/.local/state/ropero/venv`). Evidencia: `install.sh:191-258`.
+`$HOME/.local/state/ropero/venv`). Evidencia: `ropero-code/install.sh:191-258`.
 
 **R-INST-15** · El rescate de un motor **no lo hace si `command -v <nombre>`
 ya resuelve**: no debe sombrear un binario de brew o del sistema que el
 usuario ya tiene funcionando. Ésta es exactamente la razón por la que
-`resolve` da prioridad al PATH. Evidencia: `install.sh:196-214` (F2).
+`resolve` da prioridad al PATH. Evidencia: `ropero-code/install.sh:196-214` (F2).
 
 **R-INST-16** · El rescate **no pisa** nada: si el destino ya existe (fichero
 o symlink), o el enlace está colgante o no ejecutable, **no se rescata**.
-Evidencia: `install.sh:215-223`.
+Evidencia: `ropero-code/install.sh:215-223`.
 
 **R-INST-17** · El enlace rescatado apunta al **binario real** (symlinks
 resueltos), para que no se rompa si `$BIN_DIR` se vacía y se rellena.
-Evidencia: `install.sh:219-228`.
+Evidencia: `ropero-code/install.sh:219-228`.
 
 **R-INST-18** · El venv rescatado que colisiona con uno existente **se aparta**
-como `venv.farm.$$`: no se pisa nada. Evidencia: `install.sh:236-258`.
+como `venv.farm.$$`: no se pisa nada. Evidencia: `ropero-code/install.sh:236-258`.
 
 #### 4.9.4 Lo que el instalador nunca toca
 
@@ -1238,8 +1253,8 @@ como `venv.farm.$$`: no se pisa nada. Evidencia: `install.sh:236-258`.
 `$BIN_DIR/ropero`; un fichero real en `$BIN_DIR/ropero.d`; un directorio real
 en `$DIR` que no reconoce como suyo; un symlink ajeno en `$DIR`; la red; el
 PATH del usuario; y el entorno de otros motores.
-Evidencia: `install.sh:369-373`, `:404-406`, `:352`, `:324-326`,
-`bin/lib/cmd-install.sh:601-604`.
+Evidencia: `ropero-code/install.sh:369-373`, `:404-406`, `:352`, `:324-326`,
+`ropero-code/bin/lib/cmd-install.sh:601-604`.
 
 **R-INST-20** · **No existe `--uninstall`**: la única desinstalación es borrar
 los dos symlinks a mano. Lo que sí existe es la **migración** del layout
@@ -1253,7 +1268,7 @@ share debe ser symlink y su destino resuelto estar **dentro del repo** del
 entrypoint instalado; (3) `bash <entry> --help` debe salir 0; (4) restos
 legacy (`ropero.d`, `$DIR.old.*`) → avisos, no fallos. Con **guard F4**: si
 el entrypoint resuelto apunta **fuera** de este repo, avisa y **no ejecuta
-nada**. Evidencia: `install.sh:445-530`, `:501-512`.
+nada**. Evidencia: `ropero-code/install.sh:445-530`, `:501-512`.
 
 #### 4.9.6 Los motores: tres estados que se confunden
 
@@ -1266,36 +1281,36 @@ distingue:
 | **enlazado** | existe un symlink en `$BIN_DIR` → binario real |
 | **en el PATH** | `command -v <nombre>` resuelve |
 
-Evidencia: `bin/lib/cmd-install.sh:506-515`, `:593-613`;
-`bin/lib/cmd-doctor.sh:286-301`.
+Evidencia: `ropero-code/bin/lib/cmd-install.sh:506-515`, `:593-613`;
+`ropero-code/bin/lib/cmd-doctor.sh:286-301`.
 
 **R-INST-23** · Un motor cuyo instalador dice OK pero que **no queda
 utilizable** es un **fallo, no un éxito maquillado** (`rc=1`). Evidencia:
-`bin/lib/cmd-install.sh:506-515`.
+`ropero-code/bin/lib/cmd-install.sh:506-515`.
 
 **R-INST-24** · La precedencia de `resolve` es **PATH → `$BIN_DIR` → rutas
 largas**, en los ocho motores. ⇒ *El motor que se usa es el que está en el
 PATH*, no el más nuevo ni el recién compilado. Evidencia:
-`bin/lib/engines/llama-server.sh:314-327`, `llama-server-official.sh:228-241`,
-`vllm.sh:73-84`, `mlx-serve.sh:76-138`, `tensorrt-llm.sh:103-116`,
-`fastflowlm.sh:155-167`, `strata.sh:124-139`; `airllm.sh:70-75` (no busca
+`ropero-code/bin/lib/engines/llama-server.sh:314-327`, `ropero-code/bin/lib/engines/llama-server-official.sh:228-241`,
+`ropero-code/bin/lib/engines/vllm.sh:73-84`, `ropero-code/bin/lib/engines/mlx-serve.sh:76-138`, `ropero-code/bin/lib/engines/tensorrt-llm.sh:103-116`,
+`ropero-code/bin/lib/engines/fastflowlm.sh:155-167`, `ropero-code/bin/lib/engines/strata.sh:124-139`; `ropero-code/bin/lib/engines/airllm.sh:70-75` (no busca
 binario: busca un **intérprete**).
 
 **R-INST-25** · Los nombres de los enlaces son el `basename` del binario
 resuelto: `llama-server`, `llama-server-official`, `vllm`, `mlx-serve`,
 `trtllm-serve`, `flm`, `strata`. **`airllm` no lleva enlace**: es una librería
 que sirve `bin/server/endpoint.py` desde su intérprete. Evidencia:
-`bin/lib/cmd-install.sh:564-565`, `:599-600`.
+`ropero-code/bin/lib/cmd-install.sh:564-565`, `:599-600`.
 
 **R-INST-26** · `ropero install engines` **exige TTY**: sin TTY es error de
 uso (exit 2), porque un menú que se traga un EOF acabaría eligiendo por su
 cuenta. Un engine no compatible se **omite** con aviso; uno ya instalado no
 se reinstala salvo `--force`. Evidencia:
-`bin/lib/cmd-install.sh:375-448`, `:464-467`, `:495-505`.
+`ropero-code/bin/lib/cmd-install.sh:375-448`, `:464-467`, `:495-505`.
 
 **R-INST-27** · Un engine **roto no tumba** el install: `_rp_engine_deps_ok`
 devuelve 1 con la lista de dependencias que faltan, **sin `exit`**.
-Evidencia: `bin/lib/03-engines.sh:171-184`.
+Evidencia: `ropero-code/bin/lib/03-engines.sh:171-184`.
 
 ---
 
@@ -1306,25 +1321,25 @@ Evidencia: `bin/lib/03-engines.sh:171-184`.
 **R-MOD-1** · El catálogo **son los TOML**: la raíz es `<repo>/models`; cada
 `*.toml` que no empiece por `_` es un modelo **activo**; los de
 `models/<engine>/fired/` son **retirados** (informativos: no se instalan ni
-arrancan). Evidencia: `bin/python/modelconf.py:630-658`, `README.md:58-60`.
+arrancan). Evidencia: `ropero-code/bin/python/modelconf.py:630-658`, `ropero-code/README.md:60-62`.
 
 **R-MOD-2** · `bin/python/modelconf.py` es **la fuente de verdad del esquema**
-(el shell no lo duplica). Evidencia: `bin/lib/02-modelconf.sh:4-6`.
+(el shell no lo duplica). Evidencia: `ropero-code/bin/lib/02-modelconf.sh:4-6`.
 
 **R-MOD-3** · El shell consume el catálogo mediante **un único dump** por
 proceso (idempotente), con separador `0x1F` y **31 campos** por registro, y
 un **guard de versión de formato**: si la cabecera no es
 `ROPERO_MC_DUMP_VERSION=1`, error y no se lee a ciegas. Evidencia:
-`bin/lib/02-modelconf.sh:6-7`, `:33-34`, `:159-185`.
+`ropero-code/bin/lib/02-modelconf.sh:6-7`, `:33-34`, `:159-185`.
 
 **R-MOD-4** · **Un TOML roto no tumba el catálogo**: se avisa por stderr y se
 salta; los demás cargan igual. Antes abortaba el dump entero y `ropero list`
 imprimía una lista vacía **con exit 0** (el peor fallo posible: falsehood
-silencioso). Evidencia: `bin/python/modelconf.py:1176-1186`.
+silencioso). Evidencia: `ropero-code/bin/python/modelconf.py:1176-1186`.
 
 **R-MOD-5** · Nombres duplicados entre activo y `fired` **no son error**: las
 dos filas se quedan y **la primera gana** (los activos van antes). Evidencia:
-`bin/python/modelconf.py:137-140`, `bin/lib/02-modelconf.sh:220-229`.
+`ropero-code/bin/python/modelconf.py:137-140`, `ropero-code/bin/lib/02-modelconf.sh:220-229`.
 
 **R-MOD-6** · El **formato** declara **dónde vive el artefacto**:
 
@@ -1335,58 +1350,58 @@ dos filas se quedan y **la primera gana** (los activos van antes). Evidencia:
 | `q4nx` (FLM) | `[model].path` es un **TAG**, no una ruta |
 | `strata` | `[model].path` es `<familia>/<paquete>` |
 
-Evidencia: `bin/lib/cmd-catalog.sh:389-410`.
+Evidencia: `ropero-code/bin/lib/cmd-catalog.sh:389-410`.
 
 #### 4.10.2 Los alias
 
 **R-MOD-7** · El alias se declara en `[model].alias`; los alias de **nivel**
 en `[aliases]` **deben apuntar a un nivel declarado** (si no, error de
 validación). Evidencia: `models/_template.toml` (sección `[aliases]`),
-`bin/python/modelconf.py:1549-1554`.
+`ropero-code/bin/python/modelconf.py:1549-1554`.
 
 **R-MOD-8** · En memoria, un alias se materializa como **una fila extra** en
 las arrays paralelas, detrás de las reales, copiando sus campos con
 `MODEL_ISALIAS=1` y `MODEL_REAL=<real>`. Evidencia:
-`bin/lib/02-modelconf.sh:36-38`, `:193-214`.
+`ropero-code/bin/lib/02-modelconf.sh:36-38`, `:193-214`.
 
 **R-MOD-9** · **El choque de alias es un error** que nombra el conflicto; un
 alias igual al propio nombre se ignora. Evidencia:
-`bin/lib/02-modelconf.sh:202-206`.
+`ropero-code/bin/lib/02-modelconf.sh:202-206`.
 
 **R-MOD-10** · Un alias **responde igual que el nombre**: `rp_model_exists`
 acepta ambos, `rp_model_argv` traduce alias → real, y `ropero path` usa
 **siempre el nombre real** para el directorio. Evidencia:
-`bin/lib/02-modelconf.sh:231-235`, `:284-288`;
-`bin/lib/cmd-catalog.sh:364-372`.
+`ropero-code/bin/lib/02-modelconf.sh:231-235`, `:284-288`;
+`ropero-code/bin/lib/cmd-catalog.sh:364-372`.
 
 #### 4.10.3 El contrato de stdout
 
 **R-MOD-11** · **stdout = datos; stderr = todo lo humano**. En `ropero list`,
 stdout es el formato crudo `  %-16s engine=%-13s format=%-12s ctx=%-7s …` y
 el prefijo de **dos espacios** es un contrato explícito con el plugin.
-Evidencia: `bin/lib/cmd-catalog.sh:11-15`, `:24-27`, `:91-92`;
-`bin/lib/00-utils.sh:5-8`.
+Evidencia: `ropero-code/bin/lib/cmd-catalog.sh:11-15`, `:24-27`, `:91-92`;
+`ropero-code/bin/lib/00-utils.sh:5-8`.
 
 **R-MOD-12** · `ropero levels` **no imprime cabeceras**, porque cualquier
 otra cosa por stdout rompe el autocompletado; los niveles se validan con
 `[A-Za-z0-9._-]+` (tokens seguros para shell). Evidencia:
-`bin/lib/cmd-catalog.sh:284-287`.
+`ropero-code/bin/lib/cmd-catalog.sh:284-287`.
 
 **R-MOD-13** · `ropero args` imprime **un argumento por línea** y **valida
 contra el TOML**: un nivel, flag u opción no declarado es exit 2. Evidencia:
-`bin/lib/cmd-catalog.sh:221-282`.
+`ropero-code/bin/lib/cmd-catalog.sh:221-282`.
 
 #### 4.10.4 La descarga: `hf` y sólo `hf`
 
 **R-MOD-14** · El único downloader es **`hf` (HuggingFace CLI)**: no hay
 `curl` de reserva, porque `ROPERO_DOWNLOADER` era «una vía de fuga de los
-tests». Evidencia: `bin/lib/05-download.sh:9-13`.
+tests». Evidencia: `ropero-code/bin/lib/05-download.sh:9-13`.
 
 **R-MOD-15** · La descarga de un GGUF usa **staging propio**:
 `mktemp -d "$dest_dir/.rp-dl.XXXXXX"` — dentro del destino y en el mismo
 filesystem, para que el `mv` sea atómico; además evita que dos descargas con
 el mismo nombre de fichero y repos distintos se pisen. Evidencia:
-`bin/lib/05-download.sh:95-99`, `:158-162`.
+`ropero-code/bin/lib/05-download.sh:95-99`, `:158-162`.
 
 **R-MOD-16** · La secuencia de una descarga de GGUF es **exactamente**:
 (1) si el nombre final existe y no está vacío → «ya descargado», return 0;
@@ -1396,13 +1411,13 @@ medio renombrar) → `mv` y se da por buena; (3) **`hf` ANTES de preguntar**
 secuencia posible»—; (4) `rp_confirm` con el tamaño; (5) `hf download` al
 staging; (6) si `hf` dice OK pero el fichero no aparece, se busca por
 `basename` (hf a veces normaliza el nombre); (7) rename comparando rutas
-absolutas; (8) `rm -rf` del staging. Evidencia: `bin/lib/05-download.sh:123-199`.
+absolutas; (8) `rm -rf` del staging. Evidencia: `ropero-code/bin/lib/05-download.sh:123-199`.
 
 **R-MOD-17** · La descarga de un checkpoint **safetensors NO usa staging, a
 propósito**: `hf` es reanudable con `--local-dir` fijo, y un staging mataría
 precisamente esa reanudación (una descarga de 12 GB cortada a medias debe
 **continuar**, no empezar de cero). Evidencia:
-`bin/lib/05-download.sh:203-209`.
+`ropero-code/bin/lib/05-download.sh:203-209`.
 
 **R-MOD-18** · La verificación de una descarga es **por contenido real**,
 no por marcadores:
@@ -1412,32 +1427,32 @@ no por marcadores:
   (`model.safetensors.index.json` o `pytorch_model.bin.index.json`) —«un
   shard suelto NO cuenta»— **y** `config.json`.
 
-Evidencia: `bin/lib/05-download.sh:20-22`, `:38-59`, `:126`, `:228-235`.
+Evidencia: `ropero-code/bin/lib/05-download.sh:20-22`, `:38-59`, `:126`, `:228-235`.
 
 **R-MOD-19** · Aunque `hf` salga con 0, se **re-verifica**; si falta algo →
 error «hf terminó pero <dir> está incompleto», se borra el marcador y
 **return 1**. Un exit 0 de un downloader no es un modelo instalado.
-Evidencia: `bin/lib/05-download.sh:285-296`.
+Evidencia: `ropero-code/bin/lib/05-download.sh:285-296`.
 
 **R-MOD-20** · **No hay verificación por hash ni por checksum** en ninguna
 parte. El campo `[download].size` es **puramente informativo**: se usa sólo
 para el mensaje de consentimiento y las tablas. Evidencia:
-`bin/lib/05-download.sh:91`, `:151`; `bin/lib/cmd-models.sh:478`, `:487`.
+`ropero-code/bin/lib/05-download.sh:91`, `:151`; `ropero-code/bin/lib/cmd-models.sh:478`, `:487`.
 
 **R-MOD-21** · El estado de una descarga **se reconstruye desde el disco**:
 GGUF → presencia del fichero final; safetensors → pesos + `config.json` +
 marcador `.download_complete` (que **sólo** se toca si los pesos están de
 verdad); un `.download_complete` sin pesos es «un directorio roto, no un
 modelo instalado» y se re-descarga. Evidencia:
-`bin/lib/05-download.sh:21-22`, `:250-256`, `:286-298`.
+`ropero-code/bin/lib/05-download.sh:21-22`, `:250-256`, `:286-298`.
 
 **R-MOD-22** · La salida de `hf` va a **stderr**, para que un install con
 selección no «parezca escupir basura en vez de un modelo». Evidencia:
-`bin/lib/05-download.sh:277-279`.
+`ropero-code/bin/lib/05-download.sh:277-279`.
 
 **R-MOD-23** · Los auxiliares `[download.aux.*]` se bajan al mismo directorio
 con filtro `use=run` (los que el arranque referencia: `${mtp}`,
-`${mmproj}`, `${chat_template}`). Evidencia: `bin/lib/cmd-models.sh:321-336`,
+`${mmproj}`, `${chat_template}`). Evidencia: `ropero-code/bin/lib/cmd-models.sh:321-336`,
 `:515-517`.
 
 #### 4.10.5 Reutilización entre modelos
@@ -1446,13 +1461,13 @@ con filtro `use=run` (los que el arranque referencia: `${mtp}`,
 fichero**, el segundo modelo **se enlaza** al directorio del primero en vez de
 re-descargar. La comparación es **repo + nombre destino**, no sólo el nombre
 (`mmproj-BF16.gguf` existe en repos distintos con contenidos distintos).
-Evidencia: `bin/lib/cmd-models.sh:338-435`, `:346-350`.
+Evidencia: `ropero-code/bin/lib/cmd-models.sh:338-435`, `:346-350`.
 
 **R-MOD-25** · Un symlink ya hecho a mano **se respeta** (no se toca); uno
 **roto** se quita; y si el fichero está con el nombre del repo en vez del
 esperado, **no** se enlaza un directorio inútil: se explica el `mv` que hay
 que hacer. `--force` **no** enlaza nada («quiero el fichero AHORA AQUÍ»).
-Evidencia: `bin/lib/cmd-models.sh:396-426`.
+Evidencia: `ropero-code/bin/lib/cmd-models.sh:396-426`.
 
 #### 4.10.6 La decisión de descargar
 
@@ -1460,12 +1475,12 @@ Evidencia: `bin/lib/cmd-models.sh:396-426`.
 modelo `fired` pedido explícitamente es **error de uso (exit 2)**; un modelo
 sin `[download]` ni `[build]` es exit 2 («su artefacto se consigue a
 mano»); y un flag que contradice al TOML (`--build` en uno que sólo tiene
-`[download]`) es exit 2. Evidencia: `bin/lib/cmd-models.sh:641-662`,
+`[download]`) es exit 2. Evidencia: `ropero-code/bin/lib/cmd-models.sh:641-662`,
 `:688-690`, `:730-737`.
 
 **R-MOD-27** · **Elegir un modelo ES consentir su descarga**: dentro del
 proceso se fija `RP_YES=1`, y la pregunta de tamaño no se repite. Evidencia:
-`bin/lib/cmd-models.sh:19-20`, `:500`.
+`ropero-code/bin/lib/cmd-models.sh:19-20`, `:500`.
 
 **R-MOD-29** · Un modelo puede declarar **las dos vías** (`[download]` y
 `[build]`) a la vez; entonces hay que elegir, y `--prio download|build` es
@@ -1478,13 +1493,13 @@ instalación desatendida de una lista de modelos:
 
 Si la prioridad pedida no está disponible para ese modelo, es error de uso
 con el nombre del modelo y las dos vías. Evidencia:
-`bin/lib/cmd-models.sh:696-723`, `:730-737`.
+`ropero-code/bin/lib/cmd-models.sh:696-723`, `:730-737`.
 
 **R-MOD-30** · En la vía **build**, si el repo de safetensors **ya viene
 cuantizado**, la fase de cuantización **se salta**: se genera el GGUF
 directamente. Es la misma regla que aplica el gguffer cuando el quant pedido
 ya es el de fábrica (R-GGUF-9). Evidencia:
-`bin/lib/cmd-gguffer.sh:439-483` (plan de cuantización).
+`ropero-code/bin/lib/cmd-gguffer.sh:439-483` (plan de cuantización).
 
 **R-MOD-31** · `ropero gguffer` es el **equivalente manual** de
 `ropero install models --prio build`: baja el repo de safetensors, crea el
@@ -1492,7 +1507,7 @@ GGUF y lo cuantiza. Funciona directamente si el safetensors ya está
 cuantizado, o con el imatrix para cuantizar. Es el comando para cuando el
 ciclo completo de `install models` no encaja (un modelo puntual, un
 quant puntual, o un modelo que todavía no está en el catálogo). Evidencia:
-`bin/lib/cmd-gguffer.sh:1-15`, `:1271-1327`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1-15`, `:1271-1327`.
 
 **R-MOD-28** · Los motores con almacén propio (FLM, Strata) **deciden ellos**:
 si el engine define el hook opcional `install_model`, **manda él** y se salta
@@ -1501,9 +1516,9 @@ puede venir de `[model].path` **y** de `--decision` en `[args]`) y crea
 symlinks en `~/models/q4nx/<modelo>`. **Strata no descarga nada**: en Strata
 no hay modo «descargar sin arrancar»; su hook pide el *plan*
 (`strata launch --plan --output json`), lo enseña y dice explícitamente «no
-se ha bajado NADA». Evidencia: `bin/lib/cmd-models.sh:437-455`,
-`bin/lib/engines/fastflowlm.sh:188-259`,
-`bin/lib/engines/strata.sh:188-237`.
+se ha bajado NADA». Evidencia: `ropero-code/bin/lib/cmd-models.sh:437-455`,
+`ropero-code/bin/lib/engines/fastflowlm.sh:188-259`,
+`ropero-code/bin/lib/engines/strata.sh:188-237`.
 
 ---
 
@@ -1526,62 +1541,62 @@ fichero está en § 5.2.
 baterías ok) de 1 (alguna falló) de 2 (no se puede ni empezar). El producto
 real de la capa de evaluación no es un exit code: es un **informe de
 puntuación 0–100 por bloque** con veredicto A/B/C. Evidencia:
-`test/lib/test-common.sh:499-565`, `docs/juez.md`.
+`ropero-code/test/lib/test-common.sh:499-565`, `docs/juez.md`.
 
 **R-TST-3** · **El contenido de las respuestas del modelo no se evalúa
 automáticamente en ningún test**: no hay ni un `assert` sobre la calidad de
 la respuesta, sólo sobre el artefacto (JSON no vacío). La regresión sobre
-calidad es manual. Evidencia: `test/lib/test-common.sh:401-437`.
+calidad es manual. Evidencia: `ropero-code/test/lib/test-common.sh:401-437`.
 
 #### 4.11.2 El runner común
 
 **R-TST-4** · El runner resuelve sus rutas **desde la ubicación del propio
 script**, no desde el `cwd` ni desde `ROPERO_ROOT`: el test debe ser lanzable
-desde cualquier sitio. Evidencia: `test/lib/test-common.sh:37-38`.
+desde cualquier sitio. Evidencia: `ropero-code/test/lib/test-common.sh:37-38`.
 
 **R-TST-5** · El runner monta un **provider hermético propio**
 (`ropero-local`, openai-compatible) apuntando a `127.0.0.1:<puerto>/v1` y
 **no lee ni toca la config global de opencode** del usuario; además aísla
 `HOME` con `XDG_CONFIG_HOME/DATA/STATE/CACHE` → directorio de la batería.
-Evidencia: `test/lib/test-common.sh:20-27`, `:147-183`, `:288-297`.
+Evidencia: `ropero-code/test/lib/test-common.sh:20-27`, `:147-183`, `:288-297`.
 
 **R-TST-6** · La API key se resuelve **después** del arranque del modelo, en
 este orden: `LLAMA_API_KEY` > `$STATE_DIR/api_key` > `OPENAI_API_KEY` >
 `sk-local-dev-key`. El orden importa: contra un engine recién arrancado,
 resolverla antes daría 401. Y **nunca** se imprime ni se escribe en el
 informe; el fichero de config que la lleva queda en `chmod 600`. Evidencia:
-`test/lib/test-common.sh:85-100`, `:83`, `:181`, `:459`.
+`ropero-code/test/lib/test-common.sh:85-100`, `:83`, `:181`, `:459`.
 
 **R-TST-7** · El contexto y el `output` del modelo bajo prueba se derivan
 del `context` del TOML: `output = context − 1024`, saturado a
 `[4096, 65536]`, con contexto por defecto 32768. Evidencia:
-`test/lib/test-common.sh:114-128` (medido: `groot` → `context 65536 /
+`ropero-code/test/lib/test-common.sh:114-128` (medido: `groot` → `context 65536 /
 output 64512`).
 
 **R-TST-8** · El runner hace **probe** del engine con
 `GET /v1/models` + `Authorization: Bearer <key>` antes de lanzar opencode, y
 aborta con mensaje claro si no responde; una respuesta **vacía** cuenta como
-probe fallido. Evidencia: `test/lib/test-common.sh:189-203`, `:394-398`.
+probe fallido. Evidencia: `ropero-code/test/lib/test-common.sh:189-203`, `:394-398`.
 
 **R-TST-9** · El runner invoca exactamente
 `opencode run <prompt> --agent build --model ropero-local/<modelo> --format json --standalone`,
 con stdout al JSON y stderr a su propio fichero, **nunca descartado**.
-Evidencia: `test/lib/test-common.sh:401-403` (argv verificado en ejecución).
+Evidencia: `ropero-code/test/lib/test-common.sh:401-403` (argv verificado en ejecución).
 
 **R-TST-10** · Un fallo en una batería **no aborta las demás**: se anota y se
 sigue; el agregado sale por 1 sólo si alguna falló. Y `ropero stop all` es
 tolerante a fallo (`|| true`): un entorno ya limpio no puede abortar la
-batería. Evidencia: `test/lib/test-common.sh:541-565`, `:213`, `:216`.
+batería. Evidencia: `ropero-code/test/lib/test-common.sh:541-565`, `:213`, `:216`.
 
 **R-TST-11** · El runner produce un `recopilacion-completa.md` con el
 **CONTENIDO** de cada artefacto (log del engine, JSON, sesión exportada,
-stderr), no sólo sus rutas. Evidencia: `test/lib/test-common.sh:312-332`,
+stderr), no sólo sus rutas. Evidencia: `ropero-code/test/lib/test-common.sh:312-332`,
 `:445-492`.
 
 **R-TST-12** · La negativa a empezar es **exit 2**, no 1: falta el modelo,
 falta `jq`/`opencode`/`ropero`, no se puede crear el directorio de salida o
 no se puede preparar el entorno aislado. Evidencia:
-`test/lib/test-common.sh:501-528`, `:530-539`.
+`ropero-code/test/lib/test-common.sh:501-528`, `:530-539`.
 
 #### 4.11.3 Los dobles
 
@@ -1596,12 +1611,12 @@ Evidencia: `test/fakes/{pkill,curl,ropero,opencode}`.
 motor**: re-cuantizar falla con el mensaje literal
 `requantizing from type X is disabled`. Por eso el gguffer debe detectar el
 cuant incompatible *antes* de descargar los pesos. Evidencia:
-`test/fakes/gguffer/llama-quantize:121-129`.
+`ropero-code/test/fakes/gguffer/llama-quantize:121-129`.
 
 **R-TST-15** · El GGUF sintético (`gguf_fake.py`) permite que el resultado
 del cuantizador falso sea verificable con el **`ggufcheck` real**, no con
 otro doble: eso es lo que da credibilidad a la aserción del `file_type`.
-Evidencia: `test/fakes/gguffer/gguf_fake.py`, `test/test-gguffer.sh:178`.
+Evidencia: `test/fakes/gguffer/gguf_fake.py`, `ropero-code/test/test-gguffer.sh:178`.
 
 **R-TST-16** · La suite offline, ejecutada con `HOME` temporal y los fakes
 en el PATH, corre **5/5 baterías ok en ~2 s, exit 0**, sin GPU, sin red y
@@ -1611,7 +1626,7 @@ sin matar nada. *Medido en ejecución.* Evidencia: `test/test-groot.sh` +
 **R-TST-17** · La baja de procesos es una **lista cerrada y explícita**:
 `llama-server`, `llama-server-official`, `opencode`, `mcode`, `claude`.
 **Nunca `python`** — un `pkill -9 python` mataría procesos ajenos al test.
-Evidencia: `test/lib/test-common.sh:206-219`, `test/fakes/pkill:6-10`.
+Evidencia: `ropero-code/test/lib/test-common.sh:206-219`, `ropero-code/test/fakes/pkill:6-10`.
 
 #### 4.11.4 Lo que la batería NO garantiza — tres heridas medidas
 
@@ -1628,7 +1643,7 @@ el recuento impreso añade un `+12` **hardcodeado**.
 
 Consecuencia: el requisito de seguridad más sensible del repo **no está
 garantizado por la suite**. Arreglo: `[[ "$rc" == "0" ]] || fallos=$((fallos+1))`.
-Evidencia: `test/test-endpoint-auth.sh:31-106`, `:204-208`.
+Evidencia: `ropero-code/test/test-endpoint-auth.sh:31-106`, `:204-208`.
 
 > Éste es el peor tipo de defecto posible en una batería: un checker que da
 > verde sin mirar. Es peor que no tener checker, porque **consume la confianza
@@ -1639,29 +1654,29 @@ Evidencia: `test/test-endpoint-auth.sh:31-106`, `:204-208`.
 el conversor falso. Medido: en un sandbox sin `transformers`, **15 de los 38
 checks fallan** y el script sale 1. El mensaje culpa al entorno, no al
 gguffer. Falta un doble de `python` (o un `ROPERO_PYTHON` que apunte a un
-stub). Evidencia: `bin/lib/cmd-gguffer.sh:1961-1980`,
-`test/test-gguffer.sh:16-17`.
+stub). Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1961-1980`,
+`ropero-code/test/test-gguffer.sh:16-17`.
 
 **R-TST-20** · 🟠 **No hay runner de CI ni comando documentado** que ejecute
 la suite completa: hay que lanzar 16 scripts a mano. El path que el README y
 el CHANGELOG dan (`tests/suite/run.sh`) **no existe** (fue movido a `test/`
-en `4b133bf` y la doc nunca se actualizó). El propio `README.md:174` dice
+en `4b133bf` y la doc nunca se actualizó). El propio `ropero-code/README.md:176` dice
 `test/`: la doc se contradice. No hay `.github/`, ni `Makefile`, ni
-`justfile`. Evidencia: `README.md:174`, `:192`, `CHANGELOG.md:205`.
+`justfile`. Evidencia: `ropero-code/README.md:176`, `ropero-code/README.md:194`, `ropero-code/CHANGELOG.md:205`.
 
 **R-TST-21** · 🟠 **Los logs de los dobles se escriben pero nunca se
 assertan.** Los cinco dobles raíz registran su argv en `$HOME/.fake-*.log`
 y **ningún test los lee** (grep de `FAKE_LOG`/`.fake-` → 0 coincidencias).
 Por tanto «nunca `pkill -9 python`» y «el argv exacto de `opencode run`»
 son invariantes *documentadas*, no *verificadas*. El andamiaje ya existe:
-basta un `grep` sobre el log. Evidencia: `test/fakes/README.md:50-51`.
+basta un `grep` sobre el log. Evidencia: `ropero-code/test/fakes/README.md:50-51`.
 
 **R-TST-22** · 🟠 **La resolución de niveles (`[levels]`) no tiene un solo
 test.** El catálogo define niveles por modelo y `rp_model_argv <modelo>
 [nivel]` los resuelve, pero ningún test verifica que el nivel pedido llegue
 al argv, que un nivel no declarado falle, ni que el nivel por defecto se
 aplique. Es la mitad de la superficie de configuración del catálogo.
-Evidencia: `models/llama/groot.toml` (`[levels]`), `bin/lib/02-modelconf.sh:269-312`.
+Evidencia: `models/llama/groot.toml` (`[levels]`), `ropero-code/bin/lib/02-modelconf.sh:269-312`.
 
 **R-TST-23** · 🟠 **21 ficheros de código no son tocados por ningún test**,
 entre ellos `cmd-catalog.sh`, `cmd-doctor.sh`, `cmd-install.sh`,
@@ -1675,7 +1690,7 @@ niega a arrancar sin `LLAMA_API_KEY`»; el test afirma **exactamente lo
 contrario** (arranca `flm serve` directo, sin `--api-key`, y arranca igual
 sin `LLAMA_API_KEY`). Va además en la cifra (17 vs. 19 checks) y no registra
 el refactor. **El test es la fuente de verdad; el CHANGELOG miente.**
-Evidencia: `CHANGELOG.md:98-102` vs. `test/test-endpoint-auth.sh:116-122`,
+Evidencia: `ropero-code/CHANGELOG.md:98-102` vs. `ropero-code/test/test-endpoint-auth.sh:116-122`,
 `:199-202`.
 
 **R-TST-25** · 🟡 **Dos scripts dependent del entorno más de lo que
@@ -1683,24 +1698,24 @@ parece**: `test-flm-decision.sh` y `test-models-symlink.sh` abortan con
 `LLAMA_API_KEY: unbound variable` si no está exportada (por `set -u` +
 `: "${OPENAI_API_KEY:=$LLAMA_API_KEY}"`), y el runner exige `jq` en el PATH.
 Un fallo de entorno se presenta como fallo de test. Evidencia:
-`bin/lib/01-env.sh:60`, `test/lib/test-common.sh:522-528`.
+`ropero-code/bin/lib/01-env.sh:60`, `ropero-code/test/lib/test-common.sh:522-528`.
 
 **R-TST-26** · 🟡 **La compatibilidad con bash 3.2 es una declaración, no
 una verificación**: el README y las cabeceras de los 11 scripts la afirman,
 pero la batería **no ejecuta `bash 3.2`** en ningún sitio (el sandbox es
 Linux con bash 5). El grep confirma que no se usan las construcciones
 prohibidas, pero la compatibilidad real en macOS **no está probada**.
-Evidencia: `README.md:200-202`, `test/bench-motor.sh:411`.
+Evidencia: `ropero-code/README.md:199-200`, `ropero-code/test/bench-motor.sh:411`.
 
 **R-TST-27** · 🟡 **`shellcheck` no está en la batería**, pese a que el
 README lo documenta como requisito de desarrollo. Evidencia:
-`README.md:194`.
+`ropero-code/README.md:194`.
 
 **R-TST-28** · 🟡 **Dos scripts devuelven códigos no estándar**:
 `test-strata.sh` sale con el **número de fallos** (3 fallos → exit 3, no 1) y
 `test-endpoint-auth.sh` sale 0/1 pero **sin propagar el fallo del bloque
-python** (ver R-TST-18). Evidencia: `test/test-strata.sh:218-223`,
-`test/test-endpoint-auth.sh:204-208`.
+python** (ver R-TST-18). Evidencia: `ropero-code/test/test-strata.sh:218-223`,
+`ropero-code/test/test-endpoint-auth.sh:204-208`.
 
 ---
 
@@ -1710,20 +1725,20 @@ python** (ver R-TST-18). Evidencia: `test/test-strata.sh:218-223`,
 TypeScript (`@opencode/plugin`) con `id: "ropero-modelo"`. Hace **dos
 cosas** por el mismo motivo: que el modelo que pides sea el que te
 responde, y que no se te vaya GPU/tiempo en peticiones que no son tuyas.
-Evidencia: `opencode-plugin/index.ts:4-40`, `:146-147`.
+Evidencia: `ropero-code/opencode-plugin/index.ts:4-40`, `:146-147`.
 
 **R-OC-2** · El plugin se instala como **copia**, no como symlink — al revés
 que todo lo demás de ropero, y con razón explícita: **el watcher de opencode
 (inotify) no sigue symlinks**, así que los cambios no se recargarían. Si el
 destino difiere, se guarda un **backup numerado** (`.bak`, `.bak.1`,
 `.bak.2`…) antes de sobrescribir; si el destino es idéntico (`cmp -s`), no
-se toca nada. Evidencia: `bin/lib/cmd-install.sh:688-691`, `:710-712`,
+se toca nada. Evidencia: `ropero-code/bin/lib/cmd-install.sh:688-691`, `:710-712`,
 `:722-732`.
 
 **R-OC-3** · El instalador **no registra el plugin**: al final **comprueba**
 si la config de opencode declara `"ropero-modelo"` y, si no, avisa e imprime
 el snippet. Los plugins de `~/.config/opencode/plugins/` se cargan solos.
-Evidencia: `bin/lib/cmd-install.sh:741-753`, `opencode-plugin/README.md:14`.
+Evidencia: `ropero-code/bin/lib/cmd-install.sh:741-753`, `ropero-code/opencode-plugin/README.md:14`.
 
 **R-OC-4** · Las **tres opciones** del plugin:
 
@@ -1735,7 +1750,7 @@ Evidencia: `bin/lib/cmd-install.sh:741-753`, `opencode-plugin/README.md:14`.
 | `titleReasoning` | `"low"` | effort del razonamiento en la petición de título |
 | `titleLocal` | `false` | el título se pone en local y **no** se llama al modelo |
 
-Evidencia: `opencode-plugin/index.ts:42-57`, `:151`, `:164`, `:271-279`.
+Evidencia: `ropero-code/opencode-plugin/index.ts:42-57`, `:151`, `:164`, `:271-279`.
 
 **R-OC-5** · Los **tres hooks** usados y cuándo:
 
@@ -1746,35 +1761,35 @@ Evidencia: `opencode-plugin/index.ts:42-57`, `:151`, `:164`, `:271-279`.
 | `title` | en la petición de título | acota `maxTokens` y `reasoningEffort`, o pone el título en local |
 
 `hook("prompt")` **no** sirve: no tiene `model`. Evidencia:
-`opencode-plugin/index.ts:215-281`, `opencode-plugin/README.md:96-103`.
+`ropero-code/opencode-plugin/index.ts:215-281`, `ropero-code/opencode-plugin/README.md:96-103`.
 
 **R-OC-6** · El plugin **filtra**: consulta `ropero list` (cacheado) y **no
 hace nada** si el `modelID` no es un modelo de ropero — «el server ya está
 sirviendo lo que sea, y meter a ropero por medio sólo conseguiría romper la
-petición». Evidencia: `opencode-plugin/index.ts:76-101`, `:179-191`.
+petición». Evidencia: `ropero-code/opencode-plugin/index.ts:76-101`, `:179-191`.
 
 **R-OC-7** · Si `ropero use` falla, el hook **lanza**: la petición de
 opencode **falla**. No se degrada en silencio. Evidencia:
-`opencode-plugin/index.ts:167-172`, `opencode-plugin/README.md:60-62`.
+`ropero-code/opencode-plugin/index.ts:167-172`, `ropero-code/opencode-plugin/README.md:60-62`.
 
 **R-OC-8** · El `variant` de opencode se pasa como `--nivel` **sólo si
 coincide exactamente** con un nivel declarado por el modelo (`ropero levels
-<modelo>`). Evidencia: `opencode-plugin/index.ts:230-232`.
+<modelo>`). Evidencia: `ropero-code/opencode-plugin/index.ts:230-232`.
 
 **R-OC-9** · La deduplicación usa `servido` + `enCurso` para no lanzar dos
 `ropero use` por dos peticiones seguidas; la clave incluye el **nivel**,
 porque el mismo modelo con otro nivel son args distintos y el server se
-reinicia. Evidencia: `opencode-plugin/index.ts:153-160`, `:192-210`.
+reinicia. Evidencia: `ropero-code/opencode-plugin/index.ts:153-160`, `:192-210`.
 
 **R-OC-10** · El contrato estable con la CLI es de tres cosas: `list` (dos
 espacios + nombre), `levels` (uno por línea) y `use` (última línea
-`ROPERO_PORT=<n>`). Evidence: `opencode-plugin/index.ts:173`,
-`bin/lib/cmd-runtime.sh:273`, `:291`; `README.md:161-162`.
+`ROPERO_PORT=<n>`). Evidence: `ropero-code/opencode-plugin/index.ts:173`,
+`ropero-code/bin/lib/cmd-runtime.sh:273`, `:291`; `ropero-code/README.md:163-164`.
 
 **R-OC-11** · El `provider` por defecto del plugin es **`"marichocho"`**, un
 provider que **no existe** en la configuración actual de opencode del
 dueño. Es un residuo vivo en el código. Evidencia:
-`opencode-plugin/index.ts:151`.
+`ropero-code/opencode-plugin/index.ts:151`.
 
 ---
 
@@ -1790,20 +1805,20 @@ estado del arte.
 baja un motor, prepara los artefactos y deja el modelo en disco. De ahí que
 el engine de ropero tenga **tres piezas extra** sobre el contrato de 8
 hooks: `install_model`, el *puente* `strata-run.sh` y la resolución de
-*packs*. Evidencia: `test/test-strata.sh:5-16`, `:102-109`.
+*packs*. Evidencia: `ropero-code/test/test-strata.sh:5-16`, `:102-109`.
 
 **R-STRATA-2** · Un modelo de Strata en el catálogo es un **puntero** al
 catálogo de Strata: `[model].path = "<familia>/<paquete>"` (p. ej.
 `gyro/Gyro-M`), **no** una ruta. `_rp_eng_strata_pack` lo dice
 explícitamente y **no** usa `_rp_engine_model_path`, que le pegaría el
 prefijo de `$SAFETENSORS_DIR`. Evidencia:
-`bin/lib/engines/strata.sh:160-176`; `models/strata/gyro-m.toml:22-25`.
+`ropero-code/bin/lib/engines/strata.sh:160-176`; `ropero-code/models/strata/gyro-m.toml:22-25`.
 
 **R-STRATA-3** · Los ficheros **no los baja ropero**: los baja Strata al
 arrancar. En Strata **no hay modo «descargar sin arrancar»**, y el
 `install_model` de ropero lo dice con todas las letras («no se ha bajado
 NADA») y da la receta (`ROPERO_START_TIMEOUT=7200 ropero use <modelo>`).
-Evidencia: `bin/lib/engines/strata.sh:188-237`;
+Evidencia: `ropero-code/bin/lib/engines/strata.sh:188-237`;
 `docs/strata.md`.
 
 **R-STRATA-4** · La instalación de Strata es la **oficial**: se descarga el
@@ -1811,60 +1826,60 @@ instalador a un **fichero temporal** (nunca `curl | sh`) y se ejecuta con
 `env STRATA_BIN_DIR=$BIN_DIR sh $tmp`. La razón: `strata install` usa la
 misma variable de entorno para **buscar** `setup.py` y para decidir **dónde
 escribir**, así que no sirve para aislar las dos rutas. Evidencia:
-`bin/lib/engines/strata.sh:87-111`.
+`ropero-code/bin/lib/engines/strata.sh:87-111`.
 
 **R-STRATA-5** · La precedencia de `resolve` es **PATH → `$BIN_DIR` →
 `~/.local/bin/strata` → `~/.local/share/strata/terminal/current/bin/strata`**
 — el *launcher activo*, no la versión más nueva que haya en disco.
-Evidencia: `bin/lib/engines/strata.sh:124-139`.
+Evidencia: `ropero-code/bin/lib/engines/strata.sh:124-139`.
 
 **R-STRATA-6** · El **probe** distingue tres estados: `missing` (Strata
 ausente), `down` (Strata presente, puerto sin servicio) y `ok`. Y mira el
 **puerto de ropero** (el proxy), no el interno de Strata: lo que tiene que
 contestar es el endpoint de ropero con su `/health`. Evidencia:
-`bin/lib/engines/strata.sh:141-154`.
+`ropero-code/bin/lib/engines/strata.sh:141-154`.
 
 **R-STRATA-7** · Strata **no hace auth** (`native_auth` → `no`): la clave la
 pone el proxy de ropero. Strata arranca con `--access local --no-api-key`,
 de modo que sólo escucha en 127.0.0.1. Evidencia:
-`bin/lib/engines/strata.sh:157-163`.
+`ropero-code/bin/lib/engines/strata.sh:157-163`.
 
 **R-STRATA-8** · El `launch` de ropero **devuelve un PID**, y el proceso
 supervisor es otro: `strata launch --no-tui` **devuelve** cuando el server ya
-sirve. De ahí el puente. Evidencia: `test/test-strata.sh:160-161`;
-`bin/server/strata-run.sh:14-30`.
+sirve. De ahí el puente. Evidencia: `ropero-code/test/test-strata.sh:160-161`;
+`ropero-code/bin/server/strata-run.sh:14-30`.
 
 **R-STRATA-9** · El **puente** `strata-run.sh` (1) lanza Strata y **espera a
 que termine** —la descarga puede ser de 70 GB—, (2) **se queda vivo**
 mientras el modelo sirve, y (3) al recibir SIGTERM/SIGINT **para lo que él
-mismo arrancó** y sale. Evidencia: `bin/server/strata-run.sh:14-30`, `:100-160`.
+mismo arrancó** y sale. Evidencia: `ropero-code/bin/server/strata-run.sh:14-30`, `:100-152`.
 
 **R-STRATA-10** · Para poder parar sólo lo suyo, el launch se guarda con
 `--save-preset <nombre>` y al parar se usa `strata launch --preset <nombre>
 --stop`: `strata launch --stop` a secas para **todos** los launches, y
 parar el Strata del usuario sería una grosería. Evidencia:
-`bin/server/strata-run.sh:36-48`, `:100-110`.
+`ropero-code/bin/server/strata-run.sh:36-48`, `:100-110`.
 
 **R-STRATA-11** · El puente comprueba **cada 15 s** que el launch sigue
 corriendo (`strata launch --status --output json`): si Strata lo paró o
 murió el motor, el wrapper sale con error para que ropero **limpie el
 estado** en vez de quedarse con un «modelo» que no existe. Y el `sleep` es
 de 1 s, no de 1 h, porque el trap de bash **se aplaza** mientras duerme un
-comando (medido). Evidencia: `bin/server/strata-run.sh:130-160`.
+comando (medido). Evidencia: `ropero-code/bin/server/strata-run.sh:130-152`.
 
 **R-STRATA-12** · El `launch` de ropero pasa `--backend strata`,
 `--backend-bin <binario>`, `--model <familia/paquete>`, el **id publicado de
 ropero** (`strata-qwen38-q2`), el **contexto** del modelo y el **puerto
 interno = externo + 1000** (10998). Los flags extra del TOML viajan como
-`--extra-arg` y llegan al backend. Evidencia: `test/test-strata.sh:169-177`.
+`--extra-arg` y llegan al backend. Evidencia: `ropero-code/test/test-strata.sh:169-177`.
 
 **R-STRATA-13** · El **prefijo `--set`** es el mecanismo con el que se pasan
 opciones con valor a Strata: `ropero use strata-qwen36-q4 --vram-reserve 1344`
 se traduce en `--set vram_reserve_mib=1344`. El valor por defecto de
 1344 MiB es **medido en esta máquina** (RTX 5080 Laptop): con menos de
 512 MiB libres el driver de NVIDIA pagina y la petición no vuelve nunca.
-Evidencia: `docs/strata.md:132-137`;
-`models/strata/gyro-m.toml:56-60`.
+Evidencia: `ropero-code/docs/strata.md:132-137`;
+`ropero-code/models/strata/gyro-m.toml:56-60`.
 
 #### 4.13.2 El hueco: `strata launch` no puede servir estos modelos
 
@@ -2006,7 +2021,7 @@ aparece en `[options].list` y su bloque `[args.option.vram-reserve]` está
 (`--vram-reserve-mib <n>` como flag directo). ⇒ Hay que decidir **una**
 forma y dejarla viva y probada: sin la reserva, por debajo de 512 MiB libres
 el driver de NVIDIA pagina y la petición no vuelve nunca. Evidencia:
-`models/strata/gyro-m.toml:29`, `:56-60`; `docs/strata.md:132-137`;
+`ropero-code/models/strata/gyro-m.toml:29`, `:56-60`; `ropero-code/docs/strata.md:132-137`;
 `groot-strata.sh:343-344`.
 
 **R-STRATA-29** · La **reserva de VRAM** (1344 MiB) es un valor **medido
@@ -2053,7 +2068,7 @@ concretas, y ropero tiene una restricción dura equivalente:
 R-NF-4), `ln -sT` (GNU) y `stat -c%s` (GNU). Además usa `set -euo pipefail`,
 mientras que el instalador de ropero evita `errexit` **a propósito** para que
 un fallo implícito no aborte a medias sin mensaje. Evidencia:
-`groot-strata.sh:48`, `:140`, `:288`; `install.sh:61-66`;
+`groot-strata.sh:48`, `:140`, `:288`; `ropero-code/install.sh:61-66`;
 `bin/lib/00-utils.sh`.
 
 **R-STRATA-35** · El `estado` del script usa `mktemp` + fichero temporal
@@ -2137,7 +2152,7 @@ de diseño documentada por el propio script. Cualquier propuesta que salga de
 de GGUFs (descarga → conversión → imatrix → cuantización → verificación →
 model card). La comparten el CLI y la ruta `[build]` de los TOML (vía
 `rp_model_build_argv`): **no hay dos Makers de GGUF**. Evidencia:
-`bin/lib/cmd-gguffer.sh:1-15`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1-15`.
 
 **R-GGUF-2** · El gguffer **no ejecuta el TOML**: lee sus campos y monta el
 argv, igual que el resto del sistema. Un modelo es DATO (P-6).
@@ -2154,7 +2169,7 @@ GGUF». Detalle en R-GGUF-54…R-GGUF-58.
 **R-GGUF-3** · La fuente es **una de tres**, y son excluyentes:
 `--path <dir>` (un repo ya clonado), `--repo <owner/name>` (a clonar) o
 `--gguf <fichero|owner/repo>` (un GGUF existente). Evidencia:
-`bin/lib/cmd-gguffer.sh:1418`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1418`.
 
 **R-GGUF-4** · Las opciones de salida son **dos y distintas**:
 `--out NOMBRE|RUTA` (nombre/carpeta/ruta) y `--out-principal RUTA` (la ruta
@@ -2163,11 +2178,11 @@ necesita la suya, y `--out-principal` es la del que va a terminar en la
 carpeta del modelo (la que espera el TOML); los demás se quedan en el
 directorio normal con su nombre `<repo>-<quant>.gguf`. Y `--out-principal`
 **exige** una ruta de fichero `.gguf`. Evidencia:
-`bin/lib/cmd-gguffer.sh:27-32`, `:90-121`, `:1466-1485`.
+`ropero-code/bin/lib/cmd-gguffer.sh:27-32`, `:90-121`, `:1466-1485`.
 
 **R-GGUF-5** · Con **varios** quants, `--out` **no** puede ser la ruta exacta
 de un fichero: debe ser un nombre o un directorio. Evidencia:
-`bin/lib/cmd-gguffer.sh:1466-1479`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1466-1479`.
 
 **R-GGUF-6** · Las reglas del imatrix son **duras y comprobadas antes de
 nada**:
@@ -2177,15 +2192,15 @@ nada**:
 - un imatrix **sin `--quant`** no tiene sentido: no hay nada que cuantizar
   (con la excepción de `--diagnostico`, que está exento).
 
-Evidencia: `bin/lib/cmd-gguffer.sh:45-48`, `:1350-1371`,
-`test/test-gguffer.sh:191-214`, `:242-246`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:45-48`, `:1350-1371`,
+`ropero-code/test/test-gguffer.sh:191-214`, `:242-246`.
 
 **R-GGUF-7** · `--quant` es **repetible** y admite coma:
 `--quant IQ2_M --quant IQ3_XS` o `--quant IQ2_M,IQ3_XS`. Y **cuantizar ya
 cuantizado no es un error**: si el repo ya viene en el quant pedido, se
 coloca el GGUF y se sale 0 **sin borrar nada**. Evidencia:
-`bin/lib/cmd-gguffer.sh:27`, `:54-58`, `:1288-1295`;
-`test/test-gguffer.sh:152-156`.
+`ropero-code/bin/lib/cmd-gguffer.sh:27`, `:54-58`, `:1288-1295`;
+`ropero-code/test/test-gguffer.sh:152-156`.
 
 #### 4.14.3 El ahorro que da forma al diseño
 
@@ -2194,21 +2209,21 @@ los pesos**. Si el quant pedido es distinto del que ya traen los pesos, el
 gguffer **falla con rc≠0, sin bajar nada**, y **sugiere el repo hermano sin
 cuantizar** que sí serviría (`acme/modelo-BF16`).
 
-> «el ahorro de 60 GB tontos» — `test/test-gguffer.sh:162-169`
+> «el ahorro de 60 GB tontos» — `ropero-code/test/test-gguffer.sh:162-169`
 
 La razón es dura: el motor **no re-cuantiza** (`requantizing from type X is
-disabled`). Evidencia: `bin/lib/cmd-gguffer.sh:1619-1685`;
-`test/fakes/gguffer/llama-quantize:121-129`.
+disabled`). Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1619-1685`;
+`ropero-code/test/fakes/gguffer/llama-quantize:121-129`.
 
 **R-GGUF-9** · 🔴 **Un repo ya cuantizado (NVFP4) se conserva, no se
 cuantiza**: el GGUF sale con `general.file_type = 39` (NVFP4) y el mensaje
 lo dice. Y si se pide un quant **distinto**, es error. La regla del motor es
 la regla del gguffer: *lo que ya está en el quant pedido no se toca*.
-Evidencia: `test/test-gguffer.sh:144-161`, `:219-223`.
+Evidencia: `ropero-code/test/test-gguffer.sh:144-161`, `:219-223`.
 
 **R-GGUF-10** · Un repo en **FP8** sí puede cuantizarse desde su F16
 dequantizado, y el gguffer **avisa** de que dequantiza (se pierde la ventaja
-del quant de fábrica). Evidencia: `test/test-gguffer.sh:235-240`.
+del quant de fábrica). Evidencia: `ropero-code/test/test-gguffer.sh:235-240`.
 
 #### 4.14.4 La cabeza MTP: el bloque que el imatrix no cubre
 
@@ -2219,13 +2234,13 @@ cuantizador aborta con «Missing importance matrix for tensor blk.64…».
 
 Es lo que hacía bartowski con su IQ2_M del Qwen3.8: dejó el bloque de la MTP
 en Q4_0, que no exige imatrix. Evidencia:
-`bin/lib/cmd-gguffer.sh:123-140`.
+`ropero-code/bin/lib/cmd-gguffer.sh:123-140`.
 
 **R-GGUF-12** · La cobertura del imatrix se comprueba **por bloque entero**,
 no tensor a tensor: los tensores que el imatrix no tiene son normalmente las
 normas f32, que no se cuantizan y no exigen imatrix; lo que aborta al
 cuantizador es un bloque entero sin cobertura. Evidencia:
-`bin/lib/cmd-gguffer.sh:123-140`.
+`ropero-code/bin/lib/cmd-gguffer.sh:123-140`.
 
 **R-GGUF-13** · El bloque MTP se localiza por **metadata**, no por el nombre
 del tensor: los tensores de la MTP se llaman como los de cualquier otro
@@ -2239,7 +2254,7 @@ bloque_mtp = block_count - nextn_predict_layers
 
 Qwen3.8 denso: `block_count=65`, `nextn=1` → bloque 64. `fable`: 41 → 40.
 `nemotron`: `nextn=0` → no hay MTP. Evidencia:
-`bin/lib/cmd-gguffer.sh:151-176`.
+`ropero-code/bin/lib/cmd-gguffer.sh:151-176`.
 
 **R-GGUF-14** · Cuando el error es de imatrix, el gguffer **traduce** el
 mensaje opaco del cuantizador («Missing importance matrix for tensor
@@ -2291,7 +2306,7 @@ cabeza MTP quedó en un quant aparte.
 
 La procedencia declara el quant **por nombre** (`"quant": "Q4_K_M"`), no por
 número. Es lo que va al model card. Evidencia:
-`bin/lib/cmd-gguffer.sh` (fase 6); `test/test-gguffer.sh:179-182`.
+`bin/lib/cmd-gguffer.sh` (fase 6); `ropero-code/test/test-gguffer.sh:179-182`.
 
 **R-GGUF-20** · El gguffer **no miente sobre el resultado**: si los pesos
 venían en NVFP4 y no se cuantizó nada, el mensaje final dice «NO he
@@ -2306,7 +2321,7 @@ los modos: ningún `read()` puede pasar de 100 MiB aunque el fichero sea de
 300 MiB (fichero disperso). Y distingue dos espacios de números que se
 confunden: `--file-type` (`general.file_type` / `llama_ftype`) y
 `--tipo-predominante` (el `ggml_type` del tensor). Evidencia:
-`test/test-ggufcheck.sh:38-47`, `:51-75`.
+`ropero-code/test/test-ggufcheck.sh:38-47`, `:51-75`.
 
 **R-GGUF-54** · 🔶 **El gguffer exige un motor llama.cpp disponible** —el
 oficial o el fork— y esa es una **precondición**, no un detalle: sin ella no
@@ -2325,14 +2340,14 @@ toma cuatro cosas:
 | el unidor de shards | `command -v llama-gguf-split` → si no, `$LLAMA_DIR/build/bin/llama-gguf-split` |
 | `libggml` (para `ggufcheck`) | `$LLAMA_DIR/build/bin/libggml.{so,dylib}` o `$LLAMA_DIR/build/lib/libggml.so` |
 
-Evidencia: `bin/lib/cmd-gguffer.sh:1376-1392`, `:840-846`;
-`bin/lib/01-env.sh:33-34`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1376-1392`, `:840-846`;
+`ropero-code/bin/lib/01-env.sh:33-34`.
 
 **R-GGUF-55** · 🔶 **El conversor es el punto que no admite sustituto**: sin
 `$LLAMA_DIR/convert_hf_to_gguf.py` **no hay conversión**, y por tanto no hay
 GGUF — con o sin quant. El cuantizador y el unidor de shards sí tienen
 alternativa en el PATH; el conversor, no. Evidencia:
-`bin/lib/cmd-gguffer.sh:1377`, `:1992`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1377`, `:1992`.
 
 **R-GGUF-56** · 🔶 **La precondición se comprueba ANTES de descargar los
 pesos**, con un mensaje que nombre el motor que falta y la variable que lo
@@ -2340,7 +2355,7 @@ apunta. Hoy **no hay guard**: si el motor no está, la conversión falla y el
 clasificador de errores la etiqueta como «faltan ficheros en el clon: la
 descarga está incompleta» — un diagnóstico **falso** que empuja a borrar y
 rebajar 60 GB por un problema que no es la descarga (H-27). Evidencia:
-`bin/lib/cmd-gguffer.sh:1957` (el único `-f` sobre el motor es para el
+`ropero-code/bin/lib/cmd-gguffer.sh:1957` (el único `-f` sobre el motor es para el
 parche), `:2035-2041` (el clasificador).
 
 **R-GGUF-57** · 🔶 **Los dos motores no dejan el clon en el mismo sitio**, y
@@ -2355,34 +2370,34 @@ eso es una costura del gguffer:
 motor salvo que se exporte `LLAMA_DIR=~/llama.cpp-official`. Ni el README ni
 `docs/` mencionan `LLAMA_DIR` ni `LLAMA_OFFICIAL_DIR` (sí están en
 `--help` de los engines: R-GGUF-33). Evidencia:
-`bin/lib/01-env.sh:33-34`; `bin/lib/engines/llama-server.sh:78`, `:155`;
-`bin/lib/engines/llama-server-official.sh:60`, `:77`;
-`bin/lib/cmd-gguffer.sh:1376`.
+`ropero-code/bin/lib/01-env.sh:33-34`; `ropero-code/bin/lib/engines/llama-server.sh:78`, `:155`;
+`ropero-code/bin/lib/engines/llama-server-official.sh:60`, `:77`;
+`ropero-code/bin/lib/cmd-gguffer.sh:1376`.
 
 **R-GGUF-58** · 🔶 **Ni `llama-quantize` ni `llama-gguf-split` se enlazan** en
 `$BIN_DIR` al instalar un engine: los engines instalan `llama-server` y
 `llama-server-official`, nada más. Es decir, la alternativa por el PATH que
 el gguffer contempla (R-GGUF-54) **no la activa ningún instalador**: en la
 práctica, el motor se encuentra **o no se encuentra**. Evidencia:
-`bin/lib/cmd-install.sh:599-613` (el enlace es el `basename` del binario
+`ropero-code/bin/lib/cmd-install.sh:599-613` (el enlace es el `basename` del binario
 resuelto), `bin/lib/engines/llama-server.sh` (enlaza `llama-server`).
 
 **R-GGUF-22** · Los modos son `--meta`, `--tipo-predominante`, `--file-type`,
 `--nombres`, `--bloque`, `--info`, y la **validación por defecto**, y cada uno
 tiene una salida exacta esperada. Evidencia:
-`test/test-ggufcheck.sh:38-47`.
+`ropero-code/test/test-ggufcheck.sh:38-47`.
 
 **R-GGUF-23** · Un GGUF **inválido** falla con **rc=1, mensaje claro y sin
 traceback**: un índice de tensores incompleto (declara 3, tiene 2) informa del
 recuento real; un `n_tensors` imposible (declara 1000, trae 2) también; y un
 `n_tensors = 2^40` en un fichero de 1 GiB **falla rápido** (<5 s, «GGUF
 inválido»), **no** se cuelga ni reserva 1 GiB. Evidencia:
-`test/test-ggufcheck.sh:115-134`.
+`ropero-code/test/test-ggufcheck.sh:115-134`.
 
 **R-GGUF-24** · El parámetro deprecado `solo_cabecera=True` **se sigue
 aceptando** (y se ignora): compatibilidad hacia atrás. Y `model_card.py
 --gguf` debe terminar con rc=0 **sin** `TypeError` y generar README y CUANT.
-Evidencia: `test/test-ggufcheck.sh:79-93`.
+Evidencia: `ropero-code/test/test-ggufcheck.sh:79-93`.
 
 **R-GGUF-25** · `ggufcheck` se puede ejecutar contra **cualquier** GGUF, no
 sólo los de ropero: acepta `--lib <ruta>` para la biblioteca de ggml. Y en el
@@ -2405,13 +2420,13 @@ leyendo `config.json` y `hf_quant_config.json` (del repo por HTTP con
 | `DEQUANT` | FP8/AWQ/GPTQ: el conversor los **dequantiza** a F16 | 1 |
 | `NINGUNO` | sin quant de fábrica (BF16/F16) | 1 o 32 |
 
-Evidencia: `bin/lib/cmd-gguffer.sh:288-378`, `:1647-1673`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:288-378`, `:1647-1673`.
 
 **R-GGUF-27** · Las reglas de parseo tienen tres trampas resueltas: el
 `quant_algo` va **anidado** en `quantization`, no en la raíz; el
 `quant_method` puede venir de `producer.name`; y **un 404 de HF no es JSON
 válido** y se ignora ⇒ un repo inexistente se lee como `NINGUNO`, que es lo
-correcto. Evidencia: `bin/lib/cmd-gguffer.sh:223-245`, `:279-283`,
+correcto. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:223-245`, `:279-283`,
 `:305-306`.
 
 **R-GGUF-28** · El plan de cuantización decide por cada quant pedido en
@@ -2420,17 +2435,17 @@ cuantiza**; (2) está en *otro* quant → **imposible** (el motor no
 re-cuantiza); (3) no está cuantizado y el pedido es un quant real → se
 cuantiza y hace falta imatrix; (4) no está cuantizado y el pedido es «plano»
 (F32/F16/BF16) → simple conversión de dtype, **sin imatrix**.
-Evidencia: `bin/lib/cmd-gguffer.sh:426-483`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:426-483`.
 
 **R-GGUF-29** · «Cuantizado» significa: todo `file_type` salvo `""`, `0`
 (F32), `1` (F16) y `32` (BF16). Evidencia:
-`bin/lib/cmd-gguffer.sh:389-394`.
+`ropero-code/bin/lib/cmd-gguffer.sh:389-394`.
 
 **R-GGUF-30** · Un **quant desconocido** aborta con rc 1 **antes de
 descargar**: la lista se parsea del `llama-quantize --help` del motor, en dos
 versiones (con alias y canónica, `grep -v "alias for"`), y el error dice
 `ropero gguffer --list-quants`. Evidencia:
-`bin/lib/cmd-gguffer.sh:1440-1465`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1440-1465`.
 
 #### 4.14.9 La superficie completa de la CLI
 
@@ -2438,7 +2453,7 @@ versiones (con alias y canónica, `grep -v "alias for"`), y el error dice
 flags, con dos modos activados por flag: `--list-quants` (o `--quant` **sin
 valor**) lista los quants del motor y los publicados para ese modelo base, y
 `--diagnostico` imprime el informe de por qué no se cuantiza **sin
-cuantizar**. Evidencia: `bin/lib/cmd-gguffer.sh:1324-1326`, `:1391-1415`,
+cuantizar**. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1324-1326`, `:1391-1415`,
 `:2060-2064`.
 
 **R-GGUF-32** · Los flags completos, con su obligatoriedad:
@@ -2462,13 +2477,13 @@ cuantizar**. Evidencia: `bin/lib/cmd-gguffer.sh:1324-1326`, `:1391-1415`,
 | `--chat-template` | `FICHERO` | — | **no documentado en `--help`** |
 | `--tokenizer` | `FICHERO` | — | **no documentado en `--help`** |
 
-Todos aceptan `--flag=valor`. Evidencia: `bin/lib/cmd-gguffer.sh:1271-1327`.
+Todos aceptan `--flag=valor`. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1271-1327`.
 
 **R-GGUF-33** · Las **variables de entorno** que gobiernan el comportamiento
 y **no salen en `--help`**: `GGUF_DIR` (`$HOME/models/gguf`), `GGUF_WORK_DIR`
 (`$HOME/.cache/ropero/gguffer`), `LLAMA_DIR` (`$HOME/llama.cpp`), `ROPERO_ROOT`,
 `MTP_QUANT` (`Q4_0`), `ROPERO_CHAT_TEMPLATE`. Se descubren leyendo el
-código. Evidencia: `bin/lib/cmd-gguffer.sh:975`, `:1271`, `:1376`, `:1476-1477`,
+código. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:975`, `:1271`, `:1376`, `:1476-1477`,
 `:1801`.
 
 **R-GGUF-34** · La ruta `[build]` del TOML se traduce al argv del gguffer
@@ -2480,8 +2495,8 @@ por una **tabla explícita** en `modelconf.py`:
 `keep_source`, `keep_intermedio`, `no_mtp`, `force`. Y `quant` admite lista
 o cadena con comas. El contrato es explícito: **la receta del TOML y el
 comando a mano son lo mismo**. Evidencia:
-`bin/python/modelconf.py:1248-1263`, `:1326-1334`;
-`bin/lib/02-modelconf.sh:323-336`; `bin/quant/ACRITO.md:23-26`.
+`ropero-code/bin/python/modelconf.py:1248-1263`, `:1326-1334`;
+`ropero-code/bin/lib/02-modelconf.sh:323-336`; `ropero-code/bin/quant/ACRITO.md:23-26`.
 
 #### 4.14.10 La conversión: tres arreglos que existen por casos reales
 
@@ -2490,20 +2505,20 @@ si el checkpoint es NVFP4 el intermedio es `-NVFP4`, si es MXFP4
 `-MXFP4_MOE`, si no `-F16`/`-BF16` según `--intermedio`. No se pone «-F16» a
 un fichero NVFP4. Y al reintentar se **reutiliza** el intermedio existente:
 para F16/BF16 se busca cualquiera de los dos; para NVFP4/MXFP4_MOE sólo el
-exacto. Evidencia: `bin/lib/cmd-gguffer.sh:1630-1635`, `:1802-1826`.
+exacto. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1630-1635`, `:1802-1826`.
 
 **R-GGUF-36** · `--no-mtp` **sólo se pasa si el conversor lo entiende**: se
 comprueba con `grep -qE "no-mtp|no_nextn"` sobre el conversor. Motivo: la
 clase `Qwen3_5TextModel` del motor de ropero **ignora** el flag, y usarlo
 aun así aborta la conversión. Evidencia:
-`bin/lib/cmd-gguffer.sh:1919-1925`; `:187-200`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1919-1925`; `:187-200`.
 
 **R-GGUF-37** · El **tokenizer se arregla antes de convertir**, en dos pasos:
 (i) se inyecta el `chat_template.jinja` del repo dentro del
 `tokenizer_config.json` — el conversor de llama.cpp **nunca** lee el
 `.jinja`— y (ii) se cambia `tokenizer_class: TokenizersBackend`
 (transformers v5) por `PreTrainedTokenizerFast`, guardando un `.bak`.
-Evidencia: `bin/lib/cmd-gguffer.sh:1070-1141`, `:1984-1989`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1070-1141`, `:1984-1989`.
 
 **R-GGUF-38** · La conversión tiene **dos reintentos automáticos**:
 (1) `Tokenizer class … does not exist` ⇒ se arregla el tokenizer y se
@@ -2513,26 +2528,26 @@ conversor, se **borra el GGUF parcial** y se **clasifica la causa**: sin
 disco (`no space left|disk quota|write error`), sin RAM
 (`MemoryError|OutOfMemory|Cannot allocate memory|Killed`), o clon
 incompleto. Siempre se **conservan los pesos** y se imprime el comando
-exacto de reintento. Evidencia: `bin/lib/cmd-gguffer.sh:1992-2051`.
+exacto de reintento. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1992-2051`.
 
 **R-GGUF-39** · Las flags del cuantizador van **antes de los posicionales**:
 `llama-quantize` sólo parsea opciones mientras el argumento empiece por
 `--`; si no, muere con `invalid nthread '--imatrix'`. El argv final es
 `llama-quantize [--imatrix F] [--tensor-type …] <f16> <salida> <QUANT>`.
-Evidencia: `bin/lib/cmd-gguffer.sh:2213-2219`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:2213-2219`.
 
 **R-GGUF-40** · El bloque MTP se localiza por **dos vías que se unen**: la
 metadata (`bloque_mtp = block_count - nextn_predict_layers`) **y** la
 comparación bloque a bloque contra el imatrix. Cada bloque sin cobertura
 recibe `--tensor-type "blk\.<N>\..*=Q4_0"`, con `Q4_0` configurable por
-`MTP_QUANT`. Evidencia: `bin/lib/cmd-gguffer.sh:2115-2166`, `:878-906`.
+`MTP_QUANT`. Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:2115-2166`, `:878-906`.
 
 **R-GGUF-41** · El `general.file_type` (llama_ftype: NVFP4=39,
 MXFP4_MOE=38, BF16=32, F16=1) **nunca** se compara con el `ggml_type`
 (NVFP4=40, MXFP4=39): son espacios de números distintos y «nunca coincide».
 El gguffer lee el file_type **real** del GGUF y rehace el plan con ese dato.
-Evidencia: `bin/lib/cmd-gguffer.sh:1435-1438`, `:2072-2098`;
-`bin/quant/quant-tipos.sh:9-11`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1435-1438`, `:2072-2098`;
+`ropero-code/bin/quant/quant-tipos.sh:9-11`.
 
 #### 4.14.11 Los parches del motor
 
@@ -2542,14 +2557,14 @@ recibe **parches** que se aplican con `patch -p1` y exigen **recompilar**
 después (sin recompilar, el parche no sirve). El estado de los parches se
 detecta **por el código**, no por git, y antes de parchear se guarda una
 copia `.ropero.bak`. Si tras aplicar siguen faltando parches ⇒ error
-(rc 1). Evidencia: `bin/quant/aplicar-parche-motor.sh:103-118`, `:153-158`,
-`:199-203`, `:206-220`; `bin/lib/engines/llama-server.sh:77-117`.
+(rc 1). Evidencia: `ropero-code/bin/quant/aplicar-parche-motor.sh:103-118`, `:153-158`,
+`:199-203`, `:206-220`; `ropero-code/bin/lib/engines/llama-server.sh:77-117`.
 
 **R-GGUF-43** · La aplicación del parche mixed-precision en el gguffer es
 **fail-open** (`patch -p1 … || true`): si el parche no entra, se sigue y la
 conversión fallará después con un error menos claro. Es un fail-open
 justificado —el error real aparece en la conversión— pero conviene saberlo.
-Evidencia: `bin/lib/cmd-gguffer.sh:1959`.
+Evidencia: `ropero-code/bin/lib/cmd-gguffer.sh:1959`.
 
 #### 4.14.12 La capa de scripts (`bin/quant/`)
 
@@ -2558,34 +2573,34 @@ la tabla `modelos.tsv` (7 columnas: `n pesos q imr imf flags fuente`) es su
 **fuente de verdad** —los guiones no llevan la lista dentro—. La ruta de
 destino **no se calcula en el script**: se le pide a ropero
 (`ropero path "$modelo"`), para no duplicar la verdad de los TOMLs.
-Evidencia: `bin/quant/cuantizar-todos.sh:5-6`, `:92-102`, `:113`, `:227`;
-`bin/quant/README.md:71-72`, `:78-81`.
+Evidencia: `ropero-code/bin/quant/cuantizar-todos.sh:5-6`, `:92-102`, `:113`, `:227`;
+`ropero-code/bin/quant/README.md:71-72`, `:78-81`.
 
 **R-GGUF-45** · El **nombre del destino nunca es mentiroso**: si el nombre
 de la ruta del TOML **no contiene** el nombre del quant principal, el GGUF
 va a la carpeta con su nombre propio en vez de llevar el del principal («el
 launcher creería que el modelo es el IQ2_M»). Los quants secundarios van a
 `$GGUF_DIR/_variantes/<modelo>/`. Evidencia:
-`bin/quant/cuantizar-todos.sh:146-186`; `bin/lib/cmd-gguffer.sh:105-118`,
+`ropero-code/bin/quant/cuantizar-todos.sh:146-186`; `ropero-code/bin/lib/cmd-gguffer.sh:105-118`,
 `:1853-1858`.
 
 **R-GGUF-46** · Un **fallo de un modelo no para la tirada** (salvo
 `--parar`): «un modelo que no se deja fabricar no puede impedir que los
 demás sí». Cada modelo tiene su log y el resumen final lista OK/FALLO por
-modelo. Evidencia: `bin/quant/cuantizar-todos.sh:35-37`, `:204-212`,
+modelo. Evidencia: `ropero-code/bin/quant/cuantizar-todos.sh:35-37`, `:204-212`,
 `:244-272`.
 
 **R-GGUF-47** · `bin/quant/todo.sh` es el guion completo y su **orden es
 significantivo**: **cuantizar → verificar → subir**. La verificación va
 **por delante** de la subida y, si algún GGUF falla, **no se sube nada**
-(`exit 1`). Evidencia: `bin/quant/todo.sh:47-92`, `:66-82`.
+(`exit 1`). Evidencia: `ropero-code/bin/quant/todo.sh:47-92`, `:66-82`.
 
 **R-GGUF-48** · `verificar-gguf.sh` es la **verificación posterior sin GPU**:
 exige ≥ 100 MiB, metadata legible, `arch` presente, tensores > 0 y
 `block_count`; la ausencia de `nextn_predict_layers` **no** es error (se
 informa como «(ninguno)»); y si se le pasa el quant esperado, compara
 `general.file_type` con el número de ese quant. Códigos: 0 ok · 1 fallos ·
-2 sin argumentos. Evidencia: `bin/quant/verificar-gguf.sh:28-96`.
+2 sin argumentos. Evidencia: `ropero-code/bin/quant/verificar-gguf.sh:28-96`.
 
 **R-GGUF-49** · La subida a HF (`subir-hf.sh`) crea el repo
 `<HF_USER>/<nombre-modelo>-<QUANT>-GGUF` (el nombre se deriva del fichero y
@@ -2594,31 +2609,31 @@ el `README.md` y el `CUANTIZATION.md`, y deja un marcador `.hf-uploaded` en
 la misma carpeta. El `base_model` sale del **propio GGUF**
 (`general.base_model.0.repo_url`), no de una tabla. Los GGUFs de
 `_variantes/` **no** se suben. Evidencia:
-`bin/quant/subir-hf.sh:46`, `:105-129`, `:184`, `:200-300`.
+`ropero-code/bin/quant/subir-hf.sh:46`, `:105-129`, `:184`, `:200-300`.
 
 **R-GGUF-50** · El **model card sale del propio GGUF**, no de una tabla, y
 **debe declarar** que el modelo no es del cuantizador; si no hay imatrix, lo
 dice («sin importance matrix… suele dar peor calidad»). Y el `.fuente.json`
 es la **única** fuente de qué imatrix se usó, porque el conversor no escribe
 `base_model` en la metadata. Evidencia:
-`bin/python/model_card.py:21-27`, `:186-188`, `:272`, `:305-309`;
-`bin/quant/subir-hf.sh:230-252`.
+`ropero-code/bin/python/model_card.py:21-27`, `:186-188`, `:272`, `:305-309`;
+`ropero-code/bin/quant/subir-hf.sh:230-252`.
 
 #### 4.14.13 Tres discrepancias del gguffer, medidas
 
 **R-GGUF-51** · 🟠 **`subir-hf.sh --subir` NO verifica el GGUF que sube**:
 sólo mira el marcador `.hf-uploaded`. La puerta de verificación está en el
 gguffer (fase 4) y en `todo.sh`; llamando al script de subida directamente,
-**un GGUF no verificado se sube**. El `README.md:82-83` afirma «un GGUF que
+**un GGUF no verificado se sube**. El `ropero-code/README.md:84-85` afirma «un GGUF que
 no pasa la verificación no se sube», y eso sólo se cumple si se pasa por
 `todo.sh` o si lo fabricó el gguffer. Evidencia:
-`bin/quant/subir-hf.sh:203-206`, `:278`; `bin/quant/README.md:82-83`.
+`ropero-code/bin/quant/subir-hf.sh:203-206`, `:278`; `ropero-code/bin/quant/README.md:82-83`.
 
 **R-GGUF-52** · 🟠 **La escritura de la procedencia es fail-open y su código
 de retorno se ignora**: si `_gguffer_escribe_fuente` falla, el GGUF queda
 **sin** `.fuente.json` y la tirada **sale 0**. Un artefacto sin procedencia
 publicable, con el código de salida diciendo que todo fue bien. Evidencia:
-`bin/lib/cmd-gguffer.sh:1006`, `:2315`.
+`ropero-code/bin/lib/cmd-gguffer.sh:1006`, `:2315`.
 
 **R-GGUF-53** · 🟡 **El comentario de `cuantizar-todos.sh` está desfasado
 respecto al código**: dice que el gguffer borra los safetensors «tanto si
@@ -2628,7 +2643,7 @@ es un **duplicado exacto** de un hunk de otro parche que **ningún script
 aplica**. Y `model_card.py::_tipos()` resuelve los alias **al revés** que
 `quant-tipos.sh::quant_nombre`: Python deja el último (el alias) y bash deja
 el primero (el canónico). Evidencia:
-`bin/quant/cuantizar-todos.sh:30-33` vs. `bin/lib/cmd-gguffer.sh:2040-2047`;
+`ropero-code/bin/quant/cuantizar-todos.sh:30-33` vs. `ropero-code/bin/lib/cmd-gguffer.sh:2040-2047`;
 `bin/quant/patches/`; `bin/python/model_card.py` vs.
 `bin/quant/quant-tipos.sh`.
 
@@ -2642,7 +2657,7 @@ el primero (el canónico). Evidencia:
 localizable (`fichero:línea`) salvo los marcados `[derivado]`, que son
 consecuencia de otro requisito y no de una línea de código concreta, y los
 marcados 🔶, que son el **estado objetivo declarado por el dueño** y todavía
-no están en el código (16 de ellos).
+no están en el código (17 de ellos).
 
 | Área | Requisitos | Ficheros fuente principales | Cobertura de tests |
 |---|---|---|---|
@@ -2660,7 +2675,7 @@ no están en el código (16 de ellos).
 | `R-TST` · Batería | 28 | `test/` | 🟢 es la batería |
 | `R-OC` · opencode | 11 | `opencode-plugin/index.ts` | 🔴 ninguno |
 | `R-STRATA` · Strata + `groot-strata.sh` | 38 | `bin/lib/engines/strata.sh`, `bin/server/strata-run.sh`, `groot-strata.sh` | 🟢 bueno (ropero) · 🟡 el script no |
-| `R-GGUF` · Fabricación GGUF | 58 | `bin/lib/cmd-gguffer.sh`, `bin/quant/*`, `bin/python/{ggufcheck,model_card}.py` | 🟢 bueno (no hermético) |
+| `R-GGUF` · Fabricación GGUF | 59 | `bin/lib/cmd-gguffer.sh`, `bin/quant/*`, `bin/python/{ggufcheck,model_card}.py` | 🟢 bueno (no hermético) |
 
 ### 5.2 La matriz de los requisitos que no están garantizados
 
@@ -2704,9 +2719,9 @@ puede comprobarse con el estado actual del repo.
 
 **H-1 · La spec que el código cita no existe.** El código referencia
 `spec §N` y `ADR-1` en docstrings, comentarios y nombres de función
-(`bin/lib/cmd-gguffer.sh:3` dice «(spec §8.15)»; `bin/lib/03-engines.sh`
+(`ropero-code/bin/lib/cmd-gguffer.sh:3` dice «(spec §8.15)»; `bin/lib/03-engines.sh`
 remite a `ADR-1`; `bin/server/strata-run.sh` cita «ADR-1» como origen de la
-restricción bash 3.2). El `README.md:175` anuncia `docs/specs/`.
+restricción bash 3.2). El `ropero-code/README.md:177` anuncia `docs/specs/`.
 **Ese directorio no existe en el repo.** `docs/` sólo contiene ficheros
 `.md` de pruebas y de Strata/FLM.
 
@@ -2716,8 +2731,8 @@ hay* y *especificar lo que hay*, y por eso cada requisito lleva evidencia
 de línea.
 
 **H-2 · El runner de la batería que la documentación anuncia no existe.**
-`README.md:192` y `CHANGELOG.md:205` dan `tests/suite/run.sh`; el path real
-es `test/` (movido en `4b133bf`) y el propio `README.md:174` lo dice bien.
+`ropero-code/README.md:194` y `ropero-code/CHANGELOG.md:205` dan `tests/suite/run.sh`; el path real
+es `test/` (movido en `4b133bf`) y el propio `ropero-code/README.md:176` lo dice bien.
 No hay `.github/`, ni `Makefile`, ni `justfile`: **no existe un comando
 documentado que ejecute la batería completa**.
 
@@ -2725,11 +2740,11 @@ documentado que ejecute la batería completa**.
 
 | # | Contradicción | Veredicto |
 |---|---|---|
-| H-3 | `CHANGELOG.md:23-25` y `engines/fastflowlm.sh:6-8` dicen que FLM va **detrás** de `endpoint.py`; el launch real es `flm serve` **directo** y el test lo **exige** (`test-endpoint-auth.sh:109-122`) | **el test manda**. Consecuencia: el puerto de FLM queda abierto a local sin key |
-| H-4 | `CHANGELOG.md:179-183` dice que `llama-server-official` está **oculto**; el código lo **visibiliza** y `install engines` lo ofrece en igualdad | **el código manda** |
-| H-5 | `CHANGELOG.md:98-102` afirma que el engine FLM «se niega a arrancar sin `LLAMA_API_KEY`»; el test afirma lo contrario | **el test manda** |
-| H-6 | `README.md:161-162` promete `tests/suite/run.sh` | **no existe** |
-| H-7 | `engines/llama-server.sh:12-28` y `CHANGELOG.md:158-178` hablan de un fork de AtomicBot; el motor real es **privado** (`Lorenzo-SF/ropero-llama-turboquant`) | **el código manda** |
+| H-3 | `ropero-code/CHANGELOG.md:23-25` y `ropero-code/bin/lib/engines/fastflowlm.sh:6-8` dicen que FLM va **detrás** de `endpoint.py`; el launch real es `flm serve` **directo** y el test lo **exige** (`ropero-code/test/test-endpoint-auth.sh:109-122`) | **el test manda**. Consecuencia: el puerto de FLM queda abierto a local sin key |
+| H-4 | `ropero-code/CHANGELOG.md:179-183` dice que `llama-server-official` está **oculto**; el código lo **visibiliza** y `install engines` lo ofrece en igualdad | **el código manda** |
+| H-5 | `ropero-code/CHANGELOG.md:98-102` afirma que el engine FLM «se niega a arrancar sin `LLAMA_API_KEY`»; el test afirma lo contrario | **el test manda** |
+| H-6 | `ropero-code/README.md:163-164` promete `tests/suite/run.sh` | **no existe** |
+| H-7 | `ropero-code/bin/lib/engines/llama-server.sh:12-28` y `ropero-code/CHANGELOG.md:158-178` hablan de un fork de AtomicBot; el motor real es **privado** (`Lorenzo-SF/ropero-llama-turboquant`) | **el código manda** |
 
 ### 6.3 Deuda funcional medida
 
@@ -2832,7 +2847,7 @@ terminar.
 ### 8.2 Qué se midió (no se suplementó)
 
 - **317 requisitos** con identificador único y evidencia `fichero:línea`
-  (16 de ellos = estado objetivo declarado por el dueño, no implementados).
+  (17 de ellos = estado objetivo declarado por el dueño, no implementados).
 - **La batería de tests**, ejecutada en un `HOME` temporal con los dobles en
   el PATH: **5/5 baterías ok en ~2 s, exit 0**, sin GPU, sin red y sin matar
   nada.
@@ -2859,7 +2874,7 @@ terminar.
 
 ### 8.4 Qué no viene del código
 
-Los **16 requisitos marcados 🔶** salen de la declaración del dueño
+Los **17 requisitos marcados 🔶** salen de la declaración del dueño
 (2026-11-12), no de una línea de código. Son el contrato que el proyecto
 **quiere** tener; el código de hoy los incumple, y cada incumplimiento está
 anotado en § 6 con su identificador de deuda. Refutar esos requisitos
