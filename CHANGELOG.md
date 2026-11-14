@@ -91,12 +91,16 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   violaciones y termina con código 2. No se han modificado esos TOML: el
   validador expone el estado real y corregir los datos requiere su propio
   cambio.
-- **La regla `[download]` + `[build]` está en tensión con R-DATA-6.** El doc B
-  §4.1.1 la presenta como error de uso (código 2), mientras que R-DATA-6 sitúa
-  la elección entre `--download` y `--build` en el momento de instalar y no
-  como defecto del TOML. De las seis violaciones del catálogo real, tres
-  proceden de esta regla. Es una contradicción documentada según §6.7 y queda
-  pendiente de decisión; no se altera el requisito todavía.
+- **Un modelo puede declarar las dos vías** (`[download]` **y** `[build]`) a la
+  vez: **no es un error**. El doc B §4.1.1 la daba como error de uso (código 2)
+  y R-DATA-6 situaba la elección entre `--download` y `--build` en el momento
+  de instalar, no como defecto del TOML. Resuelto (decisión del dueño,
+  2026-11-14): la fila del doc B §4.1.1 se borró y el validador acepta ambas
+  tablas. La elección del camino es de `ropero install models` (F5/T-25,
+  R-MOD-29): con las dos vías se pregunta al usuario, y `--prio=download|build`
+  la elige sin preguntar (global o por modelo; si el modelo no tiene ese
+  camino, se ignora). El exit 2 —error de uso— lo reservan los comandos, no el
+  validador.
 - **La regla de `context` múltiplo de 32 sólo aparece en el doc B §4.1.1.** La
   v1 acepta `133072`, que no es múltiplo de 32, y la v2 es más estricta. Se
   debe promover a R-DATA en el doc A o retirar la regla; queda pendiente de
