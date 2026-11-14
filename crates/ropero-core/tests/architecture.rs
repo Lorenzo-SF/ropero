@@ -6,8 +6,9 @@
 //!    entorno, no lanza procesos y no habla con la red (doc B §3.2.3).
 //! 2. **El grafo de dependencias del workspace no tiene ciclos** y
 //!    `ropero-core` no depende de ningún crate del workspace.
-//! 3. **`ropero-cli` mide menos de 400 líneas** (R-ARQ-1): es un
-//!    dispatcher, no un sitio donde viva la lógica.
+//! 3. **`ropero-cli` mide menos de 800 líneas** (R-ARQ-1): es un
+//!    dispatcher, no un sitio donde viva la lógica. El umbral subió de 400
+//!    a 800 en el [ADR-005](../../docs/adr/ADR-005-umbral-de-lineas-del-cli.md).
 //!
 //! ## Cómo se detecta la E/S de verdad
 //!
@@ -249,11 +250,19 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
     }
 }
 
-/// `ropero-cli` mide menos de 400 líneas.
+/// `ropero-cli` mide menos de 800 líneas.
 ///
-/// Es un dispatcher: la lógica vive en `ropero-core` (doc B §3.3).
+/// Es un dispatcher: la lógica vive en `ropero-core` (doc B §3.3) y la E/S
+/// en `ropero-runtime`.
+///
+/// El umbral subió de 400 a 800 en el ADR-005, y el motivo está medido:
+/// la superficie del contrato pasó de siete invocaciones a doce (los once
+/// comandos del doc CLI v2 más `ropero <modelo>`), y el parser pasó de
+/// escrito a mano a `clap`, que son 239 líneas de traducción de la
+/// superficie. Lo que el umbral sigue vigilando es lo mismo de siempre: que
+/// el CLI **no** se llene de lógica.
 #[test]
-fn ropero_cli_under_400_lines() {
+fn ropero_cli_under_800_lines() {
     let cli_src = repo_root().join("crates").join("ropero-cli").join("src");
     let mut lines = 0usize;
     for file in collect_rs(&cli_src) {
@@ -261,8 +270,8 @@ fn ropero_cli_under_400_lines() {
         lines += content.lines().count();
     }
     assert!(
-        lines < 400,
-        "ropero-cli has {lines} lines, expected fewer than 400"
+        lines < 800,
+        "ropero-cli has {lines} lines, expected fewer than 800 (ADR-005)"
     );
 }
 

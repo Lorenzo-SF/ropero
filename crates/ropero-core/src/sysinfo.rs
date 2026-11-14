@@ -77,3 +77,148 @@ pub fn ram_gb_desde_bytes(texto: &str) -> f64 {
     };
     bytes / (1024.0 * 1024.0 * 1024.0)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La captura del `status`
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// La memoria de `/proc/meminfo`, en MB.
+///
+/// Devuelve (usada, total) en MB. El fichero trae líneas `clave: valor` en
+/// kB: `MemTotal`, `MemAvailable`, `SwapTotal` y `SwapFree`.
+pub fn meminfo_mb(texto: &str) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
+    let mut total = None;
+    let mut disponible = None;
+    let mut swap_total = None;
+    let mut swap_libre = None;
+    for linea in texto.lines() {
+        let Some((clave, valor)) = linea.split_once(':') else {
+            continue;
+        };
+        let clave = clave.trim();
+        let kb = valor_kb(valor);
+        match clave {
+            "MemTotal" => total = kb,
+            "MemAvailable" => disponible = kb,
+            "SwapTotal" => swap_total = kb,
+            "SwapFree" => swap_libre = kb,
+            _ => {}
+        }
+    }
+    let ram_usada = match (total, disponible) {
+        (Some(t), Some(d)) => Some(t - d),
+        _ => None,
+    };
+    let swap_usada = match (swap_total, swap_libre) {
+        (Some(t), Some(f)) => Some(t - f),
+        _ => None,
+    };
+    (
+        ram_usada.map(|v| v / 1024.0),
+        total.map(|v| v / 1024.0),
+        swap_usada.map(|v| v / 1024.0),
+        swap_total.map(|v| v / 1024.0),
+    )
+}
+
+/// El valor de una línea de `/proc/meminfo`, en kB.
+///
+/// La línea es `clave:  12345 kB`; sólo se queda con el número.
+pub fn valor_kb(valor: &str) -> Option<f64> {
+    let numeros: String = valor
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    numeros.parse::<f64>().ok()
+}
+
+/// El tamaño de un dispositivo zram, en MB, según su `disksize`.
+///
+/// El fichero `disksize` de `/sys/block/zramN` está en bytes.
+pub fn zram_mb(disksize: &str) -> Option<f64> {
+    let bytes: f64 = disksize.trim().parse().ok()?;
+    Some(bytes / (1024.0 * 1024.0))
+}
+
+/// La frecuencia de la CPU, en GHz, según `/proc/cpuinfo`.
+///
+/// Busca la línea `cpu MHz` y la divide entre 1000. Si no está, busca
+/// `model name` y extrae el GHz del nombre (los Apple Silicon y los
+/// Scaleway loannounced así).
+pub fn cpu_ghz(cpuinfo: &str) -> Option<f64> {
+    for linea in cpuinfo.lines() {
+        let Some((clave, valor)) = linea.split_once(':') else {
+            continue;
+        };
+        if clave.trim() == "cpu MHz" {
+            let mhz: f64 = valor.trim().parse().ok()?;
+            return Some(mhz / 1000.0);
+        }
+    }
+    ghz_de_nombre(cpuinfo)
+}
+
+/// El GHz que anuncia el nombre del procesador.
+///
+/// Busca el número que va **seguido** de "GHz": en "Apple M3 Max 3.20GHz"
+/// el número es `3.20`, y en "AMD Ryzen 9 5950X" no hay ninguno (ni el 9
+/// ni el 5950 son GHz).
+fn ghz_de_nombre(cpuinfo: &str) -> Option<f64> {
+    for linea in cpuinfo.lines() {
+        let Some((clave, valor)) = linea.split_once(':') else {
+            continue;
+        };
+        if !clave.trim().starts_with("model name") {
+            continue;
+        }
+        let texto = valor.to_lowercase();
+        let mut pos = 0;
+        while let Some(inicio) = texto[pos..].find(|c: char| c.is_ascii_digit()) {
+            let desde = pos + inicio;
+            let numero: String = texto[desde..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
+            let fin = desde + numero.len();
+            if texto[fin..].starts_with("ghz")
+                && let Ok(valor) = numero.parse::<f64>()
+            {
+                return Some(valor);
+            }
+            pos = desde + numero.len().max(1);
+        }
+    }
+    None
+}
+
+/// La temperatura de un sensor térmico, en grados Celsius.
+///
+/// `thermal_zoneN/temp` está en mili-grados: `42000` son 42 °C.
+pub fn thermal_c(milis: &str) -> Option<f64> {
+    let valor: f64 = milis.trim().parse().ok()?;
+    Some(valor / 1000.0)
+}
+
+/// Una GPU, según la salida de `nvidia-smi --query-gpu=...`.
+///
+/// La salida esperada tiene una línea por GPU con los campos separados por
+/// comas: `nombre, clocks.gr, temperature.gpu`.
+pub fn nvidia_gpus(salida: &str) -> Vec<(String, Option<f64>, Option<f64>)> {
+    let mut gpus = Vec::new();
+    for linea in salida.lines() {
+        let linea = linea.trim();
+        if linea.is_empty() {
+            continue;
+        }
+        let campos: Vec<&str> = linea.split(',').map(|c| c.trim()).collect();
+        if campos.len() < 3 {
+            continue;
+        }
+        let nombre = campos[0].to_string();
+        let ghz = campos[1].parse::<f64>().ok().map(|mhz| mhz / 1000.0);
+        let temp = campos[2].parse::<f64>().ok();
+        gpus.push((nombre, ghz, temp));
+    }
+    gpus
+}
