@@ -6,6 +6,11 @@
 //! reales, y comprueba que la implementación en Rust produce exactamente lo
 //! mismo.
 //!
+//! **La v1 (`ropero-code/`) es sólo referencia**: se consulta y se contrasta,
+//! pero la v2 se desarrolla como si esa carpeta no existiera. El catálogo
+//! propio de la v2 está en `<repo-root>/models` (doc B §2.4) y lo comprueba
+//! `crates/ropero-core/tests/catalogo_real.rs` (sin `#[ignore]`).
+//!
 //! ## Procedencia de los valores congelados
 //!
 //! Los argv de abajo se capturaron **ejecutando la v1 en modo lectura**
@@ -76,7 +81,13 @@ fn base_frozen() -> PathBuf {
 
 /// Base del catálogo real de la v1: `<repo-root>/ropero-code/models`.
 ///
-/// Sólo la usa el test de deriva, que está marcado `#[ignore]`.
+/// **Sólo referencia.** La v1 es el catálogo de la v2 con el que se comparó
+/// el argv congelado; la v2 tiene el suyo propio en `<repo-root>/models` (doc
+/// B §2.4) y se desarrolla como si `ropero-code/` no existiera.
+///
+/// Sólo la usan los tests marcados `#[ignore]`, que comparan con la v1 real:
+/// la batería por defecto (`cargo test`) no depende de `ropero-code/`, que
+/// puede no estar o estar desactualizada.
 fn base_real() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")

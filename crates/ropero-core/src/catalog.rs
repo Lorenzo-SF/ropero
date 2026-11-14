@@ -220,12 +220,10 @@ pub fn find_spec<'a>(cat: &'a Catalog, name: &str) -> Option<&'a ModelSpec> {
 /// `base` es el directorio de modelos ya resuelto por la capa de
 /// presentación (`ropero_core::models_base`): aquí no se pregunta al disco
 /// si existe.
+///
+/// No hay candidatas en `ropero-code/`: la v1 es sólo referencia.
 pub fn template_candidates(root: &Path, base: &Path) -> Vec<PathBuf> {
-    vec![
-        base.join("_template.toml"),
-        root.join("_template.toml"),
-        root.join("ropero-code/models/_template.toml"),
-    ]
+    vec![base.join("_template.toml"), root.join("_template.toml")]
 }
 
 /// Filas del catálogo: un modelo por fichero de origen (un alias no es una

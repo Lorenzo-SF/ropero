@@ -68,6 +68,15 @@ cargo test --locked --workspace
 cargo build --locked --workspace --release
 ```
 
+El catálogo de la v2 es **propio**: vive en [`models/`](models/) en la raíz
+del workspace (45 modelos: 17 activos y 28 retirados en `fired/`). Se
+descubre por ancestrales, así que la CLI funciona desde cualquier subdirectorio:
+
+```bash
+cargo run --locked -p ropero-cli -- validate   # OK: 45 modelo(s) validados
+cargo run --locked -p ropero-cli -- list --all  # 45 líneas
+```
+
 La CLI v2 se puede apuntar a otro catálogo con `ROPERO_MODELS_DIR` (debe
 apuntar a la raíz que contiene `models/`):
 

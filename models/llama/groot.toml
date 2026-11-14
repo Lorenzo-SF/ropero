@@ -1,0 +1,70 @@
+[model]
+name    = "groot"
+engine  = "llama-server"
+context = 65536 
+
+[files]
+gguf = "Groot-19B-A3B-261023-NVFP4.gguf"
+
+[build] 
+repo         = "GrootTeam/Groot-19B-A3B-261023-NVFP4"
+keep_source  = true
+size = "13.6 GB"
+
+[levels]
+list    = ["think", "instruct"]
+default = "think"
+
+[args]
+base = [
+    "--n-gpu-layers", "999",
+    # "--moe-cache","soft", 
+    "--kv-unified",
+    "--kv-offload",
+    "--cache-reuse", "512",
+    
+    "--cache-type-k", "q8_0",
+    "--cache-type-v", "q8_0",
+
+    "--n-predict", "8192",
+    "--keep", "16384",
+    "--presence-penalty", "1.5",
+    "--repeat-penalty", "1.0",
+
+
+    "--spec-type", "draft-mtp", 
+    "--spec-draft-n-max", "3",     
+    "--spec-draft-n-min", "0",     
+    "--spec-draft-p-min", "0.8",     
+    "--spec-draft-type-k", "q8_0",  
+    "--spec-draft-type-v", "q8_0",  
+
+    # "--spec-type", "ngram-map-k4v",
+    # "--spec-ngram-map-k4v-size-n", "24",
+    # "--spec-ngram-map-k4v-size-m", "48",
+    # "--spec-ngram-map-k4v-min-hits", "1",
+]
+
+[args.level.think]
+chat_template_kwargs = { enable_thinking = true }
+base = [
+    # Parámetros recomendados para tareas generales en modo pensamiento
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--reasoning", "true",
+
+]
+
+[args.level.instruct]
+chat_template_kwargs = { enable_thinking = false }
+base = [
+    # Parámetros recomendados para modo instructivo (sin pensamiento)
+    "--temp", "0.7",
+    "--top-p", "0.8",
+    "--top-k", "20",
+    "--min-p", "0.0",
+    "--reasoning", "false",
+]
+

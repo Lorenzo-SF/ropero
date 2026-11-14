@@ -1,19 +1,12 @@
-//! Comprobación del catálogo real de la v1 (`ropero-code/models`).
+//! Comprobación del catálogo real de la v2 (`models/`, en la raíz del
+//! workspace).
 //!
-//! Este test está marcado `#[ignore]` a propósito: el catálogo real sigue
-//! viviendo en `ropero-code/` (la v1 lo resuelve con `ROPERO_ROOT` relativo
-//! a `ropero-code/`) hasta la fase F9/T-05, cuando el catálogo pase a la raíz
-//! del workspace. Mientras tanto, la batería por defecto (`cargo test`)
-//! debe ser hermética y no depender de ese directorio.
+//! El catálogo de la v2 es **propio**: vive en `<repo-root>/models` (doc B
+//! §2.4) y está versionado en el repo. Por eso este test **no** está
+//! marcado `#[ignore]`: corre siempre, en la batería por defecto y en CI.
 //!
-//! Cómo ejecutarlo:
-//!
-//! ```text
-//! cargo test --locked --workspace -- --ignored
-//! ```
-//!
-//! Si `ropero-code/models` no existe (por ejemplo, en una copia del repo sin
-//! la v1), el test se omite con un mensaje claro en vez de fallar.
+//! La v1 (`ropero-code/`) es sólo referencia: la v2 se desarrolla como si
+//! esa carpeta no existiera, y este test no depende de ella.
 
 use std::path::{Path, PathBuf};
 
@@ -24,12 +17,11 @@ const FIRED_ESPERADOS: usize = 28;
 /// Nº total de modelos del catálogo real (activos + retirados).
 const TOTAL_ESPERADO: usize = ACTIVOS_ESPERADOS + FIRED_ESPERADOS;
 
-/// Base del catálogo real: `<repo-root>/ropero-code/models`.
+/// Base del catálogo real de la v2: `<repo-root>/models`.
 fn base_real() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
-        .join("ropero-code")
         .join("models")
 }
 
@@ -69,16 +61,13 @@ fn recoge(base: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
 }
 
 #[test]
-#[ignore = "el catálogo real vive en ropero-code/ hasta la fase F9/T-05; ejecutar con `cargo test --locked --workspace -- --ignored`"]
 fn catalogo_real_tiene_45_modelos() {
     let base = base_real();
-    if !base.is_dir() {
-        eprintln!(
-            "omitido: no existe el catálogo real en {} (la v1 no está presente)",
-            base.display()
-        );
-        return;
-    }
+    assert!(
+        base.is_dir(),
+        "no existe el catálogo de la v2 en {}",
+        base.display()
+    );
     let (active, fired) = recoge(&base);
     assert_eq!(
         active.len(),
@@ -102,18 +91,59 @@ fn catalogo_real_tiene_45_modelos() {
 
 /// El `_template.toml` del catálogo real debe existir y declarar `[model]`.
 #[test]
-#[ignore = "el catálogo real vive en ropero-code/ hasta la fase F9/T-05; ejecutar con `cargo test --locked --workspace -- --ignored`"]
 fn catalogo_real_tiene_plantilla() {
     let base = base_real();
-    if !base.is_dir() {
-        eprintln!(
-            "omitido: no existe el catálogo real en {} (la v1 no está presente)",
-            base.display()
-        );
-        return;
-    }
+    assert!(
+        base.is_dir(),
+        "no existe el catálogo de la v2 en {}",
+        base.display()
+    );
     let template = base.join("_template.toml");
     assert!(template.is_file(), "falta {}", template.display());
     let text = std::fs::read_to_string(&template).expect("leer la plantilla");
     assert!(text.contains("[model]"), "la plantilla no declara [model]");
+}
+
+/// Todos los TOML del catálogo de la v2 pasan el validador.
+///
+/// Es el mismo contrato que `ropero validate` sobre `models/`: 45 modelos
+/// válidos, sin violaciones.
+#[test]
+fn catalogo_real_valida_sin_violaciones() {
+    let base = base_real();
+    assert!(
+        base.is_dir(),
+        "no existe el catálogo de la v2 en {}",
+        base.display()
+    );
+    let (active, fired) = recoge(&base);
+    let mut specs = Vec::new();
+    let mut texts = std::collections::BTreeMap::new();
+    for path in active.iter().chain(fired.iter()) {
+        let text = std::fs::read_to_string(path).expect("leer el TOML del modelo");
+        let spec = ropero_core::parse_model(&text, path)
+            .unwrap_or_else(|e| panic!("no se pudo parsear {}: {}", path.display(), e));
+        specs.push(spec);
+        texts.insert(path.clone(), text);
+    }
+    assert_eq!(
+        specs.len(),
+        TOTAL_ESPERADO,
+        "modelos del catálogo de la v2 en {}",
+        base.display()
+    );
+    let catalog = ropero_core::Catalog {
+        models: specs.iter().take(ACTIVOS_ESPERADOS).cloned().collect(),
+        fired: specs.iter().skip(ACTIVOS_ESPERADOS).cloned().collect(),
+    };
+    let errors = ropero_core::validate_catalog(&catalog, &texts);
+    assert!(
+        errors.is_empty(),
+        "el catálogo de la v2 tiene {} violaciones: {:?}",
+        errors.len(),
+        errors
+            .iter()
+            .map(|e| format!("{}:{} {}", e.path(), e.line().unwrap_or(0), e.message()))
+            .collect::<Vec<_>>()
+    );
 }
