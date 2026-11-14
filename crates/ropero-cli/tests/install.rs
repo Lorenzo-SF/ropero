@@ -12,6 +12,9 @@
 //! - **`$BIN_DIR`**: un temporal donde se ven los enlaces.
 //! - **`PATH`**: un temporal con un binario falso, para que el motor
 //!   "esté instalado" sin que lo esté.
+//! - **`hf`**: un script falso que **graba sus argumentos** y crea el
+//!   fichero que se le pide: es lo que permite comprobar que la descarga
+//!   es **de verdad** (y con qué argumentos se llama a `hf`).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -77,6 +80,46 @@ gguf = "modelo-gamma.gguf"
 repo = "ejemplo/modelo-gamma-pesos"
 "#;
 
+/// El `hf` falso: graba sus argumentos y crea el fichero que se le pide.
+///
+/// Es el downloader de la batería: sin él no se puede comprobar que
+/// `ropero install models` **descarga de verdad** (T-26).
+const HF_FALSO: &str = r#"#!/bin/sh
+# Sólo builtins: el PATH de la batería es un temporal y no tiene dirname
+# ni mkdir (el directorio de destino lo crea ropero).
+base="${0%/*}"
+printf '%s\n' "$@" > "$base/args.log"
+
+dir=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--local-dir" ]; then dir="$a"; fi
+  prev="$a"
+done
+[ -n "$dir" ] || exit 3
+
+n=0
+file=""
+skip=0
+for a in "$@"; do
+  if [ "$skip" = "1" ]; then skip=0; continue; fi
+  case "$a" in
+    download) continue ;;
+    --local-dir|--exclude) skip=1; continue ;;
+    -*) continue ;;
+    *) n=$((n + 1)); if [ "$n" = "2" ]; then file="$a"; fi ;;
+  esac
+done
+
+if [ -n "$file" ]; then
+  printf 'contenido falso\n' > "$dir/$file"
+else
+  printf 'pesos\n' > "$dir/model.safetensors"
+  printf '{}\n' > "$dir/config.json"
+fi
+exit 0
+"#;
+
 /// La máquina de pruebas: catálogo, `$BIN_DIR` y `PATH` temporales.
 struct Fake {
     /// La raíz del catálogo.
@@ -132,6 +175,33 @@ impl Fake {
             std::fs::set_permissions(&destino, permisos).expect("chmod");
         }
         self
+    }
+
+    /// Pone un `hf` falso en el `PATH` controlado.
+    fn con_hf(self) -> Self {
+        let destino = self.path.join("hf");
+        std::fs::write(&destino, HF_FALSO).expect("hf falso");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permisos = std::fs::metadata(&destino).expect("permisos").permissions();
+            permisos.set_mode(0o755);
+            std::fs::set_permissions(&destino, permisos).expect("chmod");
+        }
+        self
+    }
+
+    /// El `$HOME` de la máquina de pruebas (de ahí cuelga `$GGUF_DIR`).
+    fn home(&self) -> PathBuf {
+        self.root.parent().expect("HOME").to_path_buf()
+    }
+
+    /// Los argumentos con los que se llamó a `hf` (vacío si no se llamó).
+    fn argumentos_hf(&self) -> Vec<String> {
+        match std::fs::read_to_string(self.path.join("args.log")) {
+            Ok(texto) => texto.lines().map(|l| l.to_string()).collect(),
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Corre `ropero` contra la máquina de pruebas.
@@ -439,7 +509,8 @@ fn install_models_con_modelo_desconocido_es_error_de_uso() {
     assert!(stderr.contains("modelo desconocido"), "stderr={stderr}");
 }
 
-/// `install models` **no dice "instalado"**: dice lo que falta.
+/// `install models` **no dice "instalado"** cuando la descarga falla: dice
+/// lo que pasó y **qué hacer**.
 #[test]
 fn install_models_no_dice_que_ha_instalado() {
     let fake = Fake::nuevo("models-honesto");
@@ -449,9 +520,10 @@ fn install_models_no_dice_que_ha_instalado() {
         !stdout.contains("instalado"),
         "no puede decir que está instalado: {stdout}"
     );
-    assert!(stdout.contains("no está descargado"), "stdout={stdout}");
+    assert!(stdout.contains("vía download"), "stdout={stdout}");
+    assert!(stdout.contains("error"), "stdout={stdout}");
     assert!(
-        stderr.contains("hf"),
+        stderr.contains("huggingface_hub"),
         "el mensaje debe decir qué falta: {stderr}"
     );
 }
@@ -469,4 +541,115 @@ fn install_models_acepta_lista_con_comas() {
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(stdout.contains("modelo-alpha"), "stdout={stdout}");
     assert!(stdout.contains("modelo-beta"), "stdout={stdout}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La descarga de verdad
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `ropero install models <modelo>` **descarga de verdad**: el GGUF acaba
+/// en disco y la línea dice `descargado`.
+#[test]
+fn install_models_descarga_el_gguf_con_hf() {
+    let fake = Fake::nuevo("models-descarga").con_hf();
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "modelo-alpha"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("modelo-alpha: vía download · descargado"),
+        "stdout={stdout}"
+    );
+    let destino = fake
+        .home()
+        .join("models/gguf/modelo-alpha/modelo-alpha.gguf");
+    assert!(
+        destino.is_file(),
+        "el GGUF no se ha descargado: {destino:?}"
+    );
+    assert!(
+        !destino.as_os_str().is_empty(),
+        "el GGUF está vacío: {destino:?}"
+    );
+}
+
+/// `hf` se llama con los **argumentos exactos**: `download <repo>
+/// <fichero> --local-dir <staging>`.
+#[test]
+fn install_models_llama_a_hf_con_los_argumentos_exactos() {
+    let fake = Fake::nuevo("models-args").con_hf();
+    let (code, _stdout, stderr) = fake.corre(&["install", "models", "modelo-alpha"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    let args = fake.argumentos_hf();
+    assert_eq!(
+        &args[..4],
+        &[
+            "download",
+            "ejemplo/modelo-alpha",
+            "modelo-alpha.gguf",
+            "--local-dir"
+        ],
+        "hf no se ha llamado con los argumentos exactos: {args:?}"
+    );
+}
+
+/// El GGUF que **ya está** no se vuelve a bajar: se dice y no se llama a
+/// `hf`.
+#[test]
+fn install_models_no_vuelve_a_bajar_un_modelo_ya_descargado() {
+    let fake = Fake::nuevo("models-ya-descargado").con_hf();
+    let destino = fake
+        .home()
+        .join("models/gguf/modelo-alpha/modelo-alpha.gguf");
+    std::fs::create_dir_all(destino.parent().expect("dir")).expect("directorio");
+    std::fs::write(&destino, "ya está\n").expect("gguf");
+
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "modelo-alpha"]);
+
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(
+        stdout.contains("modelo-alpha: vía download · ya descargado"),
+        "stdout={stdout}"
+    );
+    assert!(
+        fake.argumentos_hf().is_empty(),
+        "hf no debía llamarse: {:?}",
+        fake.argumentos_hf()
+    );
+}
+
+/// La vía `build` dice la verdad: todavía **no** se fabrica, así que no se
+/// dice que se ha instalado nada.
+#[test]
+fn install_models_con_la_via_build_dice_que_no_esta_implementada() {
+    let fake = Fake::nuevo("models-build").con_hf();
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "modelo-gamma"]);
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert!(
+        stdout.contains("modelo-gamma: vía build"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("todavía no está implementado"),
+        "el mensaje no dice que no está implementado: {stdout}"
+    );
+    assert!(
+        !stdout.contains("instalado"),
+        "no puede decir que está instalado: {stdout}"
+    );
+    assert!(
+        stderr.contains("ropero-forge"),
+        "el mensaje no dice qué hacer: {stderr}"
+    );
+}
+
+/// Sin `hf` en el `PATH` el error es claro y **no se pregunta nada**.
+#[test]
+fn install_models_sin_hf_dice_que_hace_falta_hf() {
+    let fake = Fake::nuevo("models-sin-hf");
+    let (code, stdout, stderr) = fake.corre(&["install", "models", "modelo-alpha"]);
+    assert_eq!(code, 1, "stderr={stderr}");
+    assert!(stdout.contains("falta 'hf'"), "stdout={stdout}");
+    assert!(
+        stderr.contains("huggingface_hub"),
+        "el mensaje no dice cómo se arregla: {stderr}"
+    );
 }

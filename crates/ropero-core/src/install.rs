@@ -563,6 +563,10 @@ pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
 ///
 /// Sólo salen los modelos de los motores **instalados** (T-25): un modelo
 /// de un motor que no está en la máquina no se puede instalar.
+///
+/// Y sólo salen los que **no** son de descarga manual (R-DATA-3): un
+/// `[download].manual = true` es un checkpoint enorme que el instalador no
+/// baja por sorpresa (pero que sí se baja si se pide a mano).
 pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     let mut menu = Menu::default();
     for motor in motores.iter().filter(|m| m.instalado) {
@@ -572,6 +576,7 @@ pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palett
             .into_iter()
             .map(|(spec, _)| spec)
             .filter(|spec| spec.model.engine == id)
+            .filter(|spec| !es_manual(spec))
             .collect();
         if filas.is_empty() {
             continue;
@@ -598,6 +603,15 @@ pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palett
         menu.lineas.pop();
     }
     menu
+}
+
+/// Si un modelo es de **descarga manual** (R-DATA-3).
+///
+/// `manual = true` saca el modelo de la oferta de `ropero install
+/// models`: son checkpoints enormes que el instalador no baja por
+/// sorpresa. Si el usuario lo pide a mano, se baja igual.
+pub fn es_manual(spec: &ModelSpec) -> bool {
+    spec.download.as_ref().is_some_and(|d| d.manual)
 }
 
 /// Separa un **texto** en nombres.
@@ -754,23 +768,19 @@ pub fn motor_ocupado(motor: &str, destino: &str) -> String {
     format!("{motor}: hay un fichero real en {destino}: no lo toco (quítalo o renómbralo)")
 }
 
-/// La línea de un modelo que se ha resuelto pero **no está instalado**.
-pub fn modelo_pendiente(modelo: &str, via: Via, descargado: bool) -> String {
-    if descargado {
-        format!("{modelo}: vía {via} · ya está descargado")
-    } else {
-        format!("{modelo}: vía {via} · no está descargado")
-    }
+/// El mensaje de la vía `build`: todavía **no** se fabrica.
+///
+/// No dice "instalado" porque no lo está: la fabricación de un GGUF es
+/// `ropero-forge`, que aún no existe (doc B §4.10.4). La vía `download`,
+/// en cambio, **sí** baja el modelo de verdad.
+pub fn via_build_pendiente(modelo: &str) -> String {
+    format!("{modelo}: vía build · error: fabricar el GGUF todavía no está implementado")
 }
 
-/// El error honesto de `install models`: la descarga **no** está hecha.
-///
-/// No dice "instalado" porque no lo está: la descarga es el bloque 3 (con
-/// `hf`), y aquí sólo se resuelve el modelo y se decide su vía.
-pub fn descarga_pendiente() -> String {
-    "no he instalado ningún modelo: la descarga con `hf` todavía no está implementada\n  \
-     (ropero install models resuelve los modelos y decide su vía; \
-     ningún peso se ha descargado)"
+/// La pista de la vía `build`: **qué hacer** (P-13).
+pub fn pista_build_pendiente() -> String {
+    "  (la fabricación de GGUFs es `ropero-forge`, que aún no existe: \
+     usa la vía download, o fabrica el GGUF a mano con `ropero gguffer`)"
         .to_string()
 }
 

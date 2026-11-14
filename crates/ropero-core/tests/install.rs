@@ -45,6 +45,21 @@ repo = "ejemplo/groot"
 file = "groot.gguf"
 "#;
 
+/// Un modelo de **descarga manual**: no se ofrece en el menú.
+const MANUAL: &str = r#"
+[model]
+name = "manual"
+engine = "llama-server"
+
+[files]
+gguf = "manual.gguf"
+
+[download]
+repo = "ejemplo/manual"
+file = "manual.gguf"
+manual = true
+"#;
+
 /// Un modelo con sólo `[build]`.
 const SOLO_BUILD: &str = r#"
 [model]
@@ -416,6 +431,23 @@ fn el_menu_de_modelos_solo_ofrece_los_de_los_motores_instalados() {
     }];
     let menu = menu_modelos(&cat, &motores, &paleta);
     assert!(menu.nombres.is_empty(), "{:?}", menu.nombres);
+}
+
+/// Un modelo de **descarga manual** no se ofrece en el menú (R-DATA-3).
+///
+/// Son checkpoints enormes que el instalador no baja por sorpresa; si el
+/// usuario lo pide a mano, sí se baja.
+#[test]
+fn el_menu_de_modelos_no_ofrece_los_de_descarga_manual() {
+    let llama = motor("llama-server", "naranja");
+    let cat = build_catalog(vec![spec(DOS_VIAS), spec_en(MANUAL, "manual.toml")], vec![])
+        .expect("catálogo");
+    let motores = [MotorDelMenu {
+        manifest: &llama,
+        instalado: true,
+    }];
+    let menu = menu_modelos(&cat, &motores, &Palette::plain());
+    assert_eq!(menu.nombres, vec!["nemotron".to_string()]);
 }
 
 /// El menú de motores numera sus opciones y lleva su color.
