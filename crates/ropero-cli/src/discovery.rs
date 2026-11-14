@@ -132,7 +132,16 @@ fn collect(
                 out.push(spec);
             }
             Err(e) => {
-                let msg = format!("{}: {}", path.display(), e);
+                // Un error de parseo lleva **ruta y línea** (doc B §4.1.1):
+                // la línea la calcula el parseo con el `span` del error de
+                // `toml` sobre el texto fuente.
+                let violation = ropero_core::parse_error(&e);
+                let msg = format!(
+                    "{}:{}: {}",
+                    violation.path(),
+                    violation.line().unwrap_or(0),
+                    violation.message()
+                );
                 ropero_core::err_line(&format!("aviso: no se pudo parsear {}", msg));
                 problems.push(msg);
             }

@@ -29,6 +29,12 @@ pub enum ValidationRule {
     MinRamMustBePositive,
     UnknownKey,
     ContextInvalid,
+    /// El TOML no se puede deserializar (error de sintaxis o de tipo).
+    ///
+    /// No es una regla de §4.1.1: es el fallo que impide siquiera leer el
+    /// fichero. Se distingue de `UnknownKey` para que la regla que se
+    /// reporta sea la que de verdad se rompió.
+    ParseInvalid,
 }
 
 impl ValidationRule {
@@ -106,10 +112,63 @@ impl ValidationError {
     }
 }
 
+/// Clasifica un error de parseo como violación de §4.1.1.
+///
+/// Un TOML con una clave que el esquema no conoce (`deny_unknown_fields`) o
+/// con un motor que no existe no llega a `validate()`: muere al deserializar.
+/// Por eso sus reglas —`UnknownKey` y `EngineInvalid`— se construyen aquí,
+/// a partir del error de parseo, y no dentro de [`validate`].
+///
+/// El error conserva la **ruta y la línea** (doc B §4.1.1): la línea la
+/// calculó el parseo (el `span` del error de `toml` sobre el texto fuente).
+pub fn parse_error(error: &crate::ModelError) -> ValidationError {
+    match error {
+        crate::ModelError::Parse { path, source, line } => {
+            let Some(key) = unknown_key_name(source) else {
+                return ValidationError {
+                    rule: ValidationRule::ParseInvalid,
+                    key: String::new(),
+                    path: path.display().to_string(),
+                    message: format!("no se pudo leer el TOML: {}", source.message()),
+                    line: *line,
+                };
+            };
+            ValidationError {
+                rule: ValidationRule::UnknownKey,
+                key: key.clone(),
+                path: path.display().to_string(),
+                message: format!(
+                    "clave desconocida '{key}': quítala o renómbrala a una que exista en el esquema"
+                ),
+                line: *line,
+            }
+        }
+        crate::ModelError::UnknownEngine { path, source, line } => ValidationError {
+            rule: ValidationRule::EngineInvalid,
+            key: "model.engine".to_string(),
+            path: path.display().to_string(),
+            message: source.to_string(),
+            line: *line,
+        },
+    }
+}
+
+/// El nombre de la clave desconocida, si el error es de ese tipo.
+///
+/// `toml` lo dice como `unknown field \`clave\`, expected \`…\``. Si el error
+/// es otro (sintaxis, tipo), no hay clave: `None`.
+fn unknown_key_name(err: &toml::de::Error) -> Option<String> {
+    let msg = err.message();
+    let rest = msg.strip_prefix("unknown field `")?;
+    let (name, _) = rest.split_once('`')?;
+    Some(name.to_string())
+}
+
 /// Valida las reglas semánticas de §4.1.1.
 ///
 /// La clave desconocida y el motor inválido se detectan al deserializar; sus
-/// variantes de regla se usan para clasificar los errores de parseo del CLI.
+/// variantes de regla se construyen en [`parse_error`], que clasifica el
+/// error de parseo.
 pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationError> {
     let mut errors = Vec::new();
     let name = &spec.model.name;
@@ -302,6 +361,27 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
 /// Localiza la línea 1-based de una clave TOML en su texto fuente.
 pub fn find_toml_line(source: &str, key: &str) -> Option<usize> {
     find_toml_line_in(source, key, &[key])
+}
+
+/// La línea 1-based donde cae un error de parseo de `toml`.
+///
+/// El error trae un `span` (rango de bytes en el texto original); de ahí se
+/// cuenta la línea. Es lo que permite que el error de parseo lleve
+/// `ruta:línea` (doc B §4.1.1) en vez de sólo la ruta.
+///
+/// PURA: sólo lee los dos argumentos; no toca el disco.
+pub fn parse_error_line(source: &str, err: &toml::de::Error) -> Option<usize> {
+    let span = err.span()?;
+    let start = span.start.min(source.len());
+    Some(source[..start].matches('\n').count() + 1)
+}
+
+/// Localiza la línea 1-based de la clave `[model].engine`.
+///
+/// La clave vive dentro de la tabla `[model]`: el nombre corto (`engine`) no
+/// basta, porque la misma clave puede existir en otra tabla.
+pub fn find_engine_line(source: &str) -> Option<usize> {
+    find_toml_line_in(source, "model.engine", &["model"])
 }
 
 fn find_toml_line_in(source: &str, key: &str, alternatives: &[&str]) -> Option<usize> {

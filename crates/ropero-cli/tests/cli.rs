@@ -396,3 +396,97 @@ fn un_motor_desconocido_es_un_problema_del_catalogo() {
         stderr
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los errores de parseo llevan ruta:línea (doc B §4.1.1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Monta un catálogo con un TOML **inválido** y devuelve su raíz.
+///
+/// `nombre` da nombre al directorio: cada caso usa el suyo, para que dos
+/// tests no se pisen el fichero.
+///
+/// `contenido` es el texto del TOML; se escribe en
+/// `models/llama/modelo-roto.toml`.
+fn catalogo_con_toml_roto(nombre: &str, contenido: &str) -> PathBuf {
+    let base = std::env::temp_dir().join(format!("ropero-cli-toml-roto-{nombre}"));
+    let models = base.join("models/llama");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&models).unwrap();
+    std::fs::write(models.join("modelo-roto.toml"), contenido).unwrap();
+    base
+}
+
+/// Corre `ropero validate` contra el catálogo con el TOML inválido.
+fn run_con_toml_roto(nombre: &str, contenido: &str) -> (i32, String, String) {
+    let base = catalogo_con_toml_roto(nombre, contenido);
+    let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
+        .args(["validate"])
+        .env("ROPERO_MODELS_DIR", &base)
+        .env("GGUF_DIR", base.join("gguf"))
+        .env("SAFETENSORS_DIR", base.join("safetensors"))
+        .env("LOG_DIR", base.join("logs"))
+        .current_dir(std::env::temp_dir())
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// La ruta del TOML roto del caso `nombre`.
+fn ruta_toml_roto(nombre: &str) -> String {
+    std::env::temp_dir()
+        .join(format!("ropero-cli-toml-roto-{nombre}"))
+        .join("models/llama/modelo-roto.toml")
+        .display()
+        .to_string()
+}
+
+/// Una clave desconocida se reporta como **`ruta:línea`**, y la línea es la
+/// del campo culpable.
+///
+/// Antes el error salía como `ruta: error de parseo…`, sin línea: el
+/// usuario no sabía dónde mirar (doc B §4.1.1).
+#[test]
+fn una_clave_desconocida_se_reporta_con_ruta_y_linea() {
+    let toml = "[model]\nname = \"modelo-roto\"\nengine = \"llama-server\"\n\n[files]\ngguf = \"g.gguf\"\nclave_que_no_existe = \"x\"\n";
+    let (code, stdout, stderr) = run_con_toml_roto("clave", toml);
+    assert_eq!(code, 1, "stdout={} stderr={}", stdout, stderr);
+    // La clave culpable está en la línea 7.
+    let esperado = format!("{}:7", ruta_toml_roto("clave"));
+    assert!(
+        stderr.contains(&esperado),
+        "el error no lleva ruta:línea ({esperado}): stderr={}",
+        stderr
+    );
+    // Y se dice qué clave es la culpable.
+    assert!(
+        stderr.contains("clave_que_no_existe"),
+        "el error no nombra la clave: stderr={}",
+        stderr
+    );
+}
+
+/// Un motor desconocido se reporta como **`ruta:línea`**, y la línea es la de
+/// la clave `engine`.
+#[test]
+fn un_motor_desconocido_se_reporta_con_ruta_y_linea() {
+    let toml = "[model]\nname = \"modelo-roto\"\nengine = \"motor-inventado\"\n\n[files]\ngguf = \"g.gguf\"\n";
+    let (code, stdout, stderr) = run_con_toml_roto("motor", toml);
+    assert_eq!(code, 1, "stdout={} stderr={}", stdout, stderr);
+    // La clave `engine` está en la línea 3.
+    let esperado = format!("{}:3", ruta_toml_roto("motor"));
+    assert!(
+        stderr.contains(&esperado),
+        "el error no lleva ruta:línea ({esperado}): stderr={}",
+        stderr
+    );
+    assert!(
+        stderr.contains("motor desconocido"),
+        "el error no dice qué pasa: stderr={}",
+        stderr
+    );
+}
