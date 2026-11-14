@@ -51,12 +51,12 @@ PACK="$MODEL_DIR/packs/$PACK_NAME"
 SAMPLING='{"temperature":0.7,"top_p":0.80,"top_k":20,"min_p":0.0,"presence_penalty":1.5,"repetition_penalty":1.0}'
 
 # --- Variables por defecto (sobrescribibles por env) ---
-CTX="${CTX:-32768}"
-KV="${KV:-k8v4}"
+CTX="${CTX:-31072}"
+KV="${KV:-int8}"
 VISION="${VISION:-off}"
 RESERVA="${RESERVA:-512}"
 MTP="${MTP:-on}"
-TUNE="${TUNE:-quick}"
+TUNE="${TUNE:-thorough}"
 PORT="${PORT:-9999}"
 
 # --- Helpers ---
