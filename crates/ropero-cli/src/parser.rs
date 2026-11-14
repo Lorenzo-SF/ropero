@@ -241,3 +241,33 @@ pub fn tokens(matches: &ArgMatches) -> Vec<String> {
         .map(|v| v.cloned().collect())
         .unwrap_or_default()
 }
+
+/// Los tokens de `ropero install`, **en el orden en que los escribió el
+/// usuario**.
+///
+/// El orden **importa**: el `--prio` global va antes de la lista de modelos
+/// y el por modelo detrás (doc B §4.10.7). `clap` separa los flags de los
+/// posicionales, así que el orden se reconstruye con los **índices** que
+/// `clap` guarda de cada valor.
+pub fn install_tokens(matches: &ArgMatches) -> Vec<ropero_core::install::Token> {
+    let mut tokens: Vec<(usize, ropero_core::install::Token)> = Vec::new();
+    let lista = matches.get_many::<String>("lista");
+    let indices = matches.indices_of("lista");
+    if let (Some(valores), Some(indices)) = (lista, indices) {
+        for (valor, indice) in valores.zip(indices) {
+            tokens.push((
+                indice,
+                ropero_core::install::Token::Modelo(valor.to_string()),
+            ));
+        }
+    }
+    let prios = matches.get_many::<String>("prio");
+    let indices = matches.indices_of("prio");
+    if let (Some(valores), Some(indices)) = (prios, indices) {
+        for (valor, indice) in valores.zip(indices) {
+            tokens.push((indice, ropero_core::install::Token::Prio(valor.to_string())));
+        }
+    }
+    tokens.sort_by_key(|(indice, _)| *indice);
+    tokens.into_iter().map(|(_, token)| token).collect()
+}

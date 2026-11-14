@@ -134,19 +134,42 @@ fn un_argumento_de_mas_sale_con_dos() {
 
 /// Los comandos que se parsean pero todavía no se ejecutan dicen **qué
 /// falta** y salen con 1 (no con 2: el uso es correcto).
+///
+/// `install` **no** está aquí: ya funciona (F5). Su contrato es otro: sin
+/// lista y sin terminal es un **error de uso** (código 2), porque el menú
+/// necesita una terminal (R-INST-26).
 #[test]
 fn los_comandos_pendientes_dicen_que_falta_y_salen_con_uno() {
-    for cmd in ["install", "gguffer"] {
-        let (code, _stdout, stderr) = run(&[cmd]);
+    let (code, _stdout, stderr) = run(&["gguffer"]);
+    assert_eq!(
+        code, CODIGO_ERROR_EJECUCION,
+        "gguffer salió con {code}: {stderr}"
+    );
+    assert!(
+        stderr.contains("todavía no está implementado"),
+        "gguffer: stderr={stderr}"
+    );
+    assert!(stderr.contains("gguffer"), "gguffer: stderr={stderr}");
+}
+
+/// `ropero install` sin lista y **sin terminal** es un error de uso
+/// (código 2), y el mensaje dice **qué hacer** (R-INST-26).
+#[test]
+fn install_sin_lista_y_sin_terminal_es_error_de_uso() {
+    for argumentos in [
+        vec!["install"],
+        vec!["install", "engines"],
+        vec!["install", "models"],
+    ] {
+        let (code, _stdout, stderr) = run(&argumentos);
         assert_eq!(
-            code, CODIGO_ERROR_EJECUCION,
-            "{cmd} salió con {code}: {stderr}"
+            code, CODIGO_ERROR_USO,
+            "{argumentos:?} salió con {code}: {stderr}"
         );
         assert!(
-            stderr.contains("todavía no está implementado"),
-            "{cmd}: stderr={stderr}"
+            stderr.contains("terminal"),
+            "{argumentos:?}: el mensaje no dice que hace falta una terminal: {stderr}"
         );
-        assert!(stderr.contains(cmd), "{cmd}: stderr={stderr}");
     }
 }
 
