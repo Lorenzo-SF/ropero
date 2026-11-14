@@ -33,7 +33,7 @@ CTX="${CTX:-131072}"
 MTP="${MTP:-on}"
 VISION="${VISION:-off}"
 RESERVA="${RESERVA:-512}"
-MODO_TUNE="${MODO_TUNE:-quick}"
+MODO_TUNE="${MODO_TUNE:-thorough}"
 PUERTO="${PUERTO:-9999}"
 NO_TUNE="${NO_TUNE:-0}"
 
