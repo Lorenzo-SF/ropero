@@ -13,13 +13,13 @@
 //!
 //! ## El orden de las comprobaciones (R-EST-8)
 //!
-//! ```
+//! ```text
 //! 1. ¿Hay algo escuchando en el puerto?  → si no, no hay nada que parar.
 //! 2. ¿El PID del estado es el del puerto?→ si no, es ajeno. NO se toca.
 //! 3. ¿El start_time coincide?            → si no, es otro proceso. NO se toca.
 //! 4. ¿El exe_digest coincide?           → si no, es otro programa. NO se toca.
 //! 5. Ahora sí: SIGTERM al grupo de procesos.
-//! ```
+//! ```text
 
 use std::path::Path;
 

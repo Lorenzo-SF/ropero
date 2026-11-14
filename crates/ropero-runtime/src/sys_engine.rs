@@ -155,6 +155,47 @@ fn libc_killpg(pgrp: i32, sig: i32) -> i32 {
     unsafe { killpg(pgrp, sig) }
 }
 
+/// El stopper real: el que manda las señales del sistema operativo.
+///
+/// Se llama `OsStopper` y no `SysStopper` porque `SysStopper` es el
+/// **orquestador** de la parada (el de `stop.rs`), y este es su doble de
+/// producción: los dos están en el mismo crate y el nombre repetido sólo
+/// genera ambigüedad.
+pub struct OsStopper;
+
+impl crate::stop::Stopper for OsStopper {
+    fn alive(&self, pid: u32) -> bool {
+        libc_kill(pid as i32, 0) == 0
+    }
+
+    fn identidad(&self, pid: u32) -> Option<crate::process::ProcIdentity> {
+        crate::process::ProcIdentity::of(pid)
+    }
+
+    fn terminate(&self, identity: &crate::process::ProcIdentity) {
+        // Al grupo: el motor tiene hijos, y si sólo se mata al padre los
+        // hijos quedan sirviendo el puerto.
+        signal_group(identity.pid, Signal::TERM);
+    }
+
+    fn kill(&self, identity: &crate::process::ProcIdentity) {
+        signal_group(identity.pid, Signal::KILL);
+    }
+
+    fn wait_exit(&self, pid: u32, deadline: std::time::Duration) -> bool {
+        let limite = std::time::Instant::now() + deadline;
+        loop {
+            if !self.alive(pid) {
+                return true;
+            }
+            if std::time::Instant::now() >= limite {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
 /// El rango de puertos de un motor, para la CLI.
 pub fn port_range_of(engine: &ropero_core::EngineManifest) -> PortRange {
     engine.port_range

@@ -2,7 +2,7 @@
 //!
 //! ## La forma del arranque
 //!
-//! ```
+//! ```text
 //! 1. Preflight: engine instalado, modelo instalado, recursos.
 //! 2. Puerto: el del modelo, el pedido con --port, o el primero libre del
 //!    rango del motor.
@@ -13,7 +13,7 @@
 //! 6. Estado en disco (tmp + mv, atómico).
 //! 7. En primer plano: esperar al proceso. Ctrl-C propaga el SIGINT y
 //!    sale con 130.
-//! ```
+//! ```text
 //!
 //! ## Por qué hay una capa de dobles
 //!
