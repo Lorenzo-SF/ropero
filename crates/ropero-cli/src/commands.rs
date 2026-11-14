@@ -33,7 +33,10 @@ pub fn list(all: bool) -> i32 {
 
 /// `ropero status`: el estado de la máquina, tipo `nvidia-smi`.
 pub fn status() -> i32 {
-    crate::pendiente("status")
+    let maquina = ropero_runtime::capture_machine_state();
+    let texto = ropero_core::status::status_text(&maquina);
+    ropero_core::out(&texto, false);
+    0
 }
 
 /// `ropero engines [--all]`: la lista de motores con su color, su madurez
@@ -175,7 +178,78 @@ pub fn args(modelo: &str, tokens: &[String]) -> i32 {
 /// las de cada motor (disponible o no). Sale con **0** si todo está bien, y
 /// con **1** si falta algo.
 pub fn doctor() -> i32 {
-    crate::pendiente("doctor")
+    let Ok(s) = crate::discovery::scan() else {
+        return 1;
+    };
+    let informe = ropero_core::doctor::DoctorReport {
+        ropero: comprueba_ropero(),
+        engines: s
+            .engines
+            .iter()
+            .map(|m| ropero_core::doctor::EngineDeps {
+                installed: ropero_runtime::engine_installed(m),
+                manifest: m.clone(),
+                checks: comprueba_deps(&m.deps),
+            })
+            .collect(),
+    };
+    for linea in informe.lines() {
+        ropero_core::out_line(&linea);
+    }
+    let resumen = informe.summary();
+    if informe.todo_ok() {
+        ropero_core::out_line(&resumen);
+        0
+    } else {
+        ropero_core::err_line(&resumen);
+        1
+    }
+}
+
+/// Las dependencias del propio ropero.
+///
+/// La primera es el propio binario: que esté en el `PATH` es lo que
+/// permite invocarlo sin escribir la ruta entera.
+fn comprueba_ropero() -> Vec<ropero_core::doctor::DepCheck> {
+    ropero_core::doctor::DEPENDENCIAS_ROPERO
+        .iter()
+        .map(|(nombre, _)| ropero_core::doctor::DepCheck {
+            dependency: ropero_core::doctor::dependencia_ropero(nombre),
+            status: if esta_en_path(nombre) {
+                ropero_core::doctor::DepStatus::Ok
+            } else {
+                ropero_core::doctor::DepStatus::Missing
+            },
+        })
+        .collect()
+}
+
+/// Las dependencias de un motor.
+fn comprueba_deps(deps: &[String]) -> Vec<ropero_core::doctor::DepCheck> {
+    deps.iter()
+        .map(|nombre| ropero_core::doctor::DepCheck {
+            dependency: ropero_core::doctor::Dependency {
+                name: nombre.clone(),
+                remedy: "instálalo con tu gestor de paquetes".to_string(),
+            },
+            status: if ropero_runtime::which(nombre).is_some() {
+                ropero_core::doctor::DepStatus::Ok
+            } else {
+                ropero_core::doctor::DepStatus::Missing
+            },
+        })
+        .collect()
+}
+
+/// Si la dependencia está satisfied.
+///
+/// La primera es el propio binario `ropero`: se busca por su nombre de
+/// ejecutable, no por la palabra "ropero".
+fn esta_en_path(nombre: &str) -> bool {
+    if nombre == "ropero" {
+        return ropero_runtime::ropero_en_path();
+    }
+    ropero_runtime::which(nombre).is_some()
 }
 
 /// Busca un modelo en el catálogo.

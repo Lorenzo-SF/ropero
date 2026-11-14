@@ -68,11 +68,13 @@ const CODIGO_SIGINT: i32 = 130;
 fn un_comando_que_va_bien_sale_con_cero() {
     for args in [
         vec!["validate"],
+        vec!["list"],
         vec!["template"],
         vec!["args", "modelo-alpha"],
         vec!["levels", "modelo-alpha"],
         vec!["path", "modelo-alpha"],
         vec!["engines"],
+        vec!["status"],
         vec!["--help"],
         vec!["--version"],
     ] {
@@ -372,6 +374,30 @@ fn version_dice_version_build_y_autor() {
     assert!(stdout.contains("Lorenzo Sánchez Fraile"), "stdout={stdout}");
 }
 
+/// `ropero status` no rompe y sale con 0.
+#[test]
+fn status_sale_con_cero() {
+    let (code, stdout, stderr) = run(&["status"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    assert!(stdout.contains("CPU"), "stdout={stdout}");
+    assert!(stdout.contains("RAM"), "stdout={stdout}");
+}
+
+/// `ropero doctor` comprueba las dependencias y sale con 0 o 1.
+#[test]
+fn doctor_sale_con_cero_o_uno() {
+    let (code, stdout, stderr) = run(&["doctor"]);
+    assert!(
+        code == CODIGO_OK || code == CODIGO_ERROR_EJECUCION,
+        "doctor salió con {code}: {stderr}"
+    );
+    assert!(stdout.contains("DEPENDENCIAS DE ROPERO"), "stdout={stdout}");
+    assert!(
+        stdout.contains("DEPENDENCIAS DE LOS MOTORES"),
+        "stdout={stdout}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // El pipe roto no es un error (SIGPIPE)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -387,11 +413,14 @@ fn version_dice_version_build_y_autor() {
 fn canalizar_a_head_no_revienta_el_programa() {
     for args in [
         vec!["args", "modelo-alpha"],
+        vec!["list"],
         vec!["validate"],
+        vec!["list"],
         vec!["template"],
         vec!["levels", "modelo-alpha"],
         vec!["path", "modelo-alpha"],
         vec!["--help"],
+        vec!["status"],
     ] {
         for lineas in ["1", "12"] {
             let out = Command::new("sh")
@@ -429,11 +458,14 @@ fn canalizar_a_head_no_revienta_el_programa() {
 fn canalizar_a_head_termina_con_cero() {
     for args in [
         vec!["args", "modelo-alpha"],
+        vec!["list"],
         vec!["validate"],
+        vec!["list"],
         vec!["template"],
         vec!["levels", "modelo-alpha"],
         vec!["path", "modelo-alpha"],
         vec!["--help"],
+        vec!["status"],
     ] {
         for lineas in ["1", "12"] {
             // `head -n N` cierra el pipe después de N líneas: `ropero` recibe
