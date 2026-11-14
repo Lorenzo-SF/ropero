@@ -82,7 +82,7 @@ pub const COMMANDS: &[Command] = &[
         usage: "stop [modelo]",
         summary: "detiene los motores lanzados por ropero",
         phase: None,
-        state: CommandState::Parsed,
+        state: CommandState::Ready,
     },
     Command {
         name: "gguffer",

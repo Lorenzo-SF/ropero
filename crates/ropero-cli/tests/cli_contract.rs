@@ -97,11 +97,21 @@ fn ropero_a_secas_sale_con_cero() {
     assert!(stdout.contains("ropero --help"), "stdout={stdout}");
 }
 
-/// Un comando desconocido es un error de uso: sale con 2.
+/// Un modelo desconocido en el **arranque** es un error de ejecución:
+/// sale con 1.
+///
+/// El doc CLI v2 §8.1 dice que si una precondición no se cumple es
+/// «error de ejecución (código 1)». Y la precondición del arranque
+/// incluye que el modelo exista: sin modelo no hay nada que arrancar.
+///
+/// Ojo: esto **no** contradice el §5.2, que dice que un comando
+/// desconocido sale con 2. `ropero inventado` no es un comando
+/// desconocido: es el nombre de un modelo que no está en el catálogo, y
+/// el arranque lo trata como lo que es.
 #[test]
-fn un_comando_desconocido_sale_con_dos() {
+fn un_modelo_desconocido_en_el_arranque_sale_con_uno() {
     let (code, _stdout, stderr) = run(&["inventado"]);
-    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
     assert!(stderr.contains("modelo desconocido"), "stderr={stderr}");
 }
 
@@ -126,7 +136,7 @@ fn un_argumento_de_mas_sale_con_dos() {
 /// falta** y salen con 1 (no con 2: el uso es correcto).
 #[test]
 fn los_comandos_pendientes_dicen_que_falta_y_salen_con_uno() {
-    for cmd in ["install", "stop", "gguffer"] {
+    for cmd in ["install", "gguffer"] {
         let (code, _stdout, stderr) = run(&[cmd]);
         assert_eq!(
             code, CODIGO_ERROR_EJECUCION,
@@ -140,15 +150,27 @@ fn los_comandos_pendientes_dicen_que_falta_y_salen_con_uno() {
     }
 }
 
-/// El arranque de un modelo se parsea pero todavía no se ejecuta: sale con
-/// 1 y lo dice.
+/// `ropero stop` **funciona**: sin estado en disco no hay nada que parar,
+/// y eso no es un error.
+#[test]
+fn stop_sin_nada_que_parar_no_es_un_error() {
+    let (code, _stdout, stderr) = run(&["stop"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+}
+
+/// El arranque de un modelo que no se puede arrancar dice **por qué** y
+/// sale con 1 (error de ejecución, no de uso: el modelo sí existe).
 #[test]
 fn el_arranque_de_un_modelo_sale_con_uno_y_lo_dice() {
     let (code, _stdout, stderr) = run(&["modelo-alpha"]);
     assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
-    assert!(stderr.contains("modelo-alpha"), "stderr={stderr}");
+    // El mensaje dice **qué** pasa y **qué hacer**.
     assert!(
-        stderr.contains("todavía no está implementado"),
+        stderr.contains("modelo-alpha") || stderr.contains("motor"),
+        "stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("ropero install") || stderr.contains("ropero stop"),
         "stderr={stderr}"
     );
 }

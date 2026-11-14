@@ -81,7 +81,12 @@ fn esperar_a_un_proceso_que_termina_devuelve_el_codigo() {
     });
 
     let interruptor = Interruptor::new();
-    let resultado = esperar(motor.as_ref(), 7, &interruptor, Duration::from_secs(5));
+    let resultado = esperar(
+        motor.as_ref(),
+        7,
+        &interruptor,
+        Some(Duration::from_secs(5)),
+    );
     assert_eq!(resultado, Ok(Some(0)));
 }
 
@@ -97,7 +102,12 @@ fn un_ctrl_c_durante_la_espera_interrumpe() {
         interruptor_clon.disparar();
     });
 
-    let resultado = esperar(motor.as_ref(), 7, &interruptor, Duration::from_secs(5));
+    let resultado = esperar(
+        motor.as_ref(),
+        7,
+        &interruptor,
+        Some(Duration::from_secs(5)),
+    );
     // `Err(Interrumpido)` es la señal de "interrumpido": el caller sale
     // con 130.
     assert_eq!(

@@ -44,10 +44,19 @@ impl Engine for SysEngine {
         let mut command = Command::new(&spec.program);
         command.args(&spec.argv);
         command.arg("--port").arg(port.to_string());
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        command.stdin(Stdio::null());
+        // La salida del motor va al **log**: es lo que el usuario mira
+        // cuando el arranque falla («mira su log para ver qué pasó»). Sin
+        // esto, un motor que aborta se queda sin explicar por qué.
+        if let Some(log) = abrir_log(&spec.log) {
+            if let Ok(clon) = log.try_clone() {
+                command.stdout(clon);
+            }
+            command.stderr(log);
+        } else {
+            command.stdout(Stdio::null());
+            command.stderr(Stdio::null());
+        }
         // Su propio grupo: las señales van al grupo entero.
         #[cfg(unix)]
         {
@@ -58,6 +67,10 @@ impl Engine for SysEngine {
             .spawn()
             .map_err(|e| format!("{}: {e}", spec.program.display()))?;
         let pid = child.id();
+        // La identidad se lee **del proceso vivo**, no del binario que se
+        // lanzó: así el `exe_digest` es el del binario que realmente
+        // ejecuta (que para un script es su intérprete) y coincide con
+        // el que se leerá al parar (P-3).
         let identity = ProcIdentity::of(pid).ok_or_else(|| {
             let _ = child.kill();
             format!("no se pudo leer la identidad del proceso {pid}")
@@ -155,6 +168,22 @@ fn libc_killpg(pgrp: i32, sig: i32) -> i32 {
     unsafe { killpg(pgrp, sig) }
 }
 
+/// Abre el log del motor para anexar la salida.
+///
+/// Si no se puede abrir (el directorio no existe, no hay permisos), se
+/// devuelve `None` y el motor arranca sin log: es mejor un arranque sin
+/// log que un arranque que no arranca.
+fn abrir_log(ruta: &std::path::Path) -> Option<std::fs::File> {
+    if let Some(dir) = ruta.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(ruta)
+        .ok()
+}
+
 /// El stopper real: el que manda las señales del sistema operativo.
 ///
 /// Se llama `OsStopper` y no `SysStopper` porque `SysStopper` es el
@@ -199,4 +228,26 @@ impl crate::stop::Stopper for OsStopper {
 /// El rango de puertos de un motor, para la CLI.
 pub fn port_range_of(engine: &ropero_core::EngineManifest) -> PortRange {
     engine.port_range
+}
+
+/// El binario del motor: el primero de `detect.binaries` que está en el
+/// `PATH`.
+///
+/// Es la misma pregunta que `engine_installed` (que mira *algún* binario),
+/// pero con el **concreto**: el motor que se lanza es un binario
+/// concreto, no "uno de los que可能会".
+pub fn binary_of(engine: &ropero_core::EngineManifest) -> Option<std::path::PathBuf> {
+    engine
+        .detect
+        .binaries
+        .iter()
+        .find_map(|binario| crate::catalog_scan::which(binario))
+        .or_else(|| {
+            engine
+                .detect
+                .paths
+                .iter()
+                .map(std::path::PathBuf::from)
+                .find(|ruta| ruta.is_file())
+        })
 }

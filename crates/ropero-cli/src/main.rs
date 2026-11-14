@@ -64,7 +64,7 @@ fn comando(matches: &ArgMatches) -> i32 {
     };
     match nombre {
         "install" => pendiente("install"),
-        "stop" => pendiente("stop"),
+        "stop" => commands::stop(&parser::modelo(sub)),
         "gguffer" => pendiente("gguffer"),
         "status" => commands::status(),
         "doctor" => commands::doctor(),
