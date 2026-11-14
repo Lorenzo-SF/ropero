@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use crate::EngineId;
 use crate::EngineManifest;
 use crate::ModelSpec;
+use crate::catalog;
 
 /// El estado de un motor en la máquina.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,12 +300,18 @@ pub struct Counts {
 }
 
 /// Cuenta lo que hay, a partir de la foto.
+///
+/// Los modelos se cuentan **una vez**: un alias no es un modelo más (doc CLI
+/// v2 §6.5: los modelos disponibles son los TOML del catálogo, y los
+/// instalados los descargados).
 pub fn counts(snapshot: &Snapshot) -> Counts {
     Counts {
         motores_disponibles: snapshot.engines.len(),
         motores_instalados: snapshot.engines_installed().len(),
-        modelos_disponibles: snapshot.models.len(),
-        modelos_instalados: snapshot.models_downloaded().len(),
+        modelos_disponibles: catalog::cuenta_unicos(snapshot.models.iter().map(|m| &m.spec)),
+        modelos_instalados: catalog::cuenta_unicos(
+            snapshot.models_downloaded().into_iter().map(|m| &m.spec),
+        ),
     }
 }
 

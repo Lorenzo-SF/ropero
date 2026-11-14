@@ -310,9 +310,43 @@ pub fn model_description(spec: &ModelSpec) -> String {
 /// En la fila de un alias, `model.name` es el alias; el nombre real es el del
 /// modelo original (es el directorio donde viven sus artefactos).
 pub fn real_name(spec: &ModelSpec) -> String {
+    real_name_ref(spec).to_string()
+}
+
+/// El nombre real del modelo, sin clonar.
+fn real_name_ref(spec: &ModelSpec) -> &str {
     spec.real_name
-        .clone()
-        .unwrap_or_else(|| spec.model.name.clone())
+        .as_deref()
+        .unwrap_or(spec.model.name.as_str())
+}
+
+/// Si la fila es la **materialización de un alias**.
+///
+/// En la fila de un alias, `model.name` es el alias y el nombre real sigue
+/// siendo el del TOML de origen; en la fila de origen los dos coinciden.
+///
+/// Es la **única** definición de "fila de alias": el resto del core decide
+/// con este helper, no con la comparación repetida.
+pub fn es_alias(spec: &ModelSpec) -> bool {
+    real_name_ref(spec) != spec.model.name
+}
+
+/// Los modelos **únicos** de una lista: un alias no es un modelo más.
+///
+/// La cuenta es por **nombre real** (el del TOML de origen): la fila de un
+/// alias y la de su modelo son el mismo modelo (doc CLI v2 §6.5: los
+/// modelos disponibles son los TOML del catálogo).
+pub fn cuenta_unicos<'a>(specs: impl Iterator<Item = &'a ModelSpec>) -> usize {
+    let mut vistos: BTreeSet<&str> = BTreeSet::new();
+    for spec in specs {
+        // La fila de un alias no cuenta: su modelo ya está en la fila de su
+        // TOML de origen.
+        if es_alias(spec) {
+            continue;
+        }
+        vistos.insert(real_name_ref(spec));
+    }
+    vistos.len()
 }
 
 /// Convierte un nombre en el `SLUG` que usan las variables de entorno
