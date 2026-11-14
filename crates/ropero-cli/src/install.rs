@@ -122,6 +122,9 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
         Err(e) => return uso(&e.to_string()),
     };
     let lista = install::nombres_de(tokens);
+    // Con lista se instala **directo** (desatendido): el usuario ya ha
+    // dicho qué quiere, así que no se pregunta (doc CLI v2 §9.2).
+    let desatendido = !lista.is_empty();
     let eleccion = if lista.is_empty() {
         match elegir_modelos(s) {
             Ok(elegidos) => elegidos,
@@ -134,6 +137,12 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
         Ok(elegidos) => elegidos,
         Err(e) => return uso(&e.to_string()),
     };
+    let modo = if desatendido {
+        ropero_download::Modo::Desatendido
+    } else {
+        ropero_download::Modo::Interactivo
+    };
+    let mut codigo = 0;
     for elegido in elegidos {
         // Un `--prio` ignorado **se avisa** y no aborta (doc B §4.10.7).
         if let Some(aviso) = &elegido.aviso {
@@ -150,10 +159,57 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
                 return e.exit_code();
             }
         };
-        let descargado = ropero_runtime::model_downloaded(elegido.spec, &s.env);
-        ropero_core::out_line(&install::modelo_pendiente(&elegido.nombre, via, descargado));
+        match via {
+            Via::Download => {
+                if baja_modelo(&elegido.nombre, elegido.spec, &s.env, modo) != 0 {
+                    codigo = 1;
+                }
+            }
+            Via::Build => {
+                ropero_core::out_line(&install::via_build_pendiente(&elegido.nombre));
+                ropero_core::err_line(&install::pista_build_pendiente());
+                codigo = 1;
+            }
+        }
     }
-    ropero_core::err_line(&install::descarga_pendiente());
+    codigo
+}
+
+/// Baja un modelo de verdad: la vía `download` llama a `hf`.
+///
+/// El plan lo decide `ropero-download` (qué se baja, a dónde y con qué
+/// argumentos) y la ejecución es suya (R-MOD-16). Aquí sólo se informa del
+/// resultado, una línea por modelo.
+fn baja_modelo(
+    nombre: &str,
+    spec: &ropero_core::ModelSpec,
+    env: &ropero_core::Environment,
+    modo: ropero_download::Modo,
+) -> i32 {
+    if spec.download.as_ref().is_some_and(|d| d.manual) {
+        ropero_core::err_line(&format!(
+            "aviso: '{nombre}' es de descarga manual (grande): se baja por petición explícita"
+        ));
+    }
+    let plan = match ropero_download::plan_de_descarga(spec, env) {
+        Ok(plan) => plan,
+        Err(e) => return informa_error(nombre, &e),
+    };
+    match ropero_download::descarga(&plan, env, modo) {
+        Ok(resultado) => {
+            ropero_core::out_line(&ropero_download::linea(nombre, Via::Download, resultado));
+            0
+        }
+        Err(e) => informa_error(nombre, &e),
+    }
+}
+
+/// Informa de un error de descarga: la línea del modelo y su pista.
+fn informa_error(nombre: &str, e: &ropero_download::Error) -> i32 {
+    ropero_core::out_line(&ropero_download::linea_error(nombre, Via::Download, e));
+    if let Some(pista) = e.pista() {
+        ropero_core::err_line(&pista);
+    }
     1
 }
 

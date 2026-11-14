@@ -178,6 +178,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ropero-core",
+ "ropero-download",
  "ropero-runtime",
 ]
 
