@@ -36,6 +36,22 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   retirados, y resolución de nombres y alias. Un directorio de motor
   desconocido se informa como error del catálogo, pero no aborta el escaneo
   del resto de modelos.
+- **Catálogo propio de la v2 en `models/`** (doc B §2.4): 46 TOML versionados
+  en la raíz del workspace (17 activos + 28 retirados en `fired/` +
+  `_template.toml`), generados desde los TOML de la v1 como **fuente de
+  referencia, en modo lectura**. Dos correcciones: `context = 133072` →
+  `131072` en `mlx/metalnemotron.toml` y `mlx/metalqwen.toml` (el valor
+  estándar 2¹⁷ = 128 K, múltiplo de 32; 133072 era un typo), y el renombrado
+  de `tensorrt/groot.toml` a `tensorrt/groot-trt.toml` para que el fichero
+  coincida con `name = "groot-trt"` (el nombre **no** se toca: los nombres
+  son únicos globales y `llama/groot.toml` ya ocupa `groot`). Todo lo demás
+  es idéntico a la fuente. `ropero validate` sobre el catálogo nuevo da
+  `OK: 45 modelo(s) validados` (exit 0).
+- **El descubrimiento ya no mira `ropero-code/`**: la raíz de la v2 es la que
+  tiene `models/`. `ROPERO_MODELS_DIR` y `ROPERO_ROOT` se siguen honrando, y
+  la búsqueda por ancestrales funciona igual. La v1 queda como **referencia**
+  (aprender, consultar, contrastar): la v2 se desarrolla como si esa carpeta
+  no existiera.
 - **Montaje del argv** en el orden `base → level → flags → options`, con
   placeholders, comprobación de `requires`, alias de nivel y `replace`.
   `replace` sustituye la pareja del base en su posición para no duplicar una
@@ -84,13 +100,17 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
 
 ### Deuda conocida
 
-- La batería del workspace contiene **152 tests pasados y 4 ignorados**. Los
-  ignorados requieren el catálogo real o la v1 y se ejecutan de forma
-  explícita; `environment.rs` está cubierto por 17 tests.
-- `ropero validate` sobre el catálogo real de la v1 informa de seis
-  violaciones y termina con código 2. No se han modificado esos TOML: el
-  validador expone el estado real y corregir los datos requiere su propio
-  cambio.
+- La batería del workspace contiene **156 tests pasados y 2 ignorados**. Los
+  ignorados son los del golden master, que comparan con la v1 real
+  (`ropero-code/`, sólo referencia) y se ejecutan de forma explícita;
+  `environment.rs` está cubierto por 17 tests. El catálogo de la v2
+  (`models/`) ya no está ignorado: `crates/ropero-core/tests/catalogo_real.rs`
+  corre siempre y afirma 45 modelos (17 activos + 28 retirados) que validan
+  sin violaciones.
+- `ropero validate` sobre el **catálogo nuevo de la v2** (`models/`) informa
+  `OK: 45 modelo(s) validados` y termina con código 0. El catálogo de la v1
+  (`ropero-code/models`) ya no se valida: es sólo referencia, y la v2 se
+  desarrolla como si esa carpeta no existiera.
 - **Un modelo puede declarar las dos vías** (`[download]` **y** `[build]`) a la
   vez: **no es un error**. El doc B §4.1.1 la daba como error de uso (código 2)
   y R-DATA-6 situaba la elección entre `--download` y `--build` en el momento
@@ -102,9 +122,10 @@ versionado sigue [SemVer](https://semver.org/lang/es/).
   camino, se ignora). El exit 2 —error de uso— lo reservan los comandos, no el
   validador.
 - **La regla de `context` múltiplo de 32 sólo aparece en el doc B §4.1.1.** La
-  v1 acepta `133072`, que no es múltiplo de 32, y la v2 es más estricta. Se
-  debe promover a R-DATA en el doc A o retirar la regla; queda pendiente de
-  decisión.
+  v1 acepta `133072`, que no es múltiplo de 32, y la v2 es más estricta. En el
+  catálogo nuevo de la v2 se corrigió el typo: `mlx/metalnemotron.toml` y
+  `mlx/metalqwen.toml` pasan de `133072` a `131072` (el valor estándar 2¹⁷ =
+  128 K). Queda pendiente promover la regla a R-DATA en el doc A o retirarla.
 - **La tabla del doc B §4.1.1 es el contrato de la v2, no el contrato completo
   de la v1.** La v1 comprueba además que `[args.level.<n>]` esté declarado en
   `[levels].list`, que `[args.flag.<f>]` y `[args.option.<o>]` estén

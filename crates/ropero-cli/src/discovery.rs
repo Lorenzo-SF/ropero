@@ -155,6 +155,9 @@ fn collect(
 /// `ROPERO_ROOT`), luego la cadena de directorios desde el directorio de
 /// trabajo y desde el propio ejecutable. La **decisión** (qué se prueba, en
 /// qué orden) es del dominio; aquí sólo se responde qué existe en disco.
+///
+/// La raíz de la v2 es la que tiene `models/` (doc B §2.4). No se busca en
+/// `ropero-code/`: la v1 es sólo referencia.
 pub fn find_model_root(env: &Environment) -> Result<PathBuf, String> {
     let mut chain: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe()
@@ -166,15 +169,17 @@ pub fn find_model_root(env: &Environment) -> Result<PathBuf, String> {
         .ok_or_else(|| "no se encontró el directorio de modelos".to_string())
 }
 /// Dice si un directorio es la raíz del catálogo y, si lo es, cuál.
+///
+/// La raíz de la v2 es la que tiene `models/` (doc B §2.4): el catálogo
+/// propio vive en `<workspace>/models`. No hay búsqueda en `ropero-code/`:
+/// la v1 es sólo referencia — la v2 se desarrolla como si esa carpeta no
+/// existiera.
 fn accept(p: &Path) -> Option<PathBuf> {
     let models = p.join("models");
     let known =
         models.is_dir() || models.join("_template.toml").is_file() || models.join("llama").is_dir();
     if known || is_models_base(p) {
         return Some(p.to_path_buf());
-    }
-    if p.join("ropero-code/models").is_dir() {
-        return Some(p.join("ropero-code"));
     }
     None
 }
