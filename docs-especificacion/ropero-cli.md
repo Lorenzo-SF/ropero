@@ -194,16 +194,23 @@ La lista acepta **ids o alias**, separados por **espacios o comas**.
 
 ### 9.3 El flag `--prio`
 
-`ropero install models` incorpora el contrato de `--prio` ya escrito en el
-[doc A §4.10.6](ropero-especificacion.md#4106-la-decisión-de-descargar)
-(R-MOD-29):
+El contrato de `--prio` es el del
+[doc B §4.10.7](ropero-construccion.md#4107-el-contrato-de---prio), que es la
+fuente **normativa** (el [doc A §4.10.6](ropero-especificacion.md#4106-la-decisión-de-descargar),
+R-MOD-29, remite a él):
 
 - `--prio download|build` es la forma de **elegir sin preguntar** cuando un
   modelo declara **las dos vías** (`[download]` y `[build]`).
 - Puede ser **global** (para todos los modelos de la invocación) o **por
   modelo**.
+- El **global** va **antes** de la lista de modelos; el **por modelo** va
+  **detrás** del modelo y **hasta el siguiente modelo**.
+- Si hay un `--prio` **global** y otro **por modelo**, **manda el por modelo**
+  para ese modelo.
 - Si la prioridad pedida **no está disponible** para ese modelo, se **ignora**
   si el modelo no tiene ese camino, o si la prioridad ya **es su defecto**.
+- Un valor que no sea `download` ni `build` es **error de uso (exit 2)**, con
+  el valor recibido en el mensaje.
 
 ## 10. `ropero stop [<nada>|<modelo>]`
 
@@ -322,6 +329,7 @@ resuelto aquí:
 | 9 | Si `ropero list` admite `--all` para incluir los **retirados**, como hacía la v1. | [§15](#15-ropero-list) |
 | 10 | Comportamiento de `ropero install engines`/`models` **sin TTY** y sin lista (la v1 lo trataba como error de uso). | [§9](#9-ropero-install-nadaenginesmodels) |
 | 11 | Si existe un comando `ropero engines` / `ropero models` como alias de `install engines` / `install models`. | [§9](#9-ropero-install-nadaenginesmodels) |
+| 12 | Si los flags `--download` / `--build` de la v1 sobreviven en la v2 como camino forzado, o los sustituye `--prio`. El doc A (R-DATA-6) aún los cita; este §9.3 y el doc B §4.10.7 dan el contrato de `--prio`. | [§9.3](#93-el-flag---prio) |
 
 ---
 
@@ -334,7 +342,7 @@ resuelto aquí:
 | §4 Leyenda de motores | Decisión del dueño, 2026-11-14 |
 | §5 Decisiones fijadas | Decisiones del dueño, 2026-11-14 |
 | §6-§16 Comandos | Decisión del dueño, 2026-11-14 |
-| §9.3 `--prio` | [Doc A §4.10.6](ropero-especificacion.md#4106-la-decisión-de-descargar) (R-MOD-29) |
+| §9.3 `--prio` | [Doc B §4.10.7](ropero-construccion.md#4107-el-contrato-de---prio) (contrato normativo; el doc A, R-MOD-29, remite a él) |
 | §13 Batería de tests | [`docs/tests/indice.md`](../docs/tests/indice.md) |
 | §17 Pendientes | Ambigüedades de la especificación del dueño, sin resolver |
 | §11.4 Scripts de Strata | [`groot.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/groot.sh), [`qwen-abliterated.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen-abliterated.sh), [`qwen36.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen36.sh) |
