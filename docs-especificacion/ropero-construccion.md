@@ -300,6 +300,13 @@ ropero/
 └── docs/
 ```
 
+**`ropero-code/` (la v1) no aparece en ese árbol a propósito**: es **referencia,
+no dependencia** ([ADR-003](../docs/adr/ADR-003-ropero-code-es-referencia.md)).
+Todo el desarrollo de la v2 se hace **como si esa carpeta no existiera**; se
+consulta para aprender, contrastar y comparar, nunca como fuente de verdad. El
+catálogo de la v2 es **nuevo e independiente** y vive en `models/`: **no se
+integra en el ejecutable**.
+
 **Regla de dependencia** (verificada por test, § 9 T-01):
 
 ```
@@ -1097,6 +1104,8 @@ producción. Esa es una tarea de la fase F1 (T-05).
 
 #### 4.1.1 Reglas de validación (el contrato completo)
 
+Son **15 reglas**. Cada una es una violación del catálogo y sale con código 1.
+
 | Regla | Violación | Código de salida |
 |---|---|---|
 | `[model].name` es kebab-case y único global (activos + `fired/`) | error | 1 |
@@ -1120,13 +1129,18 @@ adicionales que hace la v1 —niveles, flags, opciones y presencia de
 `[download]`/`[build]`— aún no están implementadas y están registradas como
 deuda en el CHANGELOG.
 
-**Un modelo puede declarar las dos vías** (`[download]` **y** `[build]`) a la
-vez: **no es un error** y el validador lo acepta (la fila que lo prohibía se
-borró; decisión del dueño, 2026-11-14). La elección del camino es de
-`ropero install models` (F5/T-25, R-MOD-29): con las dos vías, se pregunta al
-usuario, y `--prio=download|build` la elige sin preguntar (global o por
-modelo; si el modelo no tiene ese camino, se ignora). El exit 2 —error de
-uso— lo reservan los comandos, no el validador.
+**Tener `[download]` y `[build]` a la vez es un estado válido del TOML, no un
+error.** El validador lo acepta; la fila que lo prohibía (con código 2) se
+borró (decisión del dueño, 2026-11-14). Declarar las dos vías significa que el
+modelo **se puede obtener de dos maneras**, y eso es una propiedad del modelo,
+no un defecto de su ficha. Por tanto:
+
+- El **validador** no dice nada sobre qué vía tomar: las dos son válidas y las
+  dos se validan por separado.
+- La **elección del camino** es contrato de `ropero install models` (F5/T-25,
+  R-MOD-29): con las dos vías, se pregunta al usuario; con `--prio` se elige
+  sin preguntar. El contrato completo de `--prio` está en § 4.10.7.
+- El **exit 2** —error de uso— lo reservan los comandos, no el validador.
 
 **La regla de `name` == nombre de fichero** es una de las deudas medidas (H-23):
 hoy el validador **no** la comprueba. Se añade aquí.
@@ -2026,6 +2040,49 @@ Las 317 filas, ordenadas por la sección del doc A de la que proceden.
 | **R-MOD-31** | `ropero gguffer` es el equivalente manual de `ropero install models --prio build`: baja el repo de safetensors, crea el GGUF y lo cuantiza. | `crates/ropero-download/tests/plan.rs` <br>*Semilla v1*: bin/lib/cmd-gguffer.sh:1-15, :1271-1327. | Test `r-mod_31_ropero_gguffer_equivalente_manual_ropero_install` en `crates/ropero-download/tests/plan.rs` (prueba unit): comprueba que se cumple lo que el requisito afirma, contra la implementación de `crates/ropero-download/src/plan.rs`. El test se pone rojo si el comportamiento se altera. |
 | **R-MOD-28** | Los motores con almacén propio (FLM, Strata) deciden ellos: si el engine define el hook opcional `install_model`, manda él y se salta el camino download/build. | `crates/ropero-download/tests/plan.rs` <br>*Semilla v1*: bin/lib/cmd-models.sh:437-455, bin/lib/engines/fastflowlm.sh:188-259, bin/lib/engines/strata.sh:188-237. | Test `r-mod_28_los_motores_con_almacen_propio_flm` en `crates/ropero-download/tests/plan.rs` (prueba unit): comprueba que se cumple lo que el requisito afirma, contra la implementación de `crates/ropero-download/src/plan.rs`. El test se pone rojo si el comportamiento se altera. |
 
+### 4.10.7 El contrato de `--prio`
+
+Un modelo **puede tener `[download]`, `[build]` o los dos**: los dos es un estado
+válido del TOML (§ 4.1.1). La elección del camino ocurre en
+`ropero install models`, y `--prio` es la forma de **no preguntar**.
+
+**Valor**: `--prio=download` o `--prio=build`. Sólo esos dos valores.
+
+**Ámbito**: `--prio` puede ser **global** (toda la ejecución de ese
+`ropero install models`) **o por modelo**.
+
+**Sintaxis por modelo**: el `--prio` va **detrás** del modelo al que se aplica
+y **hasta el siguiente modelo**. El ejemplo canónico es:
+
+```
+ropero install models nemotron groot --prio=build qwen --prio=download
+```
+
+que significa exactamente:
+
+| Modelo | `--prio` | Consecuencia |
+|---|---|---|
+| `nemotron` | (ninguno) | se procesa **con lo que tenga**: si declara las dos vías, se pregunta al usuario; si sólo tiene una, se usa esa |
+| `groot` | `build` | se usa su camino `build` |
+| `qwen` | `download` | se usa su camino `download` |
+
+**Cuándo se ignora el `--prio`** (no es un error, no aborta la ejecución):
+
+- Si el modelo **no tiene** ese camino (p. ej. `--prio=build` sobre un modelo
+  que sólo declara `[download]`), el `--prio` **se ignora**.
+- Si el modelo **sólo tiene un camino** y se indica ese `--prio`, **se ignora**:
+  ya es su comportamiento por defecto, así que no cambia nada.
+
+**Sin `--prio` y con las dos vías**: se **pregunta al usuario** qué camino
+tomar. Si no hay TTY, es un error de uso (exit 2) que corresponde a los
+comandos, no al validador.
+
+> **Contrato pendiente de implementación.** La v2 actual no tiene todavía
+> `ropero install models` (llega en F5/T-25). Este apartado fija el
+> comportamiento que tendrá; lo verifica
+> `r-mod_29_modelo_puede_declarar_las_dos_vias` en
+> `crates/ropero-download/tests/plan.rs`.
+
 ### 4.11.1 Qué es
 
 *Módulo v2*: `test/` · *Zona de prueba*: `test/` · *Tipo*: e2e
@@ -2387,7 +2444,7 @@ su puerta. **Una tarea = un PR.**
 | **T-01** | Workspace con los 6 crates, `rust-toolchain.toml` (1.100.0), `rustfmt.toml`, `clippy.toml`, `deny.toml`, `Cargo.lock` commiteado, perfil release | — | — | `cargo build` verde; grafo de dependencias verificado por test |
 | **T-02** | Test de arquitectura: `ropero-core` no usa `std::process`, `std::fs`, `tokio` ni `reqwest`; el grafo no tiene ciclos; `ropero-cli` < 400 líneas | R-ARQ-1 | T-01 | El test falla si se añade una dependencia prohibida |
 | **T-03** | CI: clippy, fmt, nextest, llvm-cov, cargo-deny, matriz macOS+Linux | — | T-01 | CI verde en local y en GitHub |
-| **T-04** | ADR-001: «por qué Rust» y ADR-002: «por qué extracción y no reescritura» | — | — | Los dos ADR existen con su plantilla |
+| **T-04** | ADR-001: «por qué Rust», ADR-002: «por qué extracción y no reescritura» y ADR-003: «`ropero-code` es referencia, no dependencia» | — | — | Los tres ADR existen con su plantilla |
 | **T-05** | Portar `models/_template.toml` y los 45 TOML al esquema tipado, **sin cambiar su contenido**; el validador nuevo acepta los 45 | R-DATA | T-01 | `ropero validate` acepta los 45 y rechaza un TOML con clave desconocida |
 
 #### F1 · Modelo de datos
@@ -2395,7 +2452,7 @@ su puerta. **Una tarea = un PR.**
 | Tarea | Qué hace | Cierra | Depende de | Puerta |
 |---|---|---|---|---|
 | **T-06** | `ModelSpec` y todos sus tipos con `serde` + `deny_unknown_fields` | R-DATA-1…16 | T-05 | Cada tabla del doc A tiene su tipo y su test |
-| **T-07** | Validador: las 16 reglas de § 4.1.1, cada una con un test que falla | R-DATA-17…23 | T-06 | 16 tests, uno por regla, todos rojos antes |
+| **T-07** | Validador: las 15 reglas de § 4.1.1, cada una con un test que falla | R-DATA-17…23 | T-06 | 15 tests, uno por regla, todos rojos antes |
 | **T-08** | `ArgvBuilder`: base → level → flags → options, `replace`, `requires`, placeholders | R-DATA-16…21 | T-06 | Golden tests contra el argv real de los TOML |
 | **T-09** | Catálogo: descubrimiento de `models/`, `fired/`, unicidad de nombres, alias | R-MOD-1…8 | T-06 | El catálogo de 45 (17 activos + 28 fired) se carga |
 | **T-10** | `ropero validate`, `ropero list`, `ropero template`, `ropero args`, `ropero levels`, `ropero path` | R-CLI-6…13 | T-09 | Los seis comandos con salida esperada |
@@ -2433,7 +2490,7 @@ su puerta. **Una tarea = un PR.**
 
 | Tarea | Qué hace | Cierra | Depende de | Puerta |
 |---|---|---|---|---|
-| **T-25** | `ropero install models`: sólo los modelos de los engines instalados; sin TTY exige lista | R-CTX-2, R-CLI-16 | T-09 | Con un engine instalado, sólo se ofrecen sus modelos |
+| **T-25** | `ropero install models`: sólo los modelos de los engines instalados; sin TTY exige lista; y el contrato de `--prio` de § 4.10.7 (global o por modelo; se ignora si el modelo no tiene ese camino o si ya es su defecto; con las dos vías y sin `--prio`, se pregunta) | R-CTX-2, R-CLI-16, R-MOD-29 | T-09 | Con un engine instalado, sólo se ofrecen sus modelos; y `ropero install models nemotron groot --prio=build qwen --prio=download` resuelve nemotron por pregunta, groot por `build` y qwen por `download` |
 | **T-26** | Descarga con `hf`: la secuencia exacta de R-MOD-16, reanudación, fichero vacío | R-MOD-9…20 | T-25 | Con `hf` falso: se llama con los argumentos exactos |
 | **T-27** | Reutilización entre modelos y decisión de descargar | R-MOD-21…28 | T-26 | Dos modelos del mismo repo descargan una vez |
 | **T-28** | Contrato de stdout: `ROPERO_PORT=` al final, resto a stderr | R-OC-1…5, R-CLI-17 | T-18 | El plugin lee las tres líneas |
