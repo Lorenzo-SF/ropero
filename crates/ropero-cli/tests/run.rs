@@ -145,7 +145,7 @@ fn bin(estado: &Path, path: &Path, gguf: &Path) -> Command {
     cmd.env("ROPERO_MODELS_DIR", fixture_root());
     cmd.env("GGUF_DIR", gguf);
     cmd.env("SAFETENSORS_DIR", fixture_root().join("safetensors"));
-    cmd.env("LOG_DIR", fixture_root().join("logs"));
+    cmd.env("LOG_DIR", estado.join("logs"));
     // El estado en disco va a un temporal: los tests no tocan el estado
     // real de la máquina.
     cmd.env("ROPERO_STATE_DIR", estado);

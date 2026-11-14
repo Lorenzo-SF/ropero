@@ -7,3 +7,6 @@
 
 # Binarios sueltos generados por cargo en la raíz del workspace.
 **/*.rs.out
+
+# Los logs que escriben los tests de la CLI en su fixture.
+crates/ropero-cli/tests/fixtures/logs/
