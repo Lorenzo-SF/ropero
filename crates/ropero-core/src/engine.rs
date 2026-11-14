@@ -1,25 +1,34 @@
 //! Identificadores canónicos de motor de inferencia.
 //!
 //! `EngineId` es el tipo que viaja en `[model].engine` del TOML. Los alias
-//! legacy (`llama`, `mlx_lm`, `flm`, `tensorrt`, `strata_engine`) se
-//! canónizan en la fase de carga del catálogo mediante [`EngineId::from_str_legacy`],
-//! que devuelve el aviso con el formato del doc B §4.2:
+//! legacy (`llama-server-official`, `llama-official`, `llama`, `turbo`,
+//! `mlx_lm`, `flm`, `tensorrt`, `strata_engine`) se canónizan en la fase de
+//! carga del catálogo mediante [`EngineId::from_str_legacy`], que devuelve el
+//! aviso con el formato del doc B §4.2:
 //!
 //! ```text
 //! AVISO: el motor 'mlx_lm' es un alias antiguo; se usa 'mlx-serve'
 //! ```
 //!
 //! Un alias legacy se canonicaliza **con un aviso**, nunca en silencio.
+//!
+//! ## La nomenclatura de [ADR-004]
+//!
+//! `llama-server` es el repo **oficial** de llama.cpp y el fork privado se
+//! llama `turbo-llama`. Antes `llama-server` era el fork y el oficial se
+//! llamaba `llama-server-official`; ese id es ahora un alias.
 
 use serde::de::{Error as DeError, Unexpected};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum EngineId {
+    /// El repo **oficial** de llama.cpp (ADR-004).
     #[serde(rename = "llama-server")]
     LlamaServer,
-    #[serde(rename = "llama-server-official")]
-    LlamaServerOfficial,
+    /// El fork privado del dueño (turboquant), antes `llama-server`.
+    #[serde(rename = "turbo-llama")]
+    TurboLlama,
     #[serde(rename = "mlx-serve")]
     MlxServe,
     #[serde(rename = "fastflowlm")]
@@ -62,7 +71,7 @@ impl std::fmt::Display for UnknownEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "motor desconocido: '{}'; usa uno de: llama-server, llama-server-official, \
+            "motor desconocido: '{}'; usa uno de: llama-server, turbo-llama, \
              mlx-serve, fastflowlm, tensorrt-llm, vllm, airllm, strata",
             self.0
         )
@@ -80,10 +89,10 @@ impl UnknownEngine {
     }
 }
 
-/// Los ocho ids canónicos, en el orden de la tabla de §4.2.
+/// Los ocho ids canónicos (ADR-004), en el orden de la leyenda de motores.
 pub const CANONICAL_IDS: &[&str] = &[
     "llama-server",
-    "llama-server-official",
+    "turbo-llama",
     "mlx-serve",
     "fastflowlm",
     "tensorrt-llm",
@@ -97,7 +106,7 @@ impl EngineId {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::LlamaServer => "llama-server",
-            Self::LlamaServerOfficial => "llama-server-official",
+            Self::TurboLlama => "turbo-llama",
             Self::MlxServe => "mlx-serve",
             Self::FastFlowLm => "fastflowlm",
             Self::TensorRtLlm => "tensorrt-llm",
@@ -116,15 +125,22 @@ impl EngineId {
     pub fn from_str_legacy(s: &str) -> Result<(Self, Option<String>), UnknownEngine> {
         let canonical = match s {
             "llama-server" => Self::LlamaServer,
-            "llama-server-official" => Self::LlamaServerOfficial,
+            "turbo-llama" => Self::TurboLlama,
             "mlx-serve" => Self::MlxServe,
             "fastflowlm" => Self::FastFlowLm,
             "tensorrt-llm" => Self::TensorRtLlm,
             "vllm" => Self::Vllm,
             "airllm" => Self::AirLlm,
             "strata" => Self::Strata,
-            // Alias legacy (tabla de §4.2): se canonicalizan CON aviso.
+            // Alias legacy (ADR-004): se canonicalizan CON aviso.
+            //
+            // `llama-server-official` y `llama-official` apuntaban al repo
+            // oficial y ahora apuntan a `llama-server`; `llama` también
+            // (en la v1 `llama` era el fork, que ahora es `turbo-llama`).
+            "llama-server-official" => Self::LlamaServer,
+            "llama-official" => Self::LlamaServer,
             "llama" => Self::LlamaServer,
+            "turbo" => Self::TurboLlama,
             "mlx_lm" => Self::MlxServe,
             "flm" => Self::FastFlowLm,
             "tensorrt" => Self::TensorRtLlm,
@@ -146,18 +162,26 @@ impl EngineId {
     ///
     /// Los directorios no son ids de motor: son las carpetas donde viven los
     /// modelos de cada motor, y su nombre no siempre coincide con él
-    /// (`llama/` → `llama-server`, `mlx/` → `mlx-serve`, `flm/` →
+    /// (`turbo-llama/` → `turbo-llama`, `mlx/` → `mlx-serve`, `flm/` →
     /// `fastflowlm`). `None` si el directorio no corresponde a ningún motor.
+    ///
+    /// Los directorios **legacy** del catálogo de la v1 (`llama/`,
+    /// `llama-official/`) también se mapean, para que un catálogo viejo se
+    /// siga leyendo tras el renombrado de ADR-004.
     pub fn from_dir_name(dir: &str) -> Option<Self> {
         match dir {
-            "llama" => Some(Self::LlamaServer),
-            "llama-official" => Some(Self::LlamaServerOfficial),
+            "turbo-llama" => Some(Self::TurboLlama),
+            "llama-server" => Some(Self::LlamaServer),
             "mlx" => Some(Self::MlxServe),
             "flm" => Some(Self::FastFlowLm),
             "tensorrt" => Some(Self::TensorRtLlm),
             "vllm" => Some(Self::Vllm),
             "airllm" => Some(Self::AirLlm),
             "strata" => Some(Self::Strata),
+            // Directorios legacy (ADR-004): el fork era `llama/` y el
+            // oficial `llama-official/`.
+            "llama" => Some(Self::TurboLlama),
+            "llama-official" => Some(Self::LlamaServer),
             _ => None,
         }
     }

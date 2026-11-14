@@ -1,0 +1,19 @@
+# Modelo de prueba retirado (datos ficticios): vive en `fired/`, mismo esquema.
+
+[model]
+name    = "modelo-retirado"
+engine  = "turbo-llama"
+context = 8192
+
+[files]
+gguf = "modelo-retirado-q4_k_m.gguf"
+
+[download]
+repo = "ejemplo/modelo-retirado"
+file = "modelo-retirado-q4_k_m.gguf"
+size = "~1 GB"
+
+[args]
+base = [
+    "--ctx-size", "${ctx}",
+]

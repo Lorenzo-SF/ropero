@@ -25,11 +25,15 @@
 //! ### Alias legacy de `engine`
 //!
 //! `EngineId` sólo acepta los identificadores canónicos (`llama-server`,
-//! `llama-server-official`, `mlx-serve`, `fastflowlm`, `tensorrt-llm`,
-//! `vllm`, `airllm`, `strata`). Los alias legacy (`llama`, `mlx_lm`, `flm`,
-//! `tensorrt`, `strata_engine`) los canonicaliza `parse_model` antes de
-//! deserializar, y dejan un aviso en [`ModelSpec::notices`] (doc B §4.2):
+//! `turbo-llama`, `mlx-serve`, `fastflowlm`, `tensorrt-llm`, `vllm`,
+//! `airllm`, `strata`). Los alias legacy (`llama-server-official`,
+//! `llama-official`, `llama`, `turbo`, `mlx_lm`, `flm`, `tensorrt`,
+//! `strata_engine`) los canonicaliza `parse_model` antes de deserializar, y
+//! dejan un aviso en [`ModelSpec::notices`] (doc B §4.2):
 //! un alias legacy se canonicaliza **con un aviso**, nunca en silencio.
+//!
+//! La nomenclatura canónica es la de [ADR-004]: `llama-server` es el repo
+//! oficial de llama.cpp y `turbo-llama` el fork privado.
 //!
 //! ### Types contract
 //!

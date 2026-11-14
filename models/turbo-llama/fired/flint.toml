@@ -1,0 +1,36 @@
+# =============================================================================
+# flint — Recursive Flint (MoE, 39.8 B params, NVFP4)
+# =============================================================================
+
+[model]
+name    = "flint"
+engine  = "turbo-llama"
+context = 65536
+
+[files]
+gguf = "flint-nvfp4.gguf"
+
+[download]
+repo = "RecursiveSI/flint-nvfp4-gguf"
+file = "flint-nvfp4.gguf"
+size = "22.86 GB"
+
+[args]
+base = [
+    # 26 capas ≈ 10,7 GiB de pesos en la GPU (estimado, ver arriba).
+    "--n-gpu-layers", "50",
+    "--n-cpu-moe", "18",
+    "--moe-cache","soft", # aqui, auto sube alrededor de un 10%
+	
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
+
+    # Muestreo del card y de las configs de pi/opencode.
+    "--temp", "1.0",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--min-p", "0.0",
+
+    "--n-predict", "8192",
+    "--keep", "16384",
+]

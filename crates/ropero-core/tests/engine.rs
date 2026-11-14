@@ -1,11 +1,16 @@
 //! Tests de los identificadores de motor y de sus alias legacy (T-11).
 //!
-//! Doc B §4.2: ocho motores con ids canónicos y alias legacy. Un alias
-//! legacy se canonicaliza **con un aviso**, nunca en silencio:
+//! Doc B §4.2 y [ADR-004](../../../../docs/adr/ADR-004-nomenclatura-de-motores.md):
+//! ocho motores con ids canónicos y alias legacy. Un alias legacy se
+//! canonicaliza **con un aviso**, nunca en silencio:
 //!
 //! ```text
 //! AVISO: el motor 'mlx_lm' es un alias antiguo; se usa 'mlx-serve'
 //! ```
+//!
+//! **Cambio semántico de ADR-004**: `llama-server` pasa a significar el repo
+//! **oficial** de llama.cpp (antes era el fork) y el fork privado pasa a
+//! llamarse `turbo-llama` (antes `llama-server-official` era el oficial).
 //!
 //! Puerta de T-11: "Test de cada alias y de cada id canónico".
 
@@ -13,10 +18,10 @@ use std::path::Path;
 
 use ropero_core::{EngineId, ModelSpec, parse_model};
 
-/// Los ocho ids canónicos y su identificador canónico.
+/// Los ocho ids canónicos (ADR-004) y su identificador canónico.
 const CANONICOS: &[(&str, EngineId)] = &[
     ("llama-server", EngineId::LlamaServer),
-    ("llama-server-official", EngineId::LlamaServerOfficial),
+    ("turbo-llama", EngineId::TurboLlama),
     ("mlx-serve", EngineId::MlxServe),
     ("fastflowlm", EngineId::FastFlowLm),
     ("tensorrt-llm", EngineId::TensorRtLlm),
@@ -25,9 +30,16 @@ const CANONICOS: &[(&str, EngineId)] = &[
     ("strata", EngineId::Strata),
 ];
 
-/// Los cinco alias legacy de la tabla de §4.2 y su id canónico.
+/// Los alias legacy (ADR-004 §"Alias legacy") y su id canónico.
+///
+/// `llama-server-official` y `llama-official` apuntaban al oficial y ahora
+/// apuntan a `llama-server`; `llama` también. `turbo` es el alias nuevo del
+/// fork.
 const ALIAS_LEGACY: &[(&str, EngineId)] = &[
+    ("llama-server-official", EngineId::LlamaServer),
+    ("llama-official", EngineId::LlamaServer),
     ("llama", EngineId::LlamaServer),
+    ("turbo", EngineId::TurboLlama),
     ("mlx_lm", EngineId::MlxServe),
     ("flm", EngineId::FastFlowLm),
     ("tensorrt", EngineId::TensorRtLlm),
@@ -84,13 +96,49 @@ fn cada_motor_expone_su_id_canonico() {
     }
 }
 
+/// ADR-004: `llama-server` es el repo **oficial** de llama.cpp y el fork
+/// privado se llama `turbo-llama`. El cambio semántico crítico.
+#[test]
+fn adr_004_llama_server_es_el_oficial_y_turbo_llama_el_fork() {
+    assert_eq!(
+        EngineId::from_str_legacy("llama-server"),
+        Ok((EngineId::LlamaServer, None)),
+        "'llama-server' debe ser el motor oficial"
+    );
+    assert_eq!(
+        EngineId::from_str_legacy("turbo-llama"),
+        Ok((EngineId::TurboLlama, None)),
+        "'turbo-llama' debe ser el fork privado"
+    );
+    assert_ne!(
+        EngineId::LlamaServer,
+        EngineId::TurboLlama,
+        "el oficial y el fork son motores distintos"
+    );
+}
+
+/// La variante `LlamaServerOfficial` ya no existe: el oficial **es**
+/// `LlamaServer` (ADR-004).
+#[test]
+fn la_variante_del_oficial_desaparece() {
+    // Se comprueba por comportamiento: el id "llama-server-official" ya no
+    // es un id canónico, es un alias.
+    let (motor, aviso) = EngineId::from_str_legacy("llama-server-official")
+        .expect("'llama-server-official' debe aceptarse como alias");
+    assert_eq!(motor, EngineId::LlamaServer);
+    assert!(
+        aviso.is_some(),
+        "'llama-server-official' ya no es canónico: debe avisar"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Los cinco alias legacy
+// Los alias legacy
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Cada alias legacy se canonicaliza al id canónico, **con aviso**.
 #[test]
-fn los_cinco_alias_legacy_se_canonicalizan_con_aviso() {
+fn los_alias_legacy_se_canonicalizan_con_aviso() {
     for (alias, esperado) in ALIAS_LEGACY {
         let spec =
             parse(alias).unwrap_or_else(|e| panic!("el alias '{alias}' debe aceptarse: {e}"));
@@ -129,8 +177,8 @@ fn un_alias_legacy_nunca_se_canonicaliza_en_silencio() {
     }
 }
 
-/// `from_str_legacy` acepta los ocho canónicos y los cinco alias, y
-/// devuelve el aviso con el formato del doc.
+/// `from_str_legacy` acepta los ocho canónicos y los alias, y devuelve el
+/// aviso con el formato del doc.
 #[test]
 fn from_str_legacy_acepta_canonicos_y_alias() {
     for (id, esperado) in CANONICOS {
@@ -186,14 +234,14 @@ fn from_str_legacy_rechaza_un_id_desconocido() {
 // Los directorios de motor
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Los directorios de `models/` se mapean a su motor: `llama/` es
-/// `llama-server`, `mlx/` es `mlx-serve`, etc. (los directorios no son ids
-/// de motor: son carpetas).
+/// Los directorios de `models/` se mapean a su motor: `turbo-llama/` es
+/// `TurboLlama`, `llama-server/` es el oficial, etc. (los directorios no son
+/// ids de motor: son carpetas).
 #[test]
 fn los_directorios_de_motor_se_mapean_a_su_motor() {
     let casos = [
-        ("llama", EngineId::LlamaServer),
-        ("llama-official", EngineId::LlamaServerOfficial),
+        ("turbo-llama", EngineId::TurboLlama),
+        ("llama-server", EngineId::LlamaServer),
         ("mlx", EngineId::MlxServe),
         ("flm", EngineId::FastFlowLm),
         ("tensorrt", EngineId::TensorRtLlm),
@@ -205,4 +253,35 @@ fn los_directorios_de_motor_se_mapean_a_su_motor() {
         assert_eq!(EngineId::from_dir_name(dir), Some(esperado), "dir={dir}");
     }
     assert_eq!(EngineId::from_dir_name("no-existe"), None);
+}
+
+/// Los directorios **legacy** del catálogo de la v1 siguen mapeando a su
+/// motor: un catálogo viejo se sigue leyendo, sólo se avisa del renombrado.
+#[test]
+fn los_directorios_legacy_siguen_mapeando_a_su_motor() {
+    let casos = [
+        ("llama", EngineId::TurboLlama),
+        ("llama-official", EngineId::LlamaServer),
+    ];
+    for (dir, esperado) in casos {
+        assert_eq!(EngineId::from_dir_name(dir), Some(esperado), "dir={dir}");
+    }
+}
+
+/// Los ids canónicos son los de ADR-004, en el orden de la leyenda.
+#[test]
+fn los_ids_canonicos_son_los_de_adr_004() {
+    assert_eq!(
+        ropero_core::CANONICAL_IDS,
+        &[
+            "llama-server",
+            "turbo-llama",
+            "mlx-serve",
+            "fastflowlm",
+            "tensorrt-llm",
+            "vllm",
+            "airllm",
+            "strata",
+        ]
+    );
 }
