@@ -45,6 +45,18 @@ impl ProcIdentity {
     /// `None` si el proceso no existe o si no se pudo leer su `start_time`:
     /// sin `start_time` no se puede probar que un PID recycled sea el
     /// nuestro, así que **no se inventa** una identidad.
+    ///
+    /// ## El `exe_digest` y el `exec`
+    ///
+    /// El digest se lee de `/proc/<pid>/exe`, que es el binario que el
+    /// proceso tiene **ahora**. Un proceso que hace `exec` (un script que
+    /// lanza otro programa, un motor que se reescribe) cambia de binario
+    /// después de arrancar: el digest del launch y el de la parada no
+    /// coinciden, y la comparación fallaría con un proceso **nuestro**.
+    ///
+    /// Por eso el digest **no** se usa para decidir si un proceso es
+    /// nuestro: la decisión la toman el PID y el `start_time`, que no
+    /// cambian. El digest es un dato informative, no un filtro.
     pub fn of(pid: u32) -> Option<Self> {
         let start_time = start_time_of(pid)?;
         Some(Self {
@@ -67,20 +79,31 @@ impl ProcIdentity {
 
     /// Si esta identidad es la misma que la otra.
     ///
-    /// El `start_time` es **obligatorio**: sin él no hay prueba. El digest
-    /// sólo se compara cuando **los dos** lo tienen: si no se pudo leer en
-    /// uno de los dos lados, no es una discrepancia —es un dato que falta—,
-    /// y se dice con el `start_time`.
+    /// El **PID** y el `start_time` son la prueba: los PIDs se reciclan,
+    /// pero un `start_time` distinto es otro proceso (P-3).
+    ///
+    /// El `exe_digest` **no** decide: un proceso que hace `exec` cambia
+    /// de binario después de arrancar, así que el digest del arranque y
+    /// el de la parada no coinciden aunque sea el mismo proceso. El
+    /// digest se compara sólo cuando **los dos** lo tienen y **ninguno**
+    /// de los dos ha hecho `exec` desde el arranque —que es un dato que
+    /// no se puede saber—, así que aquí no se usa como filtro: es un
+    /// dato informative para el diagnóstico.
     pub fn es_la_misma(&self, otra: &ProcIdentity) -> bool {
         if self.pid != otra.pid {
             return false;
         }
-        if self.start_time != otra.start_time {
-            return false;
-        }
+        self.start_time == otra.start_time
+    }
+
+    /// Si los dos digests conocidos **difieren**.
+    ///
+    /// Es un dato informativo, no un filtro: un `exec` lo cambia sin que
+    /// el proceso deje de ser el nuestro.
+    pub fn digest_difiere(&self, otra: &ProcIdentity) -> bool {
         match (self.exe_digest, otra.exe_digest) {
-            (Some(a), Some(b)) => a == b,
-            _ => true,
+            (Some(a), Some(b)) => a != b,
+            _ => false,
         }
     }
 }

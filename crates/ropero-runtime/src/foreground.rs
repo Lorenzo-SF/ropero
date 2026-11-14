@@ -92,6 +92,10 @@ impl std::error::Error for Interrumpido {}
 /// Devuelve `Ok(codigo)` si el proceso terminó solo, `Err(Interrumpido)`
 /// si el usuario lo interrumpió.
 ///
+/// `deadline` es el margen de la espera: `None` significa «esperar
+/// indefinidamente», que es lo que hace el arranque en primer plano (el
+/// motor sirve hasta que el usuario lo para).
+///
 /// La espera **no** es un `wait` bloqueante del sistema: se sondea con
 /// un intervalo corto para poder mirar el interruptor. Es lo que hace que
 /// el Ctrl-C se note al instante.
@@ -99,9 +103,9 @@ pub fn esperar(
     engine: &dyn crate::launch::Engine,
     pid: u32,
     interruptor: &Interruptor,
-    deadline: Duration,
+    deadline: Option<Duration>,
 ) -> Result<Option<i32>, Interrumpido> {
-    let limite = std::time::Instant::now() + deadline;
+    let limite = deadline.map(|d| std::time::Instant::now() + d);
     loop {
         if interruptor.interrumpido() {
             return Err(Interrumpido);
@@ -109,7 +113,9 @@ pub fn esperar(
         if let Some(codigo) = engine.wait(pid, Duration::from_millis(50)) {
             return Ok(Some(codigo));
         }
-        if std::time::Instant::now() >= limite {
+        if let Some(limite) = limite
+            && std::time::Instant::now() >= limite
+        {
             return Ok(None);
         }
         std::thread::sleep(Duration::from_millis(50));

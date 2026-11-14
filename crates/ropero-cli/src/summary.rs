@@ -6,8 +6,6 @@
 //!
 //! Sale con **0**: es una ayuda breve, no un error (§5.2).
 
-use ropero_core::surface;
-
 /// `ropero` sin argumentos: el resumen.
 pub fn run() -> i32 {
     let Ok(s) = crate::discovery::scan() else {
@@ -26,45 +24,30 @@ pub fn run() -> i32 {
 
 /// `ropero <modelo>`: el arranque de un modelo.
 ///
-/// El doc CLI v2 §8 lo pone en la fase del runtime (F3): todavía no hay
-/// motor al que lanzar. El comando **se parsea** (sus flags son los del
-/// contrato, y un flag inválido es un error de uso) pero responde con
-/// honestidad: dice que falta la fase y qué hacer.
+/// El doc CLI v2 §8 lo define con seis flags: `--force`, `--cpu`,
+/// `--port`, `--api-key`, `--no-api-key` y `--ctx`. Aquí sólo se traducen
+/// a la petición del runtime; la lógica del arranque vive en
+/// `ropero-runtime` (R-ARQ-1).
 pub fn run_modelo(argumentos: &[String]) -> i32 {
     let matches = crate::parser::arranque().get_matches_from(
         std::iter::once("ropero <modelo>".to_string()).chain(argumentos.iter().cloned()),
     );
-    let modelo = crate::parser::modelo(&matches);
-    // El modelo tiene que estar en el catálogo: si no, el arranque no puede
-    // ni intentarlo, y decirlo es más útil que un "todavía no".
-    if let Ok(s) = crate::discovery::scan()
-        && ropero_core::find_spec(&s.catalog, &modelo).is_none()
-    {
-        let msg = surface::unknown_model_message(&modelo);
-        ropero_core::err_line(&surface::usage_message("", &msg));
-        return 2;
-    }
-    let flags = flags(&matches);
-    let mensaje = surface::pending_message(&format!("{modelo}{flags}"));
-    ropero_core::err_line(&mensaje);
-    1
-}
-
-/// Los flags del arranque, en texto, para que el mensaje los nombre.
-fn flags(matches: &clap::ArgMatches) -> String {
-    let mut nombres: Vec<String> = Vec::new();
-    for flag in ropero_core::surface::FLAGS_RUN {
-        let presente = match flag.kind {
-            ropero_core::surface::FlagKind::Switch => matches.get_flag(flag.name),
-            _ => matches.get_one::<String>(flag.name).is_some(),
-        };
-        if presente {
-            nombres.push(format!("--{}", flag.name));
+    let peticion = ropero_runtime::peticion_de(
+        &crate::parser::modelo(&matches),
+        matches.get_flag("force"),
+        matches.get_flag("cpu"),
+        matches.get_one::<String>("port").map(|s| s.as_str()),
+        matches.get_one::<String>("api-key").map(|s| s.as_str()),
+        matches.get_flag("no-api-key"),
+        matches.get_one::<String>("ctx").map(|s| s.as_str()),
+    );
+    match peticion {
+        Ok(peticion) => crate::commands::arranca(&peticion),
+        Err(outcome) => {
+            if let Some(mensaje) = &outcome.error {
+                ropero_core::err_line(&ropero_core::surface::usage_message("", mensaje));
+            }
+            outcome.code
         }
-    }
-    if nombres.is_empty() {
-        String::new()
-    } else {
-        format!(" {}", nombres.join(" "))
     }
 }

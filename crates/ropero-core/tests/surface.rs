@@ -109,11 +109,13 @@ fn los_comandos_pendientes_dicen_que_falta() {
     }
 }
 
-/// `install`, `stop` y `gguffer` se **parsean** pero no se ejecutan todavía:
+/// `install` y `gguffer` se **parsean** pero no se ejecutan todavía:
 /// su estado es [`CommandState::Parsed`], no `Ready`.
+///
+/// `stop` **no** está aquí: ya funciona (F3), y su estado es `Ready`.
 #[test]
-fn install_stop_y_gguffer_estan_parseados_pero_no_listos() {
-    for nombre in ["install", "stop", "gguffer"] {
+fn install_y_gguffer_estan_parseados_pero_no_listos() {
+    for nombre in ["install", "gguffer"] {
         let cmd = COMMANDS
             .iter()
             .find(|c| c.name == nombre)
@@ -125,6 +127,17 @@ fn install_stop_y_gguffer_estan_parseados_pero_no_listos() {
         );
         assert!(!cmd.es_ready());
     }
+}
+
+/// `stop` funciona: su estado es [`CommandState::Ready`].
+#[test]
+fn stop_esta_listo() {
+    let cmd = COMMANDS
+        .iter()
+        .find(|c| c.name == "stop")
+        .unwrap_or_else(|| panic!("falta 'stop'"));
+    assert_eq!(cmd.state, CommandState::Ready);
+    assert!(cmd.es_ready());
 }
 
 /// Los comandos que sí funcionan están marcados como listos.

@@ -316,18 +316,26 @@ fn un_start_time_distinto_no_es_la_misma_identidad() {
 }
 
 #[test]
-fn un_digest_distinto_no_es_la_misma_identidad() {
+fn un_digest_distinto_no_es_una_discrepancia_de_identidad() {
+    // El digest **no** decide: un proceso que hace `exec` cambia de
+    // binario después de arrancar, así que el digest del arranque y el
+    // de la parada no coinciden aunque sea el mismo proceso.
     let a = ProcIdentity::with_digest(100, 500, Some([1u8; 32]));
     let b = ProcIdentity::with_digest(100, 500, Some([2u8; 32]));
-    assert!(!a.es_la_misma(&b));
+    assert!(
+        a.es_la_misma(&b),
+        "el digest no puede ser un filtro de identidad"
+    );
+    // Pero la diferencia se puede **saber**, para el diagnóstico.
+    assert!(a.digest_difiere(&b), "la diferencia del digest es un dato");
 }
 
 #[test]
 fn un_digest_que_falta_no_es_una_discrepancia() {
-    // Falta el dato, no discrepa: el `start_time` es el que decide.
     let a = ProcIdentity::with_digest(100, 500, None);
     let b = ProcIdentity::with_digest(100, 500, Some([1u8; 32]));
     assert!(a.es_la_misma(&b));
+    assert!(!a.digest_difiere(&b), "un digest que falta no discrepa");
 }
 
 #[test]

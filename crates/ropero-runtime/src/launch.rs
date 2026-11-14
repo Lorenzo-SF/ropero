@@ -279,6 +279,12 @@ pub struct LaunchContext<'a> {
     /// El puerto pedido (`--port`), si lo hay.
     pub port: Option<u16>,
 
+    /// Los puertos que **están ocupados** del rango del motor.
+    ///
+    /// Sin esto, el puerto elegido sería el primero del rango, y podría
+    /// estar ocupado: el motor moriría con «address already in use».
+    pub occupied_ports: Vec<u16>,
+
     /// El directorio de estado.
     pub state_dir: &'a std::path::Path,
 
@@ -297,6 +303,7 @@ pub fn launch(spec: &LaunchSpec, ctx: &LaunchContext<'_>) -> Result<LaunchResult
     let device = ctx.device;
     let preflight = ctx.preflight;
     let port = ctx.port;
+    let occupied_ports = &ctx.occupied_ports;
     let state_dir = ctx.state_dir;
     let options = ctx.options;
 
@@ -307,10 +314,9 @@ pub fn launch(spec: &LaunchSpec, ctx: &LaunchContext<'_>) -> Result<LaunchResult
     // 2. Puerto.
     let puerto = match port {
         Some(p) => p,
-        None => ropero_core::pick_port(spec.port_range, &[]).ok_or(LaunchError::NoPort(
-            spec.port_range.min,
-            spec.port_range.max,
-        ))?,
+        None => ropero_core::pick_port(spec.port_range, occupied_ports).ok_or(
+            LaunchError::NoPort(spec.port_range.min, spec.port_range.max),
+        )?,
     };
 
     // 3. --force: parar lo que haya de ropero en el device.

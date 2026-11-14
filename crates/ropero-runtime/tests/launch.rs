@@ -255,6 +255,7 @@ fn contexto<'a>(
         device,
         preflight,
         port: None,
+        occupied_ports: Vec::new(),
         state_dir,
         options: opciones(),
     }

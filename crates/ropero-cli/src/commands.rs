@@ -172,6 +172,28 @@ pub fn args(modelo: &str, tokens: &[String]) -> i32 {
     }
 }
 
+/// `ropero <modelo>`: arranca el modelo en su motor.
+///
+/// La lógica **no** vive aquí: el runtime sabe lo que es un arranque
+/// (R-ARQ-1). Aquí sólo se escanea el catálogo y se le pasa al runtime,
+/// que escupe el código de salida.
+pub fn arranca(peticion: &ropero_runtime::RunRequest) -> i32 {
+    let Ok(s) = crate::discovery::scan() else {
+        return 1;
+    };
+    ropero_runtime::arranca_todo(peticion, &s.catalog, &s.engines, &s.env)
+}
+
+/// `ropero stop [<modelo>]`: para los motores lanzados por ropero.
+///
+/// Sin argumento para **todos**; con argumento, sólo el de ese modelo.
+pub fn stop(modelo: &str) -> i32 {
+    let Ok(s) = crate::discovery::scan() else {
+        return 1;
+    };
+    ropero_runtime::para_todo(modelo, &s.env)
+}
+
 /// `ropero doctor`: las dependencias de ropero y las de cada motor.
 ///
 /// El orden es el del doc CLI v2 §14: primero las del propio ropero, luego
