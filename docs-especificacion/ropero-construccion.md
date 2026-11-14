@@ -1106,7 +1106,6 @@ producción. Esa es una tarea de la fase F1 (T-05).
 | `format ≠ "safetensors"` ⇒ `[model].path` **prohibido** | error | 1 |
 | `format = "gguf"` ⇒ `[files].gguf` obligatorio | error | 1 |
 | `[download]` presente sin `[build]` ⇒ `repo` y (`file` si gguf) obligatorios | error | 1 |
-| `[download]` **y** `[build]` presentes ⇒ el usuario debe elegir `--download` o `--build` | error de uso | 2 |
 | Un `${fichero}` en `[args]` no declarado en `[files]` | error | 1 |
 | `[levels].default` debe estar en `[levels].list` | error | 1 |
 | `[aliases]` apunta a un nivel que no existe | error | 1 |
@@ -1119,8 +1118,15 @@ producción. Esa es una tarea de la fase F1 (T-05).
 Esta tabla es el contrato de validación de la v2. Las cuatro comprobaciones
 adicionales que hace la v1 —niveles, flags, opciones y presencia de
 `[download]`/`[build]`— aún no están implementadas y están registradas como
-deuda en el CHANGELOG. La regla `[download]` + `[build]` está en tensión con
-R-DATA-6: contradicción documentada según §6.7, pendiente de decisión.
+deuda en el CHANGELOG.
+
+**Un modelo puede declarar las dos vías** (`[download]` **y** `[build]`) a la
+vez: **no es un error** y el validador lo acepta (la fila que lo prohibía se
+borró; decisión del dueño, 2026-11-14). La elección del camino es de
+`ropero install models` (F5/T-25, R-MOD-29): con las dos vías, se pregunta al
+usuario, y `--prio=download|build` la elige sin preguntar (global o por
+modelo; si el modelo no tiene ese camino, se ignora). El exit 2 —error de
+uso— lo reservan los comandos, no el validador.
 
 **La regla de `name` == nombre de fichero** es una de las deudas medidas (H-23):
 hoy el validador **no** la comprueba. Se añade aquí.

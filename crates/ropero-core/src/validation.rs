@@ -20,7 +20,6 @@ pub enum ValidationRule {
     NonSafetensorsForbidsPath,
     GgufRequiresFile,
     DownloadRequiresRepo,
-    DownloadAndBuild,
     UndeclaredFilePlaceholder,
     LevelDefaultMissing,
     AliasLevelMissing,
@@ -38,11 +37,13 @@ pub enum ValidationRule {
 }
 
 impl ValidationRule {
+    /// El código de salida de una violación.
+    ///
+    /// Todas las reglas de §4.1.1 son errores de catálogo: exit 1.
+    /// (El exit 2 —error de uso— lo reservan los comandos, no el validador:
+    /// p. ej. elegir camino en `ropero install models`.)
     pub fn exit_code(self) -> i32 {
-        match self {
-            Self::DownloadAndBuild => 2,
-            _ => 1,
-        }
+        1
     }
 }
 
@@ -257,30 +258,14 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
             ));
         }
     }
-    // La tabla [download] puede coexistir con [build] para declarar auxiliares;
-    // sólo es un error si ambos describen el artefacto principal. La regla de
-    // la especificación exige elegir una vía de instalación.
-    if spec.download.is_some()
-        && spec.build.is_some()
-        && spec.download.as_ref().is_some_and(|download| {
-            !download.repo.trim().is_empty()
-                || !download.file.trim().is_empty()
-                || !download.name.trim().is_empty()
-        })
-        && spec.build.as_ref().is_some_and(|build| {
-            !build.repo.trim().is_empty()
-                || !build.gguf_file.trim().is_empty()
-                || !build.out.trim().is_empty()
-        })
-    {
-        errors.push(error(
-            ValidationRule::DownloadAndBuild,
-            "download.build",
-            "[download] y [build] no pueden coexistir; conserva sólo uno de los dos métodos",
-            ctx,
-            "download.build",
-        ));
-    }
+    // Un modelo puede declarar **las dos vías** (`[download]` y `[build]`) a
+    // la vez: no es un error. La elección del camino es de `ropero install
+    // models` (F5/T-25): con las dos, se pregunta al usuario, y con
+    // `--prio=download|build` se autoelige. Por tanto el validador acepta
+    // ambas tablas sin decir nada.
+    //
+    // Lo que sí se comprueba es la regla de «download **sin** build» (arriba):
+    // `[download]` sola exige `repo` (y `file` si el formato es gguf).
 
     check_placeholders(spec, ctx, &mut errors);
     if let Some(default) = &spec.levels.default
@@ -385,10 +370,6 @@ pub fn find_engine_line(source: &str) -> Option<usize> {
 }
 
 fn find_toml_line_in(source: &str, key: &str, alternatives: &[&str]) -> Option<usize> {
-    if key == "download.build" {
-        return find_toml_heading(source, "build")
-            .or_else(|| find_toml_heading(source, "download"));
-    }
     let leaf = key.rsplit('.').next().unwrap_or(key);
     let mut current_table = String::new();
     source.lines().enumerate().find_map(|(index, line)| {
@@ -433,7 +414,6 @@ fn error(
         message: message.to_string(),
         line: ctx.source_text.as_deref().and_then(|text| {
             let alternatives: &[&str] = match source_key {
-                "download.build" => &["download", "build"],
                 key if key.starts_with("aliases.") => &["aliases"],
                 key if key.starts_with("args.") => &[key, "args"],
                 "model.path" => &["model"],
@@ -450,20 +430,6 @@ fn error(
             find_toml_line_in(text, source_key, alternatives)
         }),
     }
-}
-
-fn find_toml_heading(source: &str, heading: &str) -> Option<usize> {
-    source.lines().enumerate().find_map(|(index, line)| {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            return None;
-        }
-        (trimmed
-            .strip_prefix('[')
-            .and_then(|rest| rest.strip_suffix(']'))
-            == Some(heading))
-        .then_some(index + 1)
-    })
 }
 
 fn is_kebab_case(name: &str) -> bool {

@@ -138,33 +138,74 @@ fn regla_08_download_sin_build_requiere_repo_y_file() {
     assert_eq!(rule(&errors), ValidationRule::DownloadRequiresRepo);
 }
 
+/// Un modelo puede declarar **las dos vías** (`[download]` y `[build]`) a la
+/// vez: no es un error de catálogo.
+///
+/// La elección del camino ocurre en `ropero install models` (F5/T-25): si el
+/// modelo tiene las dos, se pregunta al usuario; con `--prio=download|build`
+/// se autoelige (global o por modelo; si el modelo no tiene ese camino, se
+/// ignora). Por tanto **el validador no debe×HECHAR nada**: la presencia de
+/// ambas tablas es un estado válido.
 #[test]
-fn regla_09_download_y_build_requieren_eleccion_de_uso() {
+fn regla_09_download_y_build_a_la_vez_es_un_estado_valido() {
     let mut model = valid();
-    model.build = Some(ropero_core::Build {
-        repo: "owner/groot".to_string(),
-        ..Default::default()
-    });
-    let errors = validate(&model, &ctx());
-    assert_eq!(rule(&errors), ValidationRule::DownloadAndBuild);
-    assert_eq!(errors[0].exit_code(), 2);
-}
-
-#[test]
-fn regla_09_permite_download_auxiliar_con_build() {
-    let mut model = valid();
-    model.download.as_mut().expect("download").repo.clear();
-    model.download.as_mut().expect("download").file.clear();
-    model.download.as_mut().expect("download").name.clear();
     model.build = Some(ropero_core::Build {
         repo: "owner/groot".to_string(),
         ..Default::default()
     });
     assert!(
-        !validate(&model, &ctx())
+        validate(&model, &ctx()).is_empty(),
+        "un TOML con [download] y [build] es válido: {:?}",
+        validate(&model, &ctx())
             .iter()
-            .any(|error| error.rule() == ValidationRule::DownloadAndBuild)
+            .map(|e| e.message())
+            .collect::<Vec<_>>()
     );
+}
+
+/// Lo mismo, pero con las dos tablas **llenas** (no sólo la tabla presente):
+/// la coexistencia no depende de qué campos declare cada una.
+#[test]
+fn regla_09_permite_download_y_build_ambos_declarados() {
+    let model = spec(
+        r#"
+[model]
+name = "groot"
+engine = "llama-server"
+context = 32768
+
+[files]
+gguf = "groot.gguf"
+
+[download]
+repo = "owner/groot"
+file = "groot.gguf"
+
+[build]
+repo = "owner/groot"
+gguf_file = "groot.gguf"
+out = "build/groot.gguf"
+"#,
+    );
+    assert!(
+        validate(&model, &ctx()).is_empty(),
+        "un TOML con [download] y [build] es válido: {:?}",
+        validate(&model, &ctx())
+            .iter()
+            .map(|e| e.message())
+            .collect::<Vec<_>>()
+    );
+}
+
+/// La regla de «download sin build» se mantiene: `[download]` sola exige
+/// `repo` (y `file` si el formato es gguf).
+#[test]
+fn regla_08_download_sin_build_sigue_exigiendo_repo() {
+    let mut model = valid();
+    model.build = None;
+    model.download.as_mut().expect("download").repo.clear();
+    let errors = validate(&model, &ctx());
+    assert_eq!(rule(&errors), ValidationRule::DownloadRequiresRepo);
 }
 
 #[test]
