@@ -96,6 +96,8 @@ pub enum Error {
         modelo: String,
         /// El fichero que se esperaba.
         file: String,
+        /// El destino que ha quedado incompleto.
+        destino: String,
     },
     /// Una ruta del catálogo **se sale** del directorio de destino.
     ///
@@ -192,8 +194,10 @@ impl fmt::Display for Error {
                 Some(codigo) => write!(f, "falló la descarga de {modelo} (hf salió con {codigo})"),
                 None => write!(f, "falló la descarga de {modelo} (hf)"),
             },
-            Error::HfSinFichero { modelo, file } => {
-                write!(f, "falló {modelo} (hf dijo OK pero no aparece {file})")
+            Error::HfSinFichero { file, destino, .. } => {
+                write!(f, "hf terminó pero {destino} está incompleto")?;
+                write!(f, "\n  no aparece {file}")?;
+                Ok(())
             }
             Error::RutaFuera {
                 modelo,

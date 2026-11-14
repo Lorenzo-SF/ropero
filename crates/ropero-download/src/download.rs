@@ -348,6 +348,7 @@ fn baja_en_staging(
         return Err(Error::HfSinFichero {
             modelo: plan.modelo.clone(),
             file: file.to_string(),
+            destino: dest.to_string_lossy().to_string(),
         });
     };
 

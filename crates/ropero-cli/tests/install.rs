@@ -458,10 +458,11 @@ fn install_models_con_prio_por_modelo_manda_sobre_el_global() {
         "--prio=download",
     ]);
     assert_eq!(code, 1, "stderr={stderr}");
-    // modelo-alpha: el global (download).
+    // modelo-alpha: el global (download). La línea de error va a stderr
+    // (R-MOD-11): stdout es para los datos.
     assert!(
-        stdout.contains("modelo-alpha: vía download"),
-        "stdout={stdout}"
+        stderr.contains("modelo-alpha: vía download"),
+        "stderr={stderr}"
     );
     // modelo-beta: el suyo (build), por encima del global.
     assert!(stdout.contains("modelo-beta: vía build"), "stdout={stdout}");
@@ -494,8 +495,8 @@ fn un_prio_ignorado_no_aborta_los_demas() {
         "stdout={stdout}"
     );
     assert!(
-        stdout.contains("modelo-beta: vía download"),
-        "stdout={stdout}"
+        stderr.contains("modelo-beta: vía download"),
+        "stderr={stderr}"
     );
     assert!(stderr.contains("se ignora"), "stderr={stderr}");
 }
@@ -520,8 +521,8 @@ fn install_models_no_dice_que_ha_instalado() {
         !stdout.contains("instalado"),
         "no puede decir que está instalado: {stdout}"
     );
-    assert!(stdout.contains("vía download"), "stdout={stdout}");
-    assert!(stdout.contains("error"), "stdout={stdout}");
+    assert!(stderr.contains("vía download"), "stderr={stderr}");
+    assert!(stderr.contains("error"), "stderr={stderr}");
     assert!(
         stderr.contains("huggingface_hub"),
         "el mensaje debe decir qué falta: {stderr}"
@@ -532,15 +533,15 @@ fn install_models_no_dice_que_ha_instalado() {
 #[test]
 fn install_models_acepta_lista_con_comas() {
     let fake = Fake::nuevo("models-comas");
-    let (code, stdout, stderr) = fake.corre(&[
+    let (code, _stdout, stderr) = fake.corre(&[
         "install",
         "models",
         "modelo-alpha,modelo-beta",
         "--prio=download",
     ]);
     assert_eq!(code, 1, "stderr={stderr}");
-    assert!(stdout.contains("modelo-alpha"), "stdout={stdout}");
-    assert!(stdout.contains("modelo-beta"), "stdout={stdout}");
+    assert!(stderr.contains("modelo-alpha"), "stderr={stderr}");
+    assert!(stderr.contains("modelo-beta"), "stderr={stderr}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -647,9 +648,13 @@ fn install_models_sin_hf_dice_que_hace_falta_hf() {
     let fake = Fake::nuevo("models-sin-hf");
     let (code, stdout, stderr) = fake.corre(&["install", "models", "modelo-alpha"]);
     assert_eq!(code, 1, "stderr={stderr}");
-    assert!(stdout.contains("falta 'hf'"), "stdout={stdout}");
+    assert!(stderr.contains("falta 'hf'"), "stderr={stderr}");
     assert!(
         stderr.contains("huggingface_hub"),
         "el mensaje no dice cómo se arregla: {stderr}"
+    );
+    assert!(
+        !stdout.contains("falta 'hf'"),
+        "el error no va a stdout (R-MOD-11): stdout={stdout}"
     );
 }

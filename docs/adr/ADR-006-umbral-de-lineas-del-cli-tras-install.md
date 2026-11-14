@@ -33,20 +33,24 @@ Con lo que se suma:
 
 La medición, sobre el código de este ciclo (no estimada):
 
-| Fichero | Antes (F3) | Ahora (F5) | Qué es |
-|---|---:|---:|---|
-| `parser.rs` | 243 | 273 | la traducción del contrato a `clap` + el orden de los tokens de `install` |
-| `commands.rs` | 287 | 287 | los comandos que hacen su trabajo |
-| `install.rs` | — | 195 | `ropero install`: los dos menús y las dos preguntas |
-| `summary.rs` | 53 | 53 | `ropero` a secas y el arranque de un modelo |
-| `main.rs` | 100 | 101 | el dispatcher y los códigos de salida |
-| `discovery.rs` | 96 | 96 | la frontera entre la CLI y el runtime |
-| **total** | **779** | **1005** | |
+| Fichero | Antes (F3) | F5 (medición del ADR) | F5 (medición real) | Qué es |
+|---|---:|---:|---:|---|
+| `parser.rs` | 243 | 273 | 273 | la traducción del contrato a `clap` + el orden de los tokens de `install` |
+| `commands.rs` | 287 | 287 | 287 | los comandos que hacen su trabajo |
+| `install.rs` | — | 195 | 260 | `ropero install`: los dos menús y las dos preguntas |
+| `summary.rs` | 53 | 53 | 53 | `ropero` a secas y el arranque de un modelo |
+| `main.rs` | 100 | 101 | 101 | el dispatcher y los códigos de salida |
+| `discovery.rs` | 96 | 96 | 96 | la frontera entre la CLI y el runtime |
+| **total** | **779** | **1005** | **1070** | |
 
-Sin comentarios ni líneas vacías son **604** líneas de código (ADR-005
-medía 529 con 770): el crecimiento son **226** líneas de las cuales 118
+Sin comentarios ni líneas vacías son **759** líneas de código (ADR-005
+medía 529 con 770): el crecimiento son **291** líneas de las cuales 169
 son comentarios. Lo que crece es **pegamento**, no lógica de negocio: por
 cada línea de lógica hay una de explanatory.
+
+La medición de la columna «F5 (medición del ADR)» era la de cuando se
+escribió este ADR; la de «F5 (medición real)» es la de hoy, tras la
+revisión de F5 (ver «Recalibración» más abajo).
 
 ## Decisión
 
@@ -68,10 +72,11 @@ recalibra el umbral, en vez de saltárselo.
 
 ### Por qué 1100 y no 1200
 
-Con 1005 líneas, un umbral de 1100 deja **95** de margen: es lo que crece
-el CLI con **un comando más** de la misma tamaño, y lo que hace que el
-test siga mordiendo. Un umbral de 1200 dejaría 191, y a ese ritmo el
-umbral dejaría de ser un límite antes de que llegue la siguiente fase.
+Con 1005 líneas (las de cuando se escribió este ADR), un umbral de 1100
+dejaba **95** de margen: es lo que crece el CLI con **un comando más** de
+la misma tamaño, y lo que hace que el test siga mordiendo. Un umbral de
+1200 dejaría 191, y a ese ritmo el umbral dejaría de ser un límite antes
+de que llegue la siguiente fase.
 
 ### Lo que se hizo para no subirlo más
 
@@ -118,7 +123,7 @@ que no se negocian:
 - **Subir el umbral a 1200.** Da holgura de sobra, pero deja de ser un
   límite: con 1005 líneas, un margen de 195 es el que hace que el test
   duela cuando se acumula código de más.
-- **Contar sólo las líneas de código (604).** Da un número más fino y
+- **Contar sólo las líneas de código (759).** Da un número más fino y
   más honesto sobre la lógica, pero **cambia la métrica** en lugar de
   calibrarla, y el cambio coincidiría con el momento en que el total se pasa. Queda para una revisión posterior, con su propio ADR.
 - **Dejar el umbral en 800 y mover `install` al runtime.** Descartado: la
@@ -127,14 +132,48 @@ que no se negocian:
 - **No medir el CLI en líneas, sino en "funciones públicas"**. Interesante,
   pero lo mismo de siempre: cambiaría la métrica en lugar de calibrarla.
 
+## Recalibración (revisión de F5)
+
+La revisión de F5 encontró un fallo de **diseño**, no de estilo: el CLI
+decidía el **modo de la descarga** (si se preguntaba el tamaño o no) y
+guardaba la **vía** en una variable que el flujo del menú ponía a
+«interactivo». Eso es **decidir en el CLI**, justo lo que este ADR
+prohíbe.
+
+La corrección se hizo **donde toca**:
+
+- la decisión de la vía y sus mensajes viven en `ropero_core::install`;
+- el **consentimiento** de la descarga es la regla de R-MOD-27 (*elegir un
+  modelo ES consentir su descarga*), y la biblioteca conserva el modo
+  interrogativo (`ropero_download::Modo::Interactivo`) para los comandos
+  que la pidan expresamente;
+- el CLI sólo **pega**: pregunta el `--prio` de los motores (un error de
+  uso) y llama a la descarga.
+
+El CLI crece de 1005 a **1070** líneas: 65 más, de las cuales 51 son
+comentarios y código explicativo (el resto es el `match` del `--prio` y
+el cambio de `out_line` a `err_line`). La lógica que crece se fue al
+dominio, que es lo que este ADR pedía.
+
+### El umbral: se queda en **1100**
+
+Con 1070 líneas, un umbral de 1100 deja **30** de margen. Es poco, y es
+**justo lo que tiene que ser**: este ADR existe para que el pegamento de
+la fase siguiente vaya a `ropero-core` y `ropero-runtime`, no al CLI.
+Subirlo a 1150 o 1200 sería dejar de morder justo cuando la fase
+siguiente empieza a pegar.
+
+El test `ropero_cli_under_1100_lines` **no cambia**: sigue siendo el
+número vigente, y su mensaje dice el número real en cada ejecución.
+
 ## Consecuencias
 
 - El test `ropero_cli_under_800_lines` pasa a `ropero_cli_under_1100_lines`,
   con un mensaje que dice el número real.
-- El CLI del ciclo F5 se queda en **1005** líneas, con **95** de margen.
+- El CLI del ciclo F5 se queda en **1070** líneas, con **30** de margen.
   La fase siguiente (F6, la descarga de modelos con `hf`) tiene que
   escribir su pegamento en `ropero-core` y `ropero-runtime`, no en el CLI:
-  si necesita más de 95 líneas de pegamento, lo que hay que mover es el
+  si necesita más de 30 líneas de pegamento, lo que hay que mover es el
   pegamento, no el contrato.
 - La decisión de que la superficie del contrato viva en
   `ropero_core::surface` (y el parser sea una traducción de ella) sigue

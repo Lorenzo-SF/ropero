@@ -198,6 +198,24 @@ fn los_dos_valores_validos_se_parsean() {
     assert_eq!(Via::parse("build"), Ok(Via::Build));
 }
 
+/// El valor recibido aparece **íntegro** en el mensaje: no se recorta
+/// (doc B §4.10.7).
+#[test]
+fn el_valor_de_prio_invalido_aparece_integro() {
+    let error = Via::parse(" fast ").expect_err("debe fallar");
+    assert_eq!(
+        error,
+        Error::PrioInvalido {
+            valor: " fast ".to_string()
+        },
+        "el valor se ha recortado: {error}"
+    );
+    assert!(
+        error.to_string().contains(" fast "),
+        "el mensaje no dice el valor recibido tal cual: {error}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // La decisión de vía
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,6 +288,13 @@ fn un_modelo_sin_vias_es_error() {
     assert!(texto.contains("vacio"), "{texto}");
     assert!(texto.contains("[download]"), "{texto}");
     assert!(texto.contains("[build]"), "{texto}");
+    // R-MOD-26: un modelo sin vías es un error de uso (exit 2): su
+    // artefacto se consigue a mano.
+    assert_eq!(error.exit_code(), 2, "un modelo sin vías es error de uso");
+    assert!(
+        texto.contains("a mano"),
+        "el mensaje no dice cómo se consigue el artefacto: {texto}"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
