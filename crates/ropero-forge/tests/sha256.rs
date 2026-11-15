@@ -40,3 +40,34 @@ fn el_sha256_de_un_fichero_que_no_esta() {
         None
     );
 }
+
+/// El hash de un fichero es el de sus bytes, se lea como se lea: el
+/// fichero se lee **por bloques** (no se copia entero en memoria) y el
+/// hash sale igual.
+#[test]
+fn el_sha256_de_un_fichero_es_el_de_sus_bytes() {
+    let datos: Vec<u8> = (0..100_000u32).map(|n| (n % 251) as u8).collect();
+    let base = std::env::temp_dir().join(format!("ropero-forge-sha256-{}", std::process::id()));
+    std::fs::create_dir_all(&base).expect("crear el directorio");
+    let ruta = base.join("imatrix.dat");
+    std::fs::write(&ruta, &datos).expect("escribir el fichero");
+
+    assert_eq!(
+        sha256::sha256_de(&ruta),
+        Some(sha256::sha256(&datos)),
+        "el hash del fichero no es el de sus bytes"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// El hash por partes: alimentar el hash a trozos da el mismo hash que
+/// darle el fichero entero de una vez.
+#[test]
+fn el_sha256_por_partes_es_el_mismo() {
+    let datos: Vec<u8> = (0..5_000u32).map(|n| (n % 97) as u8).collect();
+    let mut hash = sha256::Sha256::nuevo();
+    for trozo in datos.chunks(37) {
+        hash.actualiza(trozo);
+    }
+    assert_eq!(hash.finalize(), sha256::sha256(&datos));
+}
