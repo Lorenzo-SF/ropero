@@ -18,17 +18,17 @@
 //!
 //! ```text
 //! ESTADO DE LA MÁQUINA
-//!   recurso   reloj      temperatura
-//!   ────────────────────────────────────────
-//!   CPU       3.40 GHz   58.00 °C
-//!   dGPU      2.10 GHz   45.00 °C
+//!   recurso          reloj  temperatura
+//!   ───────────────────────────────────
+//!   CPU           3.40 GHz     58.00 °C
+//!   dGPU          2.10 GHz     45.00 °C
 //!     NVIDIA GeForce RTX 5080
-//!   iGPU      no disponible
+//!   iGPU     no disponible
 //!
-//!   recurso   uso         total
-//!   ────────────────────────────────────────
+//!   recurso          uso        total
+//!   ─────────────────────────────────
 //!   RAM       8192.00 MB  32768.00 MB
-//!   SWAP      31698.00 MB 8192.00 MB
+//!   SWAP     31698.00 MB   8192.00 MB
 //!     (incluye 31186.00 MB de zram)
 //! ```
 //!
@@ -36,6 +36,9 @@
 //! **mismo** sistema de formato del resto de la salida (doc CLI v2 §2):
 //! los números a la derecha, el texto a la izquierda y el nombre de la
 //! GPU y el zram como notas de su fila.
+//!
+//! La sección usa **un** criterio: el reloj y la temperatura son números,
+//! como el uso y el total de la memoria, y van a la derecha.
 //!
 //! ## La captura
 //!
@@ -129,11 +132,15 @@ pub fn status_text(maquina: &MachineState) -> String {
 }
 
 /// La tabla de los procesadores: la CPU y las GPUs.
+///
+/// El reloj y la temperatura son **números**: van a la derecha, como el uso
+/// y el total de la memoria. La sección usa un solo criterio (doc CLI v2
+/// §2.1).
 fn tabla_de_procesadores(maquina: &MachineState) -> Tabla {
     let mut tabla = Tabla::nivel(1)
         .columna(Columna::texto("recurso"))
-        .columna(Columna::texto("reloj"))
-        .columna(Columna::texto("temperatura"));
+        .columna(Columna::numero("reloj"))
+        .columna(Columna::numero("temperatura"));
     tabla.fila(vec![
         Celda::plana("CPU"),
         Celda::plana(format_reading(&maquina.cpu_ghz)),

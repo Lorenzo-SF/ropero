@@ -36,7 +36,7 @@ use crate::ModelSpec;
 use crate::Palette;
 use crate::catalog::Catalog;
 use crate::catalog::real_name;
-use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, Tabla};
+use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, Seccion, Tabla};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // La vía
@@ -547,6 +547,9 @@ pub struct Menu {
 /// El menú es una **tabla** del sistema de formato (doc CLI v2 §2): el
 /// número de opción se alinea a la derecha (es un número) y el nombre del
 /// motor va en su color.
+///
+/// Y lleva el **título de su sección**, como el resto de las salidas: sin
+/// título, el menú se leía como un trozo suelto de la salida.
 pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     let mut menu = Menu::default();
     let mut tabla = Tabla::nivel(1)
@@ -567,7 +570,7 @@ pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
         ]);
         menu.nombres.push(manifest.id.as_str().to_string());
     }
-    menu.lineas.extend(tabla.lineas(paleta));
+    menu.lineas.extend(lineas_de_menu(tabla, "MOTORES", paleta));
     menu
 }
 
@@ -583,6 +586,8 @@ pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
 /// Es una tabla del sistema de formato (doc CLI v2 §2), con el motor como
 /// fila de grupo. El modelo sale con su **nombre** (sin el alias): es lo
 /// que hay que escribir para elegirlo.
+///
+/// Y lleva el **título de su sección**, como el resto de las salidas.
 pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     let mut menu = Menu::default();
     let mut tabla = Tabla::nivel(1)
@@ -614,8 +619,22 @@ pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palett
             menu.nombres.push(spec.model.name.clone());
         }
     }
-    menu.lineas.extend(tabla.lineas(paleta));
+    menu.lineas.extend(lineas_de_menu(tabla, "MODELOS", paleta));
     menu
+}
+
+/// Las líneas de un menú: el **título** de su sección y la tabla debajo.
+///
+/// Sin filas no hay menú: tampoco hay título (quien lo llama avisa de que
+/// no hay nada que elegir).
+fn lineas_de_menu(tabla: Tabla, titulo: &str, paleta: &Palette) -> Vec<String> {
+    let cuerpo = tabla.lineas(paleta);
+    if cuerpo.is_empty() {
+        return Vec::new();
+    }
+    let mut seccion = Seccion::nueva(titulo);
+    seccion.cuerpo(cuerpo);
+    seccion.lineas()
 }
 
 /// Si un modelo es de **descarga manual** (R-DATA-3).

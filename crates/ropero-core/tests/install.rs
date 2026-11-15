@@ -587,6 +587,53 @@ fn el_menu_de_motores_pone_una_sola_cabecera() {
     }
 }
 
+/// El menú de motores lleva el **título de su sección**, como `ropero list`.
+///
+/// Los menús eran la única tabla de la salida sin título de sección: se
+/// leían como un trozo suelto, sin saber de qué eran.
+#[test]
+fn el_menu_de_motores_lleva_el_titulo_de_su_seccion() {
+    let llama = motor("llama-server", "naranja");
+    let motores = [MotorDelMenu {
+        manifest: &llama,
+        instalado: true,
+    }];
+    let menu = menu_engines(&motores, &Palette::plain());
+    assert_eq!(menu.lineas[0], "MOTORES");
+    // Y la tabla va un nivel más dentro, como el cuerpo de una sección.
+    assert!(
+        menu.lineas[1].starts_with("  nº"),
+        "cabecera={:?}",
+        menu.lineas[1]
+    );
+}
+
+/// El menú de modelos lleva el **título de su sección**, como `ropero list`.
+#[test]
+fn el_menu_de_modelos_lleva_el_titulo_de_su_seccion() {
+    let llama = motor("llama-server", "naranja");
+    let cat = build_catalog(vec![spec_en(CON_TAMANO, "groot.toml")], vec![]).expect("catálogo");
+    let motores = [MotorDelMenu {
+        manifest: &llama,
+        instalado: true,
+    }];
+    let menu = menu_modelos(&cat, &motores, &Palette::plain());
+    assert_eq!(menu.lineas[0], "MODELOS");
+    assert!(
+        menu.lineas[1].starts_with("  nº"),
+        "cabecera={:?}",
+        menu.lineas[1]
+    );
+}
+
+/// Sin motores no hay menú: tampoco hay título que sacar.
+#[test]
+fn el_menu_sin_motores_no_sale() {
+    let menu = menu_engines(&[], &Palette::plain());
+    assert!(menu.lineas.is_empty(), "{:?}", menu.lineas);
+    assert!(menu.nombres.is_empty(), "{:?}", menu.nombres);
+}
+
 /// La respuesta del menú acepta **números** y **nombres**.
 #[test]
 fn la_respuesta_del_menu_acepta_numeros_y_nombres() {

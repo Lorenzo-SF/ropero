@@ -572,8 +572,12 @@ fn absoluta(path: &Path) -> PathBuf {
 /// `~` y los dos decimales los pone [`ropero_core::tamano_declarado`], no
 /// esta función (si los pusiera aquí, un tamaño que ya trae `~` saldría
 /// con dos).
+///
+/// Lo que no se sabe sale como `—`, el signo de la salida entera: el `?`
+/// era otro idioma.
 pub fn pregunta_de_descarga(plan: &Plan) -> String {
-    let tamano = ropero_core::tamano_declarado(&plan.size).unwrap_or_else(|| "?".to_string());
+    let tamano = ropero_core::tamano_declarado(&plan.size)
+        .unwrap_or_else(|| ropero_core::SIN_DATO.to_string());
     format!("¿Descargar {} ({tamano})? [s/N]: ", plan.modelo)
 }
 

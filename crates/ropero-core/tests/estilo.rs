@@ -197,16 +197,6 @@ fn una_seccion_tiene_titulo_y_cuerpo() {
     );
 }
 
-/// Una sección anidada: el título va indentado.
-#[test]
-fn una_seccion_anidada_indenta_el_titulo() {
-    let seccion = Seccion::anidada("llama-server (instalado)", 1);
-    assert_eq!(
-        seccion.lineas(),
-        vec!["  llama-server (instalado)".to_string()]
-    );
-}
-
 /// Los rótulos alineados: el valor de cada par empieza en la misma columna.
 #[test]
 fn los_rotulos_alinean_los_valores() {
@@ -241,12 +231,16 @@ fn los_guiones_valen_una_columna() {
 
 /// El recorte **cierra** el color: si no, el color se derrama sobre la
 /// columna de al lado.
+///
+/// Lo cierra con el **mismo** reset que usa la paleta: el del primer plano
+/// (`39m`). Un `0m` (reset total) es otro idioma: apagaría también el fondo
+/// y los atributos que el sistema no toca.
 #[test]
 fn el_recorte_de_un_texto_coloreado_cierra_el_color() {
     let coloreado = "\x1b[38;5;220mturbo-llama\x1b[39m";
     let recortado = truncar(coloreado, 6);
     assert_eq!(ancho_visible(&recortado), 6, "recortado={recortado:?}");
-    assert!(recortado.ends_with("\u{1b}[0m"), "recortado={recortado:?}");
+    assert!(recortado.ends_with("\u{1b}[39m"), "recortado={recortado:?}");
     assert!(recortado.contains("turbo"), "recortado={recortado:?}");
 }
 
@@ -293,4 +287,57 @@ fn la_regla_cuadra_con_la_fila_coloreada() {
     for linea in &lineas[2..] {
         assert_eq!(regla, ancho_visible(linea), "linea={linea:?}");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Los bordes: el título, los controles y los emojis
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// El título de una columna **respeta su máximo**: no desborda la regla.
+///
+/// Una cabecera más ancha que su columna empuja la regla y descuadra la
+/// tabla entera: el título se recorta como los datos.
+#[test]
+fn el_titulo_de_la_columna_no_desborda_la_regla() {
+    let mut tabla = Tabla::nivel(0)
+        .columna(Columna::texto("un título de columna muy largo").maximo(10))
+        .columna(Columna::texto("modelo"));
+    tabla.fila(vec![Celda::plana("groot-o"), Celda::plana("groot")]);
+    let lineas = tabla.lineas(&Palette::plain());
+    // El título se recorta, como cualquier dato que no cabe.
+    assert!(lineas[0].contains('…'), "cabecera={:?}", lineas[0]);
+    // Y la cabecera no es más ancha que la regla.
+    assert_eq!(
+        ancho_visible(&lineas[0]),
+        ancho_visible(&lineas[1]),
+        "la cabecera desborda la regla: {lineas:?}"
+    );
+}
+
+/// Una celda **no** se parte en dos líneas (doc CLI v2 §2.1).
+///
+/// El tabulador y el salto de línea se sustituyen por un espacio: lo que
+/// no cabe en la rejilla se recorta, y lo que la rompe se sustituye.
+#[test]
+fn la_celda_no_lleva_saltos_ni_tabuladores() {
+    let mut tabla = Tabla::nivel(0).columna(Columna::texto("modelo"));
+    tabla.fila(vec![Celda::plana("groot\to\nd3mini")]);
+    let lineas = tabla.lineas(&Palette::plain());
+    assert_eq!(lineas.len(), 3, "la celda parte la tabla: {lineas:?}");
+    assert!(!lineas[2].contains('\t'), "linea={:?}", lineas[2]);
+    assert!(!lineas[2].contains('\n'), "linea={:?}", lineas[2]);
+    assert_eq!(lineas[2], "groot o d3mini");
+}
+
+/// Los emojis miden lo que miden en la pantalla.
+#[test]
+fn los_emojis_miden_lo_que_miden() {
+    // El signo de advertencia es de los anchos: ocupa dos columnas.
+    assert_eq!(ancho_visible("⚠"), 2);
+    assert_eq!(ancho_visible("⚠️"), 2);
+    // Un modificador de tono de piel no ocupa columna: va pegado al emoji.
+    assert_eq!(ancho_visible("👍🏽"), 2);
+    assert_eq!(ancho_visible("👋🏻"), 2);
+    // Y el emoji con su selector de variación sigue midiendo dos.
+    assert_eq!(ancho_visible("🚀"), 2);
 }

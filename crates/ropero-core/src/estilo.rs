@@ -20,14 +20,15 @@
 //!
 //! 1. El **ancho visible** es el que ocupa el texto en la pantalla: los
 //!    códigos ANSI no cuentan, los caracteres anchos (CJK, emojis) valen dos
-//!    y los acentos combinantes, ninguno.
+//!    y los acentos combinantes y los modificadores de tono de piel, ninguno.
 //! 2. Los datos **numéricos** se alinean a la **derecha**; los de texto, a la
 //!    **izquierda**.
 //! 3. El texto que no cabe se **recorta** con `…`: nunca se parte en dos
-//!    líneas.
+//!    líneas. El título de una columna se recorta como sus datos y un
+//!    tabulador o un salto de línea se sustituyen por un espacio.
 //! 4. Las líneas **no** llevan espacios al final.
 //! 5. El **color** es el de la leyenda de motores (doc CLI v2 §4) y sólo se
-//!    usa en el **nombre del motor**.
+//!    usa en el **nombre del motor**. Se cierra con un único reset.
 //! 6. La sangría es de **dos espacios** por nivel; un título de sección va en
 //!    el margen y su cuerpo, un nivel más dentro.
 //!
@@ -37,19 +38,25 @@
 //! vive en el core y se puede probar sin máquina.
 
 use crate::EngineColor;
-use crate::palette::Palette;
+use crate::palette::{CIERRE, Palette};
 
 /// La sangría de un nivel: dos espacios.
-pub const SANGRIA: &str = "  ";
+const SANGRIA: &str = "  ";
 
 /// El hueco entre dos columnas de una tabla.
-pub const HUECO: &str = "  ";
+const HUECO: &str = "  ";
 
 /// La regla que separa la cabecera de las filas.
-pub const REGLA: &str = "─";
+const REGLA: &str = "─";
 
 /// Lo que se pone donde el texto se recorta.
-pub const TRUNCADO: &str = "…";
+const TRUNCADO: &str = "…";
+
+/// Lo que se pone donde el dato **no se sabe**.
+///
+/// Es el signo de la salida entera (doc CLI v2 §2.1): `—`. Lo que no se
+/// sabe no se inventa ni se pregunta con otro signo.
+pub const SIN_DATO: &str = "—";
 
 /// El ancho máximo de una columna, en columnas visibles.
 ///
@@ -115,10 +122,32 @@ fn ancho_de_caracter(c: char) -> usize {
     1
 }
 
+/// Sustituye los controles que **parten** la celda.
+///
+/// El tabulador y el salto de línea rompen la rejilla y dividen el dato en
+/// dos líneas (doc CLI v2 §2.1: el texto nunca se parte). Se sustituyen
+/// por un espacio: la rejilla sigue cuadrando y no se pierde el dato.
+///
+/// El escape (el de los colores) **no** se toca: no parte nada y es del
+/// sistema.
+fn sanea(texto: &str) -> String {
+    if !texto.contains(['\t', '\n', '\r']) {
+        return texto.to_string();
+    }
+    texto
+        .chars()
+        .map(|c| match c {
+            '\t' | '\n' | '\r' => ' ',
+            otro => otro,
+        })
+        .collect()
+}
+
 /// Los rangos que **no** ocupan columna.
 ///
 /// Son los acentos combinantes (los de las tildes y los de las vocales de
-/// otros idiomas), los selectores de variación (los de los emojis) y los
+/// otros idiomas), los selectores de variación (los de los emojis), los
+/// modificadores de tono de piel (los que van pegados a un emoji) y los
 /// espacios de ancho cero.
 fn es_de_ancho_cero(cp: u32) -> bool {
     matches!(
@@ -148,6 +177,7 @@ fn es_de_ancho_cero(cp: u32) -> bool {
             | 0x0E47..=0x0E4E
             | 0x1AB0..=0x1AFF
             | 0x1DC0..=0x1DFF
+            | 0x1F3FB..=0x1F3FF // modificadores de tono de piel
             | 0x200B..=0x200F // ancho cero, ZWNJ, ZWJ
             | 0x2060..=0x2064
             | 0x20D0..=0x20F0 // marcas de símbolos
@@ -175,7 +205,7 @@ fn es_de_ancho_doble(cp: u32) -> bool {
             | 0x2648..=0x2653
             | 0x267F
             | 0x2693
-            | 0x26A1
+            | 0x26A0..=0x26A1
             | 0x26AA..=0x26AB
             | 0x26BD..=0x26BE
             | 0x26C4..=0x26C5
@@ -260,8 +290,9 @@ pub fn truncar(texto: &str, ancho: usize) -> String {
     }
     out.push_str(TRUNCADO);
     if con_color {
-        // El color se cierra: si no, se derrama sobre lo que venga después.
-        out.push_str("\u{1b}[0m");
+        // El color se cierra con el **único** reset del sistema (el de la
+        // paleta): si no, se derrama sobre lo que venga después.
+        out.push_str(CIERRE);
     }
     out
 }
@@ -305,9 +336,13 @@ pub struct Celda {
 
 impl Celda {
     /// Una celda sin color.
+    ///
+    /// El texto se **sanea**: un tabulador o un salto de línea partirían la
+    /// celda en dos líneas (doc CLI v2 §2.1).
     pub fn plana(texto: impl Into<String>) -> Self {
+        let texto = texto.into();
         Celda {
-            texto: texto.into(),
+            texto: sanea(&texto),
             color: None,
             sufijo: String::new(),
         }
@@ -318,8 +353,9 @@ impl Celda {
     /// Es el **único** sitio donde se pinta: el color es de la leyenda de
     /// motores y no se usa para nada más.
     pub fn motor(texto: impl Into<String>, color: EngineColor) -> Self {
+        let texto = texto.into();
         Celda {
-            texto: texto.into(),
+            texto: sanea(&texto),
             color: Some(color),
             sufijo: String::new(),
         }
@@ -334,10 +370,12 @@ impl Celda {
         sufijo: impl Into<String>,
         color: EngineColor,
     ) -> Self {
+        let nombre = nombre.into();
+        let sufijo = sufijo.into();
         Celda {
-            texto: nombre.into(),
+            texto: sanea(&nombre),
             color: Some(color),
-            sufijo: sufijo.into(),
+            sufijo: sanea(&sufijo),
         }
     }
 
@@ -436,11 +474,6 @@ pub struct Anchos {
 }
 
 impl Anchos {
-    /// Los anchos de una tabla.
-    pub fn de_tabla(tabla: &Tabla) -> Self {
-        tabla.anchos()
-    }
-
     /// Los anchos de varias tablas: **el mayor** de cada columna.
     ///
     /// Así las tablas de una misma salida (los grupos de un listado) salen
@@ -550,6 +583,10 @@ impl Tabla {
     /// Las líneas de la tabla, con los anchos dados.
     ///
     /// Una tabla sin filas no imprime nada: ni cabecera ni regla.
+    ///
+    /// Una tabla **sin columnas** tampoco lleva cabecera: no hay nada que
+    /// etiquetar. Es lo que necesitan las tablas de sólo grupos (los
+    /// motores plegados del listado).
     pub fn lineas_con(&self, anchos: &Anchos, paleta: &Palette) -> Vec<String> {
         if self.filas.is_empty() {
             return Vec::new();
@@ -557,19 +594,27 @@ impl Tabla {
         let sangria = SANGRIA.repeat(self.nivel);
         let ancho_total = self.ancho_total(anchos);
         let mut out: Vec<String> = Vec::with_capacity(self.filas.len() + 2);
-        // La cabecera.
-        let cabecera: Vec<String> = self
-            .columnas
-            .iter()
-            .enumerate()
-            .map(|(i, columna)| rellena(columna.titulo(), anchos.columna(i), columna.alineacion()))
-            .collect();
-        out.push(sin_espacios_finales(&format!(
-            "{sangria}{}",
-            cabecera.join(HUECO)
-        )));
-        // La regla.
-        out.push(format!("{sangria}{}", REGLA.repeat(ancho_total)));
+        // La cabecera y su regla.
+        if !self.columnas.is_empty() {
+            let cabecera: Vec<String> = self
+                .columnas
+                .iter()
+                .enumerate()
+                .map(|(i, columna)| {
+                    let ancho = anchos.columna(i);
+                    // El título se recorta como los datos: si no, desborda
+                    // la regla de su columna.
+                    let titulo = truncar(columna.titulo(), ancho);
+                    rellena(&titulo, ancho, columna.alineacion())
+                })
+                .collect();
+            out.push(sin_espacios_finales(&format!(
+                "{sangria}{}",
+                cabecera.join(HUECO)
+            )));
+            // La regla.
+            out.push(format!("{sangria}{}", REGLA.repeat(ancho_total)));
+        }
         // Las filas.
         for (indice, fila) in self.filas.iter().enumerate() {
             match fila {
@@ -601,7 +646,7 @@ impl Tabla {
                 Fila::Grupo(celda) => {
                     // La regla separa un grupo del siguiente: el primer
                     // grupo ya lo separa la regla de la cabecera.
-                    if indice > 0 {
+                    if indice > 0 && ancho_total > 0 {
                         out.push(format!("{sangria}{}", REGLA.repeat(ancho_total)));
                     }
                     let pintado = match celda.color() {
@@ -653,15 +698,6 @@ impl Seccion {
         Seccion {
             titulo: titulo.into(),
             nivel: 0,
-            cuerpo: Vec::new(),
-        }
-    }
-
-    /// Una sección anidada: el título va indentado `nivel` niveles.
-    pub fn anidada(titulo: impl Into<String>, nivel: usize) -> Self {
-        Seccion {
-            titulo: titulo.into(),
-            nivel,
             cuerpo: Vec::new(),
         }
     }

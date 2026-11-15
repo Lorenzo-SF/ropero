@@ -47,9 +47,9 @@ El sistema vive en el dominio (`ropero_core::estilo`) y sus reglas son:
 
 | Regla | Qué obliga |
 |---|---|
-| **Ancho visible** | El ancho de una columna es el que ocupa el texto **en la pantalla**: los códigos ANSI no cuentan, los caracteres anchos (CJK, emojis) valen **dos** y los acentos combinantes, ninguno. |
-| **Alineación** | Los datos **numéricos** (tamaños, puertos, memoria) se alinean a la **derecha**; los de **texto**, a la **izquierda**. El título de una columna se alinea como sus datos. |
-| **Recorte** | El texto que no cabe en su columna se **recorta** con `…`: nunca se parte en dos líneas. El ancho máximo de una columna es de **36** columnas visibles. |
+| **Ancho visible** | El ancho de una columna es el que ocupa el texto **en la pantalla**: los códigos ANSI no cuentan, los caracteres anchos (CJK, emojis) valen **dos** y los acentos combinantes y los modificadores de tono de piel, ninguno. |
+| **Alineación** | Los datos **numéricos** (tamaños, puertos, memoria, relojes, temperaturas) se alinean a la **derecha**; los de **texto**, a la **izquierda**. El título de una columna se alinea como sus datos. |
+| **Recorte** | El texto que no cabe en su columna se **recorta** con `…`: nunca se parte en dos líneas. El ancho máximo de una columna es de **36** columnas visibles. El **título** de la columna se recorta como sus datos: no desborda la regla. Un tabulador o un salto de línea dentro de una celda se sustituyen por un espacio. |
 | **Cabecera** | Una tabla lleva **una** cabecera (los títulos de sus columnas) y una **regla** de `─` debajo. La cabecera sale **una sola vez** por tabla: los grupos se separan con una regla, no repiten la cabecera. |
 | **Grupos** | Un grupo (un motor) es una **fila de grupo**: una fila que ocupa toda la tabla, con su nombre en el color de la leyenda ([§4](#4-leyenda-de-motores)). Lo que va detrás del nombre (el estado del motor) va **fuera** del color. |
 | **Notas** | Lo que va debajo de una fila (el motivo de una incompatibilidad, el nombre de una GPU) es una **nota**: una línea más indentada, que no rompe la rejilla. |
@@ -72,11 +72,11 @@ Hay **dos** excepciones, y sólo dos:
 | Salida | Cómo se compone |
 |---|---|
 | `ropero` (a secas) | Secciones `MOTORES` y `MODELOS`, con los rótulos alineados. |
-| `ropero list` | Sección `MODELOS` con una tabla: `modelo`, `tamaño`, `artefacto` (y `estado` con `--all`). El motor es una fila de grupo, en su color. |
+| `ropero list` | Sección `MODELOS` con una tabla: `modelo`, `tamaño`, `artefacto` (y `estado` con `--all`). El motor es una fila de grupo, en su color. Un motor **plegado** dice su motivo debajo del nombre, como una nota. |
 | `ropero engines` | Sección `MOTORES` con una tabla: `motor`, `color`, `madurez`, `puertos`, `formatos`. El motivo de la incompatibilidad es una nota. |
 | `ropero status` | Sección `ESTADO DE LA MÁQUINA` con dos tablas: la de los procesadores y la de la memoria. |
 | `ropero doctor` | Secciones `DEPENDENCIAS DE ROPERO` y `DEPENDENCIAS DE LOS MOTORES`, con una tabla de `dependencia`, `estado` y `qué hacer`. El motor es una fila de grupo y una regla separa un motor del siguiente: la cabecera **no** se repite por motor. |
-| `ropero install` | Los menús son tablas: la del motor, con su `nº`; la del modelo, con su `nº`, `tamaño` y `artefacto`. |
+| `ropero install` | Los menús son tablas con su **sección**: `MOTORES` (la del motor, con su `nº`) y `MODELOS` (la del modelo, con su `nº`, `tamaño` y `artefacto`). El título va en el margen y la tabla, un nivel más dentro. |
 
 Un ejemplo, el listado:
 

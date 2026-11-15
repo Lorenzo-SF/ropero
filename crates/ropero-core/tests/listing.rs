@@ -383,3 +383,43 @@ fn todos_los_tamanos_de_la_lista_tienen_la_misma_forma() {
         assert_eq!(decimales.len(), 2, "tamano={tamano:?}");
     }
 }
+
+/// Los grupos **plegados** dicen el motivo **alineado**: el motivo va
+/// debajo del motor, un nivel más dentro, como una nota (doc CLI v2 §2.1).
+///
+/// Antes el motivo iba pegado al nombre del motor, a dos espacios: cada
+/// grupo lo tenía en un sitio y la columna de los motivos no era una
+/// columna.
+#[test]
+fn los_grupos_plegados_dicen_el_motivo_alineado() {
+    let snapshot = Snapshot::new(
+        vec![
+            motor(EngineId::AirLlm, EngineColor::Blanco, false, 8700),
+            motor(EngineId::MlxServe, EngineColor::Gris, false, 8300),
+        ],
+        vec![],
+    );
+    let lineas = listar(&snapshot, false);
+    // El motor plegado sale con su nombre y, debajo, el motivo.
+    let indice = lineas
+        .iter()
+        .position(|l| l.contains("airllm"))
+        .expect("el motor plegado sale");
+    assert_eq!(lineas[indice], "  airllm");
+    assert_eq!(lineas[indice + 1], "    no está instalado");
+    // Y todos los motivos empiezan en la misma columna.
+    let columnas: Vec<usize> = lineas
+        .iter()
+        .filter(|l| l.contains("no está instalado"))
+        .map(|l| columna(l, "no está"))
+        .collect();
+    assert_eq!(columnas.len(), 2, "{lineas:#?}");
+    assert!(
+        columnas.windows(2).all(|w| w[0] == w[1]),
+        "los motivos no se alinean: {columnas:?}"
+    );
+    // Ninguna línea con espacios al final.
+    for linea in &lineas {
+        assert_eq!(linea.trim_end(), linea, "linea={linea:?}");
+    }
+}
