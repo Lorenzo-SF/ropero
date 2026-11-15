@@ -167,6 +167,19 @@ pub fn ensure_toolchain(
         match del_build {
             Some(quantize) => quantize,
             None => {
+                // Ni cuantizador ni conversor: no hay motor (R-GGUF-54). Es el
+                // mismo error de siempre, y dice lo mismo: dónde se buscó y
+                // qué hacer.
+                if busqueda.convert_fork.is_none() && busqueda.convert_oficial.is_none() {
+                    return Err(Error::SinMotor {
+                        falta: "convert_hf_to_gguf.py (el conversor de pesos a GGUF)".to_string(),
+                        donde: format!(
+                            "se buscó en $LLAMA_DIR ({}) y en $LLAMA_OFFICIAL_DIR ({})",
+                            describe_dir(busqueda.dir_fork.as_deref(), "~/llama.cpp"),
+                            describe_dir(busqueda.dir_oficial.as_deref(), "~/llama.cpp-official"),
+                        ),
+                    });
+                }
                 return Err(Error::MotorIncompleto {
                     falta: "llama-quantize (el cuantizador)".to_string(),
                     donde: format!(
@@ -340,7 +353,10 @@ pub fn diagnostico(env: &ropero_core::Environment) -> Reporte {
             .map(|r| format!("({})", r.to_string_lossy()))
             .unwrap_or_else(|| "no está".to_string()),
     ));
-    match buscar(env, true) {
+    // El diagnóstico **no** necesita el conversor: informa de lo que hay, y
+    // quien sólo tiene el cuantizador tiene un motor de sobra para
+    // cuantizar (R-GGUF-55).
+    match buscar(env, false) {
         Ok(toolchain) => {
             lineas.push(format!(
                 "  => se usaría {} ({}), con el cuantizador {}",
@@ -382,7 +398,9 @@ pub fn diagnostico(env: &ropero_core::Environment) -> Reporte {
 /// pedido. Las líneas de **alias** se saltan (el nombre bueno es el
 /// canónico: ver el módulo [`crate::quants`]).
 pub fn quants_del_motor(env: &ropero_core::Environment) -> Option<(PathBuf, Vec<(u32, String)>)> {
-    let toolchain = buscar(env, true).ok()?;
+    // Los quants del motor los publica el **cuantizador**: el conversor no
+    // hace falta para nada aquí.
+    let toolchain = buscar(env, false).ok()?;
     let salida = Command::new(&toolchain.quantize)
         .arg("--help")
         .output()

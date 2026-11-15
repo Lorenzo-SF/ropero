@@ -300,6 +300,9 @@ fn sin_motor_no_se_baja_nada_y_el_error_dice_que_falta() {
 }
 
 /// El diagnóstico **sin motor**: enseña qué falta y sale con 1.
+///
+/// Sin motor no hay conversor **ni** cuantizador: el error es el de siempre
+/// («sin motor»), con su variable y su qué hacer.
 #[test]
 fn el_diagnostico_sin_motor_enseña_que_falta() {
     let dobles = Dobles::nuevo();

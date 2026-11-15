@@ -116,3 +116,60 @@ fn el_artefacto_colocado_en_el_subdirectorio_se_lista_con_su_carpeta() {
     );
     let _ = fs::remove_dir_all(&base);
 }
+
+/// **N-8**: las dos órdenes de consulta (`--list-quants` y `--diagnostico`)
+/// **no** exigen el conversor.
+///
+/// El defecto: pasaban `buscar(env, true)`, así que quien sólo tiene
+/// `llama-quantize` recibía un exit 1 en unas órdenes que no necesitaba
+/// convertir nada.
+#[test]
+fn la_consulta_no_exige_el_conversor() {
+    let (base, env) = entorno("gguf");
+    // Un motor con sólo el cuantizador (sin `convert_hf_to_gguf.py`).
+    let motor = base.join("motor");
+    let bin = motor.join("build/bin");
+    fs::create_dir_all(&bin).expect("crear el motor");
+    let quantize = bin.join("llama-quantize");
+    fs::write(
+        &quantize,
+        "#!/bin/sh\nprintf '  0  or F32\\n 15  or Q4_K_M\\n'\n",
+    )
+    .expect("escribir el cuantizador");
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&quantize, fs::Permissions::from_mode(0o755))
+        .expect("permisos del cuantizador");
+
+    let mut vars = env.vars.clone();
+    vars.insert(
+        "LLAMA_DIR".to_string(),
+        motor.to_string_lossy().into_owned(),
+    );
+    vars.insert("PATH".to_string(), bin.to_string_lossy().into_owned());
+    let env = Environment::new(vars, env.home.clone(), env.cwd.clone());
+
+    // La lista de quants: sin conversor, y sin error.
+    let reporte = listado::listar(&env, &Flags::default().con_repo("acme/modelo"));
+    assert!(
+        reporte.error.is_none(),
+        "la lista de quants exige el conversor: {:?}",
+        reporte.error
+    );
+    assert!(
+        reporte
+            .lineas
+            .iter()
+            .any(|l| l.contains("Quants del motor")),
+        "no lista los quants del motor: {:?}",
+        reporte.lineas
+    );
+
+    // El diagnóstico: sin conversor, y sin error.
+    let reporte = ropero_forge::toolchain::diagnostico(&env);
+    assert!(
+        reporte.error.is_none(),
+        "el diagnóstico exige el conversor: {:?}",
+        reporte.error
+    );
+    let _ = fs::remove_dir_all(&base);
+}

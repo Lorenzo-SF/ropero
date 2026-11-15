@@ -61,7 +61,10 @@ pub fn listar(env: &Environment, flags: &Flags) -> Reporte {
             }
         }
     }
-    match toolchain::buscar(env, true) {
+    // La lista **no** necesita el conversor: quien sólo tiene el
+    // cuantizador puede ver los quants del motor igual (R-GGUF-55: el
+    // conversor no admite sustituto, y aquí no hace falta convertir nada).
+    match toolchain::buscar(env, false) {
         Ok(_) => Reporte::nuevo(lineas),
         Err(error) => Reporte::con_error(lineas, error),
     }
