@@ -69,6 +69,13 @@ pub const MAGIC: &[u8; 4] = b"GGUF";
 /// Lo máximo que se lee para buscar `general.file_type`: la metadata está al
 /// principio, así que un MiB basta y no hace falta abrir el GGUF entero (los
 /// GGUF son de decenas de GB).
+///
+/// Con un vocabulario enorme (150 000 tokens) la metadata puede pasar de un
+/// MiB: entonces el `general.file_type` puede quedar **fuera** de lo leído, y
+/// `None` significa «no se ha podido saber» (quien llama cae al nombre del
+/// fichero). Subir el tope costaría memoria en cada lectura y no arreglaría
+/// el problema de fondo: la metadata es del principio, pero no tiene tamaño
+/// fijo.
 pub const LECTURA_METADATA: u64 = 1_048_576;
 
 // ── Los tipos de valor de la metadata (los de `gguf.h`) ────────────────────
