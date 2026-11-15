@@ -51,8 +51,8 @@ with open(os.path.join(here, "..", "conv.log"), "a") as f:
 
 /// El conversor que **sí** sabe excluir las cabeceras DFlash.
 ///
-/// El de arriba sólo menciona `no-mtp`: el que understands `no-dflash`
-/// es otro conversor, y con él el flag se le puede pasar.
+/// El de arriba sólo menciona `no-mtp`: el que entiende `no-dflash` es
+/// otro conversor, y con él el flag se le puede pasar.
 const CONVERT_CON_DFLASH: &str = r#"#!/usr/bin/env python3
 # El conversor falso: escribe la salida con la magic GGUF.
 # Este conversor entiende --no-mtp y --no-dflash (no-mtp y no-dflash aparecen aqui).
