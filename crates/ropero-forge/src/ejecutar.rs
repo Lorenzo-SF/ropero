@@ -93,10 +93,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
 
     // ── FASE 2: la conversión ──────────────────────────────────────────
     let es_entrada = matches!(peticion.fuente, Fuente::Gguf(_));
-    let intermedio_es_resultado = plan
-        .salidas
-        .first()
-        .is_some_and(|s| s.ruta == plan.intermedio);
+    // ¿El intermedio es **alguna** de las salidas? (R-GGUF-18: si el F16
+    // se pidió **como salida**, es un GGUF final y no se toca.) Mirar
+    // sólo la primera salía mal: con `--quant Q4_K_M --quant F16` la
+    // ruta del F16 coincide con la del intermedio, y la fase 5 lo
+    // borraba: se destruía un GGUF recién producido. La comprobación va
+    // **antes** de la fase 5, que es la que borra.
+    let intermedio_es_resultado = plan.salidas.iter().any(|s| s.ruta == plan.intermedio);
     if siguiente.is_some_and(|f| f == Fase::Conversion) && !es_entrada {
         fase_conversion(peticion, env, &toolchain, &plan, clase, &viab)?;
         escribe_cp(&fichero_cp, Fase::Conversion)?;
@@ -167,7 +170,9 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         if ordenes.borrar_clon {
             borra_dir(&plan.work, "borrar el clon de los pesos")?;
         }
-        if ordenes.borrar_intermedio && !intermedio_es_resultado {
+        if ordenes.borrar_intermedio {
+            // La política ya tiene en cuenta que el intermedio sea una
+            // salida (R-GGUF-18): aquí sólo se ejecuta lo que se decidió.
             borra_fichero(&plan.intermedio, "borrar el GGUF intermedio")?;
         }
     }

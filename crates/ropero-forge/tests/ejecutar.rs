@@ -369,6 +369,49 @@ fn al_fallar_la_cuantizacion_se_conserva_clon_e_intermedio() {
     );
 }
 
+/// **R-GGUF-18**: el intermedio que **es una de las salidas** (el F16
+/// pedido *junto* a un quant) **no se borra**: es un GGUF recién
+/// producido, no un intermedio.
+///
+/// El defecto: la comprobación miraba sólo la **primera** salida, así que
+/// con `--quant Q4_K_M --quant F16` la ruta del F16 coincidía con la del
+/// intermedio y la fase 5 lo borraba: se destruía un GGUF recién hecho.
+#[test]
+fn el_f16_pedido_como_salida_sobrevive_a_la_limpieza() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M", "F16"])
+        .con_imatrix(&tirada.base.join("imatrix.dat").to_string_lossy());
+    fs::write(tirada.base.join("imatrix.dat"), b"imatrix de fixture").expect("imatrix");
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    // El F16 pedido **como salida** sigue ahí: es un resultado.
+    let f16 = tirada.base.join("gguf/modelo-F16.gguf");
+    assert!(
+        f16.is_file(),
+        "el F16 pedido se borró: es una salida, no un intermedio"
+    );
+    // Y el quant de verdad, también.
+    assert!(tirada.base.join("gguf/modelo-Q4_K_M.gguf").is_file());
+}
+
+/// El F16 que es **sólo** el intermedio (nadie lo pidió) sí se borra:
+/// R-GGUF-18 dice que el intermedio se borra cuando ya no lo necesita
+/// nadie. Esta es la contramutación del test anterior.
+#[test]
+fn el_f16_que_es_solo_intermedio_se_borra() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    ejecutar::forja(&tirada.peticion(), &tirada.env).expect("la tirada");
+    assert!(
+        !tirada.base.join("gguf/modelo-F16.gguf").exists(),
+        "el intermedio se borra: nadie lo pidió"
+    );
+}
+
 /// La reanudación: tras el fallo de cuantización, la segunda tirada no
 /// vuelve a descargar ni a convertir (T-30: el checkpoint manda).
 #[test]
