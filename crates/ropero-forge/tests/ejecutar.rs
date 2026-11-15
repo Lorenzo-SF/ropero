@@ -1480,6 +1480,43 @@ fn la_tirada_repetida_sin_force_dice_ya_estaba() {
     assert!(segundo.ya_estaba);
 }
 
+/// Un GGUF ya hecho **sin sidecar** no sale con éxito (R-GGUF-19, T-34).
+///
+/// El defecto: el camino «ya está» salía con **0** y sin procedencia: un
+/// GGUF sin sidecar no se puede publicar, y la tirada no lo decía (T-34:
+/// *un GGUF sin sidecar se rechaza*).
+#[test]
+fn un_gguf_ya_hecho_sin_sidecar_no_sale_con_exito() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    // El GGUF está (de otra tirada, o copiado a mano), pero su sidecar no.
+    let salida = tirada.salida();
+    fs::create_dir_all(salida.parent().unwrap()).expect("crear el directorio de salida");
+    fs::write(&salida, {
+        let mut v = b"GGUF".to_vec();
+        v.extend(vec![0u8; 2048]);
+        v
+    })
+    .expect("escribir el GGUF");
+
+    let error = ejecutar::forja(&tirada.peticion(), &tirada.env).expect_err("sin sidecar");
+    assert!(
+        matches!(error, Error::SinSidecar { .. }),
+        "salió: {error:?}"
+    );
+    assert_eq!(
+        error.codigo(),
+        1,
+        "un GGUF sin sidecar no puede salir con 0"
+    );
+    // Y el error dice **qué hacer**.
+    let pista = error.pista().unwrap_or_default();
+    assert!(
+        pista.contains("--force"),
+        "la pista no dice cómo rehacerlo: {pista}"
+    );
+}
+
 /// Un `--gguf` local: no hay descarga ni conversión; se cuantiza desde el
 /// GGUF de entrada, y **el GGUF de entrada jamás se borra** (R-GGUF-17).
 #[test]

@@ -218,6 +218,17 @@ pub enum Error {
         /// El detalle del error.
         detalle: String,
     },
+    /// Un GGUF ya está, pero **sin sidecar**: no se puede publicar
+    /// (R-GGUF-19, T-34).
+    ///
+    /// La tirada no sale con 0 como si nada: un GGUF sin saber cómo se hizo
+    /// no se publica (T-34), y el error dice cómo arreglarlo.
+    SinSidecar {
+        /// El GGUF que está sin sidecar.
+        gguf: String,
+        /// El sidecar que falta.
+        sidecar: String,
+    },
     /// Un error de disco o de entorno.
     Disco {
         /// Qué se estaba haciendo.
@@ -300,6 +311,10 @@ impl Error {
             Error::Procedencia { dest, .. } => Some(format!(
                 "comprueba que se puede escribir {dest} (permiso y espacio en disco)"
             )),
+            Error::SinSidecar { gguf, sidecar } => Some(format!(
+                "borra {gguf} y rehaz la tirada, o rehazla con --force (así se escribe {sidecar} \
+                 otra vez)"
+            )),
             Error::Disco { .. } => Some(
                 "comprueba el disco y el entorno (permiso, espacio libre y las variables del motor)".to_string(),
             ),
@@ -380,6 +395,11 @@ impl fmt::Display for Error {
             Error::Procedencia { dest, detalle } => {
                 write!(f, "no se pudo escribir la procedencia ({dest}): {detalle}")
             }
+            Error::SinSidecar { gguf, sidecar } => write!(
+                f,
+                "el GGUF ya está, pero no tiene su sidecar: {gguf}\n  \
+                 falta {sidecar} (sin él no se puede publicar: T-34)"
+            ),
             Error::Disco { que, detalle } => write!(f, "no se pudo {que}: {detalle}"),
         }
     }
