@@ -344,7 +344,10 @@ fn el_quant_es_repetible_y_admite_coma() {
         "--quant",
         "q4_k_m,inventado",
     ]);
-    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
+    // Hallazgo 4: un quant inválido es un error de **uso**, no de ejecución:
+    // sale con 2 (lo que distingue «el comando está mal escrito» de «algo falló
+    // al ejecutarse»).
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
     assert!(
         stderr.contains("INVENTADO"),
         "no se partió la coma: {stderr}"
@@ -359,7 +362,7 @@ fn el_quant_es_repetible_y_admite_coma() {
         "--quant",
         "inventado",
     ]);
-    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
     assert!(stderr.contains("INVENTADO"), "no se repite: {stderr}");
 }
 

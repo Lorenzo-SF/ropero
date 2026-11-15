@@ -176,11 +176,11 @@ pub enum Error {
     /// El imatrix remoto **no está** donde tenía que estar: la descarga
     /// no lo dejó en la caché. No se cuantiza sin imatrix.
     ImatrixNoEsta {
-        /// El repo de donde se iba a bajar.
-        repo: String,
+        /// De dónde se esperaba: un repo (`owner/imatrix`) o el fichero local.
+        origen: String,
         /// El fichero que se pidió.
         fichero: String,
-        /// Dónde se buscó (la ruta de la caché).
+        /// Dónde se buscó (la ruta de la caché, o la ruta local).
         ruta: String,
     },
     /// Falló la conversión a GGUF.
@@ -224,13 +224,26 @@ pub enum Error {
         /// El detalle del error.
         detalle: String,
     },
+    /// El informe no puede enseñar un GGUF que **no está en disco**: el
+    /// checkpoint decía que la tirada estaba hecha, pero lo que anunció no
+    /// existe (R-GGUF-20, T-30).
+    SalidaFaltante {
+        /// Los GGUFs que el informe anunciaba y no están.
+        ggufos: Vec<String>,
+        /// Por qué no están (el checkpoint es de otra petición, o se borraron).
+        motivo: String,
+    },
 }
 
 impl Error {
     /// El **código de salida** que le corresponde (0 ok, 1 error, 2 uso).
+    ///
+    /// Un `--quant` inválido es un **argumento inválido**, o sea uso: sale con
+    /// **2** como `Error::Uso` (doc CLI v2 §3). El resto son errores de
+    /// ejecución y salen con 1.
     pub fn codigo(&self) -> i32 {
         match self {
-            Error::Uso(_) => 2,
+            Error::Uso(_) | Error::QuantInvalido { .. } => 2,
             _ => 1,
         }
     }
@@ -262,10 +275,33 @@ impl Error {
                  --imatrix-repo REPO --imatrix-file FICHERO   (a bajarlo de ahí)"
                     .to_string(),
             ),
-            Error::ImatrixNoEsta { repo, fichero, .. } => Some(format!(
-                "el imatrix no se pudo bajar de {repo}: comprueba que {fichero} existe en ese \
-                 repo, o bájalo a mano y pásalo con --imatrix FICHERO"
+            Error::ImatrixNoEsta { origen, fichero, .. } => Some(format!(
+                "el imatrix no está en {origen}: comprueba que {fichero} existe, o bájalo a mano \
+                 y pásalo con --imatrix FICHERO"
             )),
+            Error::FuenteNoEsta { fuente, .. } => Some(format!(
+                "comprueba {fuente}; si es un repo, bájalo con 'hf download OWNER/NAME' \
+                 (con HF_TOKEN si es privado)"
+            )),
+            Error::Descarga { .. } => Some(
+                "reintenta: el checkpoint reanuda por donde iba, y comprueba que 'hf' está \
+                 en el PATH y que HF_TOKEN vale para ese repo"
+                    .to_string(),
+            ),
+            Error::SalidaFaltante { ggufos, .. } => Some(format!(
+                "comprueba esas rutas: rehaz la forja con --force (el checkpoint no es de esta \
+                 petición) — {}",
+                ggufos.join(", ")
+            )),
+            Error::Verificacion { gguf, .. } => Some(format!(
+                "comprueba {gguf}; rehaz la forja con --force (no borro los pesos)"
+            )),
+            Error::Procedencia { dest, .. } => Some(format!(
+                "comprueba que se puede escribir {dest} (permiso y espacio en disco)"
+            )),
+            Error::Disco { .. } => Some(
+                "comprueba el disco y el entorno (permiso, espacio libre y las variables del motor)".to_string(),
+            ),
             // R-GGUF-16: el error dice **cómo se reintenta sólo la fase
             // cara** (y la traducción del error de imatrix, R-GGUF-14).
             Error::Conversion { reintento, .. } => Some(format!(
@@ -323,12 +359,17 @@ impl fmt::Display for Error {
                 faltan.join(", ")
             ),
             Error::ImatrixNoEsta {
-                repo,
+                origen,
                 fichero,
                 ruta,
             } => write!(
                 f,
-                "el imatrix no está: {repo}/{fichero} (se buscó en {ruta})"
+                "el imatrix no está: {origen} ({fichero}), se buscó en {ruta}"
+            ),
+            Error::SalidaFaltante { ggufos, motivo } => write!(
+                f,
+                "el informe no puede enseñar un GGUF que no existe: {}\n  {motivo}",
+                ggufos.join(", ")
             ),
             Error::Conversion { .. } => write!(f, "falló la conversión a GGUF"),
             Error::Cuantizacion { quant, .. } => write!(f, "falló la cuantización a {quant}"),
