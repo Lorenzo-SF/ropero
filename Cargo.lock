@@ -179,6 +179,7 @@ dependencies = [
  "clap",
  "ropero-core",
  "ropero-download",
+ "ropero-forge",
  "ropero-runtime",
 ]
 

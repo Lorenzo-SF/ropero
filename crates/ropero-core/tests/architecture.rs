@@ -6,11 +6,13 @@
 //!    entorno, no lanza procesos y no habla con la red (doc B §3.2.3).
 //! 2. **El grafo de dependencias del workspace no tiene ciclos** y
 //!    `ropero-core` no depende de ningún crate del workspace.
-//! 3. **`ropero-cli` mide menos de 1100 líneas** (R-ARQ-1): es un
+//! 3. **`ropero-cli` mide menos de 1200 líneas** (R-ARQ-1): es un
 //!    dispatcher, no un sitio donde viva la lógica. El umbral subió de 400
-//!    a 800 en el [ADR-005](../../docs/adr/ADR-005-umbral-de-lineas-del-cli.md)
-//!    y a 1100 en el
-//!    [ADR-006](../../docs/adr/ADR-006-umbral-de-lineas-del-cli-tras-install.md).
+//!    a 800 en el [ADR-005](../../docs/adr/ADR-005-umbral-de-lineas-del-cli.md),
+//!    a 1100 en el
+//!    [ADR-006](../../docs/adr/ADR-006-umbral-de-lineas-del-cli-tras-install.md)
+//!    y a 1200 en el
+//!    [ADR-007](../../docs/adr/ADR-007-umbral-de-lineas-del-cli-tras-gguffer.md).
 //!
 //! ## Cómo se detecta la E/S de verdad
 //!
@@ -252,22 +254,23 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
     }
 }
 
-/// `ropero-cli` mide menos de 1100 líneas.
+/// `ropero-cli` mide menos de 1200 líneas.
 ///
 /// Es un dispatcher: la lógica vive en `ropero-core` (doc B §3.3) y la E/S
 /// en `ropero-runtime`.
 ///
 /// El umbral subió de 400 a 800 en el ADR-005 (con el parser de `clap` y
-/// las doce invocaciones del contrato), y de 800 a 1100 en el ADR-006, con
-/// `ropero install`: la primera superficie con **menús interactivos**, que
-/// son pegamento y no lógica. Lo que el umbral sigue vigilando es lo
-/// mismo de siempre: que el CLI **no** se llene de lógica.
+/// las doce invocaciones del contrato), de 800 a 1100 en el ADR-006, con
+/// `ropero install`: la primera superficie con **menús interactivos**, y a
+/// 1200 en el ADR-007, con `ropero gguffer`: la primera superficie con
+/// **tres modos**. Lo que el umbral sigue vigilando es lo mismo de
+/// siempre: que el CLI **no** se llene de lógica.
 ///
-/// La medición vigente es **1070** líneas (ADR-006, «Recalibración»), así
-/// que el margen es de 30: la fase siguiente tiene que escribir su
-/// pegamento en el dominio y en el runtime.
+/// La medición vigente es **1148** líneas (ADR-007), así que el margen es
+/// de 52: la fase siguiente tiene que escribir su pegamento en el dominio
+/// y en el runtime.
 #[test]
-fn ropero_cli_under_1100_lines() {
+fn ropero_cli_under_1200_lines() {
     let cli_src = repo_root().join("crates").join("ropero-cli").join("src");
     let mut lines = 0usize;
     for file in collect_rs(&cli_src) {
@@ -275,8 +278,8 @@ fn ropero_cli_under_1100_lines() {
         lines += content.lines().count();
     }
     assert!(
-        lines < 1100,
-        "ropero-cli has {lines} lines, expected fewer than 1100 (ADR-006)"
+        lines < 1200,
+        "ropero-cli has {lines} lines, expected fewer than 1200 (ADR-007)"
     );
 }
 

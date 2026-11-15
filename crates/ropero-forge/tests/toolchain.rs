@@ -85,3 +85,105 @@ fn sin_cuantizador_el_error_dice_donde_se_busco() {
         otro => panic!("esperaba un MotorIncompleto, y salió: {otro:?}"),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El diagnóstico y la lista de quants del motor, con un motor **falso**.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// El cuantizador falso: con `--help` publica su lista de quants, como el
+/// motor de verdad.
+const QUANTIZE_FALSO: &str = r#"#!/bin/sh
+if [ "$1" = "--help" ]; then
+  echo "  0  or F32"
+  echo "  1  or F16"
+  echo " 15  or Q4_K : alias for Q4_K_M"
+  echo " 15  or Q4_K_M"
+  echo " 39  or NVFP4"
+  exit 0
+fi
+exit 0
+"#;
+
+/// Un motor falso en un directorio temporal, con su entorno.
+fn motor_falso() -> (PathBuf, ropero_core::Environment) {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static CONTADOR: AtomicU32 = AtomicU32::new(0);
+    let n = CONTADOR.fetch_add(1, Ordering::Relaxed);
+    let base =
+        std::env::temp_dir().join(format!("ropero-forge-toolchain-{}-{n}", std::process::id()));
+    let _ = fs::remove_dir_all(&base);
+    let motor = base.join("motor");
+    fs::create_dir_all(motor.join("build/bin")).expect("crear el motor");
+    fs::write(motor.join("convert_hf_to_gguf.py"), "# conversor\n").expect("el conversor");
+    let quantize = motor.join("build/bin/llama-quantize");
+    fs::write(&quantize, QUANTIZE_FALSO).expect("el cuantizador");
+    fs::set_permissions(&quantize, fs::Permissions::from_mode(0o755)).expect("permisos");
+    let mut vars = BTreeMap::new();
+    vars.insert(
+        "LLAMA_DIR".to_string(),
+        motor.to_string_lossy().into_owned(),
+    );
+    vars.insert(
+        "LLAMA_OFFICIAL_DIR".to_string(),
+        base.join("no-oficial").to_string_lossy().into_owned(),
+    );
+    vars.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    vars.insert("HOME".to_string(), base.to_string_lossy().into_owned());
+    let env = ropero_core::Environment::new(vars, base.clone(), base.clone());
+    (base, env)
+}
+
+/// Los quants que **publica el motor**: con su número de `llama_ftype`, y
+/// **sin los alias** (el nombre bueno es el canónico).
+#[test]
+fn los_quants_del_motor_se_leen_de_su_ayuda() {
+    let (base, env) = motor_falso();
+    let (ruta, quants) = toolchain::quants_del_motor(&env).expect("el motor publica quants");
+    assert!(ruta.ends_with("llama-quantize"), "dice {ruta:?}");
+    let nombres: Vec<&str> = quants.iter().map(|(_, n)| n.as_str()).collect();
+    assert!(nombres.contains(&"F16"), "dice {nombres:?}");
+    assert!(nombres.contains(&"Q4_K_M"), "dice {nombres:?}");
+    // El alias ("Q4_K") no sale: el 15 es el 15, y el nombre bueno es el
+    // canónico (ver el módulo `quants`).
+    assert!(!nombres.contains(&"Q4_K"), "dice {nombres:?}");
+    // Y el número es el `llama_ftype` del GGUF.
+    let q4 = quants
+        .iter()
+        .find(|(_, n)| n == "Q4_K_M")
+        .expect("el Q4_K_M");
+    assert_eq!(q4.0, 15);
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// El diagnóstico **sin motor**: el informe enseña dónde se buscó, y el
+/// reporte lleva el error (que es lo que hace que el comando salga con 1).
+#[test]
+fn el_diagnostico_sin_motor_lleva_el_error() {
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    vars.insert("LLAMA_DIR".to_string(), "/no/existe/fork".to_string());
+    vars.insert(
+        "LLAMA_OFFICIAL_DIR".to_string(),
+        "/no/existe/oficial".to_string(),
+    );
+    let env = ropero_core::Environment::new(vars, "/no/existe/home", "/tmp");
+    let reporte = toolchain::diagnostico(&env);
+    let informe = reporte.lineas.join("\n");
+    assert!(informe.contains("LLAMA_DIR"), "dice {informe}");
+    assert!(informe.contains("LLAMA_OFFICIAL_DIR"), "dice {informe}");
+    assert!(informe.contains("falta motor"), "dice {informe}");
+    // Y el error: el motor que falta y la variable que lo apunta.
+    let error = reporte.error.expect("el diagnóstico lleva el error");
+    match &error {
+        Error::SinMotor { falta, donde } => {
+            assert!(falta.contains("convert_hf_to_gguf.py"), "dice {falta}");
+            assert!(donde.contains("LLAMA_DIR"), "dice {donde}");
+        }
+        otro => panic!("esperaba un SinMotor, y salió: {otro:?}"),
+    }
+    assert_eq!(error.codigo(), 1);
+}
