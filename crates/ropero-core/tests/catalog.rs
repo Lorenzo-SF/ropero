@@ -47,6 +47,36 @@ fn alias_same_name_ignored() {
     assert_eq!(cat.models.len(), 1);
 }
 
+/// La fila de un alias se reconoce; la de su TOML de origen, no.
+///
+/// `es_alias` es la **única** definición de "fila de alias": el resto del
+/// core decide con ella.
+#[test]
+fn la_fila_de_alias_se_reconoce() {
+    let toml = TOML.replace("name = \"groot\"", "name = \"groot\"\nalias = \"g\"");
+    let cat = build_catalog(vec![spec(&toml)], vec![]).unwrap();
+    let original = cat
+        .models
+        .iter()
+        .find(|m| m.model.name == "groot")
+        .expect("debe estar el modelo");
+    let alias = cat
+        .models
+        .iter()
+        .find(|m| m.model.name == "g")
+        .expect("debe estar el alias");
+    assert!(!ropero_core::es_alias(original));
+    assert!(ropero_core::es_alias(alias));
+}
+
+/// Un alias no es un modelo más: la cuenta es por nombre real.
+#[test]
+fn la_cuenta_de_modelos_no_duplica_el_alias() {
+    let toml = TOML.replace("name = \"groot\"", "name = \"groot\"\nalias = \"g\"");
+    let cat = build_catalog(vec![spec(&toml)], vec![]).unwrap();
+    assert_eq!(ropero_core::cuenta_unicos(cat.models.iter()), 1);
+}
+
 #[test]
 fn alias_clash_errors() {
     let a = spec(&TOML.replace("groot", "a"));

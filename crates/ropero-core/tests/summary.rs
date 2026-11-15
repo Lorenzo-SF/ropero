@@ -141,6 +141,51 @@ fn el_resumen_distingue_lo_disponible_de_lo_instalado() {
     assert_eq!(c.modelos_instalados, 4);
 }
 
+/// Un TOML de modelo **con alias**.
+const TOML_CON_ALIAS: &str = r#"
+[model]
+name = "groot"
+engine = "llama-server"
+context = 1024
+alias = "g"
+
+[files]
+gguf = "g.gguf"
+"#;
+
+/// Un detector que dice que todo está descargado.
+struct TodoDescargado;
+
+impl ropero_core::snapshot::Detect for TodoDescargado {
+    fn engine_installed(&self, _manifest: &EngineManifest) -> bool {
+        true
+    }
+
+    fn model_downloaded(&self, _spec: &ModelSpec) -> bool {
+        true
+    }
+}
+
+/// El resumen cuenta **los TOML del catálogo**, no las filas: un alias no
+/// es un modelo más (doc CLI v2 §6.5).
+///
+/// El catálogo materializa el alias como una fila extra, así que el mismo
+/// modelo aparece dos veces; los "modelos disponibles" son los TOML, y un
+/// TOML es uno.
+#[test]
+fn el_resumen_no_cuenta_el_alias_como_otro_modelo() {
+    let spec = ropero_core::parse_model(TOML_CON_ALIAS, std::path::Path::new("models/groot.toml"))
+        .expect("parsear el modelo");
+    let catalogo = ropero_core::build_catalog(vec![spec], vec![]).expect("construir el catálogo");
+    // El alias se materializa como una fila extra...
+    assert_eq!(catalogo.models.len(), 2, "filas={}", catalogo.models.len());
+    // ...pero es el mismo modelo: el resumen dice uno.
+    let foto = ropero_core::snapshot::build_snapshot(&[], &catalogo.models, &TodoDescargado);
+    let c = counts(&foto);
+    assert_eq!(c.modelos_disponibles, 1, "el alias no es otro modelo");
+    assert_eq!(c.modelos_instalados, 1, "el alias no se cuenta dos veces");
+}
+
 /// El resumen sugiere la ayuda.
 #[test]
 fn el_resumen_sugiere_la_ayuda() {
