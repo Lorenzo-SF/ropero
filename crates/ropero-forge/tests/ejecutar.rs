@@ -328,7 +328,11 @@ impl Tirada {
     }
 }
 
-/// Un GGUF mínimo con `general.file_type` en su metadata (el tipo 6 es uint32).
+/// Un GGUF mínimo con `general.file_type` en su metadata.
+///
+/// El tipo del valor es el **4** (`UINT32`), que es lo que dice el formato
+/// GGUF (la tabla de `gguf.h`): con el 6 (que es `FLOAT32`) el lector no
+/// encontraba el KV y la clase salía del nombre del fichero.
 fn gguf_con_file_type(file_type: u32) -> Vec<u8> {
     let mut datos = Vec::new();
     datos.extend(b"GGUF");
@@ -338,7 +342,7 @@ fn gguf_con_file_type(file_type: u32) -> Vec<u8> {
     let clave = b"general.file_type";
     datos.extend((clave.len() as u64).to_le_bytes());
     datos.extend(clave);
-    datos.extend(6u32.to_le_bytes()); // tipo del valor: uint32
+    datos.extend(4u32.to_le_bytes()); // tipo del valor: uint32
     datos.extend(file_type.to_le_bytes());
     datos.extend(vec![0u8; 1024]);
     datos
