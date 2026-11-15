@@ -167,14 +167,63 @@ fn gguf_v1_contadores_32(kvs: &[(&str, u32, Valor)]) -> Vec<u8> {
 
 /// Un GGUF de fixture en un directorio limpio.
 fn fichero(datos: &[u8]) -> PathBuf {
+    let ruta = ruta_de_fixture();
+    fs::write(&ruta, datos).expect("escribir el GGUF");
+    ruta
+}
+
+/// Un GGUF de fixture **disperso**: se escriben los bytes que importan y
+/// el fichero se estira hasta `tamaño` sin ocupar disco de verdad.
+///
+/// Es lo que permite probar el tope de la lectura (un MiB) sin reservar
+/// 240 MB en RAM: el hueco del fichero no lo ocupa nada.
+fn fichero_disperso(datos: &[u8], tamaño: u64) -> PathBuf {
+    let ruta = ruta_de_fixture();
+    let mut fichero = fs::File::create(&ruta).expect("crear el GGUF");
+    use std::io::Write;
+    fichero.write_all(datos).expect("escribir el GGUF");
+    fichero.set_len(tamaño).expect("estirar el GGUF");
+    ruta
+}
+
+/// La ruta de un fixture: un directorio limpio **por fixture** (los tests
+/// corren en paralelo, y cada uno necesita el suyo).
+fn ruta_de_fixture() -> PathBuf {
     static CONTADOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = CONTADOR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let base =
         std::env::temp_dir().join(format!("ropero-forge-verificar-{}-{n}", std::process::id()));
-    let ruta = base.join("modelo.gguf");
     fs::create_dir_all(&base).expect("crear el fixture");
-    fs::write(&ruta, datos).expect("escribir el GGUF");
-    ruta
+    base.join("modelo.gguf")
+}
+
+/// Un KV con una **cadena enorme declarada** (sus bytes no están: es lo que
+/// pasa con el vocabulario de un modelo grande).
+///
+/// La clave es una de las que el lector **quiere** (`general.architecture`),
+/// así que la lectura se topa con ella y no puede seguir: la metadata queda
+/// incompleta.
+fn kv_cadena_enorme(datos: &mut Vec<u8>, clave: &str, longitud: u64) {
+    cadena(datos, clave, 8);
+    datos.extend_from_slice(&STRING.to_le_bytes());
+    datos.extend_from_slice(&longitud.to_le_bytes());
+}
+
+/// Un KV con el `general.file_type` (un uint32, **tipo 4**).
+fn kv_file_type(datos: &mut Vec<u8>, file_type: u32) {
+    cadena(datos, "general.file_type", 8);
+    datos.extend_from_slice(&UINT32.to_le_bytes());
+    datos.extend_from_slice(&file_type.to_le_bytes());
+}
+
+/// La cabecera de un GGUF de la v3, con `n_kv` KVs.
+fn cabecera_v3(n_kv: u64) -> Vec<u8> {
+    let mut datos = Vec::new();
+    datos.extend_from_slice(b"GGUF");
+    datos.extend_from_slice(&3u32.to_le_bytes()); // versión
+    datos.extend_from_slice(&0u64.to_le_bytes()); // n_tensors
+    datos.extend_from_slice(&n_kv.to_le_bytes()); // n_kv
+    datos
 }
 
 /// Borra el fixture.
@@ -415,21 +464,84 @@ fn lo_que_no_es_gguf_no_da_file_type() {
 
 /// Una **array** desmesurada no se lee entera: la lectura de la metadata
 /// está acotada y no se inventa un valor.
+///
+/// La fixture es **barata**: declara 60 millones de elementos y **no los
+/// escribe** (la anterior los escribía: 240 MB en RAM y 7 s de test). Con
+/// eso basta para probar el tope: la lectura se topa con él y no inventa
+/// nada.
 #[test]
 fn una_array_desmesurada_no_se_lee_entera() {
+    let mut datos = cabecera_v3(1);
+    cadena(&mut datos, "general.arr", 8);
+    datos.extend_from_slice(&ARRAY.to_le_bytes());
+    datos.extend_from_slice(&UINT32.to_le_bytes()); // el tipo del elemento
+    datos.extend_from_slice(&60_000_000u64.to_le_bytes()); // su número
+    // El fichero pasa del tope de la lectura (un MiB), pero es **disperso**:
+    // no reserva nada en RAM.
+    let ruta = fichero_disperso(&datos, 1_100_000);
+    assert_eq!(verificar::file_type(&ruta), None, "se inventa un file_type");
+    limpia(&ruta);
+}
+
+/// La lectura de la metadata está **acotada** (un MiB): lo que está más allá
+/// no se lee, y no se inventa.
+///
+/// El `general.file_type` va **después** de una cadena enorme: queda fuera
+/// de lo leído, así que no se sabe (y `None` no significa «F16»).
+#[test]
+fn la_lectura_de_la_metadata_esta_acotada() {
+    let mut datos = cabecera_v3(2);
+    // Una cadena enorme (el vocabulario de un modelo grande) **antes** del
+    // file_type.
+    kv_cadena_enorme(&mut datos, "general.architecture", 1_500_000);
+    kv_file_type(&mut datos, 15);
+    let ruta = fichero_disperso(&datos, 1_600_000);
+    assert_eq!(
+        verificar::file_type(&ruta),
+        None,
+        "se leyó más allá del tope de la lectura"
+    );
+    limpia(&ruta);
+}
+
+/// El `general.file_type` se lee **aunque la metadata no quepa** en la
+/// lectura: lo que se encontró, se queda.
+///
+/// El fichero es más largo que lo leído, así que lo que falta es metadata
+/// que no se ha leído (no un fichero truncado): el `file_type` que se
+/// encontró vale.
+#[test]
+fn el_file_type_se_lee_aunque_la_metadata_no_cabe() {
+    let mut datos = cabecera_v3(2);
+    kv_file_type(&mut datos, 15);
+    // Y después, una cadena que no cabe: la metadata queda incompleta.
+    kv_cadena_enorme(&mut datos, "general.architecture", 1_500_000);
+    let ruta = fichero_disperso(&datos, 1_600_000);
+    assert_eq!(
+        verificar::file_type(&ruta),
+        Some(15),
+        "se perdió el file_type por lo que no se leyó"
+    );
+    limpia(&ruta);
+}
+
+/// La cabecera **sin** `general.file_type` no es `None`: es la cabecera que
+/// se pudo leer (lo que no está, no está).
+#[test]
+fn la_cabecera_sin_file_type_no_es_none() {
     let datos = gguf(
         3,
         &[(
-            "general.arr",
-            ARRAY,
-            Valor::Array(
-                UINT32,
-                (0..60_000_000u32).map(Valor::U32).collect::<Vec<_>>(),
-            ),
+            "general.architecture",
+            STRING,
+            Valor::Str("qwen3".to_string()),
         )],
     );
     let ruta = fichero(&datos);
-    assert_eq!(verificar::file_type(&ruta), None, "se inventa un file_type");
+    let cab = verificar::cabecera(&ruta).expect("la cabecera se lee");
+    assert_eq!(cab.file_type, None, "se inventó un file_type");
+    assert_eq!(cab.arquitectura.as_deref(), Some("qwen3"));
+    assert_eq!(verificar::file_type(&ruta), None, "file_type no es None");
     limpia(&ruta);
 }
 

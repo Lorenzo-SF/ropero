@@ -8,6 +8,10 @@
 //!
 //! Es el sha256 del NIST (FIPS 180-4): el mismo que `sha256sum` y que
 //! `hashlib.sha256` de Python.
+//!
+//! Se puede hashear **por partes**: un fichero se lee por bloques de 8 KiB
+//! y se va alimentando el hash, sin copiarlo entero en memoria (ni duplicar
+//! el buffer).
 
 use std::path::Path;
 
@@ -33,18 +37,125 @@ const H: [u32; 8] = [
 /// El sha256 de unos bytes, en hexadecimal (en minúsculas, como
 /// `sha256sum`).
 pub fn sha256(datos: &[u8]) -> String {
-    let mut estado = H;
-    // El relleno: un 1 bit, los ceros que falten y el largo en bits (8
-    // bytes, big-endian) al final del último bloque.
-    let mut mensaje = datos.to_vec();
-    let largo = (datos.len() as u64).wrapping_mul(8);
-    mensaje.push(0x80);
-    while mensaje.len() % 64 != 56 {
-        mensaje.push(0);
-    }
-    mensaje.extend_from_slice(&largo.to_be_bytes());
+    let mut hash = Sha256::nuevo();
+    hash.actualiza(datos);
+    hash.finalize()
+}
 
-    for bloque in mensaje.chunks(64) {
+/// El sha256 de un fichero, en hexadecimal.
+///
+/// `None` si el fichero no se puede leer: no se inventa el hash de algo que
+/// no se ha leído.
+///
+/// El fichero se lee **por bloques** (8 KiB) y se hashea sobre la marcha: no
+/// se copia entero en memoria (ni se duplica el buffer).
+pub fn sha256_de(ruta: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut fichero = std::fs::File::open(ruta).ok()?;
+    let mut hash = Sha256::nuevo();
+    let mut buffer = [0u8; BLOQUE];
+    loop {
+        let leidos = fichero.read(&mut buffer).ok()?;
+        if leidos == 0 {
+            break;
+        }
+        hash.actualiza(&buffer[..leidos]);
+    }
+    Some(hash.finalize())
+}
+
+/// El tamaño del bloque con el que se lee un fichero: 8 KiB.
+const BLOQUE: usize = 8 * 1024;
+
+/// El sha256 **por partes** (el del NIST, FIPS 180-4).
+///
+/// Se puede ir alimentando con trozos: un fichero se lee por bloques y se
+/// hashea sobre la marcha, sin copiarlo entero en memoria.
+pub struct Sha256 {
+    /// Los ocho registros del estado.
+    estado: [u32; 8],
+    /// El bloque a medias (lo que falta por completar de 64 bytes).
+    bloque: [u8; 64],
+    /// Lo que hay en el bloque a medias.
+    usados: usize,
+    /// El largo de todo lo que se ha alimentado, en bytes.
+    largo: u64,
+}
+
+impl Sha256 {
+    /// Un sha256 **vacío** (el del NIST: `e3b0c442…`).
+    pub fn nuevo() -> Self {
+        Sha256 {
+            estado: H,
+            bloque: [0u8; 64],
+            usados: 0,
+            largo: 0,
+        }
+    }
+
+    /// Le da más datos al hash (en cualquier tamaño: se acumulan).
+    pub fn actualiza(&mut self, datos: &[u8]) {
+        self.largo = self.largo.wrapping_add(datos.len() as u64);
+        let mut resto = datos;
+        // Lo que completa el bloque a medias.
+        if self.usados > 0 {
+            let faltan = 64 - self.usados;
+            let cogidos = faltan.min(resto.len());
+            self.bloque[self.usados..self.usados + cogidos].copy_from_slice(&resto[..cogidos]);
+            self.usados += cogidos;
+            resto = &resto[cogidos..];
+            if self.usados == 64 {
+                let bloque = self.bloque;
+                self.comprime(&bloque);
+                self.usados = 0;
+            }
+        }
+        // Los bloques que van enteros.
+        while resto.len() >= 64 {
+            let (bloque, mas) = resto.split_at(64);
+            let mut entero = [0u8; 64];
+            entero.copy_from_slice(bloque);
+            self.comprime(&entero);
+            resto = mas;
+        }
+        // Y lo que queda, para el próximo trozo.
+        if !resto.is_empty() {
+            self.bloque[..resto.len()].copy_from_slice(resto);
+            self.usados = resto.len();
+        }
+    }
+
+    /// El hash, en hexadecimal (en minúsculas, como `sha256sum`).
+    pub fn finalize(mut self) -> String {
+        // El relleno: un 1 bit, los ceros que falten y el largo en bits (8
+        // bytes, big-endian) al final del último bloque.
+        let bits = self.largo.wrapping_mul(8);
+        self.bloque[self.usados] = 0x80;
+        self.usados += 1;
+        if self.usados > 56 {
+            // El relleno no cabe en este bloque: se completa y se empieza
+            // otro.
+            for byte in self.bloque.iter_mut().skip(self.usados) {
+                *byte = 0;
+            }
+            let bloque = self.bloque;
+            self.comprime(&bloque);
+            self.usados = 0;
+        }
+        for byte in self.bloque.iter_mut().take(56).skip(self.usados) {
+            *byte = 0;
+        }
+        self.bloque[56..64].copy_from_slice(&bits.to_be_bytes());
+        let bloque = self.bloque;
+        self.comprime(&bloque);
+        self.estado
+            .iter()
+            .map(|palabra| format!("{palabra:08x}"))
+            .collect()
+    }
+
+    /// Comprime un bloque de 64 bytes en el estado (el núcleo del NIST).
+    fn comprime(&mut self, bloque: &[u8; 64]) {
         let mut w = [0u32; 64];
         for (i, palabra) in bloque.chunks(4).enumerate() {
             w[i] = u32::from_be_bytes([palabra[0], palabra[1], palabra[2], palabra[3]]);
@@ -57,7 +168,7 @@ pub fn sha256(datos: &[u8]) -> String {
                 .wrapping_add(w[i - 7])
                 .wrapping_add(s1);
         }
-        let mut v = estado;
+        let mut v = self.estado;
         for i in 0..64 {
             let s1 = v[4].rotate_right(6) ^ v[4].rotate_right(11) ^ v[4].rotate_right(25);
             let eleccion = (v[4] & v[5]) ^ ((!v[4]) & v[6]);
@@ -79,20 +190,7 @@ pub fn sha256(datos: &[u8]) -> String {
             v[0] = t1.wrapping_add(t2);
         }
         for (i, palabra) in v.iter().enumerate() {
-            estado[i] = estado[i].wrapping_add(*palabra);
+            self.estado[i] = self.estado[i].wrapping_add(*palabra);
         }
     }
-    estado
-        .iter()
-        .map(|palabra| format!("{palabra:08x}"))
-        .collect()
-}
-
-/// El sha256 de un fichero, en hexadecimal.
-///
-/// `None` si el fichero no se puede leer: no se inventa el hash de algo que
-/// no se ha leído.
-pub fn sha256_de(ruta: &Path) -> Option<String> {
-    let datos = std::fs::read(ruta).ok()?;
-    Some(sha256(&datos))
 }

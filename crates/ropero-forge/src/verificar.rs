@@ -51,8 +51,11 @@
 //! ## Lo que esta lectura **no** hace
 //!
 //! - **No inventa**: si el fichero está truncado, si la versión no es 1, 2 o
-//!   3, o si el `general.file_type` no está, devuelve `None`. `None` **nunca**
-//!   significa «F16»: significa «no se ha podido leer».
+//!   3, o si el `general.file_type` no está, [`file_type`] devuelve `None`.
+//!   `None` **nunca** significa «F16»: significa «no se ha podido leer».
+//!   [`cabecera`] sí devuelve la cabecera **que ha podido leer** (sin
+//!   `file_type` si el fichero no lo dice): lo que no está, no está, y lo que
+//!   está se dice tal cual.
 //! - **No lee el fichero entero**: como mucho [`LECTURA_METADATA`] bytes
 //!   (la metadata está al principio; los GGUFs son de decenas de GB).
 
