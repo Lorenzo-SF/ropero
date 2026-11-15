@@ -461,6 +461,32 @@ fn la_tirada_completa_fabrica_el_gguf() {
     );
 }
 
+/// **R-GGUF-18**: el F16 pedido **como salida** (junto a un quant) no se
+/// borra en la limpieza: es un GGUF recién producido, no un intermedio.
+#[test]
+fn el_f16_pedido_como_salida_sobrevive_a_la_limpieza() {
+    let dobles = Dobles::nuevo();
+    dobles.con_motor();
+    dobles.repo("acme/modelo");
+    let (code, stdout, stderr) = dobles.ejecuta(&[
+        "gguffer",
+        "--repo",
+        "acme/modelo",
+        "--quant",
+        "Q4_K_M",
+        "--quant",
+        "F16",
+        "--imatrix",
+        &dobles.imatrix_fichero(),
+    ]);
+    assert_eq!(code, CODIGO_OK, "stdout={stdout} stderr={stderr}");
+    // El F16 pedido sigue ahí…
+    let f16 = dobles.base.join("gguf/modelo-F16.gguf");
+    assert!(f16.is_file(), "el F16 pedido se borró: es una salida");
+    // …y el quant de verdad también.
+    assert!(dobles.base.join("gguf/modelo-Q4_K_M.gguf").is_file());
+}
+
 /// **R-GGUF-16**: al fallar la cuantización **no se borra nada**: el clon
 /// y el intermedio se quedan, y el error dice cómo reintentar sólo la
 /// cuantización. Y el checkpoint dice por dónde se sigue (T-30).
