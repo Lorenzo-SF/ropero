@@ -45,6 +45,8 @@ pub struct Informe {
     pub cuantizo: bool,
     /// El quant **real** del GGUF final, por nombre.
     pub quant_real: String,
+    /// El quant (o los quants) que se cuantizaron, si se cuantizó.
+    pub quant_cuantizado: Option<String>,
     /// Dónde quedaron los pesos, si se conservaron.
     pub pesos_conservados: Option<PathBuf>,
     /// Ya estaba: todas las salidas existían y no se hizo nada.
@@ -72,6 +74,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
             salidas: plan.salidas.iter().map(|s| s.ruta.clone()).collect(),
             cuantizo: false,
             quant_real: clase.nombre_quant(peticion.intermedio),
+            quant_cuantizado: None,
             pesos_conservados: Some(plan.work.clone()),
             ya_estaba: true,
         });
@@ -79,7 +82,8 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
 
     // ── el checkpoint: por dónde reanudar ──────────────────────────────
     let fichero_cp = plan.work.join(CHECKPOINT);
-    let mut siguiente = match Checkpoint::de_json(&lee(&fichero_cp)) {
+    let checkpoint = Checkpoint::de_json(&lee(&fichero_cp));
+    let mut siguiente = match checkpoint {
         Some(cp) => cp.fase.siguiente(),
         None => Some(Fase::Fuente),
     };
@@ -118,7 +122,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         _ => None,
     };
     let origen_quant = entrada.unwrap_or_else(|| plan.intermedio.clone());
-    let mut cuantizo = false;
+    // Si el checkpoint dice que la cuantización **ya se hizo**, el informe
+    // lo dice (R-GGUF-20: el gguffer no miente). Antes esto sólo se
+    // actualizaba si la fase se ejecutaba, y una tirada **reanudada**
+    // (el checkpoint ya pasado la cuantización) decía «no se cuantizó»
+    // de algo que sí se cuantizó.
+    let mut cuantizo = viab.cuantizar
+        && checkpoint.is_some_and(|cp| cp.fase.orden() >= Fase::Cuantizacion.orden());
     if siguiente.is_some_and(|f| f == Fase::Cuantizacion) {
         if let Some(imx) = peticion.imatrix.as_ref()
             && viab.cuantizar
@@ -201,9 +211,21 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         salidas: plan.salidas.iter().map(|s| s.ruta.clone()).collect(),
         cuantizo,
         quant_real: clase.nombre_quant(peticion.intermedio),
+        quant_cuantizado: quant_cuantizado(&viab, cuantizo),
         pesos_conservados,
         ya_estaba: false,
     })
+}
+
+/// El quant (o los quants) que se cuantizaron de verdad.
+///
+/// Son los que la viabilidad marcó como **faltantes**: los planos (F16,
+/// BF16) son conversión de dtype, no cuantización.
+fn quant_cuantizado(viab: &plan::Viabilidad, cuantizo: bool) -> Option<String> {
+    if !cuantizo || viab.faltan.is_empty() {
+        return None;
+    }
+    Some(viab.faltan.join(", "))
 }
 
 /// El informe de una tirada, en líneas (R-GGUF-20: el mensaje honesto).
@@ -215,7 +237,12 @@ pub fn lineas(informe: &Informe) -> Vec<String> {
     for salida in &informe.salidas {
         lineas.push(format!("{}", salida.to_string_lossy()));
     }
-    if !informe.cuantizo && !informe.ya_estaba {
+    if informe.cuantizo {
+        // La verdad: se cuantizó, y a qué quant (R-GGUF-20).
+        if let Some(quant) = &informe.quant_cuantizado {
+            lineas.push(format!("cuantizado a {quant}"));
+        }
+    } else if !informe.ya_estaba {
         lineas.push(format!(
             "no se cuantizó: el GGUF ya estaba en {} (el quant pedido se perdió en la conversión)",
             informe.quant_real

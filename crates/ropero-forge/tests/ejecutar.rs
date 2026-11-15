@@ -505,6 +505,57 @@ fn sin_el_imatrix_remoto_no_se_cuantiza() {
     );
 }
 
+/// **R-GGUF-20**: el informe de una tirada **reanudada** no miente: si el
+/// checkpoint dice que la cuantización está hecha, el informe dice que se
+/// cuantizó (y con qué quant).
+///
+/// El defecto: `cuantizo` sólo se actualizaba si la fase de cuantización
+/// se **ejecutaba**; en una tirada reanudada (checkpoint posterior) se
+/// quedaba en `false` y el informe decía «no se cuantizó» de algo que sí
+/// se cuantizó.
+#[test]
+fn el_informe_de_una_tirada_reanudada_no_miente() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let mut flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"])
+        .con_imatrix(&tirada.base.join("imatrix.dat").to_string_lossy());
+    fs::write(tirada.base.join("imatrix.dat"), b"imatrix de fixture").expect("imatrix");
+    // `--keep-source`: el checkpoint sobrevive a la limpieza (sin él, con
+    // el clon borrado no queda por dónde reanudar).
+    flags.keep_source = true;
+    // La procedencia no se puede escribir (su sitio es un directorio): la
+    // tirada muere en la fase 6, con el checkpoint en «limpieza».
+    let sidecar = tirada.base.join("gguf/modelo-IQ2_M.gguf.fuente.json");
+    fs::create_dir_all(&sidecar).expect("bloquear el sidecar");
+    let peticion = Peticion::de_flags(flags.clone()).expect("la petición");
+    let error = ejecutar::forja(&peticion, &tirada.env).expect_err("la procedencia");
+    assert!(
+        matches!(error, Error::Procedencia { .. }),
+        "salió: {error:?}"
+    );
+
+    // Se desbloquea y se reanuda (`--force`, que es lo que hace falta
+    // cuando las salidas ya están: si no, la tirada dice «ya está»).
+    fs::remove_dir(&sidecar).expect("desbloquear el sidecar");
+    flags.force = true;
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la reanudación");
+
+    // El informe dice la verdad: se cuantizó, y a qué quant.
+    assert!(informe.cuantizo, "el informe miente: {informe:?}");
+    let lineas = ejecutar::lineas(&informe);
+    assert!(
+        lineas.iter().any(|l| l.contains("cuantizado a IQ2_M")),
+        "las líneas no dicen qué se cuantizó: {lineas:?}"
+    );
+    assert!(
+        !lineas.iter().any(|l| l.contains("no se cuantizó")),
+        "las líneas mienten: {lineas:?}"
+    );
+}
+
 /// La reanudación: tras el fallo de cuantización, la segunda tirada no
 /// vuelve a descargar ni a convertir (T-30: el checkpoint manda).
 #[test]
