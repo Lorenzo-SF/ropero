@@ -25,6 +25,10 @@ const LOS_ONCE: &[(&str, &str)] = &[
     ),
     ("levels", "levels <modelo>"),
     ("path", "path <modelo>"),
+    (
+        "test",
+        "test [--modelo <id>] [--grupo A..F] [--test <id>] [--dimension <nombre>] [--todos]",
+    ),
 ];
 
 /// Los once comandos están en la tabla, con su forma de invocación.

@@ -250,7 +250,7 @@ fn puntua_f1(salida: &str) -> Puntuacion {
         score,
         detalle: format!(
             "{metidas}/5 restricciones · {con_contraejemplo} problema{} con \
-             contraejemplo de {problemas} · {cola}",
+             contraejemplo (de {problemas} en total) · {cola}",
             if con_contraejemplo == 1 { "" } else { "s" }
         ),
     }

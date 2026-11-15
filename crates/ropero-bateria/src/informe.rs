@@ -392,6 +392,9 @@ fn linea_test(informe: &Informe, respuesta: &RespuestaTest) -> String {
             _ => "palabras/s",
         };
         partes.push(format!("{velocidad:.1} {unidad}"));
+    } else {
+        // Sin tokens o sin tiempo no hay velocidad: se dice, no se calla.
+        partes.push("tokens/s: no disponible".to_string());
     }
     format!("{} · {} · {}", respuesta.id, titulo, partes.join(" · "))
 }
