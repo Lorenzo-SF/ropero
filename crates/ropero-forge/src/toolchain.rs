@@ -172,3 +172,166 @@ fn describe_dir(dir: Option<&Path>, defecto: &str) -> String {
         None => defecto.to_string(),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La búsqueda en el disco (la parte de E/S de la precondición)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Busca el motor en el disco y llama a [`ensure_toolchain`].
+///
+/// Es la parte de E/S de la precondición: comprueba los candidatos contra
+/// el disco (que es lo que [`ensure_toolchain`] no hace) y le pasa el
+/// resultado. `env` trae `$LLAMA_DIR`, `$LLAMA_OFFICIAL_DIR`, `$HOME` y
+/// el `PATH`.
+pub fn buscar(env: &ropero_core::Environment) -> Result<Toolchain, Error> {
+    let dir_fork = dir_del_motor(env, "LLAMA_DIR", "llama.cpp");
+    let dir_oficial = dir_del_motor(env, "LLAMA_OFFICIAL_DIR", "llama.cpp-official");
+
+    let mut busqueda = Busqueda {
+        dir_fork: dir_fork.clone(),
+        dir_oficial: dir_oficial.clone(),
+        convert_fork: dir_fork
+            .as_ref()
+            .map(|dir| dir.join("convert_hf_to_gguf.py"))
+            .filter(|candidato| candidato.is_file()),
+        convert_oficial: dir_oficial
+            .as_ref()
+            .map(|dir| dir.join("convert_hf_to_gguf.py"))
+            .filter(|candidato| candidato.is_file()),
+        quantize_en_path: buscar_en_path(env, "llama-quantize"),
+        split_en_path: buscar_en_path(env, "llama-gguf-split"),
+        ..Busqueda::default()
+    };
+    // El cuantizador del build del motor que toque: se comprueba en los
+    // dos, y [`ensure_toolchain`] elige el del motor que salga.
+    busqueda.quantize_fork = dir_fork
+        .as_ref()
+        .map(|dir| dir.join("build/bin/llama-quantize"))
+        .filter(|candidato| candidato.is_file());
+    busqueda.quantize_oficial = dir_oficial
+        .as_ref()
+        .map(|dir| dir.join("build/bin/llama-quantize"))
+        .filter(|candidato| candidato.is_file());
+    busqueda.split_en_build = dir_fork
+        .as_ref()
+        .map(|dir| dir.join("build/bin/llama-gguf-split"))
+        .filter(|candidato| candidato.is_file())
+        .or_else(|| {
+            dir_oficial
+                .as_ref()
+                .map(|dir| dir.join("build/bin/llama-gguf-split"))
+                .filter(|candidato| candidato.is_file())
+        });
+
+    ensure_toolchain(&busqueda)
+}
+
+/// El directorio de un motor: la variable de entorno, o el default bajo
+/// `$HOME`.
+fn dir_del_motor(
+    env: &ropero_core::Environment,
+    variable: &str,
+    default_bajo_home: &str,
+) -> Option<PathBuf> {
+    if let Some(dir) = env.get(variable) {
+        return Some(PathBuf::from(dir));
+    }
+    if env.home.as_os_str().is_empty() {
+        return None;
+    }
+    let dir = env.home.join(default_bajo_home);
+    dir.is_dir().then_some(dir)
+}
+
+/// Busca un ejecutable en el `PATH` del entorno.
+pub fn buscar_en_path(env: &ropero_core::Environment, herramienta: &str) -> Option<PathBuf> {
+    let path = env.get("PATH")?;
+    std::env::split_paths(path)
+        .map(|dir| dir.join(herramienta))
+        .find(|candidato| es_ejecutable(candidato))
+}
+
+/// Si una ruta es un fichero ejecutable.
+pub fn es_ejecutable(ruta: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(ruta)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// El informe del `--diagnostico`: qué motor se encuentra, dónde, qué
+/// herramientas hay y qué falta.
+///
+/// Es **sólo lectura**: un diagnóstico no toca nada (doc CLI v2 §11.2).
+pub fn diagnostico(env: &ropero_core::Environment) -> Vec<String> {
+    let dir_fork = dir_del_motor(env, "LLAMA_DIR", "llama.cpp");
+    let dir_oficial = dir_del_motor(env, "LLAMA_OFFICIAL_DIR", "llama.cpp-official");
+    let mut lineas = vec![
+        format!(
+            "  $LLAMA_DIR:           {}",
+            describe_dir(dir_fork.as_deref(), "~/llama.cpp (no está)")
+        ),
+        format!(
+            "  $LLAMA_OFFICIAL_DIR:  {}",
+            describe_dir(dir_oficial.as_deref(), "~/llama.cpp-official (no está)")
+        ),
+    ];
+    for (dir, nombre) in [
+        (dir_fork.as_ref(), "el fork"),
+        (dir_oficial.as_ref(), "el oficial"),
+    ] {
+        let Some(dir) = dir else { continue };
+        let convert = dir.join("convert_hf_to_gguf.py");
+        let quantize = dir.join("build/bin/llama-quantize");
+        let split = dir.join("build/bin/llama-gguf-split");
+        lineas.push(format!("  motor {nombre} ({}):", dir.to_string_lossy()));
+        lineas.push(format!(
+            "    conversor convert_hf_to_gguf.py: {}",
+            si_esta(&convert)
+        ));
+        lineas.push(format!(
+            "    cuantizador llama-quantize:      {}",
+            si_esta(&quantize)
+        ));
+        lineas.push(format!(
+            "    unidor llama-gguf-split:        {}",
+            si_esta(&split)
+        ));
+    }
+    lineas.push(format!(
+        "  en el PATH: llama-quantize {}, llama-gguf-split {}",
+        buscar_en_path(env, "llama-quantize")
+            .map(|r| format!("({})", r.to_string_lossy()))
+            .unwrap_or_else(|| "no está".to_string()),
+        buscar_en_path(env, "llama-gguf-split")
+            .map(|r| format!("({})", r.to_string_lossy()))
+            .unwrap_or_else(|| "no está".to_string()),
+    ));
+    match buscar(env) {
+        Ok(toolchain) => lineas.push(format!(
+            "  => se usaría {} ({}), con el cuantizador {}",
+            toolchain.motor.nombre(),
+            toolchain.motor.dir().to_string_lossy(),
+            toolchain.quantize.to_string_lossy()
+        )),
+        Err(error) => {
+            lineas.push("  => falta motor:".to_string());
+            for linea in error.to_string().lines() {
+                lineas.push(format!("     {linea}"));
+            }
+            if let Some(pista) = error.pista() {
+                lineas.push(format!("     qué hacer: {pista}"));
+            }
+        }
+    }
+    lineas
+}
+
+/// «está» / «NO está», para el diagnóstico.
+fn si_esta(ruta: &Path) -> String {
+    if ruta.is_file() {
+        format!("está ({})", ruta.to_string_lossy())
+    } else {
+        "NO está".to_string()
+    }
+}

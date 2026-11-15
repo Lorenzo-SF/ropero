@@ -218,6 +218,18 @@ pub fn sugerencia_hermanos(repo: &str) -> Vec<String> {
     ]
 }
 
+/// La ruta de la salida de un quant: `<nombre>-<QUANT>.gguf`, **sin
+/// repetir** el sufijo si el nombre ya lo trae: pedir NVFP4 del repo
+/// `acme/modelo-NVFP4` no produce `modelo-NVFP4-NVFP4` (R-GGUF-9: el
+/// GGUF ya está en ese quant, se **coloca** bajo su propio nombre).
+fn ruta_de_salida(dir: &Path, nombre: &str, quant: &str) -> PathBuf {
+    if nombre.ends_with(&format!("-{quant}")) {
+        dir.join(format!("{nombre}.gguf"))
+    } else {
+        dir.join(format!("{nombre}-{quant}.gguf"))
+    }
+}
+
 /// Qué output se espera para cada quant de una tirada (R-GGUF-4/5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Salida {
@@ -356,17 +368,16 @@ impl Plan {
                     if out.ends_with(".gguf") {
                         PathBuf::from(out)
                     } else if out.contains('/') {
-                        PathBuf::from(out.trim_end_matches('/'))
-                            .join(format!("{nombre}-{quant}.gguf"))
+                        ruta_de_salida(&PathBuf::from(out.trim_end_matches('/')), &nombre, quant)
                     } else if peticion.quants.len() == 1 {
                         // Un solo quant y `--out` como nombre: ese es el
                         // nombre del fichero.
                         out_dir.join(format!("{out}.gguf"))
                     } else {
-                        out_dir.join(format!("{nombre}-{quant}.gguf"))
+                        ruta_de_salida(&out_dir, &nombre, quant)
                     }
                 } else {
-                    out_dir.join(format!("{nombre}-{quant}.gguf"))
+                    ruta_de_salida(&out_dir, &nombre, quant)
                 }
             } else {
                 out_dir.join(format!("{nombre}-{quant}.gguf"))
