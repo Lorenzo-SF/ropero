@@ -242,6 +242,115 @@ fn la_ayuda_esta_en_espanol_y_sugiere_el_uso() {
     assert!(!stdout.contains("Options:"), "stdout={}", stdout);
 }
 
+/// Las descripciones de la ayuda van todas en la **misma columna**.
+///
+/// Antes, los comandos se describían en una columna y las opciones en
+/// otra: la ayuda se veía rota.
+#[test]
+fn la_ayuda_alinea_las_descripciones_en_una_columna() {
+    let (code, stdout, stderr) = run(&["--help"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    let mut columnas: Vec<usize> = Vec::new();
+    for linea in stdout.lines() {
+        let Some((clave, valor)) = linea.split_once(": ") else {
+            continue;
+        };
+        if clave.is_empty() || valor.is_empty() {
+            continue;
+        }
+        // Las entradas de la ayuda van un nivel dentro.
+        if !linea.starts_with("  ") || linea.starts_with("   ") {
+            continue;
+        }
+        columnas.push(linea.len() - valor.len());
+    }
+    assert!(
+        columnas.len() >= 10,
+        "la ayuda no tiene entradas suficientes: stdout={}",
+        stdout
+    );
+    let primera = columnas[0];
+    for columna in &columnas {
+        assert_eq!(
+            *columna, primera,
+            "las descripciones no se alinean en la misma columna: stdout={}",
+            stdout
+        );
+    }
+}
+
+/// La pista de la ayuda va **al final** y un nivel dentro, no en el margen.
+#[test]
+fn la_ayuda_deja_la_pista_al_final_y_no_en_el_margen() {
+    let (code, stdout, stderr) = run(&["--help"]);
+    assert_eq!(code, 0, "stderr={}", stderr);
+    let lineas: Vec<&str> = stdout.lines().collect();
+    let (indice, pista) = lineas
+        .iter()
+        .enumerate()
+        .find(|(_, l)| l.contains("ropero <comando> --help"))
+        .unwrap_or_else(|| panic!("la ayuda no sugiere el uso: stdout={stdout}"));
+    assert!(
+        pista.starts_with("  "),
+        "la pista no va un nivel dentro: {pista:?}"
+    );
+    assert_eq!(
+        indice,
+        lineas.len() - 1,
+        "la pista no está al final: stdout={stdout}"
+    );
+}
+
+/// El error de uso de `clap` sale **en español** y dice qué hacer.
+///
+/// `clap` habla inglés: su «Usage:» y su «For more information» dejaban la
+/// salida del CLI en dos idiomas.
+#[test]
+fn los_errores_de_uso_de_clap_estan_en_espanol() {
+    for argumentos in [vec!["list", "--bogus"], vec!["install", "--bogus"]] {
+        let (code, _stdout, stderr) = run(&argumentos);
+        assert_eq!(code, 2, "{argumentos:?} salió con {code}: {stderr}");
+        assert!(
+            stderr.starts_with("error: "),
+            "{argumentos:?}: el error no lleva el prefijo: {stderr}"
+        );
+        assert!(
+            stderr.contains("--bogus"),
+            "{argumentos:?}: el error no dice qué falló: {stderr}"
+        );
+        assert!(
+            stderr.contains("--help"),
+            "{argumentos:?}: el error no dice qué hacer: {stderr}"
+        );
+        // Nada de inglés.
+        for ingles in [
+            "Usage:",
+            "unexpected argument",
+            "For more information",
+            "tip:",
+        ] {
+            assert!(
+                !stderr.contains(ingles),
+                "{argumentos:?}: el error habla inglés ('{ingles}'): {stderr}"
+            );
+        }
+    }
+}
+
+/// El modelo desconocido dice **lo mismo** venga de donde venga.
+///
+/// El texto es el del dominio: el runtime y la CLI lo toman de aquí.
+#[test]
+fn el_modelo_desconocido_dice_el_texto_del_dominio() {
+    let (code, _stdout, stderr) = run(&["args", "no-existe"]);
+    assert_eq!(code, 2, "stderr={}", stderr);
+    let esperado = ropero_core::surface::unknown_model_message("no-existe");
+    assert!(
+        stderr.contains(&esperado),
+        "el mensaje no es el del dominio:\n  esperado: {esperado}\n  stderr: {stderr}"
+    );
+}
+
 /// Cada comando tiene su propio `--help`, en español.
 #[test]
 fn cada_comando_tiene_su_ayuda() {

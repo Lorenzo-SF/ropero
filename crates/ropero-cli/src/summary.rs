@@ -47,7 +47,15 @@ pub fn run_modelo(argumentos: &[String]) -> i32 {
             if let Some(mensaje) = &outcome.error {
                 ropero_core::err_line(&ropero_core::surface::usage_message("", mensaje));
             }
-            outcome.code
+            if outcome
+                .error
+                .as_deref()
+                .is_some_and(|m| m.contains("modelo desconocido"))
+            {
+                2
+            } else {
+                outcome.code
+            }
         }
     }
 }

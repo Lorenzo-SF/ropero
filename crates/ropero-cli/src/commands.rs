@@ -182,6 +182,9 @@ pub fn arranca(peticion: &ropero_runtime::RunRequest) -> i32 {
     let Ok(s) = crate::discovery::scan() else {
         return 1;
     };
+    if find(&s.catalog, &peticion.model).is_none() {
+        return unknown_model("", &peticion.model);
+    }
     ropero_runtime::arranca_todo(peticion, &s.catalog, &s.engines, &s.env)
 }
 
