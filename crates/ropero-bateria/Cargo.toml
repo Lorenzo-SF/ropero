@@ -1,0 +1,12 @@
+[package]
+name = "ropero-bateria"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# La batería es dominio puro: lee el índice como texto, puntuá la salida como
+# texto, y escribe/lee JSON a mano. Cero dependencias, cero E/S.
+[dependencies]
