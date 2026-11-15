@@ -6,12 +6,18 @@
 
 use ropero_forge::procedencia::{ImatrixInfo, MtpInfo, Procedencia};
 
+/// El sidecar dice la herramienta **que se usó de verdad** (hallazgo 6): si no
+/// hubo cuantización, no puede afirmar que se llamó al cuantizador.
+const CUANTIZA: &str = "ropero gguffer (llama.cpp llama-quantize)";
+const SIN_CUANTIZAR: &str = "ropero gguffer (sin cuantizar)";
+
 fn ejemplo() -> Procedencia {
     Procedencia {
         gguf: "modelo-IQ2_M.gguf".to_string(),
         quant: "IQ2_M".to_string(),
         fuente_repo: "acme/modelo".to_string(),
-        intermedio: "F16".to_string(),
+        intermedio: Some("F16".to_string()),
+        herramienta: CUANTIZA.to_string(),
         imatrix: Some(ImatrixInfo {
             fichero: "imatrix.dat".to_string(),
             repo: Some("alguien/imatrix".to_string()),
@@ -26,6 +32,25 @@ fn ejemplo() -> Procedencia {
 
 /// El sidecar declara el quant **por nombre** (R-GGUF-19), la fuente y la
 /// imatrix.
+/// El sidecar no afirma lo que no pasó (hallazgo 6): `intermedio` es `null` cuando
+/// no hubo conversión, `mtp` cuando no se creó, y la herramienta dice la verdad.
+#[test]
+fn el_sidecar_no_afirma_lo_que_no_pasó() {
+    let honesto = Procedencia {
+        intermedio: None,
+        herramienta: SIN_CUANTIZAR.to_string(),
+        mtp: None,
+        ..ejemplo()
+    };
+    let json = honesto.a_json();
+    assert!(json.contains("\"intermedio\": null"), "dice {json}");
+    assert!(json.contains("\"mtp\": null"), "dice {json}");
+    assert!(
+        json.contains("\"herramienta\": \"ropero gguffer (sin cuantizar)\""),
+        "dice {json}"
+    );
+}
+
 #[test]
 fn el_sidecar_declara_el_quant_por_nombre() {
     let json = ejemplo().a_json();

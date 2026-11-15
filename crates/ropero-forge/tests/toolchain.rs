@@ -14,7 +14,7 @@ use ropero_forge::toolchain::{self, Busqueda};
 /// variables (R-GGUF-55: el conversor no admite sustituto).
 #[test]
 fn sin_conversor_el_error_nombra_el_motor_y_la_variable() {
-    let error = toolchain::ensure_toolchain(&Busqueda::default()).expect_err("no hay motor");
+    let error = toolchain::ensure_toolchain(&Busqueda::default(), true).expect_err("no hay motor");
     match &error {
         Error::SinMotor { falta, donde } => {
             assert!(falta.contains("convert_hf_to_gguf.py"), "dice {falta}");
@@ -35,11 +35,14 @@ fn el_fork_manda_sobre_el_oficial() {
         quantize_fork: Some(PathBuf::from("/llama.cpp/build/bin/llama-quantize")),
         ..Busqueda::default()
     };
-    let toolchain = toolchain::ensure_toolchain(&busqueda).expect("el fork está");
-    assert_eq!(toolchain.motor.dir(), std::path::Path::new("/llama.cpp"));
+    let toolchain = toolchain::ensure_toolchain(&busqueda, true).expect("el fork está");
+    assert_eq!(
+        toolchain.motor.dir(),
+        Some(std::path::Path::new("/llama.cpp"))
+    );
     assert_eq!(
         toolchain.convert,
-        PathBuf::from("/llama.cpp/convert_hf_to_gguf.py")
+        Some(PathBuf::from("/llama.cpp/convert_hf_to_gguf.py"))
     );
     assert_eq!(
         toolchain.quantize,
@@ -59,7 +62,7 @@ fn el_oficial_sirve_cuando_el_fork_no_esta() {
         )),
         ..Busqueda::default()
     };
-    let toolchain = toolchain::ensure_toolchain(&busqueda).expect("el oficial está");
+    let toolchain = toolchain::ensure_toolchain(&busqueda, true).expect("el oficial está");
     assert!(matches!(
         toolchain.motor,
         ropero_forge::Motor::Oficial { .. }
@@ -75,7 +78,7 @@ fn sin_cuantizador_el_error_dice_donde_se_busco() {
         convert_fork: Some(PathBuf::from("/llama.cpp/convert_hf_to_gguf.py")),
         ..Busqueda::default()
     };
-    let error = toolchain::ensure_toolchain(&busqueda).expect_err("falta el cuantizador");
+    let error = toolchain::ensure_toolchain(&busqueda, true).expect_err("falta el cuantizador");
     match &error {
         Error::MotorIncompleto { falta, donde } => {
             assert!(falta.contains("llama-quantize"), "dice {falta}");
@@ -84,6 +87,59 @@ fn sin_cuantizador_el_error_dice_donde_se_busco() {
         }
         otro => panic!("esperaba un MotorIncompleto, y salió: {otro:?}"),
     }
+}
+
+/// **Hallazgo 9 (R-GGUF-55)**: el conversor es imprescindible **sólo si hay que
+/// convertir**. Con una fuente que ya es un GGUF, quien sólo tiene el
+/// cuantizador puede fabricar: la precondición no puede exigir un conversor
+/// que no se va a usar.
+#[test]
+fn sin_conversor_se_puede_cuantizar_si_no_hay_que_convertir() {
+    let busqueda = Busqueda {
+        dir_fork: Some(PathBuf::from("/llama.cpp")),
+        quantize_fork: Some(PathBuf::from("/llama.cpp/build/bin/llama-quantize")),
+        ..Busqueda::default()
+    };
+    let toolchain = toolchain::ensure_toolchain(&busqueda, false).expect("basta el cuantizador");
+    assert_eq!(toolchain.convert, None, "inventa un conversor que no está");
+    assert!(
+        matches!(toolchain.motor, ropero_forge::Motor::Fork { .. }),
+        "dice {:?}",
+        toolchain.motor
+    );
+    assert_eq!(
+        toolchain.quantize,
+        PathBuf::from("/llama.cpp/build/bin/llama-quantize")
+    );
+
+    // Y con la misma búsqueda, cuando sí hay que convertir sigue siendo
+    // imprescindible (R-GGUF-55: el conversor no admite sustituto).
+    let error = toolchain::ensure_toolchain(&busqueda, true).expect_err("hay que convertir");
+    assert!(matches!(error, Error::SinMotor { .. }), "salió: {error:?}");
+    assert!(
+        matches!(&error, Error::SinMotor { falta, .. } if falta.contains("convert_hf_to_gguf.py")),
+        "dice {error}"
+    );
+}
+
+/// **Hallazgo 9**: sin motor elegido (sólo el cuantizador en el `PATH`), el motor
+/// es `Ninguno` y no se puede afirmar un directorio que no hay.
+#[test]
+fn sin_motor_elegido_no_se_inventa_su_directorio() {
+    let busqueda = Busqueda {
+        quantize_en_path: Some(PathBuf::from("/usr/bin/llama-quantize")),
+        ..Busqueda::default()
+    };
+    let toolchain =
+        toolchain::ensure_toolchain(&busqueda, false).expect("el cuantizador en el PATH");
+    assert!(
+        matches!(toolchain.motor, ropero_forge::Motor::Ninguno),
+        "dice {:?}",
+        toolchain.motor
+    );
+    assert_eq!(toolchain.motor.dir(), None, "inventa un directorio");
+    let nombre = toolchain.motor.nombre();
+    assert!(nombre.contains("ningún"), "dice {nombre}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

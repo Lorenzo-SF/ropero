@@ -36,6 +36,11 @@ use crate::verificar;
 /// El nombre del fichero de **checkpoint** de la tirada, en el work.
 pub const CHECKPOINT: &str = ".ropero-forge.json";
 
+/// La herramienta que el sidecar declara, según lo que **de verdad** pasó
+/// (hallazgo 6): decir «llama-quantize» cuando no corrió es mentir.
+pub const HERRAMIENTA_CUANTIZA: &str = "ropero gguffer (llama.cpp llama-quantize)";
+pub const HERRAMIENTA_SIN_CUANTIZAR: &str = "ropero gguffer (sin cuantizar)";
+
 /// El resultado de una tirada.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Informe {
@@ -51,12 +56,20 @@ pub struct Informe {
     pub pesos_conservados: Option<PathBuf>,
     /// Ya estaba: todas las salidas existían y no se hizo nada.
     pub ya_estaba: bool,
+    /// La tirada **cambió** respecto al checkpoint: la petición es otra (o el
+    /// checkpoint no dice de qué petición es) y se rehace desde el principio.
+    pub cambio: Option<String>,
 }
 
 /// Fabrica los GGUFs que pide la petición.
 pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
+    // Una fuente que ya es un GGUF no pasa por el conversor: el conversor
+    // sólo hace falta si hay que convertir (R-GGUF-55), y un motor con sólo
+    // el cuantizador puede fabricar.
+    let es_entrada = matches!(peticion.fuente, Fuente::Gguf(_));
+
     // ── la precondición, ANTES de bajar nada (T-29) ────────────────────
-    let toolchain = toolchain::buscar(env)?;
+    let toolchain = toolchain::buscar(env, !es_entrada)?;
 
     // ── el preflight: clase y viabilidad, ANTES de la descarga (R-GGUF-8)
     let clase = clase_de_fuente(peticion, env)?;
@@ -68,6 +81,31 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         });
     }
 
+    // ── el checkpoint: por dónde reanudar, y **de qué petición** ───────
+    // El checkpoint sólo vale si es de esta tirada: guardaba sólo la fase, así
+    // que una petición distinta sobre la misma fuente reanudaba con el
+    // checkpoint de la anterior y anunciaba un GGUF que no estaba hecho
+    // (T-30, R-GGUF-20). Con `--force` se descarta siempre: force es pedir
+    // que se rehaga.
+    let fichero_cp = plan.work.join(CHECKPOINT);
+    let huella = peticion.huella();
+    let guardado = Checkpoint::de_json(&lee(&fichero_cp));
+    let cambio = if peticion.force {
+        Some("la petición es con --force: el checkpoint se descarta y se rehace".to_string())
+    } else if guardado.as_ref().is_some_and(|cp| !cp.es_de(&huella)) {
+        Some(format!(
+            "la petición cambió ({}): el checkpoint es de otra tirada, se rehace desde el principio",
+            peticion.canon()
+        ))
+    } else {
+        None
+    };
+    let checkpoint = if peticion.force {
+        None
+    } else {
+        guardado.filter(|cp| cp.es_de(&huella))
+    };
+
     // ── si ya existe todo, no se hace nada (ni se baja) ────────────────
     if !peticion.force && !peticion.diagnostico && ya_estan_todas(&plan) {
         return Ok(Informe {
@@ -77,13 +115,11 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
             quant_cuantizado: None,
             pesos_conservados: Some(plan.work.clone()),
             ya_estaba: true,
+            cambio,
         });
     }
 
-    // ── el checkpoint: por dónde reanudar ──────────────────────────────
-    let fichero_cp = plan.work.join(CHECKPOINT);
-    let checkpoint = Checkpoint::de_json(&lee(&fichero_cp));
-    let mut siguiente = match checkpoint {
+    let mut siguiente = match &checkpoint {
         Some(cp) => cp.fase.siguiente(),
         None => Some(Fase::Fuente),
     };
@@ -91,7 +127,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // ── FASE 1: la fuente ──────────────────────────────────────────────
     if siguiente.is_some_and(|f| f == Fase::Fuente) {
         fase_fuente(peticion, env, &plan)?;
-        escribe_cp(&fichero_cp, Fase::Fuente)?;
+        escribe_cp(&fichero_cp, Fase::Fuente, &huella)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Fuente);
 
@@ -111,7 +147,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // La fuente `--gguf` no pasa por el conversor, pero la fase está
         // hecha igual: sin este checkpoint, el fichero se queda atrás
         // («fuente») y la reanudación no sabe por dónde seguir.
-        escribe_cp(&fichero_cp, Fase::Conversion)?;
+        escribe_cp(&fichero_cp, Fase::Conversion, &huella)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Conversion);
 
@@ -121,8 +157,17 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     let entrada: Option<PathBuf> = match &peticion.fuente {
         Fuente::Gguf(gguf) if Path::new(gguf).is_file() => Some(PathBuf::from(gguf)),
         Fuente::Gguf(gguf) => {
+            // En el work el fichero conserva el nombre con el que está en el
+            // repo, con su extensión: `--gguf acme/modelo-IQ2_M` (un repo, no
+            // un fichero) deja `modelo-IQ2_M.gguf`. Sin la extensión, `origen`
+            // apuntaba a un nombre sin `.gguf` y la colocación no encontraba
+            // el fichero.
             let hoja = gguf.rsplit('/').next().unwrap_or(gguf);
-            Some(plan.work.join(hoja))
+            Some(plan.work.join(if hoja.ends_with(".gguf") {
+                hoja.to_string()
+            } else {
+                format!("{hoja}.gguf")
+            }))
         }
         _ => None,
     };
@@ -138,7 +183,9 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // puede afirmar un quant que no está en disco.
     let mut cuantizo = viab.cuantizar
         && ya_estan_todas(&plan)
-        && checkpoint.is_some_and(|cp| cp.fase.orden() >= Fase::Cuantizacion.orden());
+        && checkpoint
+            .as_ref()
+            .is_some_and(|cp| cp.fase.orden() >= Fase::Cuantizacion.orden());
     if siguiente.is_some_and(|f| f == Fase::Cuantizacion) {
         if let Some(imx) = peticion.imatrix.as_ref()
             && viab.cuantizar
@@ -147,7 +194,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         }
         fase_cuantizacion(peticion, &toolchain, &plan, clase, &viab, &origen_quant)?;
         cuantizo = viab.cuantizar;
-        escribe_cp(&fichero_cp, Fase::Cuantizacion)?;
+        escribe_cp(&fichero_cp, Fase::Cuantizacion, &huella)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Cuantizacion);
 
@@ -165,7 +212,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
                 });
             }
         }
-        escribe_cp(&fichero_cp, Fase::Verificacion)?;
+        escribe_cp(&fichero_cp, Fase::Verificacion, &huella)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Verificacion);
 
@@ -186,7 +233,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // El checkpoint se escribe ANTES de los borrados: la limpieza
         // puede borrar el work con el propio checkpoint dentro (R-GGUF-16
         // y R-GGUF-17), y entonces ya no hay nada que reanudar.
-        escribe_cp(&fichero_cp, Fase::Limpieza)?;
+        escribe_cp(&fichero_cp, Fase::Limpieza, &huella)?;
         if ordenes.borrar_clon {
             borra_dir(&plan.work, "borrar el clon de los pesos")?;
         }
@@ -201,15 +248,40 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // ── FASE 6: la procedencia (R-GGUF-19: si no se puede, falla) ──────
     if siguiente.is_some_and(|f| f == Fase::Procedencia) {
         for salida in &plan.salidas {
-            escribe_procedencia(salida, peticion, clase)?;
+            escribe_procedencia(salida, peticion, clase, es_entrada, cuantizo)?;
         }
         // El checkpoint final sólo si el work sigue ahí: la limpieza
         // pudo borrarlo con el checkpoint dentro, y entonces no hay nada
         // que reanudar — un reintento con los GGUF ya hechos cae en «ya
         // estaba» (T-30).
         if plan.work.is_dir() {
-            escribe_cp(&fichero_cp, Fase::Procedencia)?;
+            escribe_cp(&fichero_cp, Fase::Procedencia, &huella)?;
         }
+    }
+
+    // El informe no puede enseñar un GGUF que no está (T-30, R-GGUF-20).
+    // Un checkpoint de la última fase **sin la petición de la que es** no vale
+    // (se descartó arriba), pero un checkpoint de la MISMA petición cuya salida
+    // se borró después sí dejaba la tirada en 0 anunciando un fichero inexistente:
+    // la última fase no se ejecuta, el sidecar no se escribe y nadie lo comprueba.
+    let faltantes: Vec<String> = plan
+        .salidas
+        .iter()
+        .filter(|s| !s.ruta.is_file())
+        .map(|s| s.ruta.to_string_lossy().into_owned())
+        .collect();
+    if !faltantes.is_empty() {
+        return Err(Error::SalidaFaltante {
+            ggufos: faltantes,
+            motivo: format!(
+                "el checkpoint decía «{}» (de la petición {}) pero esos GGUFs no están en disco",
+                checkpoint
+                    .as_ref()
+                    .map(|cp| cp.fase.nombre())
+                    .unwrap_or("ninguna fase"),
+                huella
+            ),
+        });
     }
 
     let pesos_conservados = if ordenes.borrar_clon {
@@ -224,6 +296,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         quant_cuantizado: quant_cuantizado(&viab, cuantizo),
         pesos_conservados,
         ya_estaba: false,
+        cambio,
     })
 }
 
@@ -246,6 +319,11 @@ pub fn lineas(informe: &Informe) -> Vec<String> {
     let mut lineas = Vec::new();
     for salida in &informe.salidas {
         lineas.push(format!("{}", salida.to_string_lossy()));
+    }
+    if let Some(cambio) = &informe.cambio {
+        // Lo que cambió se dice: una tirada que se rehizo no puede parecer una
+        // reanudación (T-30).
+        lineas.push(cambio.clone());
     }
     if informe.cuantizo {
         // La verdad: se cuantizó, y a qué quant (R-GGUF-20).
@@ -311,18 +389,21 @@ fn clase_de_fuente(peticion: &Peticion, env: &Environment) -> Result<Clase, Erro
     }
 }
 
-/// La clase que se deduce del **nombre** de un GGUF.
+/// La clase de un GGUF: primero su **cabecera**, y el nombre sólo como respaldo.
 ///
-/// `modelo-IQ2_M.gguf` ya está cuantizado a IQ2_M: cuantizar encima no se
-/// puede (y pedir IQ2_M es «ya está»: se coloca y se sale 0,
-/// R-GGUF-7). Si el nombre no lleva quant, se asume pesos sin cuantizar.
+/// `general.file_type` es lo que el fichero *es* (R-GGUF-7): `modelo-BF16.gguf`
+/// puede contener un IQ2_M, y el nombre es la convención de los repos, no el
+/// contenido. Si la cabecera no se puede leer (no existe, o no es un GGUF), se
+/// cae al nombre con su separador.
 fn clase_de_gguf(gguf: &str) -> Clase {
+    let ruta = Path::new(gguf);
+    if let Some(numero) = verificar::file_type(ruta) {
+        return Clase::de_numero(numero);
+    }
     let base = gguf.trim_end_matches(".gguf");
     let hoja = base.rsplit(['/', '-']).next().unwrap_or(base);
     match quants::numero_de(hoja) {
-        Some(39) => Clase::Nvfp4,
-        Some(38) => Clase::Mxfp4,
-        Some(_) => Clase::Dequant,
+        Some(numero) => Clase::de_numero(numero),
         None => Clase::Ninguno,
     }
 }
@@ -443,6 +524,20 @@ fn fase_conversion(
     if destino.is_file() {
         return Ok(());
     }
+    // Sin conversor no hay conversión (R-GGUF-55): `convert` es `None` cuando
+    // la fuente ya es un GGUF y sólo hay que cuantizar. Llegar aquí con `None`
+    // significa que la tirada pidió convertir con un motor que sólo tiene el
+    // cuantizador: se dice, y no se finge un fichero que no existe.
+    let convert =
+        match toolchain.convert.as_ref() {
+            Some(convert) => convert,
+            None => return Err(Error::MotorIncompleto {
+                falta: "convert_hf_to_gguf.py".to_string(),
+                donde:
+                    "el motor encontrado no tiene conversor: sin él no hay conversión (R-GGUF-55)"
+                        .to_string(),
+            }),
+        };
     crea_dir(destino.parent().unwrap_or(Path::new(".")))?;
     let mut args = vec![
         plan.source_dir.to_string_lossy().into_owned(),
@@ -453,7 +548,7 @@ fn fase_conversion(
     ];
     // `--no-mtp` sólo si el conversor lo entiende: un flag que no existe
     // hace fallar el conversor con "unrecognized arguments" (R-GGUF-36).
-    if peticion.no_mtp && !el_conversor_entiende(&toolchain.convert, "no-mtp") {
+    if peticion.no_mtp && !el_conversor_entiende(convert, "no-mtp") {
         // Se avisa y se sigue sin el: el conversor viejo no lo tiene.
         crate::avisa("este conversor no sabe excluir la MTP (--no-mtp); sigo sin el");
     } else if peticion.no_mtp {
@@ -462,7 +557,7 @@ fn fase_conversion(
     // `--no-dflash` igual que `--no-mtp`: se pasa si el conversor lo
     // entiende, y si no, **se dice** (no se acepta en silencio: el
     // usuario tiene que saber que el GGUF lleva las cabeceras DFlash).
-    if peticion.no_dflash && !el_conversor_entiende(&toolchain.convert, "no-dflash") {
+    if peticion.no_dflash && !el_conversor_entiende(convert, "no-dflash") {
         crate::avisa(
             "este conversor no sabe excluir las cabeceras DFlash (--no-dflash); sigo con ellas",
         );
@@ -471,12 +566,8 @@ fn fase_conversion(
     }
     let _ = clase;
     let log = plan.work.join("conversion.log");
-    let linea = format!(
-        "python3 {} {}",
-        toolchain.convert.to_string_lossy(),
-        args.join(" ")
-    );
-    let mut argv = vec![toolchain.convert.to_string_lossy().into_owned()];
+    let linea = format!("python3 {} {}", convert.to_string_lossy(), args.join(" "));
+    let mut argv = vec![convert.to_string_lossy().into_owned()];
     argv.extend(args);
     ejecuta(&python3(env)?, &argv, &log).map_err(|cola| Error::Conversion {
         cola,
@@ -500,11 +591,18 @@ fn fase_cuantizacion(
     origen: &Path,
 ) -> Result<(), Error> {
     if !viab.cuantizar {
-        // Los quants omitidos (ya está en ese quant) se **colocan**: el
-        // intermedio es el GGUF final, se copia a su ruta (R-GGUF-7: se
-        // sale 0 sin borrar nada).
+        // Los quants que ya están en el GGUF (omitidos) y los que son planos
+        // (F32/F16/BF16: no hay quant que hacer) se **colocan**: el GGUF de
+        // origen se copia a su ruta (R-GGUF-7: se sale 0 sin borrar nada).
         for salida in &plan.salidas {
-            if viab.omitidos.contains(&salida.quant) && salida.ruta != origen {
+            if (viab.omitidos.contains(&salida.quant) || viab.planos.contains(&salida.quant))
+                && salida.ruta != origen
+                && origen.is_file()
+            {
+                // El directorio de salida puede no existir (con una fuente
+                // `--gguf` no hay conversión que lo cree): sin esto, la
+                // colocación fallaba con «no such file or directory».
+                crea_dir(salida.ruta.parent().unwrap_or(Path::new(".")))?;
                 borra_fichero(&salida.ruta, "quitar el GGUF que se rehace")?;
                 copia(
                     origen,
@@ -581,12 +679,26 @@ fn fase_cuantizacion(
 /// y el GGUF sale peor sin que nadie lo diga.
 fn ruta_imatrix(imx: &Imatrix, plan: &Plan) -> Result<PathBuf, Error> {
     match imx {
-        Imatrix::Local(fichero) => Ok(fichero.clone()),
+        // Un imatrix local también se comprueba: antes esto sólo comprobaba el
+        // remoto, y se cuantizaba a ciegas con un fichero que no existía.
+        Imatrix::Local(fichero) => {
+            if !fichero.is_file() {
+                return Err(Error::ImatrixNoEsta {
+                    origen: "el fichero local".to_string(),
+                    fichero: fichero
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    ruta: fichero.to_string_lossy().into_owned(),
+                });
+            }
+            Ok(fichero.clone())
+        }
         Imatrix::Remota { repo, file } => {
             let ruta = cache_imatrix(plan, repo, file);
             if !ruta.is_file() {
                 return Err(Error::ImatrixNoEsta {
-                    repo: repo.clone(),
+                    origen: repo.clone(),
                     fichero: file.clone(),
                     ruta: ruta.to_string_lossy().into_owned(),
                 });
@@ -633,6 +745,8 @@ fn escribe_procedencia(
     salida: &plan::Salida,
     peticion: &Peticion,
     clase: Clase,
+    es_entrada: bool,
+    cuantizo: bool,
 ) -> Result<(), Error> {
     let imatrix = peticion.imatrix.as_ref().map(|imx| match imx {
         Imatrix::Local(fichero) => ImatrixInfo {
@@ -657,7 +771,19 @@ fn escribe_procedencia(
             .unwrap_or(salida.quant.as_str())
             .to_string(),
         fuente_repo: fuente_repo(peticion),
-        intermedio: clase.sufijo_intermedio(peticion.intermedio).to_string(),
+        // El sidecar no afirma lo que no pasó (hallazgo 6): si la fuente ya era
+        // un GGUF no hubo intermedio, y si no se cuantizó no se dice que corrió
+        // el cuantizador.
+        intermedio: if es_entrada {
+            None
+        } else {
+            Some(clase.sufijo_intermedio(peticion.intermedio).to_string())
+        },
+        herramienta: if cuantizo {
+            HERRAMIENTA_CUANTIZA.to_string()
+        } else {
+            HERRAMIENTA_SIN_CUANTIZAR.to_string()
+        },
         imatrix,
         mtp: None,
         fecha: fecha_utc(),
@@ -920,14 +1046,16 @@ fn escribe(ruta: &Path, texto: &str) -> Result<(), String> {
 ///
 /// El directorio puede no existir todavía (un `--gguf` local no crea el
 /// work hasta la limpieza).
-fn escribe_cp(ruta: &Path, fase: Fase) -> Result<(), Error> {
+fn escribe_cp(ruta: &Path, fase: Fase, huella: &str) -> Result<(), Error> {
     if let Some(padre) = ruta.parent() {
         crea_dir(padre)?;
     }
     let temporal = temporal_de(ruta);
-    escribe(&temporal, &Checkpoint::de(fase).a_json()).map_err(|detalle| Error::Disco {
-        que: format!("escribir el checkpoint ({})", fase.nombre()),
-        detalle,
+    escribe(&temporal, &Checkpoint::con(fase, huella).a_json()).map_err(|detalle| {
+        Error::Disco {
+            que: format!("escribir el checkpoint ({})", fase.nombre()),
+            detalle,
+        }
     })?;
     std::fs::rename(&temporal, ruta).map_err(|detalle| Error::Disco {
         que: format!("renombrar el checkpoint ({})", fase.nombre()),
