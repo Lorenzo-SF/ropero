@@ -7,7 +7,9 @@
 //! El orden de la comprobación es el del doc (R-GGUF-3/5/6/7): la fuente
 //! primero, después el imatrix, después las salidas.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use ropero_core::Environment;
 
 use crate::Error;
 use crate::quants;
@@ -364,7 +366,16 @@ impl Peticion {
     /// `--force`). Lo que no afecta al resultado (`--keep-source`,
     /// `--keep-intermedio`) no entra: dos peticiones que sólo se diferencian
     /// en la limpieza son la misma tirada.
-    pub fn canon(&self) -> String {
+    ///
+    /// El **directorio de salida resuelto** entra (el `$GGUF_DIR` de verdad,
+    /// no el texto del flag): dos peticiones que dicen lo mismo pero escriben
+    /// en sitios distintos son tiradas distintas, y si la huella no lo dice,
+    /// la segunda reutiliza el checkpoint de la primera, no fabrica nada y
+    /// muere con «salida faltante».
+    ///
+    /// El directorio **de trabajo** (donde vive el checkpoint) **no** entra:
+    /// es temporal, y si entrara la reanudación dejaría de funcionar.
+    pub fn canon(&self, env: &Environment) -> String {
         let imatrix = match &self.imatrix {
             None => "ninguna".to_string(),
             Some(Imatrix::Local(fichero)) => format!("local:{}", fichero.to_string_lossy()),
@@ -383,6 +394,7 @@ impl Peticion {
             self.out_principal
                 .clone()
                 .unwrap_or_else(|| "sin principal".to_string()),
+            format!("out-dir={}", self.out_dir(env).to_string_lossy()),
             format!(
                 "no-mtp={} no-dflash={} force={}",
                 self.no_mtp, self.no_dflash, self.force
@@ -399,13 +411,44 @@ impl Peticion {
     /// **no es de esta petición** y se descarta. Es un hash y no el texto: el
     /// JSON del checkpoint no se rompe con comillas o barras de una ruta, y dos
     /// peticiones distintas no se confunden por un accidente de parsing.
-    pub fn huella(&self) -> String {
+    pub fn huella(&self, env: &Environment) -> String {
         let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in self.canon().bytes() {
+        for byte in self.canon(env).bytes() {
             hash ^= byte as u64;
             hash = hash.wrapping_mul(0x100_0000_01b3);
         }
         format!("{hash:016x}")
+    }
+
+    /// El **directorio de salida resuelto**: dónde van los GGUFs.
+    ///
+    /// - `--out-principal`: el directorio de esa ruta;
+    /// - `--out` con ruta de fichero: el de esa ruta;
+    /// - `--out` con directorio: ese;
+    /// - `--out` con nombre (o sin `--out`): el de `$GGUF_DIR`.
+    ///
+    /// Es **resuelto** y no el texto del flag: es lo que decide dónde cae
+    /// cada GGUF, y por eso va en la huella (ver [`Peticion::canon`]).
+    pub fn out_dir(&self, env: &Environment) -> PathBuf {
+        let base = env.env_path("GGUF_DIR", "models/gguf");
+        if let Some(principal) = self.out_principal.as_deref() {
+            return Path::new(principal)
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| base.clone());
+        }
+        if let Some(out) = self.out.as_deref() {
+            if out.ends_with(".gguf") {
+                return Path::new(out)
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| base.clone());
+            }
+            if out.contains('/') {
+                return PathBuf::from(out.trim_end_matches('/'));
+            }
+        }
+        base
     }
 
     /// Si la petición pide **cuantizar de verdad**: hay quants que no son
