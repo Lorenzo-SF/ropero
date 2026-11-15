@@ -111,6 +111,20 @@ size = "9 KB"
 use = "run"
 "#;
 
+/// Un GGUF **sin tamaño** declarado: el plan no sabe cuánto pesa.
+const GGUF_SIN_TAMANO: &str = r#"
+[model]
+name = "modelo"
+engine = "turbo-llama"
+
+[files]
+gguf = "final.gguf"
+
+[download]
+repo = "ejemplo/modelo"
+file = "en-el-repo.gguf"
+"#;
+
 /// Un checkpoint safetensors.
 const SAFETENSORS: &str = r#"
 [model]
@@ -481,6 +495,21 @@ fn el_modo_desatendido_no_pregunta_y_el_interactivo_si() {
         pregunta.contains("[s/N]"),
         "la pregunta no dice que el default es no: {pregunta}"
     );
+}
+
+/// El tamaño que no se sabe sale como `—`, como en el resto de la salida.
+///
+/// El `?` era otro idioma: el sistema usa `—` para lo que no se sabe
+/// (doc CLI v2 §2.1).
+#[test]
+fn la_pregunta_de_descarga_dice_el_tamano_desconocido() {
+    let fake = Fake::nuevo("tamano-desconocido");
+    let env = fake.entorno();
+    let plan = plan_de_descarga(&spec(GGUF_SIN_TAMANO), &env).expect("plan");
+
+    let pregunta = pregunta_de_descarga(&plan);
+    assert!(pregunta.contains("(—)"), "pregunta={pregunta}");
+    assert!(!pregunta.contains("(?)"), "pregunta={pregunta}");
 }
 
 /// El default de la pregunta es **no**: si el usuario no contesta, el

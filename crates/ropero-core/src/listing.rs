@@ -22,6 +22,21 @@
 //! regla los separa. Así el listado se lee como una tabla y no como una
 //! lista de tablas.
 //!
+//! ## Los grupos plegados
+//!
+//! Un motor que no está instalado no aporta modelos: su grupo sale
+//! **plegado**, con el motivo **debajo**, como una nota (doc CLI v2 §2.1).
+//!
+//! ```text
+//!   airllm
+//!     no está instalado
+//!   mlx-serve
+//!     sólo funciona en macOS; necesita Apple Silicon con Metal
+//! ```
+//!
+//! Los motivos de todos los grupos caen en la misma columna: se leen como
+//! una columna, no como un texto pegado a cada nombre.
+//!
 //! ## El artefacto es el que dice el formato
 //!
 //! El `d3mini` no tiene fichero: su artefacto es el **tag** del almacén de
@@ -47,21 +62,15 @@
 
 use std::collections::BTreeMap;
 
-use crate::EngineColor;
 use crate::EngineId;
 use crate::ModelSpec;
-use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, Seccion, Tabla};
+use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, SIN_DATO, Seccion, Tabla};
 use crate::format::ArtifactLocation;
 use crate::palette::Palette;
-use crate::snapshot::{
-    EngineGroup, ModelPresence, ModelState, Snapshot, available_models, engine_groups,
-};
+use crate::snapshot::{EngineGroup, ModelPresence, ModelState, Snapshot, engine_groups};
 
 /// El texto de un recurso que no se puede usar.
 const NO_DISPONIBLE: &str = "no disponible";
-
-/// El texto de un dato que no está declarado.
-const SIN_DATO: &str = "—";
 
 /// El título de la sección de los modelos.
 const TITULO: &str = "MODELOS";
@@ -110,9 +119,7 @@ pub fn list_lines(
         // Una línea en blanco: los motores plegados no son parte de la tabla.
         seccion.linea("");
     }
-    for grupo in plegados {
-        seccion.linea(collapsed_line(grupo, palette));
-    }
+    seccion.cuerpo(lineas_de_plegados(&plegados, palette));
     let mut out = seccion.lineas();
     while out.last().is_some_and(|l| l.is_empty()) {
         out.pop();
@@ -242,32 +249,36 @@ fn tag_de_decision(spec: &ModelSpec) -> Option<String> {
     None
 }
 
-/// La línea de un grupo **plegado**: el motor no está instalado.
+/// Las líneas de los grupos **plegados**: el motor y el motivo.
 ///
-/// Dice **cuántos** modelos tiene y **por qué** no se pueden usar. La razón
-/// la aporta el informe de compatibilidad (F2), si el motor es incompatible
-/// con la máquina; si sí lo es, la razón es que no está instalado.
-pub fn collapsed_line(grupo: &EngineGroup, palette: &Palette) -> String {
-    let nombre = palette.paint(grupo.manifest.color, grupo.manifest.id.as_str());
-    let motivo = match &grupo.reason {
+/// Un grupo plegado es un motor que no está instalado: no aporta modelos,
+/// pero **dice por qué** (el motivo lo aporta el informe de compatibilidad,
+/// F2; si el motor sí es compatible, el motivo es que no está instalado).
+///
+/// El motivo va **debajo** del motor, como una **nota** (doc CLI v2 §2.1):
+/// es lo que va debajo de una fila, y no rompe la rejilla. Así los motivos
+/// de todos los grupos caen en la misma columna y se leen como una columna.
+fn lineas_de_plegados(plegados: &[&EngineGroup], paleta: &Palette) -> Vec<String> {
+    let mut tabla = Tabla::nivel(1);
+    for grupo in plegados {
+        tabla.grupo(Celda::motor(
+            grupo.manifest.id.as_str(),
+            grupo.manifest.color,
+        ));
+        tabla.nota(Celda::plana(motivo_de(grupo)));
+    }
+    tabla.lineas(paleta)
+}
+
+/// El motivo de un grupo plegado: por qué no se puede usar.
+fn motivo_de(grupo: &EngineGroup) -> String {
+    match &grupo.reason {
         Some(r) => r.clone(),
         None => "no está instalado".to_string(),
-    };
-    format!("  {nombre}  ({motivo})")
+    }
 }
 
 /// El resumen de una línea de `ropero list` cuando no hay nada que listar.
 pub fn empty_notice() -> String {
     "aviso: no hay modelos disponibles (instala motores y descarga modelos)".to_string()
-}
-
-/// El resumen de `ropero list` cuando hay algo.
-pub fn list_summary(snapshot: &Snapshot) -> String {
-    let n = available_models(snapshot).len();
-    format!("{n} modelo(s) disponible(s)")
-}
-
-/// El color de la leyenda de un motor.
-pub fn color_de(grupo: &EngineGroup) -> EngineColor {
-    grupo.manifest.color
 }

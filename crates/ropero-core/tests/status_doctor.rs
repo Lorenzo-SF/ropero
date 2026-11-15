@@ -146,6 +146,40 @@ fn los_kb_se_convierten_en_mb() {
     assert_eq!(ropero_core::status::bytes_a_mb(1024.0 * 1024.0), 1.0);
 }
 
+/// Los números del `status` van **a la derecha**: el reloj y la temperatura
+/// son números, como el uso y el total de la memoria.
+///
+/// La sección usaba dos criterios para el mismo tipo de dato: el reloj y la
+/// temperatura a la izquierda, el uso y el total a la derecha.
+#[test]
+fn los_numeros_del_status_van_a_la_derecha() {
+    let texto = status_text(&maquina());
+    let lineas: Vec<&str> = texto.lines().collect();
+    let cabecera = lineas
+        .iter()
+        .find(|l| l.contains("reloj"))
+        .expect("la cabecera de los procesadores");
+    let fila = lineas
+        .iter()
+        .find(|l| l.contains("CPU"))
+        .expect("la fila de la CPU");
+    // El fin de la columna del reloj: el del título y el del dato, el mismo.
+    let fin = |linea: &str, texto: &str| {
+        let byte = linea.find(texto).expect("debe salir el texto");
+        ropero_core::ancho_visible(&linea[..byte]) + ropero_core::ancho_visible(texto)
+    };
+    assert_eq!(
+        fin(cabecera, "reloj"),
+        fin(fila, "3.40 GHz"),
+        "el reloj no va a la derecha: {cabecera} / {fila}"
+    );
+    assert_eq!(
+        fin(cabecera, "temperatura"),
+        fin(fila, "58.00 °C"),
+        "la temperatura no va a la derecha: {cabecera} / {fila}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // El doctor
 // ─────────────────────────────────────────────────────────────────────────────

@@ -29,7 +29,10 @@ const FIN: &str = "m";
 /// Antes se cerraba con el 49, que es un **fondo**, no un primer plano: el
 /// texto que venía detrás de un motor salía en gris. Con el 39, lo que
 /// sigue a un nombre de motor sale con el color de siempre.
-const CIERRE: &str = "\x1b[39m";
+///
+/// Es el **único** reset del sistema: el recorte de una celda cierra el
+/// color con este mismo signo, para que la salida no hable dos idiomas.
+pub const CIERRE: &str = "\x1b[39m";
 
 /// La paleta: los colores del documento, o ninguno.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
