@@ -37,6 +37,75 @@ las cosas (un motor, un modelo, un TOML), nunca su forma.
 Consecuencia práctica: un `ropero --help` de la v2 no debe ser reconocible
 como el `ropero --help` de la v1.
 
+### 2.1 El sistema de formato (normativa)
+
+**Todas** las salidas del CLI se componen con el **mismo** sistema de formato:
+el resumen, `list`, `engines`, `status`, `doctor`, `install` y los errores.
+No es una guía de estilo: es un contrato. Lo que no encaja en él, no sale.
+
+El sistema vive en el dominio (`ropero_core::estilo`) y sus reglas son:
+
+| Regla | Qué obliga |
+|---|---|
+| **Ancho visible** | El ancho de una columna es el que ocupa el texto **en la pantalla**: los códigos ANSI no cuentan, los caracteres anchos (CJK, emojis) valen **dos** y los acentos combinantes, ninguno. |
+| **Alineación** | Los datos **numéricos** (tamaños, puertos, memoria) se alinean a la **derecha**; los de **texto**, a la **izquierda**. El título de una columna se alinea como sus datos. |
+| **Recorte** | El texto que no cabe en su columna se **recorta** con `…`: nunca se parte en dos líneas. El ancho máximo de una columna es de **36** columnas visibles. |
+| **Cabecera** | Una tabla lleva **una** cabecera (los títulos de sus columnas) y una **regla** de `─` debajo. La cabecera sale **una sola vez** por tabla: los grupos se separan con una regla, no repiten la cabecera. |
+| **Grupos** | Un grupo (un motor) es una **fila de grupo**: una fila que ocupa toda la tabla, con su nombre en el color de la leyenda ([§4](#4-leyenda-de-motores)). Lo que va detrás del nombre (el estado del motor) va **fuera** del color. |
+| **Notas** | Lo que va debajo de una fila (el motivo de una incompatibilidad, el nombre de una GPU) es una **nota**: una línea más indentada, que no rompe la rejilla. |
+| **Rótulos** | Un listado de pares (`clave: valor`) alinea las **claves**: el valor de cada par empieza siempre en la misma columna. |
+| **Títulos** | El título de una sección va en el **margen** y en **mayúsculas**; su cuerpo, un nivel más dentro. La sangría es de **dos espacios** por nivel. |
+| **Color** | El color es el de la leyenda de motores ([§4](#4-leyenda-de-motores)) y **sólo** se usa en el **nombre del motor**. Ningún título, ninguna cabecera y ningún dato llevan color. |
+| **Tamaños** | El tamaño de un artefacto es el de su descarga: **aproximado** (`~`) y con **dos decimales** (`~18.90 GB`). Lo que no se sabe **no se inventa**: sale `—`. |
+| **Artefactos** | La columna del artefacto dice **qué** se baja, y lo dice el **formato** (R-MOD-6): el fichero (`gguf`), el directorio del checkpoint (`safetensors`), el **tag** del almacén (`q4nx`) o el paquete del catálogo (`strata`). Un modelo cuyo artefacto es un tag dice **el tag** (venga de `[model].path` o de `--decision`), nunca «no disponible»; si el tag no se sabe, dice la **clase** (`tag`). |
+| **Final de línea** | Ninguna línea lleva **espacios al final**: rompen el diff y descolocan al copiar. |
+
+Hay **dos** excepciones, y sólo dos:
+
+- `ropero path` es una **exportación** (`CLAVE=valor`), no una tabla: se
+  pasa a un `eval` o se lee con un `grep`.
+- `ropero args` y `ropero levels` imprimen **un valor por línea**, sin
+  cabecera: son datos para leer, no tablas.
+
+### 2.2 La forma de cada salida
+
+| Salida | Cómo se compone |
+|---|---|
+| `ropero` (a secas) | Secciones `MOTORES` y `MODELOS`, con los rótulos alineados. |
+| `ropero list` | Sección `MODELOS` con una tabla: `modelo`, `tamaño`, `artefacto` (y `estado` con `--all`). El motor es una fila de grupo, en su color. |
+| `ropero engines` | Sección `MOTORES` con una tabla: `motor`, `color`, `madurez`, `puertos`, `formatos`. El motivo de la incompatibilidad es una nota. |
+| `ropero status` | Sección `ESTADO DE LA MÁQUINA` con dos tablas: la de los procesadores y la de la memoria. |
+| `ropero doctor` | Secciones `DEPENDENCIAS DE ROPERO` y `DEPENDENCIAS DE LOS MOTORES`, con una tabla de `dependencia`, `estado` y `qué hacer`. El motor es una fila de grupo y una regla separa un motor del siguiente: la cabecera **no** se repite por motor. |
+| `ropero install` | Los menús son tablas: la del motor, con su `nº`; la del modelo, con su `nº`, `tamaño` y `artefacto`. |
+
+Un ejemplo, el listado:
+
+```text
+MODELOS
+  modelo         tamaño  artefacto
+  ───────────────────────────────────────────────────────────
+  fastflowlm
+  d3mini       ~3.50 GB  d3:mini
+  ───────────────────────────────────────────────────────────
+  llama-server
+  groot-o     ~13.60 GB  Groot-19B-A3B-261023-NVFP4.gguf
+  nemotron-o  ~18.90 GB  NVIDIA-Nemotron-3.5-Lightning-30B-A…
+```
+
+Y el doctor, con **una** cabecera por sección:
+
+```text
+DEPENDENCIAS DE LOS MOTORES
+  dependencia  estado  qué hacer
+  ────────────────────────────────────────────────────────
+  llama-server (instalado)
+  git          ok
+  cmake        ok
+  ────────────────────────────────────────────────────────
+  vllm (no instalado)
+  uv           falta   instálalo con tu gestor de paquetes
+```
+
 ---
 
 ## 3. Códigos de salida
@@ -306,6 +375,12 @@ Lista **sólo** los **modelos disponibles** (engine instalado, modelo
 descargado), **agrupados por engine**, con la **leyenda de colores**
 ([§4](#4-leyenda-de-motores)).
 
+Con `--all` añade los modelos **no disponibles** (con la columna `estado`) y
+despliega los grupos plegados. La salida es la tabla de
+[§2.2](#22-la-forma-de-cada-salida): **una** cabecera, el motor como **fila de
+grupo** y una **regla** entre grupos. El artefacto de un modelo que es un tag
+del almacén (`q4nx`) es **el tag**, nunca «no disponible».
+
 ## 16. `ropero template`
 
 Imprime el **TOML template completo** con **comentarios de uso**.
@@ -326,7 +401,7 @@ resuelto aquí:
 | 6 | Nombres exactos de los **tipos** de cuantización que acepta `--quant` y de los que lista `--list-quants`. | [§11.2](#112-flags) |
 | 7 | Si `ropero test` mide también **rendimiento** (tokens/s, latencia) con su propia rúbrica, o sólo qualitative con la del índice. | [§13](#13-ropero-test) |
 | 8 | Formato de salida de `ropero status` (tabla, árbol, JSON) y frecuencia de refresco si lo lleva. | [§12](#12-ropero-status) |
-| 9 | Si `ropero list` admite `--all` para incluir los **retirados**, como hacía la v1. | [§15](#15-ropero-list) |
+| 9 | **Resuelto**: `ropero list` admite `--all`; añade los no disponibles con su `estado` y despliega los grupos. | [§15](#15-ropero-list) |
 | 10 | Comportamiento de `ropero install engines`/`models` **sin TTY** y sin lista (la v1 lo trataba como error de uso). | [§9](#9-ropero-install-nadaenginesmodels) |
 | 11 | Si existe un comando `ropero engines` / `ropero models` como alias de `install engines` / `install models`. | [§9](#9-ropero-install-nadaenginesmodels) |
 | 12 | Si los flags `--download` / `--build` de la v1 sobreviven en la v2 como camino forzado, o los sustituye `--prio`. El doc A (R-DATA-6) aún los cita; este §9.3 y el doc B §4.10.7 dan el contrato de `--prio`. | [§9.3](#93-el-flag---prio) |
@@ -338,6 +413,7 @@ resuelto aquí:
 | Sección | Origen |
 |---|---|
 | §2 Estética | Decisión del dueño, 2026-11-14 |
+| §2.1 Sistema de formato | Implementación del sistema de formato de la salida (`ropero_core::estilo`), 2026-11-15 |
 | §3 Códigos de salida | Decisión del dueño, 2026-11-14 |
 | §4 Leyenda de motores | Decisión del dueño, 2026-11-14 |
 | §5 Decisiones fijadas | Decisiones del dueño, 2026-11-14 |

@@ -50,7 +50,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 fn validate_ok() {
     let (code, stdout, stderr) = run(&["validate"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    assert!(stdout.contains("OK:"), "stdout={}", stdout);
+    assert!(stdout.contains("ok:"), "stdout={}", stdout);
     // 4 ficheros TOML del fixture: 3 activos + 1 retirado.
     assert!(stdout.contains("4 modelo(s)"), "stdout={}", stdout);
 }
@@ -195,7 +195,7 @@ fn replace_no_toca_el_base_si_no_se_pide_la_opcion() {
 fn el_aviso_de_canonicalizacion_no_es_error() {
     let (code, stdout, stderr) = run(&["validate"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    assert!(stdout.contains("OK:"), "stdout={}", stdout);
+    assert!(stdout.contains("ok:"), "stdout={}", stdout);
     assert!(
         stderr.contains("AVISO: el motor 'mlx_lm'"),
         "stderr={}",

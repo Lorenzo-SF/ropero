@@ -6,7 +6,7 @@
 
 use ropero_core::doctor::{DepCheck, DepStatus, Dependency, DoctorReport, EngineDeps};
 use ropero_core::status::{GpuState, MachineState, MemoryState, Reading, status_text};
-use ropero_core::{EngineId, EngineManifest, Maturity};
+use ropero_core::{EngineId, EngineManifest, Maturity, Palette};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // El status
@@ -63,10 +63,13 @@ fn la_ram_sale_en_uso_de_total() {
         .lines()
         .find(|l| l.contains("RAM"))
         .expect("debe salir la línea de la RAM");
-    assert!(
-        linea.contains("8192.00 MB de 32768.00 MB"),
-        "la RAM no sale en uso de total: {linea}"
-    );
+    let usado = linea
+        .find("8192.00 MB")
+        .expect("debe salir el uso de la RAM");
+    let total = linea
+        .find("32768.00 MB")
+        .expect("debe salir el total de la RAM");
+    assert!(usado < total, "la RAM no sale en uso de total: {linea}");
 }
 
 /// El swap también sale en uso de total.
@@ -80,10 +83,13 @@ fn el_swap_sale_en_uso_de_total() {
         .lines()
         .find(|l| l.contains("SWAP"))
         .expect("debe salir la línea del swap");
-    assert!(
-        linea.contains("1024.00 MB de 8192.00 MB"),
-        "el swap no sale en uso de total: {linea}"
-    );
+    let usado = linea
+        .find("1024.00 MB")
+        .expect("debe salir el uso del swap");
+    let total = linea
+        .find("8192.00 MB")
+        .expect("debe salir el total del swap");
+    assert!(usado < total, "el swap no sale en uso de total: {linea}");
 }
 
 /// Lo que no se puede leer se dice, no se inventa.
@@ -193,7 +199,7 @@ fn una_dependencia_ausente_dice_que_hacer() {
             checks: vec![falta("cmake")],
         }],
     };
-    let texto = informe.lines().join("\n");
+    let texto = informe.lines(&Palette::plain()).join("\n");
     assert!(texto.contains("falta"), "texto={texto}");
     assert!(texto.contains("hf"), "texto={texto}");
     // Y el remedio: lo que hay que hacer.
@@ -246,7 +252,7 @@ fn el_doctor_comprueba_todos_los_motores() {
             },
         ],
     };
-    let texto = informe.lines().join("\n");
+    let texto = informe.lines(&Palette::plain()).join("\n");
     assert!(texto.contains("llama-server"), "texto={texto}");
     assert!(texto.contains("vllm"), "texto={texto}");
     assert!(texto.contains("no instalado"), "texto={texto}");
@@ -264,7 +270,7 @@ fn el_doctor_empieza_por_las_dependencias_de_ropero() {
             checks: vec![ok("git")],
         }],
     };
-    let lineas = informe.lines();
+    let lineas = informe.lines(&Palette::plain());
     let ropero = lineas
         .iter()
         .position(|l| l.contains("DEPENDENCIAS DE ROPERO"))
@@ -287,6 +293,65 @@ fn un_motor_sin_dependencias_lo_dice() {
             checks: vec![],
         }],
     };
-    let texto = informe.lines().join("\n");
+    let texto = informe.lines(&Palette::plain()).join("\n");
     assert!(texto.contains("sin dependencias"), "texto={texto}");
+}
+
+/// La tabla de los motores tiene **una sola cabecera**: el motor es una fila
+/// de grupo y una regla lo separa del siguiente.
+///
+/// Antes cada motor repetía la cabecera y su regla: la salida se veía
+/// recargada y no se leía como una tabla (doc CLI v2 §2).
+#[test]
+fn el_doctor_no_repite_la_cabecera_por_motor() {
+    let informe = DoctorReport {
+        ropero: vec![ok("git")],
+        engines: vec![
+            EngineDeps {
+                manifest: motor(EngineId::LlamaServer),
+                installed: true,
+                checks: vec![ok("cmake")],
+            },
+            EngineDeps {
+                manifest: motor(EngineId::Vllm),
+                installed: false,
+                checks: vec![falta("uv")],
+            },
+        ],
+    };
+    let lineas = informe.lines(&Palette::plain());
+    // Una cabecera por sección: la de ropero y la de los motores.
+    let cabeceras: Vec<&String> = lineas
+        .iter()
+        .filter(|l| l.contains("dependencia"))
+        .collect();
+    assert_eq!(cabeceras.len(), 2, "lineas={lineas:#?}");
+    // Una regla por sección y una entre motores.
+    let reglas: Vec<&String> = lineas
+        .iter()
+        .filter(|l| l.trim_start().starts_with('─'))
+        .collect();
+    assert_eq!(reglas.len(), 3, "lineas={lineas:#?}");
+    // Los motores salen en su propia línea: son filas de grupo.
+    for motor in ["llama-server", "vllm"] {
+        let fila = lineas
+            .iter()
+            .find(|l| l.contains(motor))
+            .expect("el motor sale en el informe");
+        assert!(fila.contains(motor), "fila={fila}");
+        assert!(
+            !fila.contains("dependencia"),
+            "el motor no es una cabecera: {fila}"
+        );
+    }
+    // Y las dependencias de cada motor salen debajo de su nombre.
+    let cmake = lineas
+        .iter()
+        .position(|l| l.contains("cmake"))
+        .expect("cmake sale en el informe");
+    let llama = lineas
+        .iter()
+        .position(|l| l.contains("llama-server"))
+        .expect("llama-server sale en el informe");
+    assert!(llama < cmake, "lineas={lineas:#?}");
 }

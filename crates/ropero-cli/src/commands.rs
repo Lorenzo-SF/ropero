@@ -46,7 +46,8 @@ pub fn engines(all: bool) -> i32 {
         return 1;
     };
     let sistema = ropero_runtime::capture_system_info();
-    let lineas = ropero_core::engine_lines(&s.engines, &sistema, all);
+    let lineas =
+        ropero_core::engine_lines(&s.engines, &sistema, all, &ropero_core::Palette::color());
     if lineas.is_empty() {
         ropero_core::err_line("aviso: no hay motores que listar");
         return 0;
@@ -205,8 +206,7 @@ pub fn doctor() -> i32 {
     };
     let informe = ropero_core::doctor::DoctorReport {
         ropero: comprueba_ropero(),
-        engines: s
-            .engines
+        engines: ropero_core::sorted_by_canonical_id(&s.engines)
             .iter()
             .map(|m| ropero_core::doctor::EngineDeps {
                 installed: ropero_runtime::engine_installed(m),
@@ -215,7 +215,7 @@ pub fn doctor() -> i32 {
             })
             .collect(),
     };
-    for linea in informe.lines() {
+    for linea in informe.lines(&ropero_core::Palette::color()) {
         ropero_core::out_line(&linea);
     }
     let resumen = informe.summary();

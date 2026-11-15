@@ -4,36 +4,67 @@
 //! ## La forma
 //!
 //! ```text
+//! MODELOS
+//!   modelo      tamaño   artefacto
+//!   ─────────────────────────────────────────
+//!   fastflowlm
+//!   d3mini      ~3.50 GB  d3:mini
+//!   ─────────────────────────────────────────
 //!   llama-server
-//!     modelo-alpha          4.2 GB      llama-server
-//!
-//!   vllm
-//!     modelo-beta           1.1 GB      vllm
+//!   groot-o     ~13.60 GB  Groot-19B-A3B-261023-NVFP4.gguf
+//!   nemotron-o  ~18.90 GB  NVIDIA-Nemotron-3.5-Lightning-30B-A…
+//!   ─────────────────────────────────────────
+//!   turbo-llama
+//!   qwen38      ~12.10 GB  Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf
 //! ```
 //!
-//! Un motor que no está instalado no se despliega: su grupo sale **plegado**
-//! con un conteo y la razón, para que el usuario sepa que existe pero que
-//! aquí no se puede usar.
+//! La cabecera sale **una sola vez**: los motores son filas de grupo, y una
+//! regla los separa. Así el listado se lee como una tabla y no como una
+//! lista de tablas.
+//!
+//! ## El artefacto es el que dice el formato
+//!
+//! El `d3mini` no tiene fichero: su artefacto es el **tag** del almacén de
+//! FLM (`d3:mini`), y eso es lo que sale. El formato dice dónde vive cada
+//! artefacto (R-MOD-6): el fichero (`gguf`), el directorio del checkpoint
+//! (`safetensors`), el tag del almacén (`q4nx`) o el paquete del catálogo
+//! (`strata`).
+//!
+//! ## Por qué el tamaño y el artefacto van en columnas distintas
+//!
+//! El catálogo declara las dos cosas, pero no siempre: un modelo con
+//! `[download]` declara un **tamaño** y uno con `[build]` declara el
+//! **nombre del fichero**. Metidos en la misma columna, el nombre largo del
+//! artefacto **empujaba** al tamaño y las dos dejaban de alinearse
+//! (doc CLI v2 §2). Separadas, cada una tiene su ancho y su alineación: el
+//! tamaño a la derecha (es un número), el artefacto a la izquierda.
 //!
 //! ## La estética
 //!
-//! Es **nueva** (doc CLI v2 §2): nada de lo que se copió de la v1. La
-//! regla que se sigue es la del doc: alineación limpia, color sólo donde
-//! aporta (el nombre del motor), y nada de ruido.
+//! Es la del doc CLI v2 §2 y la **comparte** con el resto de comandos: el
+//! sistema de formato vive en [`crate::estilo`] y aquí sólo se decide *qué*
+//! va en cada columna.
 
 use std::collections::BTreeMap;
 
 use crate::EngineColor;
 use crate::EngineId;
+use crate::ModelSpec;
+use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, Seccion, Tabla};
+use crate::format::ArtifactLocation;
 use crate::palette::Palette;
-use crate::snapshot::{EngineGroup, ModelState, Snapshot, available_models, engine_groups};
+use crate::snapshot::{
+    EngineGroup, ModelPresence, ModelState, Snapshot, available_models, engine_groups,
+};
 
-/// Una línea del listado, ya compuesta.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Line {
-    /// La línea, tal y como sale por stdout.
-    pub text: String,
-}
+/// El texto de un recurso que no se puede usar.
+const NO_DISPONIBLE: &str = "no disponible";
+
+/// El texto de un dato que no está declarado.
+const SIN_DATO: &str = "—";
+
+/// El título de la sección de los modelos.
+const TITULO: &str = "MODELOS";
 
 /// Las líneas de `ropero list`.
 ///
@@ -46,56 +77,169 @@ pub fn list_lines(
     razones: &BTreeMap<EngineId, String>,
 ) -> Vec<String> {
     let grupos = engine_groups(snapshot, todos, razones);
-    let mut out: Vec<String> = Vec::new();
+    // Una tabla para todo el listado: el motor es una fila de grupo y una
+    // regla separa un grupo del siguiente.
+    let mut tabla = Tabla::nivel(1)
+        .columna(Columna::texto("modelo").maximo(ANCHO_MAXIMO))
+        .columna(Columna::numero("tamaño"))
+        .columna(Columna::texto("artefacto").maximo(ANCHO_MAXIMO));
+    if todos {
+        tabla = tabla.columna(Columna::texto("estado"));
+    }
     for grupo in &grupos {
         if grupo.models.is_empty() {
             continue;
         }
-        out.push(group_header(grupo, palette));
+        tabla.grupo(Celda::motor(
+            grupo.manifest.id.as_str(),
+            grupo.manifest.color,
+        ));
         for modelo in &grupo.models {
-            out.push(model_line(modelo, grupo));
+            tabla.fila(celdas_de_modelo(modelo, todos));
         }
-        out.push(String::new());
     }
     // Los grupos plegados van al final: no interrumpen la lista de lo que
     // sí se puede usar.
-    for grupo in grupos.iter().filter(|g| g.models.is_empty()) {
-        out.push(collapsed_line(grupo, palette));
+    let plegados: Vec<&EngineGroup> = grupos.iter().filter(|g| g.models.is_empty()).collect();
+    if tabla.esta_vacia() && plegados.is_empty() {
+        return Vec::new();
     }
+    let mut seccion = Seccion::nueva(TITULO);
+    seccion.cuerpo(tabla.lineas(palette));
+    if !plegados.is_empty() && !tabla.esta_vacia() {
+        // Una línea en blanco: los motores plegados no son parte de la tabla.
+        seccion.linea("");
+    }
+    for grupo in plegados {
+        seccion.linea(collapsed_line(grupo, palette));
+    }
+    let mut out = seccion.lineas();
     while out.last().is_some_and(|l| l.is_empty()) {
         out.pop();
     }
     out
 }
 
-/// La cabecera de un grupo: el nombre del motor, en su color.
-pub fn group_header(grupo: &EngineGroup, palette: &Palette) -> String {
-    let nombre = palette.paint(grupo.manifest.color, grupo.manifest.id.as_str());
-    format!("  {nombre}")
+/// Las celdas de un modelo: nombre, tamaño, artefacto y estado.
+fn celdas_de_modelo(modelo: &ModelState, con_estado: bool) -> Vec<Celda> {
+    let spec = &modelo.spec;
+    let mut celdas = vec![
+        Celda::plana(nombre_de_modelo(spec)),
+        Celda::plana(tamano_de(spec)),
+        Celda::plana(artefacto_de(spec)),
+    ];
+    if con_estado {
+        let disponible = modelo.presence == ModelPresence::Downloaded;
+        let estado = if disponible {
+            String::new()
+        } else {
+            NO_DISPONIBLE.to_string()
+        };
+        celdas.push(Celda::plana(estado));
+    }
+    celdas
 }
 
-/// La línea de un modelo dentro de su grupo.
-pub fn model_line(modelo: &ModelState, grupo: &EngineGroup) -> String {
-    let mut extra = String::new();
-    if let Some(alias) = &modelo.spec.model.alias {
-        extra.push_str(&format!(" ({alias})"));
+/// El nombre del modelo, con su alias si lo tiene.
+pub fn nombre_de_modelo(spec: &ModelSpec) -> String {
+    match &spec.model.alias {
+        Some(alias) => format!("{} ({alias})", spec.model.name),
+        None => spec.model.name.clone(),
     }
-    let descripcion = crate::catalog::model_description(&modelo.spec);
-    let descripcion = if descripcion.is_empty() {
-        "-".to_string()
+}
+
+/// El tamaño declarado del modelo: el de la descarga o el de la forja.
+///
+/// Un modelo puede declarar las dos vías (doc B §4.10.7): se teach el
+/// tamaño de la que se vaya a usar. Sin ninguna, no hay tamaño.
+pub fn tamano_de(spec: &ModelSpec) -> String {
+    let declarado = spec
+        .download
+        .as_ref()
+        .map(|d| d.size.clone())
+        .filter(|s| !s.is_empty())
+        .or_else(|| spec.build.as_ref().map(|b| b.size.clone()))
+        .unwrap_or_default();
+    crate::output::tamano_declarado(&declarado).unwrap_or_else(|| SIN_DATO.to_string())
+}
+
+/// El artefacto del modelo: el fichero local o el que se descarga.
+///
+/// Es el **nombre** del artefacto, no su ruta: la ruta se enseña en
+/// `ropero path`, que es donde las rutas están.
+///
+/// El artefacto es el que dice el **formato** (R-MOD-6), y cada formato tiene
+/// el suyo:
+///
+/// | Formato | El artefacto |
+/// |---|---|
+/// | `gguf` | el fichero (`[files].gguf`) |
+/// | `safetensors` | el directorio del checkpoint (`[model].path`) |
+/// | `q4nx` | el **tag** del almacén (FLM) |
+/// | `strata` | el paquete del catálogo (`[model].path`) |
+///
+/// Un modelo que **no** tiene artefacto no sale «no disponible»: sale el
+/// tag (que es su artefacto) o, si tampoco se sabe, la **clase** del
+/// artefacto (`tag`, `gguf`…).
+pub fn artefacto_de(spec: &ModelSpec) -> String {
+    match spec.model.format.artifact_location() {
+        ArtifactLocation::GgufDir => primero(&[
+            spec.files
+                .gguf
+                .as_ref()
+                .map(|g| g.to_string_lossy().to_string()),
+            spec.download.as_ref().map(|d| d.file.clone()),
+            spec.download.as_ref().map(|d| d.name.clone()),
+            no_vacia(&spec.model.path),
+        ])
+        .unwrap_or_else(|| "gguf".to_string()),
+        ArtifactLocation::SafetensorsDir => primero(&[
+            no_vacia(&spec.model.path),
+            spec.download.as_ref().map(|d| d.file.clone()),
+            spec.download.as_ref().map(|d| d.name.clone()),
+        ])
+        .unwrap_or_else(|| "safetensors".to_string()),
+        ArtifactLocation::FlmTag => primero(&[no_vacia(&spec.model.path), tag_de_decision(spec)])
+            .unwrap_or_else(|| "tag".to_string()),
+        ArtifactLocation::StrataCatalog => {
+            primero(&[no_vacia(&spec.model.path)]).unwrap_or_else(|| "strata".to_string())
+        }
+    }
+}
+
+/// El primer valor que no está vacío.
+fn primero(valores: &[Option<String>]) -> Option<String> {
+    valores
+        .iter()
+        .flatten()
+        .find(|valor| !valor.is_empty())
+        .cloned()
+}
+
+/// Un texto como valor, si no está vacío.
+fn no_vacia(texto: &str) -> Option<String> {
+    if texto.is_empty() {
+        None
     } else {
-        descripcion
-    };
-    let marca = if modelo.presence == crate::snapshot::ModelPresence::Downloaded {
-        ""
-    } else {
-        "  [no disponible]"
-    };
-    let _ = grupo;
-    format!(
-        "    {:<28}{:<12}{}{}",
-        modelo.spec.model.name, descripcion, extra, marca
-    )
+        Some(texto.to_string())
+    }
+}
+
+/// El tag del motor de decisión: el valor de `--decision` en `[args].base`.
+///
+/// El tag de un modelo de FLM puede venir de dos sitios (doc B, R-MOD-28):
+/// de `[model].path` —el modelo que se sirve como principal— y de
+/// `--decision` —el motor de decisión que el servidor expone en
+/// `/v1/systemone`—. El D3 (`d3mini`) es el segundo caso: su path va
+/// **vacío a propósito** y su único tag es el de `--decision`.
+fn tag_de_decision(spec: &ModelSpec) -> Option<String> {
+    let mut args = spec.args.base.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--decision" {
+            return args.next().filter(|tag| !tag.is_empty()).cloned();
+        }
+    }
+    None
 }
 
 /// La línea de un grupo **plegado**: el motor no está instalado.

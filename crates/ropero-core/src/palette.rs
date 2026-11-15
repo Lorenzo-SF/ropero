@@ -24,6 +24,12 @@ use crate::EngineColor;
 const INICIO: &str = "\x1b[38;5;";
 /// El sufijo que cierra una secuencia de color.
 const FIN: &str = "m";
+/// El cierre del color de primer plano: el 39 lo deja como estaba.
+///
+/// Antes se cerraba con el 49, que es un **fondo**, no un primer plano: el
+/// texto que venía detrás de un motor salía en gris. Con el 39, lo que
+/// sigue a un nombre de motor sale con el color de siempre.
+const CIERRE: &str = "\x1b[39m";
 
 /// La paleta: los colores del documento, o ninguno.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +55,7 @@ impl Palette {
     /// preguntar si hay que escapar.
     pub fn paint(&self, color: EngineColor, texto: &str) -> String {
         match self.ansi(color) {
-            Some(codigo) => format!("{INICIO}{codigo}{FIN}{texto}{INICIO}49{FIN}"),
+            Some(codigo) => format!("{INICIO}{codigo}{FIN}{texto}{CIERRE}"),
             None => texto.to_string(),
         }
     }

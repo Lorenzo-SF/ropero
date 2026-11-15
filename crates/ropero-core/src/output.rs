@@ -21,6 +21,10 @@ use crate::paths::ResolvedPaths;
 ///
 /// El formato es `CLAVE=valor`; una ruta que no existe no sale (quien pide
 /// `path` pregunta por lo que hay).
+///
+/// Esta salida es una **exportación**, no una tabla: se pasa a un `eval` o
+/// se lee con un `grep`, así que la clave va pegada al `=`. Es la única
+/// excepción al sistema de formato (doc CLI v2 §2).
 pub fn path_lines(paths: &ResolvedPaths) -> Vec<String> {
     let mut out = Vec::new();
     for (label, value) in [
@@ -56,11 +60,60 @@ pub fn first_invalid_token(tokens: &[String]) -> Option<&str> {
 }
 
 /// La línea de resumen de `ropero validate` cuando todo está bien.
+///
+/// El prefijo es el del vocabulario de estados (`ok`), el mismo que usa el
+/// doctor (doc CLI v2 §2).
 pub fn validate_ok_line(files: usize, base: &Path) -> String {
-    format!("OK: {} modelo(s) validados en {}", files, base.display())
+    format!("ok: {} modelo(s) validados en {}", files, base.display())
 }
 
 /// La línea de resumen de `ropero validate` cuando algo falla.
 pub fn validate_failed_line(base: &Path) -> String {
-    format!("validación fallida en {}", base.display())
+    format!("error: validación fallida en {}", base.display())
+}
+
+/// El tamaño declarado de un artefacto, con la **forma única** de la salida.
+///
+/// El tamaño de una descarga es siempre **aproximado** (por eso el `~`) y
+/// siempre con **dos decimales**: así la columna del tamaño tiene una sola
+/// forma y se alinea (doc CLI v2 §2).
+///
+/// `None` cuando el tamaño **no se sabe**: el catálogo no lo declara, o
+/// declara un cero (un tamaño de cero no es un tamaño, es un "no lo sé").
+pub fn tamano_declarado(size: &str) -> Option<String> {
+    let limpio = size.trim();
+    if limpio.is_empty() {
+        return None;
+    }
+    if valor_tamano(limpio).is_some_and(|v| v == 0.0) {
+        return None;
+    }
+    Some(forma_tamano(limpio))
+}
+
+/// La forma única de un tamaño: `~N.NN UNIDAD`.
+///
+/// Lo que no se puede leer como un tamaño sale tal cual: es mejor un texto
+/// raro que un tamaño inventado.
+pub fn forma_tamano(size: &str) -> String {
+    let limpio = size.trim();
+    let (numero, unidad) = match limpio.split_once(' ') {
+        Some((n, u)) => (n.trim(), u.trim()),
+        None => (limpio, ""),
+    };
+    let numero = numero.trim_start_matches('~').replace(',', ".");
+    match numero.parse::<f64>() {
+        Ok(valor) if !unidad.is_empty() => format!("~{valor:.2} {unidad}"),
+        _ => limpio.to_string(),
+    }
+}
+
+/// El número de un tamaño declarado: `"~3.5 GB"` → `3.5`.
+fn valor_tamano(size: &str) -> Option<f64> {
+    let numero = size
+        .trim()
+        .trim_start_matches('~')
+        .split_whitespace()
+        .next()?;
+    numero.replace(',', ".").parse::<f64>().ok()
 }

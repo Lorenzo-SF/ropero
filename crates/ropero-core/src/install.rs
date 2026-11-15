@@ -36,6 +36,7 @@ use crate::ModelSpec;
 use crate::Palette;
 use crate::catalog::Catalog;
 use crate::catalog::real_name;
+use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, Tabla};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // La vía
@@ -542,26 +543,31 @@ pub struct Menu {
 ///
 /// Sólo salen los motores **compatibles** con la máquina (R-CTX-1) y el
 /// color es el de la leyenda (doc CLI v2 §4).
+///
+/// El menú es una **tabla** del sistema de formato (doc CLI v2 §2): el
+/// número de opción se alinea a la derecha (es un número) y el nombre del
+/// motor va en su color.
 pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     let mut menu = Menu::default();
+    let mut tabla = Tabla::nivel(1)
+        .columna(Columna::numero("nº"))
+        .columna(Columna::texto("motor").maximo(ANCHO_MAXIMO))
+        .columna(Columna::texto("color"))
+        .columna(Columna::numero("puertos"))
+        .columna(Columna::texto("estado"));
     for (indice, motor) in motores.iter().enumerate() {
         let manifest = motor.manifest;
-        let nombre = paleta.paint(manifest.color, manifest.id.as_str());
-        let estado = if motor.instalado {
-            "  ya instalado"
-        } else {
-            ""
-        };
-        menu.lineas.push(format!(
-            "  {:>2}  {:<14} {:<12} {:<10}{}",
-            indice + 1,
-            nombre,
-            manifest.color.as_str(),
-            manifest.port_range.to_string(),
-            estado
-        ));
+        let estado = if motor.instalado { "ya instalado" } else { "" };
+        tabla.fila(vec![
+            Celda::plana((indice + 1).to_string()),
+            Celda::motor(manifest.id.as_str(), manifest.color),
+            Celda::plana(manifest.color.as_str()),
+            Celda::plana(manifest.port_range.to_string()),
+            Celda::plana(estado),
+        ]);
         menu.nombres.push(manifest.id.as_str().to_string());
     }
+    menu.lineas.extend(tabla.lineas(paleta));
     menu
 }
 
@@ -573,8 +579,17 @@ pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
 /// Y sólo salen los que **no** son de descarga manual (R-DATA-3): un
 /// `[download].manual = true` es un checkpoint enorme que el instalador no
 /// baja por sorpresa (pero que sí se baja si se pide a mano).
+///
+/// Es una tabla del sistema de formato (doc CLI v2 §2), con el motor como
+/// fila de grupo. El modelo sale con su **nombre** (sin el alias): es lo
+/// que hay que escribir para elegirlo.
 pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     let mut menu = Menu::default();
+    let mut tabla = Tabla::nivel(1)
+        .columna(Columna::numero("nº"))
+        .columna(Columna::texto("modelo").maximo(ANCHO_MAXIMO))
+        .columna(Columna::numero("tamaño"))
+        .columna(Columna::texto("artefacto").maximo(ANCHO_MAXIMO));
     for motor in motores.iter().filter(|m| m.instalado) {
         let id = motor.manifest.id;
         let color = motor.manifest.color;
@@ -587,27 +602,19 @@ pub fn menu_modelos(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palett
         if filas.is_empty() {
             continue;
         }
-        menu.lineas
-            .push(format!("  {}", paleta.paint(color, id.as_str())));
+        tabla.grupo(Celda::motor(id.as_str(), color));
         for spec in filas {
             let indice = menu.nombres.len() + 1;
-            let descripcion = crate::catalog::model_description(spec);
-            let descripcion = if descripcion.is_empty() {
-                "-".to_string()
-            } else {
-                descripcion
-            };
-            menu.lineas.push(format!(
-                "  {:>2}  {:<28}{}",
-                indice, spec.model.name, descripcion
-            ));
+            tabla.fila(vec![
+                Celda::plana(indice.to_string()),
+                Celda::plana(spec.model.name.clone()),
+                Celda::plana(crate::listing::tamano_de(spec)),
+                Celda::plana(crate::listing::artefacto_de(spec)),
+            ]);
             menu.nombres.push(spec.model.name.clone());
         }
-        menu.lineas.push(String::new());
     }
-    while menu.lineas.last().is_some_and(|l| l.is_empty()) {
-        menu.lineas.pop();
-    }
+    menu.lineas.extend(tabla.lineas(paleta));
     menu
 }
 

@@ -14,12 +14,37 @@
 //! **qué hacer** con ella (P-13). "falta `hf`" no sirve de nada; "falta
 //! `hf`: instálalo con `pipx install huggingface_hub`" sí.
 //!
+//! ## La forma
+//!
+//! ```text
+//! DEPENDENCIAS DE ROPERO
+//!   dependencia   estado   qué hacer
+//!   ───────────────────────────────────────────────
+//!   ropero        ok
+//!   git           falta    instálalo con tu gestor de paquetes
+//!
+//! DEPENDENCIAS DE LOS MOTORES
+//!   dependencia   estado   qué hacer
+//!   ───────────────────────────────────────────────
+//!   llama-server (instalado)
+//!   cmake         ok
+//!   ───────────────────────────────────────────────
+//!   vllm (no instalado)
+//!   uv            falta    instálalo con tu gestor de paquetes
+//! ```
+//!
+//! La tabla de los motores es **una**: el motor es una **fila de grupo** y
+//! una regla lo separa del siguiente. La cabecera sale **una sola vez**:
+//! repetirla por motor(recargaba la salida y la partía en varias tablas).
+//!
 //! ## La salida
 //!
 //! El doctor **no** decide el código de salida: dice si todo está bien
 //! ([`DoctorReport::todo_ok`]) y la CLI decide el 0 o el 1.
 
 use crate::EngineManifest;
+use crate::estilo::{Anchos, Celda, Columna, Seccion, Tabla};
+use crate::palette::Palette;
 
 /// Una dependencia: qué es y cómo se llama.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,14 +100,13 @@ pub struct DepCheck {
 }
 
 impl DepCheck {
-    /// La línea del doctor para esta dependencia.
-    pub fn line(&self) -> String {
+    /// El estado de la dependencia: `ok` o `falta`.
+    ///
+    /// Es el **vocabulario** del doctor: el mismo en todas las salidas.
+    pub fn estado(&self) -> &'static str {
         match self.status {
-            DepStatus::Ok => format!("  ok       {}", self.dependency.name),
-            DepStatus::Missing => format!(
-                "  falta    {}: {}",
-                self.dependency.name, self.dependency.remedy
-            ),
+            DepStatus::Ok => "ok",
+            DepStatus::Missing => "falta",
         }
     }
 }
@@ -144,27 +168,33 @@ impl DoctorReport {
     }
 
     /// Las líneas del informe, en el orden del doc.
-    pub fn lines(&self) -> Vec<String> {
+    ///
+    /// El nombre del motor va en el color de la leyenda (doc CLI v2 §4) y
+    /// las dependencias van en la tabla del sistema de formato (§2). Las
+    /// tablas **comparten** los anchos: todas tienen las mismas columnas.
+    ///
+    /// La tabla de los motores es **una**: el motor es una fila de grupo y
+    /// una regla lo separa del siguiente. La cabecera sale **una sola vez**
+    /// (por sección): repetirla por motor(recargaba la salida y la partía
+    /// en varias tablas).
+    pub fn lines(&self, paleta: &Palette) -> Vec<String> {
+        // Las dos tablas: la de ropero y la de los motores.
+        let tabla_ropero = tabla_de_dependencias(&self.ropero, 1);
+        let tabla_motores = tabla_de_motores(&self.engines, 1);
+        let anchos = Anchos::combinado(&[&tabla_ropero, &tabla_motores]);
+
         let mut out: Vec<String> = Vec::new();
-        out.push("DEPENDENCIAS DE ROPERO".to_string());
-        for check in &self.ropero {
-            out.push(check.line());
-        }
+        // Las dependencias de ropero.
+        let mut seccion = Seccion::nueva("DEPENDENCIAS DE ROPERO");
+        seccion.cuerpo(tabla_ropero.lineas_con(&anchos, paleta));
+        out.extend(seccion.lineas());
         out.push(String::new());
-        out.push("DEPENDENCIAS DE LOS MOTORES".to_string());
-        for motor in &self.engines {
-            let estado = if motor.installed {
-                "instalado"
-            } else {
-                "no instalado"
-            };
-            out.push(format!("  {} ({estado})", motor.manifest.id.as_str()));
-            if motor.checks.is_empty() {
-                out.push("    (sin dependencias)".to_string());
-            }
-            for check in &motor.checks {
-                out.push(format!("    {}", check.line()));
-            }
+        // Las de cada motor, en el orden canónico.
+        let mut seccion = Seccion::nueva("DEPENDENCIAS DE LOS MOTORES");
+        seccion.cuerpo(tabla_motores.lineas_con(&anchos, paleta));
+        out.extend(seccion.lineas());
+        while out.last().is_some_and(|l| l.is_empty()) {
+            out.pop();
         }
         out
     }
@@ -177,4 +207,64 @@ impl DoctorReport {
             format!("{} dependencia(s) ausente(s)", self.fallan())
         }
     }
+}
+
+/// La tabla de las dependencias: el nombre, el estado y qué hacer.
+///
+/// La columna de **qué hacer** sólo se llena cuando falta algo: es la
+/// pista (P-13), y no tiene sentido repetirla cuando la dependencia está.
+fn tabla_de_dependencias(comprobaciones: &[DepCheck], nivel: usize) -> Tabla {
+    let mut tabla = Tabla::nivel(nivel)
+        .columna(Columna::texto("dependencia"))
+        .columna(Columna::texto("estado"))
+        .columna(Columna::texto("qué hacer"));
+    for check in comprobaciones {
+        tabla.fila(celdas_de_dependencia(check));
+    }
+    tabla
+}
+
+/// La tabla de los motores: **una** tabla con el motor como fila de grupo.
+///
+/// El nombre del motor va en el color de la leyenda (§4) y su estado
+/// ("instalado") detrás, fuera del color. Sus dependencias van debajo, en la
+/// misma rejilla, y una regla separa un motor del siguiente.
+fn tabla_de_motores(motores: &[EngineDeps], nivel: usize) -> Tabla {
+    let mut tabla = Tabla::nivel(nivel)
+        .columna(Columna::texto("dependencia"))
+        .columna(Columna::texto("estado"))
+        .columna(Columna::texto("qué hacer"));
+    for motor in motores {
+        let estado = if motor.installed {
+            "instalado"
+        } else {
+            "no instalado"
+        };
+        tabla.grupo(Celda::motor_con_sufijo(
+            motor.manifest.id.as_str(),
+            format!(" ({estado})"),
+            motor.manifest.color,
+        ));
+        if motor.checks.is_empty() {
+            tabla.nota(Celda::plana("(sin dependencias)"));
+            continue;
+        }
+        for check in &motor.checks {
+            tabla.fila(celdas_de_dependencia(check));
+        }
+    }
+    tabla
+}
+
+/// Las celdas de una dependencia: el nombre, el estado y qué hacer.
+fn celdas_de_dependencia(check: &DepCheck) -> Vec<Celda> {
+    let pista = match check.status {
+        DepStatus::Ok => String::new(),
+        DepStatus::Missing => check.dependency.remedy.clone(),
+    };
+    vec![
+        Celda::plana(check.dependency.name.clone()),
+        Celda::plana(check.estado()),
+        Celda::plana(pista),
+    ]
 }
