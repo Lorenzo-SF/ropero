@@ -48,6 +48,45 @@ fn un_checkpoint_corrupto_no_reanuda() {
     }
 }
 
+/// **Hallazgo 1 (T-30)**: el checkpoint no guarda sólo la fase, guarda **qué
+/// petición** la completó (su huella). Sin eso, una tirada con otros quants
+/// sobre la misma fuente reanuda con el checkpoint de otra petición y anuncia
+/// un GGUF que no existe.
+#[test]
+fn el_checkpoint_guarda_la_huella_de_la_petición() {
+    let escrito = Checkpoint::con(Fase::Cuantizacion, "0123456789abcdef");
+    let json = escrito.clone().a_json();
+    assert!(
+        json.contains("\"huella\": \"0123456789abcdef\""),
+        "dice {json}"
+    );
+    let leido = Checkpoint::de_json(&json).expect("se lee");
+    assert_eq!(leido, escrito, "la huella se perdió en el round-trip");
+    assert!(
+        leido.es_de("0123456789abcdef"),
+        "no sabe de qué petición es"
+    );
+    assert!(!leido.es_de("fedcba9876543210"), "confunde dos peticiones");
+}
+
+/// Un checkpoint **de otra petición** no reanuda, y uno sin huella (el formato
+/// viejo) tampoco es de ninguna: la tirada empieza de cero.
+#[test]
+fn un_checkpoint_de_otra_petición_no_reanuda() {
+    let ajeno = Checkpoint::de_json(&Checkpoint::con(Fase::Procedencia, "huella-1").a_json())
+        .expect("se lee");
+    assert!(
+        !ajeno.es_de("huella-2"),
+        "reanuda con la petición equivocada"
+    );
+
+    let viejo = Checkpoint::de_json("{\n  \"fase\": \"procedencia\"\n}\n").expect("se lee");
+    assert!(
+        !viejo.es_de("huella-2"),
+        "un checkpoint sin huella no es de nadie"
+    );
+}
+
 /// La reanudación: un checkpoint de `Conversion` hace empezar por la
 /// **cuantización** (T-30: no se repiten la descarga ni la conversión).
 #[test]
