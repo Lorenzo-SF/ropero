@@ -139,6 +139,14 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
 
     // ── si ya existe todo, no se hace nada (ni se baja) ────────────────
     if !peticion.force && !peticion.diagnostico && ya_estan_todas(&plan) {
+        // Un GGUF **sin sidecar** no se puede publicar (R-GGUF-19, T-34): la
+        // tirada no sale con 0 como si nada, sino que dice qué hacer.
+        if let Some((gguf, sidecar)) = sin_sidecar(&plan) {
+            return Err(Error::SinSidecar {
+                gguf: gguf.to_string_lossy().into_owned(),
+                sidecar: sidecar.to_string_lossy().into_owned(),
+            });
+        }
         return Ok(Informe {
             salidas: plan.salidas.iter().map(|s| s.ruta.clone()).collect(),
             cuantizo: false,
@@ -1145,6 +1153,21 @@ fn cola(texto: &str, cuantas: usize) -> Vec<String> {
 /// Si **todas** las salidas ya están (y no hace falta rehacer nada).
 fn ya_estan_todas(plan: &Plan) -> bool {
     plan.salidas.iter().all(|s| s.ruta.is_file())
+}
+
+/// La primera salida **sin sidecar**, si la hay.
+///
+/// Un GGUF sin sidecar no se puede publicar (R-GGUF-19, T-34): el camino
+/// «ya está» no puede salir con 0 como si nada, porque el artefacto no se
+/// puede auditar.
+fn sin_sidecar(plan: &Plan) -> Option<(PathBuf, PathBuf)> {
+    for salida in &plan.salidas {
+        let sidecar = Procedencia::ruta(&salida.ruta);
+        if !sidecar.is_file() {
+            return Some((salida.ruta.clone(), sidecar));
+        }
+    }
+    None
 }
 
 /// El origen de la tirada, para la política de limpieza.
