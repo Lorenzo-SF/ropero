@@ -213,6 +213,7 @@ dependencies = [
 name = "ropero-runtime"
 version = "0.1.0"
 dependencies = [
+ "ropero-bateria",
  "ropero-core",
  "signal-hook",
 ]

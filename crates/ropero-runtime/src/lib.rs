@@ -3,6 +3,7 @@
 mod catalog_scan;
 pub mod device;
 pub mod foreground;
+pub mod inferencia;
 pub mod install;
 pub mod launch;
 mod machine;

@@ -118,18 +118,50 @@ pub fn parse_model_ids(cuerpo: &str) -> Vec<String> {
 ///
 /// Devuelve el cuerpo de la respuesta si el servidor respondió.
 fn http_get(port: u16, path: &str, timeout: Duration, api_key: Option<&str>) -> Option<String> {
+    let mut stream = abre_peticion(port, "GET", path, None, timeout, api_key)?;
+    let respuesta = lee_todo(&mut stream);
+    let texto = String::from_utf8_lossy(&respuesta).into_owned();
+    // El cuerpo va después de la línea en blanco.
+    let cuerpo = texto.split_once("\r\n\r\n")?;
+    Some(cuerpo.1.to_string())
+}
+
+/// Abre la conexión con el motor y le escribe la petición.
+///
+/// Es lo que comparten el `GET` de la sonda y el `POST` de la inferencia:
+/// la cabecera `Authorization: Bearer` va **aquí**, en la petición HTTP, y
+/// nunca en el `argv` de otro proceso ni en la salida del programa.
+pub fn abre_peticion(
+    port: u16,
+    metodo: &str,
+    path: &str,
+    cuerpo: Option<&str>,
+    timeout: Duration,
+    api_key: Option<&str>,
+) -> Option<TcpStream> {
     let direccion = format!("127.0.0.1:{port}");
     let mut stream = TcpStream::connect(&direccion).ok()?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
 
-    let mut peticion = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
+    let mut peticion = format!("{metodo} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n");
     if let Some(clave) = api_key {
         peticion.push_str(&format!("Authorization: Bearer {clave}\r\n"));
     }
+    if let Some(cuerpo) = cuerpo {
+        peticion.push_str("Content-Type: application/json\r\n");
+        peticion.push_str(&format!("Content-Length: {}\r\n", cuerpo.len()));
+    }
     peticion.push_str("Connection: close\r\n\r\n");
+    if let Some(cuerpo) = cuerpo {
+        peticion.push_str(cuerpo);
+    }
     stream.write_all(peticion.as_bytes()).ok()?;
+    Some(stream)
+}
 
+/// Lee la respuesta entera, hasta que el servidor cierra.
+pub fn lee_todo(stream: &mut TcpStream) -> Vec<u8> {
     let mut respuesta = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -137,15 +169,12 @@ fn http_get(port: u16, path: &str, timeout: Duration, api_key: Option<&str>) -> 
             Ok(0) => break,
             Ok(n) => {
                 respuesta.extend_from_slice(&buffer[..n]);
-                if respuesta.len() > 1_000_000 {
+                if respuesta.len() > 8_000_000 {
                     break;
                 }
             }
             Err(_) => break,
         }
     }
-    let texto = String::from_utf8_lossy(&respuesta).into_owned();
-    // El cuerpo va después de la línea en blanco.
-    let cuerpo = texto.split_once("\r\n\r\n")?;
-    Some(cuerpo.1.to_string())
+    respuesta
 }
