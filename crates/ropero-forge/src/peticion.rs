@@ -356,6 +356,58 @@ impl Peticion {
         })
     }
 
+    /// La petición en su forma **canónica**: lo que la hace ser *esta* tirada.
+    ///
+    /// Son las partes que cambian lo que se fabrica: la fuente, los quants
+    /// **en el orden pedido**, el intermedio, el imatrix, las salidas y los
+    /// interruptores que afectan al resultado (`--no-mtp`, `--no-dflash`,
+    /// `--force`). Lo que no afecta al resultado (`--keep-source`,
+    /// `--keep-intermedio`) no entra: dos peticiones que sólo se diferencian
+    /// en la limpieza son la misma tirada.
+    pub fn canon(&self) -> String {
+        let imatrix = match &self.imatrix {
+            None => "ninguna".to_string(),
+            Some(Imatrix::Local(fichero)) => format!("local:{}", fichero.to_string_lossy()),
+            Some(Imatrix::Remota { repo, file }) => format!("remota:{repo}/{file}"),
+        };
+        [
+            self.fuente.describe(),
+            if self.quants.is_empty() {
+                "sin quant".to_string()
+            } else {
+                self.quants.join(",")
+            },
+            self.intermedio.sufijo().to_string(),
+            imatrix,
+            self.out.clone().unwrap_or_else(|| "sin out".to_string()),
+            self.out_principal
+                .clone()
+                .unwrap_or_else(|| "sin principal".to_string()),
+            format!(
+                "no-mtp={} no-dflash={} force={}",
+                self.no_mtp, self.no_dflash, self.force
+            ),
+        ]
+        .join(" | ")
+    }
+
+    /// La **huella** de la petición: un número fijo (FNV-1a, 64 bits) de su
+    /// forma canónica.
+    ///
+    /// Es el valor que guarda el checkpoint (ver [`crate::fases::Checkpoint`]):
+    /// si la huella del checkpoint no es la de la tirada actual, el checkpoint
+    /// **no es de esta petición** y se descarta. Es un hash y no el texto: el
+    /// JSON del checkpoint no se rompe con comillas o barras de una ruta, y dos
+    /// peticiones distintas no se confunden por un accidente de parsing.
+    pub fn huella(&self) -> String {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in self.canon().bytes() {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+        format!("{hash:016x}")
+    }
+
     /// Si la petición pide **cuantizar de verdad**: hay quants que no son
     /// planos (F32/F16/BF16). Es lo que decide si hace falta el imatrix.
     pub fn pide_cuantizacion(&self) -> bool {

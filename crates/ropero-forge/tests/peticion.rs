@@ -251,3 +251,81 @@ fn la_consulta_tambiene_exige_quants_que_existen() {
         "sale: {error:?}"
     );
 }
+
+/// **Hallazgo 4** (doc CLI v2 §3): un `--quant` inválido es un argumento
+/// inválido, o sea **uso**: sale con **2**, no con 1.
+#[test]
+fn un_quant_invalido_es_error_de_uso_y_sale_con_dos() {
+    let error = peticion::valida_consulta(&Flags::default().con_quants(&["Q9_Z"]))
+        .expect_err("el quant no existe");
+    assert_eq!(error.codigo(), 2, "sale con {}: {error}", error.codigo());
+    assert!(
+        error.to_string().contains("Q9_Z"),
+        "el mensaje no dice el valor recibido: {error}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La pista (P-13): todos los errores dicen **qué hacer**.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **Hallazgo 5** (P-13): los errores de ejecución —verificación, procedencia,
+/// disco, fuente que no está y descarga— no tenían pista.
+#[test]
+fn los_errores_de_ejecucion_dicen_que_hacer() {
+    let verificacion = Error::Verificacion {
+        gguf: "models/gguf/modelo-Q4_K_M.gguf".to_string(),
+        motivo: "la cabecera no es GGUF".to_string(),
+        pesos: "NO borro los pesos: están en /cache/ropero/gguffer/acme__modelo".to_string(),
+    };
+    assert!(
+        verificacion
+            .pista()
+            .is_some_and(|pista| pista.contains("rehaz") && pista.contains("--force")),
+        "no dice qué hacer: {verificacion}"
+    );
+
+    let procedencia = Error::Procedencia {
+        dest: "/models/gguf/modelo.gguf.fuente.json".to_string(),
+        detalle: "permiso denegado".to_string(),
+    };
+    assert!(
+        procedencia
+            .pista()
+            .is_some_and(|pista| pista.contains("comprueba")),
+        "no dice qué hacer: {procedencia}"
+    );
+
+    let disco = Error::Disco {
+        que: "crear el directorio /cache/ropero/gguffer".to_string(),
+        detalle: "disco lleno".to_string(),
+    };
+    assert!(
+        disco
+            .pista()
+            .is_some_and(|pista| pista.contains("comprueba")),
+        "no dice qué hacer: {disco}"
+    );
+
+    let fuente = Error::FuenteNoEsta {
+        fuente: "--path /models/qwen".to_string(),
+        ruta: "/models/qwen".to_string(),
+    };
+    assert!(
+        fuente
+            .pista()
+            .is_some_and(|pista| pista.contains("comprueba") && pista.contains("hf download")),
+        "no dice qué hacer: {fuente}"
+    );
+
+    let descarga = Error::Descarga {
+        repo: "acme/modelo".to_string(),
+        codigo: Some(1),
+    };
+    assert!(
+        descarga
+            .pista()
+            .is_some_and(|pista| pista.contains("reintenta") && pista.contains("HF_TOKEN")),
+        "no dice qué hacer: {descarga}"
+    );
+}

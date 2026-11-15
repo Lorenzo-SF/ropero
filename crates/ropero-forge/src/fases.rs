@@ -74,27 +74,58 @@ impl Fase {
     }
 }
 
-/// El checkpoint de una tirada: la **última fase completada**.
+/// El checkpoint de una tirada: la **última fase completada** y **de qué
+/// petición** es.
 ///
 /// Al reanudar, la tirada empieza por la fase siguiente a la guardada.
 /// Un checkpoint que dice `Conversion` significa: la fuente y la
 /// conversión ya están, sigue por la cuantización.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// La **huella** es lo que hace que el checkpoint sea de *esta* tirada: sin
+/// ella, una petición distinta sobre la misma fuente reanuda con el
+/// checkpoint de la anterior y anuncia un GGUF que no existe (T-30). Es el
+/// hash de la forma canónica de la petición
+/// ([`crate::peticion::Peticion::huella`]), no su texto: el JSON no se
+/// rompe con las barras o comillas de una ruta.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
     /// La última fase completada.
     pub fase: Fase,
+    /// La huella de la petición que completó esa fase (vacía si no se sabe).
+    pub huella: String,
 }
 
 impl Checkpoint {
-    /// El checkpoint de una fase completada.
+    /// El checkpoint de una fase completada, **sin huella** (el formato viejo:
+    /// no se sabe de qué petición es, y por eso no reanuda).
     pub fn de(fase: Fase) -> Self {
-        Checkpoint { fase }
+        Checkpoint {
+            fase,
+            huella: String::new(),
+        }
+    }
+
+    /// El checkpoint de una fase completada **por esta petición**.
+    pub fn con(fase: Fase, huella: &str) -> Self {
+        Checkpoint {
+            fase,
+            huella: huella.to_string(),
+        }
+    }
+
+    /// Si el checkpoint es de la petición con esa huella.
+    pub fn es_de(&self, huella: &str) -> bool {
+        !self.huella.is_empty() && self.huella == huella
     }
 
     /// El **estado** del checkpoint, tal y como va al fichero (JSON
     /// mínimo, escrito a mano como el sidecar de procedencia).
     pub fn a_json(self) -> String {
-        format!("{{\n  \"fase\": \"{}\"\n}}\n", self.fase.nombre())
+        format!(
+            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\"\n}}\n",
+            self.fase.nombre(),
+            escapa(&self.huella)
+        )
     }
 
     /// El checkpoint que hay en un fichero de estado.
@@ -102,14 +133,32 @@ impl Checkpoint {
     /// Un fichero que no se puede leer o que no dice una fase de las seis
     /// **no es un checkpoint**: la tirada empieza de cero (y eso es lo
     /// seguro: reanudar con un estado medio entendido borra o salta cosas
-    /// que no toca).
+    /// que no toca). La huella es opcional: un checkpoint del formato viejo
+    /// se lee con huella vacía, y `es_de` dice que no es de nadie.
     pub fn de_json(texto: &str) -> Option<Self> {
-        let fase = texto
-            .split('"')
-            .skip_while(|trozo| *trozo != "fase")
-            .nth(2)?;
-        let fase = fase.trim().trim_matches(|c| c == ',' || c == ' ');
+        let fase = valor(texto, "fase")?;
         let fase = Fase::TODAS.iter().find(|f| f.nombre() == fase)?;
-        Some(Checkpoint { fase: *fase })
+        Some(Checkpoint {
+            fase: *fase,
+            huella: valor(texto, "huella").unwrap_or_default().to_string(),
+        })
     }
+}
+
+/// El valor de una clave de un JSON plano de un nivel (el checkpoint se
+/// escribe y se lee a mano, como el resto de la forja).
+fn valor<'a>(texto: &'a str, clave: &str) -> Option<&'a str> {
+    let trozos: Vec<&str> = texto.split('"').collect();
+    for (i, trozo) in trozos.iter().enumerate() {
+        if *trozo == clave {
+            let valor = *trozos.get(i + 2)?;
+            return Some(valor.trim().trim_matches(|c| c == ',' || c == ' '));
+        }
+    }
+    None
+}
+
+/// Escapa lo que rompería un valor JSON (comillas y barras).
+fn escapa(texto: &str) -> String {
+    texto.replace('\\', "\\\\").replace('"', "\\\"")
 }
