@@ -342,7 +342,6 @@ impl Plan {
         let work_root = env
             .env_path("GGUF_WORK_DIR", ".cache/ropero/gguffer")
             .to_path_buf();
-        let out_dir_base = env.env_path("GGUF_DIR", "models/gguf").to_path_buf();
 
         // ── el nombre base y el directorio de trabajo ─────────────────
         let mut nombre = nombre_de_fuente(&peticion.fuente);
@@ -370,29 +369,10 @@ impl Plan {
         }
 
         // ── el directorio de salida ────────────────────────────────────
-        // `--out` con ruta de fichero: el directorio es el de esa ruta.
-        // `--out` con directorio: ese. `--out-principal`: el del principal
-        // (así el GGUF cae en la carpeta del modelo, que es lo que espera
-        // el TOML).
-        let out_dir = if let Some(principal) = peticion.out_principal.as_deref() {
-            Path::new(principal)
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| out_dir_base.clone())
-        } else if let Some(out) = peticion.out.as_deref() {
-            if out.ends_with(".gguf") {
-                Path::new(out)
-                    .parent()
-                    .map(Path::to_path_buf)
-                    .unwrap_or_else(|| out_dir_base.clone())
-            } else if out.contains('/') {
-                PathBuf::from(out.trim_end_matches('/'))
-            } else {
-                out_dir_base.clone()
-            }
-        } else {
-            out_dir_base.clone()
-        };
+        // Lo resuelve la petición (es lo que va en su huella): `--out` con
+        // ruta de fichero, `--out` con directorio, `--out-principal` o el
+        // `$GGUF_DIR`.
+        let out_dir = peticion.out_dir(env);
 
         // ── el intermedio ──────────────────────────────────────────────
         // Se llama como lo que lleva dentro (ver [`Clase::sufijo_intermedio`]).

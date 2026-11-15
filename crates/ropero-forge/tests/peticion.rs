@@ -5,6 +5,7 @@
 //! ninguna validación lee el disco, así que una petición mal escrita no
 //! puede costar una descarga.
 
+use ropero_core::Environment;
 use ropero_forge::Error;
 use ropero_forge::peticion::{self, Flags, Peticion};
 
@@ -14,6 +15,16 @@ fn uso(peticion: Result<Peticion, Error>) -> String {
         Err(Error::Uso(mensaje)) => mensaje,
         otro => panic!("esperaba un error de uso, y salió: {otro:?}"),
     }
+}
+
+/// Un entorno de pruebas: las variables que la forja mira (`$GGUF_DIR` y
+/// `$GGUF_WORK_DIR`).
+fn entorno(vars: &[(&str, &str)]) -> Environment {
+    let mut mapa = std::collections::BTreeMap::new();
+    for (clave, valor) in vars {
+        mapa.insert(clave.to_string(), valor.to_string());
+    }
+    Environment::new(mapa, "/home/prueba", "/tmp/prueba")
 }
 
 /// La fuente es **una de tres**, y sin ninguna es un error de uso que
@@ -327,5 +338,136 @@ fn los_errores_de_ejecucion_dicen_que_hacer() {
             .pista()
             .is_some_and(|pista| pista.contains("reintenta") && pista.contains("HF_TOKEN")),
         "no dice qué hacer: {descarga}"
+    );
+}
+
+// ── La huella de la petición: qué es y qué no ──────────────────────────────
+
+/// La huella es **determinista**: la misma petición, la misma huella.
+///
+/// Es lo que hace que el checkpoint sea de *esta* tirada (T-30): si la
+/// huella cambiara sola, ninguna tirada podría reanudarse.
+#[test]
+fn la_huella_es_determinista() {
+    let env = entorno(&[("GGUF_DIR", "/tmp/salida")]);
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"]);
+    let peticion = Peticion::de_flags(flags.clone()).expect("la petición");
+    assert_eq!(
+        peticion.huella(&env),
+        peticion.huella(&env),
+        "no es estable"
+    );
+    // Y dos peticiones con lo mismo dan la misma huella.
+    let otra = Peticion::de_flags(flags).expect("la petición");
+    assert_eq!(
+        peticion.huella(&env),
+        otra.huella(&env),
+        "dos peticiones iguales no coinciden"
+    );
+}
+
+/// La huella **cambia** cuando cambia lo que se fabrica: el quant, el
+/// intermedio, el imatrix o la salida.
+#[test]
+fn la_huella_cambia_cuando_cambia_la_tirada() {
+    let env = entorno(&[("GGUF_DIR", "/tmp/salida")]);
+    let base = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"]);
+    let referencia = Peticion::de_flags(base.clone())
+        .expect("la petición")
+        .huella(&env);
+
+    let otro = Peticion::de_flags(base.clone().con_quants(&["Q4_K_M"])).expect("la petición");
+    assert_ne!(
+        otro.huella(&env),
+        referencia,
+        "cambiar el quant no cambia la huella"
+    );
+
+    let otro = Peticion::de_flags(base.clone().con_intermedio("bf16")).expect("la petición");
+    assert_ne!(
+        otro.huella(&env),
+        referencia,
+        "cambiar el intermedio no cambia la huella"
+    );
+
+    let otro = Peticion::de_flags(base.clone().con_imatrix("/tmp/imx.dat")).expect("la petición");
+    assert_ne!(
+        otro.huella(&env),
+        referencia,
+        "cambiar el imatrix no cambia la huella"
+    );
+
+    let otro = Peticion::de_flags(base.clone().con_out("otro")).expect("la petición");
+    assert_ne!(
+        otro.huella(&env),
+        referencia,
+        "cambiar la salida no cambia la huella"
+    );
+}
+
+/// La huella **no** cambia con lo que no cambia lo que se fabrica: la
+/// limpieza (`--keep-source`, `--keep-intermedio`) ni el directorio de
+/// trabajo (que es temporal: si entrara, la reanudación dejaría de
+/// funcionar).
+#[test]
+fn la_huella_no_cambia_con_la_limpieza_ni_con_el_directorio_de_trabajo() {
+    let env = entorno(&[
+        ("GGUF_DIR", "/tmp/salida"),
+        ("GGUF_WORK_DIR", "/tmp/trabajo-1"),
+    ]);
+    let mut flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"]);
+    let referencia = Peticion::de_flags(flags.clone())
+        .expect("la petición")
+        .huella(&env);
+
+    flags.keep_source = true;
+    flags.keep_intermedio = true;
+    let otra = Peticion::de_flags(flags).expect("la petición");
+    assert_eq!(
+        otra.huella(&env),
+        referencia,
+        "la limpieza cambia la huella"
+    );
+
+    let otro_trabajo = entorno(&[
+        ("GGUF_DIR", "/tmp/salida"),
+        ("GGUF_WORK_DIR", "/tmp/trabajo-2"),
+    ]);
+    assert_eq!(
+        otra.huella(&otro_trabajo),
+        referencia,
+        "el directorio de trabajo cambia la huella"
+    );
+}
+
+/// El **directorio de salida resuelto** va en la huella.
+///
+/// El defecto: la huella no lo incluía, así que la misma petición con otro
+/// `$GGUF_DIR` reutilizaba el checkpoint, no fabricaba nada y la tirada
+/// moría con «salida faltante» en vez de rehacerse.
+#[test]
+fn la_huella_cambia_con_el_directorio_de_salida() {
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let uno = entorno(&[("GGUF_DIR", "/tmp/salida-1")]);
+    let otro = entorno(&[("GGUF_DIR", "/tmp/salida-2")]);
+    assert_ne!(
+        peticion.huella(&uno),
+        peticion.huella(&otro),
+        "el directorio de salida no va en la huella"
+    );
+    // Y el mismo directorio, la misma huella.
+    assert_eq!(
+        peticion.huella(&uno),
+        peticion.huella(&entorno(&[("GGUF_DIR", "/tmp/salida-1")])),
+        "el mismo directorio da huellas distintas"
     );
 }

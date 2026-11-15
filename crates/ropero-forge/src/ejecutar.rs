@@ -118,14 +118,14 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // (T-30, R-GGUF-20). Con `--force` se descarta siempre: force es pedir
     // que se rehaga.
     let fichero_cp = plan.work.join(CHECKPOINT);
-    let huella = peticion.huella();
+    let huella = peticion.huella(env);
     let guardado = Checkpoint::de_json(&lee(&fichero_cp));
     let cambio = if peticion.force {
         Some("la petición es con --force: el checkpoint se descarta y se rehace".to_string())
     } else if guardado.as_ref().is_some_and(|cp| !cp.es_de(&huella)) {
         Some(format!(
             "la petición cambió ({}): el checkpoint es de otra tirada, se rehace desde el principio",
-            peticion.canon()
+            peticion.canon(env)
         ))
     } else {
         None

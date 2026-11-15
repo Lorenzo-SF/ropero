@@ -251,6 +251,14 @@ impl Tirada {
         self
     }
 
+    /// El directorio de salida de los GGUFs (`$GGUF_DIR`).
+    fn con_salida(&mut self, dir: &Path) {
+        let dir = dir.to_string_lossy().into_owned();
+        self.env_con(move |vars| {
+            vars.insert("GGUF_DIR".to_string(), dir.clone());
+        });
+    }
+
     fn env_con(&mut self, f: impl FnOnce(&mut std::collections::BTreeMap<String, String>)) {
         let mut vars = self.env.vars.clone();
         f(&mut vars);
@@ -619,7 +627,7 @@ fn un_checkpoint_de_la_fase_procedencia_sin_el_gguf_no_es_un_exito() {
     fs::create_dir_all(cp.parent().unwrap()).expect("crear el work");
     fs::write(
         &cp,
-        Checkpoint::con(Fase::Procedencia, &peticion.huella()).a_json(),
+        Checkpoint::con(Fase::Procedencia, &peticion.huella(&tirada.env)).a_json(),
     )
     .expect("escribir el checkpoint");
 
@@ -640,6 +648,52 @@ fn un_checkpoint_de_la_fase_procedencia_sin_el_gguf_no_es_un_exito() {
         tirada.log("quant.log").trim().is_empty(),
         "el cuantizador se llamó: {}",
         tirada.log("quant.log")
+    );
+}
+
+/// **La huella incluye el directorio de salida**.
+///
+/// El defecto: la huella no lo incluía, así que la misma petición con otro
+/// `$GGUF_DIR` reutilizaba el checkpoint, no fabricaba nada y la tirada
+/// moría con «salida faltante» (exit 1) en vez de rehacerse.
+#[test]
+fn la_misma_petición_con_otro_directorio_de_salida_rehace_el_gguf() {
+    let mut tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let mut flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"])
+        .con_imatrix(&tirada.imatrix());
+    // `--keep-source`: el checkpoint sobrevive a la limpieza (si no, la
+    // primera tirada lo borra con el clon y no hay nada que reutilizar).
+    flags.keep_source = true;
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let primera = ejecutar::forja(&peticion, &tirada.env).expect("la primera tirada");
+    assert!(
+        primera.cuantizo,
+        "la primera tirada no cuantizó: {primera:?}"
+    );
+    assert!(
+        tirada.base.join("gguf/modelo-IQ2_M.gguf").is_file(),
+        "la primera tirada no dejó el GGUF"
+    );
+
+    // La misma petición, pero con otro directorio de salida: es **otra**
+    // tirada, y el GGUF se rehace allí.
+    tirada.con_salida(&tirada.base.join("gguf-2"));
+    let segunda = ejecutar::forja(&peticion, &tirada.env).expect("la segunda tirada");
+    assert!(
+        segunda.cuantizo,
+        "la segunda tirada no cuantizó: {segunda:?}"
+    );
+    assert!(
+        tirada.base.join("gguf-2/modelo-IQ2_M.gguf").is_file(),
+        "el GGUF no se rehízo en el sitio nuevo: {segunda:?}"
+    );
+    let lineas = ejecutar::lineas(&segunda);
+    assert!(
+        lineas.iter().any(|l| l.contains("cambió")),
+        "el informe no dice que la petición cambió: {lineas:?}"
     );
 }
 
