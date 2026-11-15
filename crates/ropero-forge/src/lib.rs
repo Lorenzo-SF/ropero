@@ -22,6 +22,8 @@
 //! | [`fases`] | la máquina de las seis fases y el checkpoint | no |
 //! | [`limpieza`] | la política de limpieza (R-GGUF-16…18) | no |
 //! | [`procedencia`] | el sidecar de procedencia (R-GGUF-19) | no |
+//! | [`ejecutar`] | la tirada: las seis fases de verdad | sí |
+//! | [`verificar`] | la verificación mínima de un GGUF | sí |
 //!
 //! Lo puro va delante a propósito: el plan, la viabilidad, la política de
 //! limpieza y la procedencia se pueden afirmar en un test sin que se baje
@@ -37,6 +39,7 @@
 
 use std::fmt;
 
+pub mod ejecutar;
 pub mod fases;
 pub mod limpieza;
 pub mod peticion;
@@ -44,12 +47,28 @@ pub mod plan;
 pub mod procedencia;
 pub mod quants;
 pub mod toolchain;
+pub mod verificar;
 
+pub use ejecutar::{Informe, forja};
 pub use fases::{Checkpoint, Fase};
 pub use peticion::{Fuente, Imatrix, Intermedio, Peticion};
 pub use plan::{Clase, Plan, Viabilidad};
 pub use procedencia::{MtpInfo, Procedencia};
 pub use toolchain::{Motor, Toolchain};
+
+/// Un aviso de la forja: va a **stderr** (stdout es para los datos).
+pub fn avisa(mensaje: &str) {
+    crate::err_line(&format!("aviso: {mensaje}"));
+}
+
+/// Escribe una línea en stderr, tolerando el pipe roto.
+///
+/// Es el mismo primitivo del core, duplicado aquí para que la forja no
+/// dependa de la capa de presentación más de lo que debe.
+fn err_line(texto: &str) {
+    use std::io::Write;
+    let _ = std::io::stderr().write_all(format!("{texto}\n").as_bytes());
+}
 
 /// Los errores de la forja.
 ///
