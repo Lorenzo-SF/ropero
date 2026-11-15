@@ -219,16 +219,24 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // «cuantizado a Q4_K_M» sin que el cuantizador llegara a correr (R-GGUF-20:
     // no mentir sobre el resultado).
     let mut estados = Estados::default();
+    let mut hash_imatrix: Option<String> = None;
     if let Some(cp) = checkpoint.as_ref()
         && cp.fase.orden() >= Fase::Cuantizacion.orden()
     {
         estados.por_quant = cp.estados.clone();
+        hash_imatrix = cp.imatrix_sha256.clone();
     }
 
     // ── FASE 1: la fuente ──────────────────────────────────────────────
     if siguiente.is_some_and(|f| f == Fase::Fuente) {
         fase_fuente(peticion, env, &plan)?;
-        escribe_cp(&fichero_cp, Fase::Fuente, &huella, &estados)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Fuente,
+            &huella,
+            &estados,
+            hash_imatrix.as_deref(),
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Fuente);
 
@@ -259,7 +267,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // La fuente `--gguf` no pasa por el conversor, pero la fase está
         // hecha igual: sin este checkpoint, el fichero se queda atrás
         // («fuente») y la reanudación no sabe por dónde seguir.
-        escribe_cp(&fichero_cp, Fase::Conversion, &huella, &estados)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Conversion,
+            &huella,
+            &estados,
+            hash_imatrix.as_deref(),
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Conversion);
 
@@ -290,6 +304,12 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         {
             baja_imatrix(imx, env, &plan)?;
         }
+        // El hash del imatrix se calcula **aquí**, antes de que la limpieza
+        // (fase 5) borre el work: el imatrix remoto vive en su caché, y sin
+        // su hash el sidecar no dice **cuál** matriz se usó (R-GGUF-19).
+        if hash_imatrix.is_none() {
+            hash_imatrix = hash_del_imatrix(peticion, &plan);
+        }
         // Lo que el conversor ya hizo (el F16 pedido como salida) no lo
         // vuelve a decir la fase 3: su estado es «convertido», no «ya
         // existía» (R-GGUF-20).
@@ -306,7 +326,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         for (quant, estado) in de_la_fase_3.por_quant {
             estados.fija(&quant, estado);
         }
-        escribe_cp(&fichero_cp, Fase::Cuantizacion, &huella, &estados)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Cuantizacion,
+            &huella,
+            &estados,
+            hash_imatrix.as_deref(),
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Cuantizacion);
     let cuantizo = estados.cuantizo();
@@ -325,7 +351,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
                 });
             }
         }
-        escribe_cp(&fichero_cp, Fase::Verificacion, &huella, &estados)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Verificacion,
+            &huella,
+            &estados,
+            hash_imatrix.as_deref(),
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Verificacion);
 
@@ -350,7 +382,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // El checkpoint se escribe ANTES de los borrados: la limpieza
         // puede borrar el work con el propio checkpoint dentro (R-GGUF-16
         // y R-GGUF-17), y entonces ya no hay nada que reanudar.
-        escribe_cp(&fichero_cp, Fase::Limpieza, &huella, &estados)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Limpieza,
+            &huella,
+            &estados,
+            hash_imatrix.as_deref(),
+        )?;
         if ordenes.borrar_clon {
             borra_dir(&plan.work, "borrar el clon de los pesos")?;
         }
@@ -364,15 +402,33 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
 
     // ── FASE 6: la procedencia (R-GGUF-19: si no se puede, falla) ──────
     if siguiente.is_some_and(|f| f == Fase::Procedencia) {
+        // El hash del imatrix: el de la fase 3, o el del fichero si aún está
+        // (el local nunca se borra; el remoto puede que sí).
+        let hash = hash_imatrix
+            .clone()
+            .or_else(|| hash_del_imatrix(peticion, &plan));
         for salida in &plan.salidas {
-            escribe_procedencia(salida, peticion, clase, es_entrada, &estados, &plan)?;
+            escribe_procedencia(
+                salida,
+                peticion,
+                clase,
+                es_entrada,
+                &estados,
+                hash.as_deref(),
+            )?;
         }
         // El checkpoint final sólo si el work sigue ahí: la limpieza
         // pudo borrarlo con el checkpoint dentro, y entonces no hay nada
         // que reanudar — un reintento con los GGUF ya hechos cae en «ya
         // estaba» (T-30).
         if plan.work.is_dir() {
-            escribe_cp(&fichero_cp, Fase::Procedencia, &huella, &estados)?;
+            escribe_cp(
+                &fichero_cp,
+                Fase::Procedencia,
+                &huella,
+                &estados,
+                hash_imatrix.as_deref(),
+            )?;
         }
     }
 
@@ -938,11 +994,8 @@ fn escribe_procedencia(
     clase: Clase,
     es_entrada: bool,
     estados: &Estados,
-    plan: &Plan,
+    hash_imatrix: Option<&str>,
 ) -> Result<(), Error> {
-    // El hash del imatrix: el del fichero (el local nunca se borra; el remoto
-    // puede que sí: su caché la lleva la limpieza).
-    let hash_imatrix = hash_del_imatrix(peticion, plan);
     let imatrix = peticion.imatrix.as_ref().map(|imx| ImatrixInfo {
         fichero: match imx {
             Imatrix::Local(fichero) => fichero
@@ -1308,14 +1361,20 @@ fn escribe(ruta: &Path, texto: &str) -> Result<(), String> {
 ///
 /// El directorio puede no existir todavía (un `--gguf` local no crea el
 /// work hasta la limpieza).
-fn escribe_cp(ruta: &Path, fase: Fase, huella: &str, estados: &Estados) -> Result<(), Error> {
+fn escribe_cp(
+    ruta: &Path,
+    fase: Fase,
+    huella: &str,
+    estados: &Estados,
+    imatrix_sha256: Option<&str>,
+) -> Result<(), Error> {
     if let Some(padre) = ruta.parent() {
         crea_dir(padre)?;
     }
     let temporal = temporal_de(ruta);
     escribe(
         &temporal,
-        &Checkpoint::con_estado(fase, huella, &estados.por_quant).a_json(),
+        &Checkpoint::con_estado(fase, huella, &estados.por_quant, imatrix_sha256).a_json(),
     )
     .map_err(|detalle| Error::Disco {
         que: format!("escribir el checkpoint ({})", fase.nombre()),
