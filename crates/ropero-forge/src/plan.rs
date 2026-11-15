@@ -54,9 +54,20 @@ pub enum Clase {
     /// FP8, AWQ, GPTQ: el conversor los **dequantiza** a F16. Se puede
     /// cuantizar desde ahí, avisando de que el quant de fábrica se pierde.
     Dequant,
+    /// Un GGUF **ya cuantizado** (o ya en un dtype plano), según el
+    /// `general.file_type` **de su cabecera** (R-GGUF-7). Es la clase de
+    /// verdad: el nombre del fichero puede decir BF16 y contener un IQ2_M.
+    ///
+    /// Se construye con [`Clase::de_numero`].
+    Gguf(u32),
 }
 
 impl Clase {
+    /// La clase de un GGUF por el `llama_ftype` de su cabecera.
+    pub fn de_numero(numero: u32) -> Clase {
+        Clase::Gguf(numero)
+    }
+
     /// El `llama_ftype` que se espera en el GGUF convertido.
     ///
     /// Es lo que el plan usa para saber si el quant pedido ya está en los
@@ -64,6 +75,7 @@ impl Clase {
     /// intermedio (F16 = 1, BF16 = 32).
     pub fn ftype_esperado(self, intermedio: crate::peticion::Intermedio) -> u32 {
         match self {
+            Clase::Gguf(numero) => numero,
             Clase::Nvfp4 | Clase::Mixto => 39,
             Clase::Mxfp4 => 38,
             Clase::Ninguno | Clase::Dequant => match intermedio {
@@ -78,6 +90,7 @@ impl Clase {
     /// F16 hace que se crea que se puede reutilizar para otro quant).
     pub fn sufijo_intermedio(self, intermedio: crate::peticion::Intermedio) -> &'static str {
         match self {
+            Clase::Gguf(numero) => quants::nombre_de(numero).unwrap_or("desconocido"),
             Clase::Nvfp4 | Clase::Mixto => "NVFP4",
             Clase::Mxfp4 => "MXFP4_MOE",
             Clase::Ninguno | Clase::Dequant => intermedio.sufijo(),
@@ -268,10 +281,21 @@ pub fn nombre_de_fuente(fuente: &Fuente) -> String {
 /// `acme/modelo-NVFP4` no produce `modelo-NVFP4-NVFP4` (R-GGUF-9: el
 /// GGUF ya está en ese quant, se **coloca** bajo su propio nombre).
 fn ruta_de_salida(dir: &Path, nombre: &str, quant: &str) -> PathBuf {
-    if nombre.ends_with(&format!("-{quant}")) {
+    if acaba_en_sufijo(nombre, quant) {
         dir.join(format!("{nombre}.gguf"))
     } else {
         dir.join(format!("{nombre}-{quant}.gguf"))
+    }
+}
+
+/// Si un nombre **termina en** un sufijo **con separador** (o es el sufijo
+/// entero). Sin separador, `modelo-BF16` «termina en F16» y el plan confunde
+/// el nombre del repo con el sufijo del quant: se llamaría `modelo-BF16-F16`
+/// o, peor, `modelo-BF16` cuando el intermedio es F16.
+fn acaba_en_sufijo(nombre: &str, sufijo: &str) -> bool {
+    match nombre.strip_suffix(sufijo) {
+        None => false,
+        Some(prefijo) => prefijo.is_empty() || "-_.".chars().any(|sep| prefijo.ends_with(sep)),
     }
 }
 
@@ -374,7 +398,7 @@ impl Plan {
         // Se llama como lo que lleva dentro (ver [`Clase::sufijo_intermedio`]).
         let mut nombre_inter = nombre.clone();
         let sufijo = clase.sufijo_intermedio(peticion.intermedio);
-        if !nombre_inter.ends_with(sufijo) {
+        if !acaba_en_sufijo(&nombre_inter, sufijo) {
             nombre_inter = format!("{nombre_inter}-{sufijo}");
         }
         let intermedio = out_dir.join(format!("{nombre_inter}.gguf"));

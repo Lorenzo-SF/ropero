@@ -298,3 +298,38 @@ fn la_salida_y_el_sidecar_se_llaman_como_el_artefacto() {
         out_dir.join("modelo-F16.gguf.fuente.json")
     );
 }
+
+/// **Hallazgo 8**: el sufijo del intermedio se comparaba con `ends_with` **sin
+/// separador**, así que `modelo-BF16` «terminaba en F16» y el intermedio F16 de
+/// ese repo se llamaba `modelo-BF16.gguf`: un nombre que dice BF16 y contiene
+/// F16. El sufijo va delimitado.
+#[test]
+fn el_sufijo_del_intermedio_va_delimitado() {
+    let flags = Flags {
+        repo: Some("acme/modelo-BF16".to_string()),
+        quants: vec!["IQ2_M".to_string()],
+        ..Flags::default()
+    };
+    let peticion = Peticion::de_flags(flags).expect("la petición es válida");
+    let env = Environment::default();
+    let plan = Plan::de(&peticion, &env, Clase::Ninguno).expect("el plan");
+
+    let intermedio = plan.intermedio.to_string_lossy().into_owned();
+    assert!(
+        intermedio.ends_with("modelo-BF16-F16.gguf"),
+        "el intermedio confunde el nombre del repo con el sufijo: {intermedio}"
+    );
+    // Y cuando el nombre YA es el sufijo (con separador), no se repite.
+    let flags = Flags {
+        repo: Some("acme/modelo-F16".to_string()),
+        quants: vec!["F16".to_string()],
+        ..Flags::default()
+    };
+    let peticion = Peticion::de_flags(flags).expect("la petición es válida");
+    let plan = Plan::de(&peticion, &env, Clase::Ninguno).expect("el plan");
+    let intermedio = plan.intermedio.to_string_lossy().into_owned();
+    assert!(
+        intermedio.ends_with("modelo-F16.gguf"),
+        "el intermedio repite el sufijo: {intermedio}"
+    );
+}
