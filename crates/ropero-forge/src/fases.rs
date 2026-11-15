@@ -74,8 +74,8 @@ impl Fase {
     }
 }
 
-/// El checkpoint de una tirada: la **última fase completada** y **de qué
-/// petición** es.
+/// El checkpoint de una tirada: la **última fase completada**, **de qué
+/// petición** es y **qué cuantizó** la fase 3.
 ///
 /// Al reanudar, la tirada empieza por la fase siguiente a la guardada.
 /// Un checkpoint que dice `Conversion` significa: la fuente y la
@@ -87,12 +87,19 @@ impl Fase {
 /// hash de la forma canónica de la petición
 /// ([`crate::peticion::Peticion::huella`]), no su texto: el JSON no se
 /// rompe con las barras o comillas de una ruta.
+///
+/// Los **quants cuantizados** son lo que la fase 3 hizo de verdad: sin ellos,
+/// una tirada reanudada diría «no se cuantizó» de algo que sí se cuantizó, y
+/// una tirada cuyas salidas ya estaban diría «se cuantizó» sin que el
+/// cuantizador llegara a correr (R-GGUF-20: no mentir sobre el resultado).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
     /// La última fase completada.
     pub fase: Fase,
     /// La huella de la petición que completó esa fase (vacía si no se sabe).
     pub huella: String,
+    /// Los quants que la fase 3 **cuantizó** de verdad.
+    pub cuantizados: Vec<String>,
 }
 
 impl Checkpoint {
@@ -102,6 +109,7 @@ impl Checkpoint {
         Checkpoint {
             fase,
             huella: String::new(),
+            cuantizados: Vec::new(),
         }
     }
 
@@ -110,6 +118,17 @@ impl Checkpoint {
         Checkpoint {
             fase,
             huella: huella.to_string(),
+            cuantizados: Vec::new(),
+        }
+    }
+
+    /// El checkpoint de una fase completada **por esta petición**, con lo que
+    /// la fase 3 cuantizó de verdad.
+    pub fn con_cuantizados(fase: Fase, huella: &str, cuantizados: &[String]) -> Self {
+        Checkpoint {
+            fase,
+            huella: huella.to_string(),
+            cuantizados: cuantizados.to_vec(),
         }
     }
 
@@ -122,9 +141,10 @@ impl Checkpoint {
     /// mínimo, escrito a mano como el sidecar de procedencia).
     pub fn a_json(self) -> String {
         format!(
-            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\"\n}}\n",
+            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\",\n  \"cuantizados\": \"{}\"\n}}\n",
             self.fase.nombre(),
-            escapa(&self.huella)
+            escapa(&self.huella),
+            escapa(&self.cuantizados.join(", "))
         )
     }
 
@@ -134,13 +154,22 @@ impl Checkpoint {
     /// **no es un checkpoint**: la tirada empieza de cero (y eso es lo
     /// seguro: reanudar con un estado medio entendido borra o salta cosas
     /// que no toca). La huella es opcional: un checkpoint del formato viejo
-    /// se lee con huella vacía, y `es_de` dice que no es de nadie.
+    /// se lee con huella vacía, y `es_de` dice que no es de nadie. Los quants
+    /// cuantizados también: un checkpoint viejo no dice cuáles, y no se
+    /// inventan.
     pub fn de_json(texto: &str) -> Option<Self> {
         let fase = valor(texto, "fase")?;
         let fase = Fase::TODAS.iter().find(|f| f.nombre() == fase)?;
+        let cuantizados = valor(texto, "cuantizados")
+            .unwrap_or_default()
+            .split(',')
+            .map(|q| q.trim().to_string())
+            .filter(|q| !q.is_empty())
+            .collect();
         Some(Checkpoint {
             fase: *fase,
             huella: valor(texto, "huella").unwrap_or_default().to_string(),
+            cuantizados,
         })
     }
 }

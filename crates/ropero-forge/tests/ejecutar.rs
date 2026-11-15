@@ -295,6 +295,15 @@ impl Tirada {
         fs::read_to_string(self.base.join(nombre)).unwrap_or_default()
     }
 
+    /// Cuántas veces se llamó al cuantizador para un quant (el doble graba
+    /// sus argumentos, uno por línea).
+    fn llamadas_al_cuantizador(&self, quant: &str) -> usize {
+        self.log("quant.log")
+            .lines()
+            .filter(|l| *l == quant)
+            .count()
+    }
+
     fn modo(&self, modo: &str) {
         if modo.is_empty() {
             let _ = fs::remove_file(self.base.join("quant-modo"));
@@ -634,6 +643,122 @@ fn un_checkpoint_de_la_fase_procedencia_sin_el_gguf_no_es_un_exito() {
     );
 }
 
+/// **R-GGUF-20**: el informe y el sidecar dicen lo que la fase 3 hizo **de
+/// verdad**.
+///
+/// El defecto: con `--force` (o al rehacer con otra huella) la salida ya
+/// está, la fase 3 la salta y el cuantizador **no** corre, pero el informe
+/// decía «cuantizado a Q4_K_M» y el sidecar «llama.cpp llama-quantize».
+#[test]
+fn el_informe_no_dice_que_se_cuantizó_si_el_cuantizador_no_corrió() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let mut flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M"])
+        .con_imatrix(&tirada.imatrix());
+    let peticion = Peticion::de_flags(flags.clone()).expect("la petición");
+    let primera = ejecutar::forja(&peticion, &tirada.env).expect("la primera tirada");
+    assert!(
+        primera.cuantizo,
+        "la primera tirada no cuantizó: {primera:?}"
+    );
+    assert_eq!(
+        tirada.llamadas_al_cuantizador("Q4_K_M"),
+        1,
+        "la primera tirada no cuantizó"
+    );
+
+    // La segunda, con `--force`: la salida ya está y la fase 3 la salta, así
+    // que el cuantizador no vuelve a correr.
+    flags.force = true;
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let segunda = ejecutar::forja(&peticion, &tirada.env).expect("la segunda tirada");
+
+    assert!(
+        !segunda.cuantizo,
+        "el informe dice que se cuantizó y el cuantizador no corrió: {segunda:?}"
+    );
+    let lineas = ejecutar::lineas(&segunda);
+    assert!(
+        !lineas.iter().any(|l| l.contains("cuantizado a")),
+        "las líneas mienten: {lineas:?}"
+    );
+    assert!(
+        lineas.iter().any(|l| l.contains("no se cuantizó")),
+        "las líneas no dicen qué pasó: {lineas:?}"
+    );
+    assert_eq!(
+        tirada.llamadas_al_cuantizador("Q4_K_M"),
+        1,
+        "el cuantizador se llamó de más: {}",
+        tirada.log("quant.log")
+    );
+
+    // Y el sidecar tampoco: la herramienta no puede ser «llama-quantize».
+    let salida = tirada.base.join("gguf").join("modelo-Q4_K_M.gguf");
+    let sidecar = fs::read_to_string(Procedencia::ruta(&salida)).expect("el sidecar está");
+    assert!(
+        !sidecar.contains("llama-quantize"),
+        "la herramienta miente: {sidecar}"
+    );
+    assert!(
+        sidecar.contains("no se cuantizó"),
+        "la herramienta no dice qué pasó: {sidecar}"
+    );
+}
+
+/// **El mensaje dice lo que pasó** (R-GGUF-20): una colocación de un
+/// `--gguf` no es «el quant pedido se perdió en la conversión» (no hubo
+/// conversión), y una conversión sin quant que hacer tampoco.
+#[test]
+fn el_mensaje_de_no_cuantizar_dice_lo_que_pasó() {
+    // La colocación: el GGUF ya estaba en ese quant y se colocó tal cual.
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.entrada("modelo-IQ2_M.gguf", 29);
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["IQ2_M"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+    let lineas = ejecutar::lineas(&informe);
+    assert!(
+        lineas.iter().any(|l| l.contains("se colocó tal cual")),
+        "las líneas no dicen que se colocó: {lineas:?}"
+    );
+    assert!(
+        !lineas
+            .iter()
+            .any(|l| l.contains("se perdió en la conversión")),
+        "las líneas mienten: no hubo conversión: {lineas:?}"
+    );
+
+    // La conversión: no hay quant que hacer (el F16 es un dtype, no un quant).
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["F16"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+    let lineas = ejecutar::lineas(&informe);
+    assert!(
+        lineas.iter().any(|l| l.contains("no hay quant que hacer")),
+        "las líneas no dicen por qué no se cuantizó: {lineas:?}"
+    );
+    assert!(
+        !lineas
+            .iter()
+            .any(|l| l.contains("se perdió en la conversión")),
+        "las líneas mienten: {lineas:?}"
+    );
+}
+
+/// **R-GGUF-20**: el informe dice lo que la fase 3 hizo **de verdad**.
+///
+/// Con `--force` y la salida ya hecha, el cuantizador **no** corre (la fase 3
+/// salta las salidas que ya existen): el informe no puede decir «cuantizado a
+/// IQ2_M» —eso era el defecto—, y el sidecar tampoco.
 #[test]
 fn el_informe_de_una_tirada_reanudada_no_miente() {
     let tirada = Tirada::nueva().con_dobles();
@@ -664,16 +789,39 @@ fn el_informe_de_una_tirada_reanudada_no_miente() {
     let peticion = Peticion::de_flags(flags).expect("la petición");
     let informe = ejecutar::forja(&peticion, &tirada.env).expect("la reanudación");
 
-    // El informe dice la verdad: se cuantizó, y a qué quant.
-    assert!(informe.cuantizo, "el informe miente: {informe:?}");
+    // El informe dice la verdad: el cuantizador no corrió, así que no se
+    // dice que se cuantizó.
+    assert!(!informe.cuantizo, "el informe miente: {informe:?}");
     let lineas = ejecutar::lineas(&informe);
     assert!(
-        lineas.iter().any(|l| l.contains("cuantizado a IQ2_M")),
-        "las líneas no dicen qué se cuantizó: {lineas:?}"
+        lineas.iter().any(|l| l.contains("no se cuantizó")),
+        "las líneas no dicen que no se cuantizó: {lineas:?}"
     );
     assert!(
-        !lineas.iter().any(|l| l.contains("no se cuantizó")),
+        !lineas.iter().any(|l| l.contains("cuantizado a")),
         "las líneas mienten: {lineas:?}"
+    );
+    // El cuantizador **no** volvió a correr: el log tiene la llamada de la
+    // primera tirada y ninguna más.
+    let log = tirada.log("quant.log");
+    let llamadas = log.lines().filter(|l| *l == "IQ2_M").count();
+    assert_eq!(
+        llamadas, 1,
+        "el cuantizador se llamó {llamadas} veces: {log}"
+    );
+
+    // Y el sidecar tampoco: la herramienta no puede ser «llama-quantize».
+    let sidecar = fs::read_to_string(Procedencia::ruta(
+        &tirada.base.join("gguf").join("modelo-IQ2_M.gguf"),
+    ))
+    .expect("el sidecar está");
+    assert!(
+        !sidecar.contains("llama-quantize"),
+        "la herramienta miente: {sidecar}"
+    );
+    assert!(
+        sidecar.contains("no se cuantizó"),
+        "la herramienta no dice qué pasó: {sidecar}"
     );
 }
 

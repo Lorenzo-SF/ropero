@@ -40,6 +40,33 @@ pub const CHECKPOINT: &str = ".ropero-forge.json";
 /// (hallazgo 6): decir «llama-quantize» cuando no corrió es mentir.
 pub const HERRAMIENTA_CUANTIZA: &str = "ropero gguffer (llama.cpp llama-quantize)";
 pub const HERRAMIENTA_SIN_CUANTIZAR: &str = "ropero gguffer (sin cuantizar)";
+/// La salida ya estaba hecha y no se rehizo: el cuantizador **no** corrió,
+/// y el sidecar no puede decir que se cuantizó (R-GGUF-20).
+pub const HERRAMIENTA_YA_ESTABA: &str = "ropero gguffer (el GGUF ya estaba: no se cuantizó)";
+
+/// Lo que la fase 3 hizo de verdad (R-GGUF-20: el gguffer no miente).
+///
+/// Es lo que cuenta el informe y el sidecar: **no** lo que la tirada iba a
+/// hacer. Si el cuantizador no llegó a correr, aquí no hay quantizados, y
+/// el informe no dice «cuantizado a …».
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Cuantizacion {
+    /// Los quants que el cuantizador **cuantizó** (salieron de
+    /// `llama-quantize`).
+    pub cuantizados: Vec<String>,
+    /// Los quants que se **colocaron**: el GGUF de origen, tal cual (ya
+    /// estaba en ese quant, o es un dtype plano: no hay quant que hacer).
+    pub colocados: Vec<String>,
+    /// Los quants cuya salida **ya existía** y no se rehizo.
+    pub ya_existentes: Vec<String>,
+}
+
+impl Cuantizacion {
+    /// Si el cuantizador llegó a correr.
+    pub fn cuantizo(&self) -> bool {
+        !self.cuantizados.is_empty()
+    }
+}
 
 /// El resultado de una tirada.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +86,9 @@ pub struct Informe {
     /// La tirada **cambió** respecto al checkpoint: la petición es otra (o el
     /// checkpoint no dice de qué petición es) y se rehace desde el principio.
     pub cambio: Option<String>,
+    /// Lo que hizo la fase 3: los quants cuantizados, los colocados y los
+    /// que ya estaban (R-GGUF-20).
+    pub cuantizacion: Cuantizacion,
 }
 
 /// Fabrica los GGUFs que pide la petición.
@@ -116,6 +146,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
             pesos_conservados: Some(plan.work.clone()),
             ya_estaba: true,
             cambio,
+            cuantizacion: Cuantizacion::default(),
         });
     }
 
@@ -124,10 +155,27 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         None => Some(Fase::Fuente),
     };
 
+    // Lo que la cuantización hizo de verdad: en esta tirada, o en una tirada
+    // anterior de esta misma (el checkpoint lo guarda). Antes esto se fijaba a
+    // `viab.cuantizar` —lo que la tirada iba a hacer— y el informe decía
+    // «cuantizado a Q4_K_M» sin que el cuantizador llegara a correr (R-GGUF-20:
+    // no mentir sobre el resultado).
+    let mut cuantizacion = Cuantizacion::default();
+    if let Some(cp) = checkpoint.as_ref()
+        && cp.fase.orden() >= Fase::Cuantizacion.orden()
+    {
+        cuantizacion.cuantizados = cp.cuantizados.clone();
+    }
+
     // ── FASE 1: la fuente ──────────────────────────────────────────────
     if siguiente.is_some_and(|f| f == Fase::Fuente) {
         fase_fuente(peticion, env, &plan)?;
-        escribe_cp(&fichero_cp, Fase::Fuente, &huella)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Fuente,
+            &huella,
+            &cuantizacion.cuantizados,
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Fuente);
 
@@ -147,7 +195,12 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // La fuente `--gguf` no pasa por el conversor, pero la fase está
         // hecha igual: sin este checkpoint, el fichero se queda atrás
         // («fuente») y la reanudación no sabe por dónde seguir.
-        escribe_cp(&fichero_cp, Fase::Conversion, &huella)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Conversion,
+            &huella,
+            &cuantizacion.cuantizados,
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Conversion);
 
@@ -172,31 +225,22 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         _ => None,
     };
     let origen_quant = entrada.unwrap_or_else(|| plan.intermedio.clone());
-    // Si el checkpoint dice que la cuantización **ya se hizo**, el informe
-    // lo dice (R-GGUF-20: el gguffer no miente). Antes esto sólo se
-    // actualizaba si la fase se ejecutaba, y una tirada **reanudada**
-    // (el checkpoint ya pasado la cuantización) decía «no se cuantizó»
-    // de algo que sí se cuantizó.
-    //
-    // Se comprueba además que los GGUFs estén: el checkpoint dice que
-    // se cuantizó **aquello** que se cuantizó entonces, y el informe no
-    // puede afirmar un quant que no está en disco.
-    let mut cuantizo = viab.cuantizar
-        && ya_estan_todas(&plan)
-        && checkpoint
-            .as_ref()
-            .is_some_and(|cp| cp.fase.orden() >= Fase::Cuantizacion.orden());
     if siguiente.is_some_and(|f| f == Fase::Cuantizacion) {
         if let Some(imx) = peticion.imatrix.as_ref()
             && viab.cuantizar
         {
             baja_imatrix(imx, env, &plan)?;
         }
-        fase_cuantizacion(peticion, &toolchain, &plan, clase, &viab, &origen_quant)?;
-        cuantizo = viab.cuantizar;
-        escribe_cp(&fichero_cp, Fase::Cuantizacion, &huella)?;
+        cuantizacion = fase_cuantizacion(peticion, &toolchain, &plan, clase, &viab, &origen_quant)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Cuantizacion,
+            &huella,
+            &cuantizacion.cuantizados,
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Cuantizacion);
+    let cuantizo = cuantizacion.cuantizo();
 
     // ── FASE 4: la verificación ────────────────────────────────────────
     if siguiente.is_some_and(|f| f == Fase::Verificacion) {
@@ -212,17 +256,26 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
                 });
             }
         }
-        escribe_cp(&fichero_cp, Fase::Verificacion, &huella)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Verificacion,
+            &huella,
+            &cuantizacion.cuantizados,
+        )?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Verificacion);
 
     // ── FASE 5: la limpieza (la política decide, aquí se ejecuta) ──────
-    // El estado es el **real**: si no se cuantizó, no se cuantizó (R-GGUF-18:
-    // sin cuantización el intermedio **es** el GGUF final, y no se borra).
+    // Lo que decide la política es si el intermedio **es** un intermedio: si
+    // la tirada cuantiza, lo es (y se borra después de todos los quants); si
+    // no, el intermedio **es** el GGUF final y no se toca (R-GGUF-18). Eso
+    // lo dice el **plan** (lo que la tirada cuantiza), no lo que el
+    // cuantizador llegó a hacer en esta tirada: si la salida ya estaba y no
+    // se rehízo, el intermedio sigue siendo un sobrante y se borra igual.
     let estado = EstadoTirada {
         origen: origen_de(peticion),
         verifico: true,
-        cuantizo,
+        cuantizo: viab.cuantizar,
         intermedio_es_resultado,
         intermedio_es_entrada: es_entrada,
         keep_source: peticion.keep_source,
@@ -233,7 +286,12 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // El checkpoint se escribe ANTES de los borrados: la limpieza
         // puede borrar el work con el propio checkpoint dentro (R-GGUF-16
         // y R-GGUF-17), y entonces ya no hay nada que reanudar.
-        escribe_cp(&fichero_cp, Fase::Limpieza, &huella)?;
+        escribe_cp(
+            &fichero_cp,
+            Fase::Limpieza,
+            &huella,
+            &cuantizacion.cuantizados,
+        )?;
         if ordenes.borrar_clon {
             borra_dir(&plan.work, "borrar el clon de los pesos")?;
         }
@@ -248,14 +306,19 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // ── FASE 6: la procedencia (R-GGUF-19: si no se puede, falla) ──────
     if siguiente.is_some_and(|f| f == Fase::Procedencia) {
         for salida in &plan.salidas {
-            escribe_procedencia(salida, peticion, clase, es_entrada, cuantizo)?;
+            escribe_procedencia(salida, peticion, clase, es_entrada, &cuantizacion)?;
         }
         // El checkpoint final sólo si el work sigue ahí: la limpieza
         // pudo borrarlo con el checkpoint dentro, y entonces no hay nada
         // que reanudar — un reintento con los GGUF ya hechos cae en «ya
         // estaba» (T-30).
         if plan.work.is_dir() {
-            escribe_cp(&fichero_cp, Fase::Procedencia, &huella)?;
+            escribe_cp(
+                &fichero_cp,
+                Fase::Procedencia,
+                &huella,
+                &cuantizacion.cuantizados,
+            )?;
         }
     }
 
@@ -293,22 +356,24 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         salidas: plan.salidas.iter().map(|s| s.ruta.clone()).collect(),
         cuantizo,
         quant_real: clase.nombre_quant(peticion.intermedio),
-        quant_cuantizado: quant_cuantizado(&viab, cuantizo),
+        quant_cuantizado: quant_cuantizado(&cuantizacion),
         pesos_conservados,
         ya_estaba: false,
         cambio,
+        cuantizacion,
     })
 }
 
 /// El quant (o los quants) que se cuantizaron de verdad.
 ///
-/// Son los que la viabilidad marcó como **faltantes**: los planos (F16,
-/// BF16) son conversión de dtype, no cuantización.
-fn quant_cuantizado(viab: &plan::Viabilidad, cuantizo: bool) -> Option<String> {
-    if !cuantizo || viab.faltan.is_empty() {
+/// Son los que el cuantizador **cuantizó**: los planos (F16, BF16) son
+/// conversión de dtype, no cuantización, y los que ya estaban en su quant
+/// no se tocan.
+fn quant_cuantizado(cuantizacion: &Cuantizacion) -> Option<String> {
+    if cuantizacion.cuantizados.is_empty() {
         return None;
     }
-    Some(viab.faltan.join(", "))
+    Some(cuantizacion.cuantizados.join(", "))
 }
 
 /// El informe de una tirada, en líneas (R-GGUF-20: el mensaje honesto).
@@ -331,10 +396,25 @@ pub fn lineas(informe: &Informe) -> Vec<String> {
             lineas.push(format!("cuantizado a {quant}"));
         }
     } else if !informe.ya_estaba {
-        lineas.push(format!(
-            "no se cuantizó: el GGUF ya estaba en {} (el quant pedido se perdió en la conversión)",
-            informe.quant_real
-        ));
+        // Lo que **no** se cuantizó se dice como fue (R-GGUF-20): el mensaje
+        // viejo («el quant pedido se perdió en la conversión») era mentira
+        // cuando no hubo conversión (la colocación de un `--gguf`).
+        if !informe.cuantizacion.colocados.is_empty() {
+            lineas.push(format!(
+                "no se cuantizó: {} ya estaba en ese quant y se colocó tal cual",
+                informe.cuantizacion.colocados.join(", ")
+            ));
+        } else if !informe.cuantizacion.ya_existentes.is_empty() {
+            lineas.push(format!(
+                "no se cuantizó: {} ya estaba hecho y no se rehizo",
+                informe.cuantizacion.ya_existentes.join(", ")
+            ));
+        } else {
+            lineas.push(format!(
+                "no se cuantizó: no hay quant que hacer (el GGUF está en {})",
+                informe.quant_real
+            ));
+        }
     }
     if informe.ya_estaba {
         lineas.push("ya estaba: no se ha hecho nada (usa --force para rehacer)".to_string());
@@ -582,6 +662,11 @@ fn el_conversor_entiende(convert: &Path, flag: &str) -> bool {
 }
 
 /// La fase 3: la cuantización, quant a quant.
+///
+/// Devuelve **lo que hizo de verdad**: los quants que el cuantizador
+/// cuantizó, los que se colocaron (copiados) y los que ya estaban hechos
+/// (R-GGUF-20: el informe y el sidecar cuentan esto, no lo que la tirada iba
+/// a hacer).
 fn fase_cuantizacion(
     peticion: &Peticion,
     toolchain: &Toolchain,
@@ -589,7 +674,8 @@ fn fase_cuantizacion(
     clase: Clase,
     viab: &plan::Viabilidad,
     origen: &Path,
-) -> Result<(), Error> {
+) -> Result<Cuantizacion, Error> {
+    let mut hecho = Cuantizacion::default();
     if !viab.cuantizar {
         // Los quants que ya están en el GGUF (omitidos) y los que son planos
         // (F32/F16/BF16: no hay quant que hacer) se **colocan**: el GGUF de
@@ -609,9 +695,10 @@ fn fase_cuantizacion(
                     &salida.ruta,
                     "colocar el GGUF (ya está en ese quant)",
                 )?;
+                hecho.colocados.push(salida.quant.clone());
             }
         }
-        return Ok(());
+        return Ok(hecho);
     }
     let imx = peticion.imatrix.as_ref().map(|imx| ruta_imatrix(imx, plan));
     let imx = match imx {
@@ -625,7 +712,9 @@ fn fase_cuantizacion(
             continue;
         }
         if salida.ruta.is_file() {
-            // El que ya existe de una tirada anterior: no se rehace.
+            // El que ya existe de una tirada anterior: no se rehace, y no se
+            // dice que se cuantizó (el cuantizador no corrió).
+            hecho.ya_existentes.push(salida.quant.clone());
             continue;
         }
         crea_dir(salida.ruta.parent().unwrap_or(Path::new(".")))?;
@@ -666,8 +755,11 @@ fn fase_cuantizacion(
             });
         }
         let _ = clase;
+        // El cuantizador **sí** corrió: el quant se cuenta como cuantizado
+        // (y el informe lo dice).
+        hecho.cuantizados.push(salida.quant.clone());
     }
-    Ok(())
+    Ok(hecho)
 }
 
 /// La ruta del imatrix que se le pasa al cuantizador.
@@ -746,7 +838,7 @@ fn escribe_procedencia(
     peticion: &Peticion,
     clase: Clase,
     es_entrada: bool,
-    cuantizo: bool,
+    cuantizacion: &Cuantizacion,
 ) -> Result<(), Error> {
     let imatrix = peticion.imatrix.as_ref().map(|imx| match imx {
         Imatrix::Local(fichero) => ImatrixInfo {
@@ -771,18 +863,20 @@ fn escribe_procedencia(
             .unwrap_or(salida.quant.as_str())
             .to_string(),
         fuente_repo: fuente_repo(peticion),
-        // El sidecar no afirma lo que no pasó (hallazgo 6): si la fuente ya era
-        // un GGUF no hubo intermedio, y si no se cuantizó no se dice que corrió
-        // el cuantizador.
+        // El sidecar no afirma lo que no pasó (hallazgo 6, R-GGUF-20): si la
+        // fuente ya era un GGUF no hubo intermedio, y si el cuantizador no
+        // corrió no se dice que se cuantizó.
         intermedio: if es_entrada {
             None
         } else {
             Some(clase.sufijo_intermedio(peticion.intermedio).to_string())
         },
-        herramienta: if cuantizo {
+        herramienta: if cuantizacion.cuantizados.contains(&salida.quant) {
             HERRAMIENTA_CUANTIZA.to_string()
-        } else {
+        } else if cuantizacion.colocados.contains(&salida.quant) {
             HERRAMIENTA_SIN_CUANTIZAR.to_string()
+        } else {
+            HERRAMIENTA_YA_ESTABA.to_string()
         },
         imatrix,
         mtp: None,
@@ -1046,16 +1140,18 @@ fn escribe(ruta: &Path, texto: &str) -> Result<(), String> {
 ///
 /// El directorio puede no existir todavía (un `--gguf` local no crea el
 /// work hasta la limpieza).
-fn escribe_cp(ruta: &Path, fase: Fase, huella: &str) -> Result<(), Error> {
+fn escribe_cp(ruta: &Path, fase: Fase, huella: &str, cuantizados: &[String]) -> Result<(), Error> {
     if let Some(padre) = ruta.parent() {
         crea_dir(padre)?;
     }
     let temporal = temporal_de(ruta);
-    escribe(&temporal, &Checkpoint::con(fase, huella).a_json()).map_err(|detalle| {
-        Error::Disco {
-            que: format!("escribir el checkpoint ({})", fase.nombre()),
-            detalle,
-        }
+    escribe(
+        &temporal,
+        &Checkpoint::con_cuantizados(fase, huella, cuantizados).a_json(),
+    )
+    .map_err(|detalle| Error::Disco {
+        que: format!("escribir el checkpoint ({})", fase.nombre()),
+        detalle,
     })?;
     std::fs::rename(&temporal, ruta).map_err(|detalle| Error::Disco {
         que: format!("renombrar el checkpoint ({})", fase.nombre()),
