@@ -433,6 +433,13 @@ fn la_tirada_completa_fabrica_el_gguf() {
     ]);
     assert_eq!(code, CODIGO_OK, "stdout={stdout} stderr={stderr}");
 
+    // El informe dice **qué se hizo** (R-GGUF-20): se cuantizó, y a qué
+    // quant.
+    assert!(
+        stdout.contains("cuantizado a Q4_K_M"),
+        "el informe no dice qué se cuantizó: {stdout}"
+    );
+
     // El GGUF está, con la magic, y con su sidecar de procedencia
     // (R-GGUF-19: sin procedencia no se publica).
     let salida = dobles.base.join("gguf/modelo-Q4_K_M.gguf");
