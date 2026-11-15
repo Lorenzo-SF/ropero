@@ -43,11 +43,18 @@ pub struct Procedencia {
     pub quant: String,
     /// De dónde salió: el repo, la ruta de los pesos o el GGUF de origen.
     pub fuente_repo: String,
-    /// Qué intermedio se usó (el sufijo: F16, BF16, NVFP4…).
-    pub intermedio: String,
+    /// Qué intermedio se usó (el sufijo: F16, BF16, NVFP4…). `None` si **no lo
+    /// hubo**: con una fuente que ya es un GGUF no hay conversión, y el sidecar
+    /// no puede afirmar un intermedio que no existió (R-GGUF-19).
+    pub intermedio: Option<String>,
     /// La importance matrix, si se usó.
     pub imatrix: Option<ImatrixInfo>,
-    /// La cabeza MTP, si quedó en un quant aparte.
+    /// La herramienta que **se usó** (R-GGUF-19: lo que pasó, no lo que se
+    /// supone). `null` en el JSON cuando no se registró.
+    pub herramienta: String,
+    /// La cabeza MTP, si quedó en un quant aparte. `None` significa **no se
+    /// registró** (la forja no puede conocer el bloque de la cabeza sin leer
+    /// el GGUF entero: T-33), no que no la haya.
     pub mtp: Option<MtpInfo>,
     /// La fecha de la fabricación, en formato ISO (la pasa quien llama,
     /// porque el reloj es E/S).
@@ -87,16 +94,21 @@ impl Procedencia {
                 escapa(&mtp.quant)
             ),
         };
+        let intermedio = match &self.intermedio {
+            None => "null".to_string(),
+            Some(intermedio) => format!("\"{}\"", escapa(intermedio)),
+        };
         format!(
             "{{\n  \"gguf\": \"{}\",\n  \"quant\": \"{}\",\n  \"fuente_repo\": \"{}\",\n  \
-             \"intermedio\": \"{}\",\n  \"imatrix\": {},\n  \"mtp\": {},\n  \
-             \"herramienta\": \"ropero gguffer (llama.cpp llama-quantize)\",\n  \"fecha\": \"{}\"\n}}\n",
+             \"intermedio\": {},\n  \"imatrix\": {},\n  \"mtp\": {},\n  \
+             \"herramienta\": \"{}\",\n  \"fecha\": \"{}\"\n}}\n",
             escapa(&self.gguf),
             escapa(&self.quant),
             escapa(&self.fuente_repo),
-            escapa(&self.intermedio),
+            intermedio,
             imx,
             mtp,
+            escapa(&self.herramienta),
             escapa(&self.fecha)
         )
     }

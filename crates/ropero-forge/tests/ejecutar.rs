@@ -302,6 +302,46 @@ impl Tirada {
             fs::write(self.base.join("quant-modo"), modo).expect("escribir el modo");
         }
     }
+
+    /// Un GGUF de entrada **con su cabecera**: la magic, la versión, los
+    /// contadores y el KV `general.file_type` (un uint32 en la metadata), más
+    /// el relleno para pasar el tamaño mínimo de la verificación.
+    fn entrada(&self, nombre: &str, file_type: u32) -> PathBuf {
+        let ruta = self.base.join("entrada").join(nombre);
+        fs::create_dir_all(ruta.parent().unwrap()).expect("crear entrada");
+        fs::write(&ruta, gguf_con_file_type(file_type)).expect("escribir el GGUF de entrada");
+        ruta
+    }
+
+    /// Un imatrix de fixture (el fichero, aquí).
+    fn imatrix(&self) -> String {
+        let imx = self.base.join("imatrix.dat");
+        fs::write(&imx, b"imatrix de fixture").expect("escribir el imatrix");
+        imx.to_string_lossy().into_owned()
+    }
+
+    /// Un motor **sin conversor**: sólo el cuantizador (quien sólo tiene
+    /// `llama-quantize` y una fuente que ya es un GGUF).
+    fn sin_conversor(self) -> Self {
+        let _ = fs::remove_file(self.base.join("motor/convert_hf_to_gguf.py"));
+        self
+    }
+}
+
+/// Un GGUF mínimo con `general.file_type` en su metadata (el tipo 6 es uint32).
+fn gguf_con_file_type(file_type: u32) -> Vec<u8> {
+    let mut datos = Vec::new();
+    datos.extend(b"GGUF");
+    datos.extend(3u32.to_le_bytes()); // versión
+    datos.extend(0u64.to_le_bytes()); // n_tensors
+    datos.extend(1u64.to_le_bytes()); // n_metadata
+    let clave = b"general.file_type";
+    datos.extend((clave.len() as u64).to_le_bytes());
+    datos.extend(clave);
+    datos.extend(6u32.to_le_bytes()); // tipo del valor: uint32
+    datos.extend(file_type.to_le_bytes());
+    datos.extend(vec![0u8; 1024]);
+    datos
 }
 
 impl Drop for Tirada {
@@ -523,11 +563,11 @@ fn sin_el_imatrix_remoto_no_se_cuantiza() {
 
     match &error {
         Error::ImatrixNoEsta {
-            repo,
+            origen,
             fichero,
             ruta,
         } => {
-            assert_eq!(repo, "owner/imatrix");
+            assert_eq!(origen, "owner/imatrix");
             assert_eq!(fichero, "Q4_K_M.dat");
             assert!(ruta.contains("imatrix"), "dice {ruta}");
         }
@@ -553,6 +593,43 @@ fn sin_el_imatrix_remoto_no_se_cuantiza() {
 /// se **ejecutaba**; en una tirada reanudada (checkpoint posterior) se
 /// quedaba en `false` y el informe decía «no se cuantizó» de algo que sí
 /// se cuantizó.
+#[test]
+fn un_checkpoint_de_la_fase_procedencia_sin_el_gguf_no_es_un_exito() {
+    // Hallazgo 1: el checkpoint de la última fase no convierte una tirada en éxito
+    // si el artefacto que afirma producir no está en disco.
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let peticion = tirada.peticion();
+    // Un checkpoint de la MISMA petición (por eso es creíble), ya en la última
+    // fase, pero sin el GGUF: la fase 6 no se ejecuta y nada lo comprueba.
+    let cp = tirada.base.join("work/acme__modelo/.ropero-forge.json");
+    fs::create_dir_all(cp.parent().unwrap()).expect("crear el work");
+    fs::write(
+        &cp,
+        Checkpoint::con(Fase::Procedencia, &peticion.huella()).a_json(),
+    )
+    .expect("escribir el checkpoint");
+
+    let error = ejecutar::forja(&peticion, &tirada.env).expect_err("el falso éxito");
+    assert!(
+        matches!(error, Error::SalidaFaltante { .. }),
+        "salió: {error:?}"
+    );
+    assert_eq!(error.codigo(), 1, "un éxito falso no puede salir con 0");
+    let pista = error.pista().unwrap_or_default();
+    assert!(pista.contains("checkpoint"), "la pista dice: {pista}");
+    assert!(
+        !tirada.salida().is_file(),
+        "el GGUF anunciado no está en disco"
+    );
+    // Nadie lo fabricó: el checkpoint pretendía que ya estaba hecho.
+    assert!(
+        tirada.log("quant.log").trim().is_empty(),
+        "el cuantizador se llamó: {}",
+        tirada.log("quant.log")
+    );
+}
+
 #[test]
 fn el_informe_de_una_tirada_reanudada_no_miente() {
     let tirada = Tirada::nueva().con_dobles();
@@ -596,27 +673,305 @@ fn el_informe_de_una_tirada_reanudada_no_miente() {
     );
 }
 
-/// El informe **no** afirma un quant que no está en disco: el checkpoint
-/// puede ser de otra tirada, y el GGUF que se pide puede no existir.
+/// **Hallazgo 10 / T-30**: el checkpoint puede ser de **otra** petición. Si no
+/// es de la tirada actual se descarta, y la tirada se rehace: lo que el
+/// informe anuncia tiene que **estar en disco**.
+///
+/// El defecto: el test consagraba el falso éxito — `expect("la tirada")` sin
+/// comprobar que el GGUF exista, y la tirada salía 0 anunciando un fichero que
+/// no estaba (el checkpoint sólo guardaba la fase, no la petición).
 #[test]
 fn el_informe_no_afirma_un_quant_que_no_esta_en_disco() {
     let tirada = Tirada::nueva().con_dobles();
     tirada.repo("acme/modelo", "");
-    // Un checkpoint de otra tirada, ya en la última fase.
+    // Un checkpoint de otra tirada, ya en la última fase: sin huella, no es de
+    // esta petición.
     let cp = tirada.base.join("work/acme__modelo/.ropero-forge.json");
     fs::create_dir_all(cp.parent().unwrap()).expect("crear el work");
     fs::write(&cp, "{\n  \"fase\": \"procedencia\"\n}\n").expect("escribir el checkpoint");
 
-    let informe = ejecutar::forja(&tirada.peticion(), &tirada.env).expect("la tirada");
+    let peticion = tirada.peticion();
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    // Lo que anuncia está en disco, y es un GGUF de verdad.
     assert!(
-        !informe.cuantizo,
-        "el informe afirma un quant que no está: {informe:?}"
+        tirada.salida().is_file(),
+        "el informe anuncia un quant que no está: {informe:?}"
     );
+    let contenido = fs::read(tirada.salida()).expect("el GGUF está");
+    assert_eq!(
+        &contenido[..4],
+        b"GGUF",
+        "el fichero anunciado no es un GGUF"
+    );
+    assert!(
+        informe.cuantizo,
+        "el informe miente sobre el quant: {informe:?}"
+    );
+    // Y el informe lo dice: el checkpoint no era de esta petición.
     let lineas = ejecutar::lineas(&informe);
     assert!(
-        !lineas.iter().any(|l| l.contains("cuantizado a")),
-        "las líneas afirman un quant que no está: {lineas:?}"
+        lineas.iter().any(|l| l.contains("cambió")),
+        "el informe no dice que la petición cambió: {lineas:?}"
     );
+    assert!(
+        lineas.iter().any(|l| l.contains("cuantizado a IQ2_M")),
+        "las líneas no dicen qué se cuantizó: {lineas:?}"
+    );
+}
+
+/// **Hallazgo 1 (R-GGUF-20, T-30)**: el checkpoint guardaba **sólo la fase**,
+/// no la **petición**. Una segunda tirada con otros quants sobre la misma
+/// fuente saltaba todas las fases y salía 0 anunciando un GGUF inexistente,
+/// sin llamar al cuantizador.
+#[test]
+fn una_petición_distinta_sobre_la_misma_fuente_no_salta_las_fases() {
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.entrada("modelo-F16.gguf", 1);
+    let imx = tirada.imatrix();
+    let base = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_imatrix(&imx);
+
+    // La primera tirada: Q4_K_M, sale bien.
+    let primera = Peticion::de_flags(base.clone().con_quants(&["Q4_K_M"])).expect("la petición");
+    let primero = ejecutar::forja(&primera, &tirada.env).expect("la primera tirada");
+    assert!(
+        primero.cuantizo,
+        "la primera tirada no cuantizó: {primero:?}"
+    );
+
+    // La segunda, con OTROS quants sobre la misma fuente.
+    let segunda = Peticion::de_flags(base.con_quants(&["Q8_0"])).expect("la petición");
+    let informe = ejecutar::forja(&segunda, &tirada.env).expect("la segunda tirada");
+
+    // El GGUF anunciado existe, y se cuantizó de verdad.
+    let salida = tirada.base.join("gguf").join("modelo-F16-Q8_0.gguf");
+    assert!(
+        salida.is_file(),
+        "el GGUF anunciado no está en disco: {informe:?}"
+    );
+    let contenido = fs::read(&salida).expect("el GGUF está");
+    assert_eq!(&contenido[..4], b"GGUF", "el fichero no es un GGUF");
+    assert!(informe.cuantizo, "el informe miente: {informe:?}");
+    // El informe dice que la petición cambió (y por eso se rehizo).
+    let lineas = ejecutar::lineas(&informe);
+    assert!(
+        lineas.iter().any(|l| l.contains("cambió")),
+        "el informe no dice que la petición cambió: {lineas:?}"
+    );
+    // El cuantizador se llamó las dos veces: una por quant.
+    let log = tirada.log("quant.log");
+    let llamadas = log
+        .lines()
+        .filter(|l| matches!(*l, "Q4_K_M" | "Q8_0"))
+        .count();
+    assert_eq!(
+        llamadas, 2,
+        "el cuantizador se llamó {llamadas} veces: {log}"
+    );
+}
+
+// ── La clase de un GGUF: se lee de su cabecera, no de su nombre (hallazgo 2) ─
+
+/// **R-GGUF-7**: un GGUF que ya está en el quant pedido **se coloca** y se
+/// sale 0. Con el sufijo de quant en el nombre, la tirada lo confundía con
+/// pesos sin cuantizar y **re-cuantizaba** (el motor real lo rechaza) y
+/// exigía imatrix.
+#[test]
+fn un_gguf_ya_en_el_quant_pedido_se_coloca_y_no_se_recuantiza() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.fichero_fixture(
+        "acme/modelo-IQ2_M",
+        "modelo-IQ2_M.gguf",
+        &gguf_con_file_type(29),
+    );
+    let flags = Flags::default()
+        .con_gguf("acme/modelo-IQ2_M")
+        .con_quants(&["IQ2_M"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    assert!(
+        !informe.cuantizo,
+        "re-cuantiza lo ya cuantizado: {informe:?}"
+    );
+    assert!(
+        tirada.log("quant.log").trim().is_empty(),
+        "el cuantizador se llamó: {}",
+        tirada.log("quant.log")
+    );
+    let salida = tirada.base.join("gguf").join("modelo-IQ2_M.gguf");
+    assert!(salida.is_file(), "el GGUF colocado no está en disco");
+}
+
+/// **Hallazgo 2b**: un GGUF ya cuantizado + otro quant es **NoViable** (R-GGUF-8),
+/// y el preflight se **salta** porque la clase se deducía mal del nombre.
+#[test]
+fn un_gguf_ya_cuantizado_con_otro_quant_no_es_viable_sin_cuantizar() {
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.entrada("modelo-Q4_K_M.gguf", 15);
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["Q8_0"])
+        .con_imatrix(&tirada.imatrix());
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let error = ejecutar::forja(&peticion, &tirada.env).expect_err("no es viable");
+    match &error {
+        Error::NoViable { pedido, tienen, .. } => {
+            assert_eq!(pedido, "Q8_0");
+            assert_eq!(tienen, "Q4_K_M", "el quant real es el de la cabecera");
+        }
+        otro => panic!("esperaba un NoViable, y salió: {otro:?}"),
+    }
+    assert!(
+        tirada.log("quant.log").trim().is_empty(),
+        "cuantiza lo ya cuantizado: {}",
+        tirada.log("quant.log")
+    );
+}
+
+/// **Hallazgo 2c**: un GGUF en F16 pedido **como quant** se coloca (R-GGUF-7:
+/// no hay quant que hacer), en vez de morir en la fase 4 «no está».
+#[test]
+fn un_gguf_en_f16_pedido_como_quant_se_coloca_y_sale_0() {
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.entrada("modelo-F16.gguf", 1);
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["F16"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    assert!(!informe.cuantizo, "no hay quant que hacer: {informe:?}");
+    assert_eq!(
+        informe.quant_real, "F16",
+        "el quant real es el de la cabecera"
+    );
+    assert!(tirada.log("quant.log").trim().is_empty(), "no se cuantiza");
+    let salida = tirada.base.join("gguf").join("modelo-F16.gguf");
+    assert!(salida.is_file(), "el F16 no se colocó");
+    assert!(Procedencia::ruta(&salida).is_file(), "el sidecar no está");
+}
+
+/// **Hallazgo 2**: la clase se deduce del `general.file_type` **de la cabecera**,
+/// no del nombre. `modelo-BF16` con cabecera IQ2_M es IQ2_M (no pesos en claro).
+#[test]
+fn la_clase_del_gguf_se_lee_de_la_cabecera_no_del_nombre() {
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.entrada("modelo-BF16.gguf", 29);
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["IQ2_M"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    assert!(
+        !informe.cuantizo,
+        "el nombre confundió la clase: {informe:?}"
+    );
+    assert_eq!(
+        informe.quant_real, "IQ2_M",
+        "el quant real es el de la cabecera"
+    );
+    assert!(
+        tirada.log("quant.log").trim().is_empty(),
+        "el cuantizador se llamó: {}",
+        tirada.log("quant.log")
+    );
+}
+
+/// **Hallazgo 6 (R-GGUF-19)**: el sidecar dice **lo que pasó**. Con fuente
+/// `--gguf` no hubo conversión (no hay intermedio) y el cuantizador no se
+/// llamó, así que el sidecar no puede afirmar ninguno de los dos.
+#[test]
+fn el_sidecar_dice_lo_que_pasó() {
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.entrada("modelo-Q4_K_M.gguf", 15);
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["Q4_K_M"]);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+    assert!(!informe.cuantizo, "no se cuantizó: {informe:?}");
+
+    let sidecar = fs::read_to_string(Procedencia::ruta(
+        &tirada.base.join("gguf").join("modelo-Q4_K_M.gguf"),
+    ))
+    .expect("el sidecar está");
+    assert!(
+        sidecar.contains("\"intermedio\": null"),
+        "afirma un intermedio que no existió: {sidecar}"
+    );
+    assert!(
+        sidecar.contains("sin cuantizar"),
+        "la herramienta miente: {sidecar}"
+    );
+    assert!(
+        !sidecar.contains("llama-quantize"),
+        "afirma que el cuantizador se llamó: {sidecar}"
+    );
+
+    // La contramutación: cuando SÍ hubo conversión y cuantización, el sidecar
+    // los declara (la tirada de `la_tirada_completa_fabrica_el_gguf`).
+}
+
+/// **Hallazgo 7**: el imatrix **local** no se comprobaba: se cuantizaba a
+/// ciegas con un fichero inexistente (el remoto sí se comprobaba).
+#[test]
+fn el_imatrix_local_tambien_se_comprueba() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M"])
+        .con_imatrix(&tirada.base.join("no-esta.dat").to_string_lossy());
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let error = ejecutar::forja(&peticion, &tirada.env).expect_err("el imatrix no está");
+    assert!(
+        matches!(error, Error::ImatrixNoEsta { .. }),
+        "salió: {error:?}"
+    );
+    assert!(
+        error.to_string().contains("no-esta.dat"),
+        "el error nombra el fichero: {error}"
+    );
+    assert!(
+        tirada.log("quant.log").trim().is_empty(),
+        "cuantiza a ciegas sin imatrix: {}",
+        tirada.log("quant.log")
+    );
+}
+
+/// **Hallazgo 9 (R-GGUF-55)**: el conversor sólo hace falta si hay que
+/// **convertir**. Con una fuente que ya es un GGUF, quien sólo tiene
+/// `llama-quantize` puede fabricar.
+#[test]
+fn el_conversor_solo_hace_falta_si_hay_que_convertir() {
+    let tirada = Tirada::nueva().con_dobles().sin_conversor();
+    let entrada = tirada.entrada("modelo-F16.gguf", 1);
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["Q4_K_M"])
+        .con_imatrix(&tirada.imatrix());
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe =
+        ejecutar::forja(&peticion, &tirada.env).expect("la tirada con sólo el cuantizador");
+    assert!(informe.cuantizo, "no cuantizó: {informe:?}");
+    assert!(
+        tirada
+            .base
+            .join("gguf")
+            .join("modelo-F16-Q4_K_M.gguf")
+            .is_file(),
+        "el GGUF no está"
+    );
+    // Y con una fuente que sí hay que convertir, el conversor sigue siendo
+    // imprescindible (R-GGUF-55).
+    let tirada = Tirada::nueva().con_dobles().sin_conversor();
+    tirada.repo("acme/modelo", "");
+    let error = ejecutar::forja(&tirada.peticion(), &tirada.env).expect_err("sin conversor");
+    assert!(matches!(error, Error::SinMotor { .. }), "salió: {error:?}");
 }
 
 /// La reanudación: tras el fallo de cuantización, la segunda tirada no

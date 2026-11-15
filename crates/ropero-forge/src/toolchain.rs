@@ -37,6 +37,9 @@ use crate::reporte::Reporte;
 /// Qué motor se encontró.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Motor {
+    /// Ningún motor elegido: sólo se encontró el cuantizador (en el `PATH`) y
+    /// no hace falta convertir. No se puede afirmar un directorio que no hay.
+    Ninguno,
     /// El fork: `$LLAMA_DIR` (por defecto `~/llama.cpp`).
     Fork { dir: PathBuf },
     /// El oficial: `$LLAMA_OFFICIAL_DIR` (por defecto
@@ -48,15 +51,17 @@ impl Motor {
     /// Su nombre, para los mensajes.
     pub fn nombre(&self) -> &'static str {
         match self {
+            Motor::Ninguno => "ningún motor (sólo el cuantizador)",
             Motor::Fork { .. } => "llama.cpp (el fork)",
             Motor::Oficial { .. } => "llama.cpp (el oficial)",
         }
     }
 
-    /// Su directorio.
-    pub fn dir(&self) -> &Path {
+    /// Su directorio, si hay motor.
+    pub fn dir(&self) -> Option<&Path> {
         match self {
-            Motor::Fork { dir } | Motor::Oficial { dir } => dir,
+            Motor::Ninguno => None,
+            Motor::Fork { dir } | Motor::Oficial { dir } => Some(dir),
         }
     }
 }
@@ -66,8 +71,9 @@ impl Motor {
 pub struct Toolchain {
     /// Qué motor es.
     pub motor: Motor,
-    /// El conversor: `<motor>/convert_hf_to_gguf.py`.
-    pub convert: PathBuf,
+    /// El conversor: `<motor>/convert_hf_to_gguf.py`. `None` cuando no hace
+    /// falta (la fuente ya es un GGUF y sólo hay que cuantizar, R-GGUF-55).
+    pub convert: Option<PathBuf>,
     /// El cuantizador: el `PATH` o `<motor>/build/bin/llama-quantize`.
     pub quantize: PathBuf,
     /// El unidor de shards, si está (no es imprescindible: sólo une).
@@ -104,23 +110,22 @@ pub struct Busqueda {
 /// Con la búsqueda hecha ([`Busqueda`]), decide qué motor se usa y qué
 /// falta. El orden es: el fork primero (es el que ropero instala por
 /// defecto), el oficial después (R-GGUF-57).
-pub fn ensure_toolchain(busqueda: &Busqueda) -> Result<Toolchain, Error> {
-    // ── el conversor: sin sustituto (R-GGUF-55) ────────────────────────
-    let (motor, convert) = if let Some(convert) = busqueda.convert_fork.clone() {
-        (
-            Motor::Fork {
-                dir: busqueda.dir_fork.clone().unwrap_or_default(),
-            },
-            convert,
-        )
-    } else if let Some(convert) = busqueda.convert_oficial.clone() {
-        (
-            Motor::Oficial {
-                dir: busqueda.dir_oficial.clone().unwrap_or_default(),
-            },
-            convert,
-        )
-    } else {
+pub fn ensure_toolchain(
+    busqueda: &Busqueda,
+    hace_falta_conversor: bool,
+) -> Result<Toolchain, Error> {
+    // ── el motor, y el conversor sólo si hay que convertir ─────────────
+    // El orden: el fork primero, el oficial después (R-GGUF-57).
+    let motor = if busqueda.convert_fork.is_some() {
+        Motor::Fork {
+            dir: busqueda.dir_fork.clone().unwrap_or_default(),
+        }
+    } else if busqueda.convert_oficial.is_some() {
+        Motor::Oficial {
+            dir: busqueda.dir_oficial.clone().unwrap_or_default(),
+        }
+    } else if hace_falta_conversor {
+        // El conversor no admite sustituto (R-GGUF-55).
         return Err(Error::SinMotor {
             falta: "convert_hf_to_gguf.py (el conversor de pesos a GGUF)".to_string(),
             donde: format!(
@@ -129,15 +134,35 @@ pub fn ensure_toolchain(busqueda: &Busqueda) -> Result<Toolchain, Error> {
                 describe_dir(busqueda.dir_oficial.as_deref(), "~/llama.cpp-official"),
             ),
         });
+    } else {
+        // No hay que convertir: la fuente ya es un GGUF, y con sólo el
+        // cuantizador se fabrica (R-GGUF-55).
+        busqueda
+            .dir_fork
+            .as_ref()
+            .map(|dir| Motor::Fork { dir: dir.clone() })
+            .or_else(|| {
+                busqueda
+                    .dir_oficial
+                    .as_ref()
+                    .map(|dir| Motor::Oficial { dir: dir.clone() })
+            })
+            .unwrap_or(Motor::Ninguno)
+    };
+    let convert = match &motor {
+        Motor::Fork { .. } => busqueda.convert_fork.clone(),
+        Motor::Oficial { .. } => busqueda.convert_oficial.clone(),
+        Motor::Ninguno => None,
     };
 
     // ── el cuantizador: el PATH primero, luego el build del motor ──────
     let quantize = if let Some(quantize) = busqueda.quantize_en_path.clone() {
         quantize
     } else {
-        let del_build = match motor {
+        let del_build = match &motor {
             Motor::Fork { .. } => busqueda.quantize_fork.clone(),
             Motor::Oficial { .. } => busqueda.quantize_oficial.clone(),
+            Motor::Ninguno => None,
         };
         match del_build {
             Some(quantize) => quantize,
@@ -146,7 +171,7 @@ pub fn ensure_toolchain(busqueda: &Busqueda) -> Result<Toolchain, Error> {
                     falta: "llama-quantize (el cuantizador)".to_string(),
                     donde: format!(
                         "no está en el PATH ni en {}/build/bin",
-                        motor.dir().to_string_lossy()
+                        describe_dir(motor.dir(), "~/llama.cpp")
                     ),
                 });
             }
@@ -185,7 +210,10 @@ fn describe_dir(dir: Option<&Path>, defecto: &str) -> String {
 /// el disco (que es lo que [`ensure_toolchain`] no hace) y le pasa el
 /// resultado. `env` trae `$LLAMA_DIR`, `$LLAMA_OFFICIAL_DIR`, `$HOME` y
 /// el `PATH`.
-pub fn buscar(env: &ropero_core::Environment) -> Result<Toolchain, Error> {
+pub fn buscar(
+    env: &ropero_core::Environment,
+    hace_falta_conversor: bool,
+) -> Result<Toolchain, Error> {
     let dir_fork = dir_del_motor(env, "LLAMA_DIR", "llama.cpp");
     let dir_oficial = dir_del_motor(env, "LLAMA_OFFICIAL_DIR", "llama.cpp-official");
 
@@ -225,7 +253,7 @@ pub fn buscar(env: &ropero_core::Environment) -> Result<Toolchain, Error> {
                 .filter(|candidato| candidato.is_file())
         });
 
-    ensure_toolchain(&busqueda)
+    ensure_toolchain(&busqueda, hace_falta_conversor)
 }
 
 /// El directorio de un motor: la variable de entorno, o el default bajo
@@ -312,12 +340,16 @@ pub fn diagnostico(env: &ropero_core::Environment) -> Reporte {
             .map(|r| format!("({})", r.to_string_lossy()))
             .unwrap_or_else(|| "no está".to_string()),
     ));
-    match buscar(env) {
+    match buscar(env, true) {
         Ok(toolchain) => {
             lineas.push(format!(
                 "  => se usaría {} ({}), con el cuantizador {}",
                 toolchain.motor.nombre(),
-                toolchain.motor.dir().to_string_lossy(),
+                toolchain
+                    .motor
+                    .dir()
+                    .map(|dir| dir.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "sin directorio: sólo el cuantizador".to_string()),
                 toolchain.quantize.to_string_lossy()
             ));
             Reporte::nuevo(lineas)
@@ -350,7 +382,7 @@ pub fn diagnostico(env: &ropero_core::Environment) -> Reporte {
 /// pedido. Las líneas de **alias** se saltan (el nombre bueno es el
 /// canónico: ver el módulo [`crate::quants`]).
 pub fn quants_del_motor(env: &ropero_core::Environment) -> Option<(PathBuf, Vec<(u32, String)>)> {
-    let toolchain = buscar(env).ok()?;
+    let toolchain = buscar(env, true).ok()?;
     let salida = Command::new(&toolchain.quantize)
         .arg("--help")
         .output()
