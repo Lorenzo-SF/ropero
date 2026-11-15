@@ -50,6 +50,7 @@ pub mod plan;
 pub mod procedencia;
 pub mod quants;
 pub mod reporte;
+pub mod sha256;
 pub mod toolchain;
 pub mod verificar;
 

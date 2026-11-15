@@ -16,11 +16,16 @@ fn ejemplo() -> Procedencia {
         gguf: "modelo-IQ2_M.gguf".to_string(),
         quant: "IQ2_M".to_string(),
         fuente_repo: "acme/modelo".to_string(),
+        base_model: Some("acme/modelo-F16".to_string()),
+        base_model_name: Some("modelo-F16".to_string()),
+        arch: Some("qwen3".to_string()),
+        block_count: Some(48),
         intermedio: Some("F16".to_string()),
         herramienta: CUANTIZA.to_string(),
         imatrix: Some(ImatrixInfo {
             fichero: "imatrix.dat".to_string(),
             repo: Some("alguien/imatrix".to_string()),
+            sha256: Some("abc123".to_string()),
         }),
         mtp: Some(MtpInfo {
             bloque: 64,
@@ -110,4 +115,53 @@ fn los_valores_con_comillas_se_escapan() {
         json.contains("\"fuente_repo\": \"acme/\\\"raro\\\"\""),
         "dice {json}"
     );
+}
+
+/// Los campos que la v1 tenía y la v2 había perdido (R-GGUF-19): el modelo
+/// base, la arquitectura, los bloques y el hash de la importance matrix. Los
+/// lee el model card (`ropero-code/bin/python/model_card.py`).
+#[test]
+fn el_sidecar_declara_el_modelo_base_la_arquitectura_y_el_hash() {
+    let json = ejemplo().a_json();
+    assert!(
+        json.contains("\"base_model\": \"acme/modelo-F16\""),
+        "dice {json}"
+    );
+    assert!(
+        json.contains("\"base_model_name\": \"modelo-F16\""),
+        "dice {json}"
+    );
+    assert!(json.contains("\"arch\": \"qwen3\""), "dice {json}");
+    assert!(json.contains("\"block_count\": 48"), "dice {json}");
+    assert!(json.contains("\"sha256\": \"abc123\""), "dice {json}");
+}
+
+/// Lo que **no** se puede calcular **no está**: mejor callar que mentir.
+#[test]
+fn los_campos_que_no_se_saben_no_estan() {
+    let sin = Procedencia {
+        base_model: None,
+        base_model_name: None,
+        arch: None,
+        block_count: None,
+        imatrix: Some(ImatrixInfo {
+            fichero: "imatrix.dat".to_string(),
+            repo: None,
+            sha256: None,
+        }),
+        ..ejemplo()
+    };
+    let json = sin.a_json();
+    for campo in [
+        "base_model",
+        "base_model_name",
+        "arch",
+        "block_count",
+        "sha256",
+    ] {
+        assert!(
+            !json.contains(&format!("\"{campo}\"")),
+            "el campo {campo} no debería estar: {json}"
+        );
+    }
 }

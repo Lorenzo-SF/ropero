@@ -32,6 +32,10 @@ pub struct ImatrixInfo {
     pub fichero: String,
     /// El repo de donde vino, si fue remota.
     pub repo: Option<String>,
+    /// El **sha256** de la matriz: el mismo nombre puede ser otra matriz, y
+    /// con el hash se sabe cuál se usó (la v1 lo tenía; el modelo card lo
+    /// enseña).
+    pub sha256: Option<String>,
 }
 
 /// La procedencia de un GGUF producido.
@@ -43,6 +47,17 @@ pub struct Procedencia {
     pub quant: String,
     /// De dónde salió: el repo, la ruta de los pesos o el GGUF de origen.
     pub fuente_repo: String,
+    /// El **repo del modelo base** (el de los pesos sin cuantizar). `None`
+    /// si no se puede saber: no se inventa (R-GGUF-19).
+    pub base_model: Option<String>,
+    /// El **nombre del modelo base**. `None` si no se puede saber.
+    pub base_model_name: Option<String>,
+    /// La **arquitectura** del modelo (la de su cabecera, `general.architecture`).
+    /// `None` si la cabecera no lo dice.
+    pub arch: Option<String>,
+    /// Los **bloques** del modelo (los de su cabecera,
+    /// `<arquitectura>.block_count`). `None` si la cabecera no lo dice.
+    pub block_count: Option<u64>,
     /// Qué intermedio se usó (el sufijo: F16, BF16, NVFP4…). `None` si **no lo
     /// hubo**: con una fuente que ya es un GGUF no hay conversión, y el sidecar
     /// no puede afirmar un intermedio que no existió (R-GGUF-19).
@@ -72,7 +87,10 @@ impl Procedencia {
     /// El sidecar, como texto JSON.
     ///
     /// Los valores que llevan comillas se escapan (una ruta con comillas
-    /// no debe romper el JSON).
+    /// no debe romper el JSON). Los campos que **no** se pueden calcular
+    /// **no están**: un `null` o una cadena vacía serían afirmaciones
+    /// falsas (R-GGUF-19: la procedencia dice lo que pasó, no lo que se
+    /// supone).
     pub fn a_json(&self) -> String {
         let imx = match &self.imatrix {
             None => "null".to_string(),
@@ -80,6 +98,9 @@ impl Procedencia {
                 let mut partes = vec![format!("\"fichero\": \"{}\"", escapa(&imx.fichero))];
                 if let Some(repo) = &imx.repo {
                     partes.push(format!("\"repo\": \"{}\"", escapa(repo)));
+                }
+                if let Some(sha) = &imx.sha256 {
+                    partes.push(format!("\"sha256\": \"{}\"", escapa(sha)));
                 }
                 format!("{{{}}}", partes.join(", "))
             }
@@ -98,19 +119,33 @@ impl Procedencia {
             None => "null".to_string(),
             Some(intermedio) => format!("\"{}\"", escapa(intermedio)),
         };
-        format!(
-            "{{\n  \"gguf\": \"{}\",\n  \"quant\": \"{}\",\n  \"fuente_repo\": \"{}\",\n  \
-             \"intermedio\": {},\n  \"imatrix\": {},\n  \"mtp\": {},\n  \
-             \"herramienta\": \"{}\",\n  \"fecha\": \"{}\"\n}}\n",
-            escapa(&self.gguf),
-            escapa(&self.quant),
-            escapa(&self.fuente_repo),
-            intermedio,
-            imx,
-            mtp,
-            escapa(&self.herramienta),
-            escapa(&self.fecha)
-        )
+        // Los campos opcionales: si están, van; si no, **no están**.
+        let mut campos = vec![
+            format!("  \"gguf\": \"{}\"", escapa(&self.gguf)),
+            format!("  \"quant\": \"{}\"", escapa(&self.quant)),
+            format!("  \"fuente_repo\": \"{}\"", escapa(&self.fuente_repo)),
+        ];
+        if let Some(base) = &self.base_model {
+            campos.push(format!("  \"base_model\": \"{}\"", escapa(base)));
+        }
+        if let Some(nombre) = &self.base_model_name {
+            campos.push(format!("  \"base_model_name\": \"{}\"", escapa(nombre)));
+        }
+        if let Some(arch) = &self.arch {
+            campos.push(format!("  \"arch\": \"{}\"", escapa(arch)));
+        }
+        if let Some(bloques) = self.block_count {
+            campos.push(format!("  \"block_count\": {bloques}"));
+        }
+        campos.push(format!("  \"intermedio\": {intermedio}"));
+        campos.push(format!("  \"imatrix\": {imx}"));
+        campos.push(format!("  \"mtp\": {mtp}"));
+        campos.push(format!(
+            "  \"herramienta\": \"{}\"",
+            escapa(&self.herramienta)
+        ));
+        campos.push(format!("  \"fecha\": \"{}\"", escapa(&self.fecha)));
+        format!("{{\n{}\n}}\n", campos.join(",\n"))
     }
 }
 

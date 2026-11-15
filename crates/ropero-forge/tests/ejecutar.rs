@@ -651,6 +651,52 @@ fn un_checkpoint_de_la_fase_procedencia_sin_el_gguf_no_es_un_exito() {
     );
 }
 
+/// **R-GGUF-19**: el sidecar declara el modelo base y el hash de la
+/// importance matrix (los campos que la v1 tenía y la v2 había perdido, y que
+/// lee el model card).
+///
+/// Y lo que no se puede calcular **no está**: el GGUF de este doble no
+/// lleva metadata, así que no puede decir cuál es su arquitectura.
+#[test]
+fn el_sidecar_declara_el_modelo_base_y_el_hash_del_imatrix() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let imx = tirada.imatrix();
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"])
+        .con_imatrix(&imx);
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    let sidecar = fs::read_to_string(Procedencia::ruta(&tirada.salida())).expect("el sidecar está");
+    // El modelo base: el repo del que se hizo el GGUF.
+    assert!(
+        sidecar.contains("\"base_model\": \"acme/modelo\""),
+        "dice {sidecar}"
+    );
+    assert!(
+        sidecar.contains("\"base_model_name\": \"modelo\""),
+        "dice {sidecar}"
+    );
+    // El hash de la importance matrix: el de verdad, no uno inventado.
+    let esperado =
+        ropero_forge::sha256::sha256_de(std::path::Path::new(&imx)).expect("el hash del imatrix");
+    assert!(
+        sidecar.contains(&format!("\"sha256\": \"{esperado}\"")),
+        "dice {sidecar}"
+    );
+    // Y lo que el GGUF no dice, el sidecar tampoco.
+    assert!(
+        !sidecar.contains("\"arch\""),
+        "se inventó la arch: {sidecar}"
+    );
+    assert!(
+        !sidecar.contains("\"block_count\""),
+        "se inventaron los bloques: {sidecar}"
+    );
+}
+
 /// **La huella incluye el directorio de salida**.
 ///
 /// El defecto: la huella no lo incluía, así que la misma petición con otro

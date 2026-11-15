@@ -30,6 +30,7 @@ use crate::peticion::{Fuente, Imatrix, Peticion};
 use crate::plan::{self, Clase, Plan};
 use crate::procedencia::{ImatrixInfo, Procedencia};
 use crate::quants;
+use crate::sha256;
 use crate::toolchain::{self, Toolchain};
 use crate::verificar;
 
@@ -306,7 +307,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // ── FASE 6: la procedencia (R-GGUF-19: si no se puede, falla) ──────
     if siguiente.is_some_and(|f| f == Fase::Procedencia) {
         for salida in &plan.salidas {
-            escribe_procedencia(salida, peticion, clase, es_entrada, &cuantizacion)?;
+            escribe_procedencia(salida, peticion, clase, es_entrada, &cuantizacion, &plan)?;
         }
         // El checkpoint final sólo si el work sigue ahí: la limpieza
         // pudo borrarlo con el checkpoint dentro, y entonces no hay nada
@@ -839,6 +840,7 @@ fn escribe_procedencia(
     clase: Clase,
     es_entrada: bool,
     cuantizacion: &Cuantizacion,
+    plan: &Plan,
 ) -> Result<(), Error> {
     let imatrix = peticion.imatrix.as_ref().map(|imx| match imx {
         Imatrix::Local(fichero) => ImatrixInfo {
@@ -847,12 +849,22 @@ fn escribe_procedencia(
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             repo: None,
+            // El hash de la matriz: con él se sabe **cuál** se usó (la v1 lo
+            // tenía, y el model card lo enseña).
+            sha256: sha256::sha256_de(fichero),
         },
         Imatrix::Remota { repo, file } => ImatrixInfo {
             fichero: file.clone(),
             repo: Some(repo.clone()),
+            // El remoto está en la caché del work: su hash es el de **ese**
+            // fichero.
+            sha256: sha256::sha256_de(&cache_imatrix(plan, repo, file)),
         },
     });
+    // La cabecera del GGUF producido: el arch, los bloques y el modelo base
+    // (R-GGUF-19: la v1 los tenía en el sidecar, y el model card los lee).
+    let cab = verificar::cabecera(&salida.ruta);
+    let (base_model, base_model_name) = base_del_modelo(peticion, cab.as_ref());
     let procedencia = Procedencia {
         gguf: salida
             .ruta
@@ -863,6 +875,10 @@ fn escribe_procedencia(
             .unwrap_or(salida.quant.as_str())
             .to_string(),
         fuente_repo: fuente_repo(peticion),
+        base_model,
+        base_model_name,
+        arch: cab.as_ref().and_then(|c| c.arquitectura.clone()),
+        block_count: cab.as_ref().and_then(|c| c.block_count),
         // El sidecar no afirma lo que no pasó (hallazgo 6, R-GGUF-20): si la
         // fuente ya era un GGUF no hubo intermedio, y si el cuantizador no
         // corrió no se dice que se cuantizó.
@@ -887,6 +903,32 @@ fn escribe_procedencia(
         dest: dest.to_string_lossy().into_owned(),
         detalle,
     })
+}
+
+/// El **repo** y el **nombre** del modelo base.
+///
+/// Lo primero es lo que diga la cabecera del GGUF (`general.base_model.0`):
+/// es la verdad. Y si la cabecera no lo dice (el conversor de llama.cpp no lo
+/// escribe), se usa el repo de la fuente: el GGUF se hizo de ese modelo, y
+/// eso no se inventa. Si no hay repo (una ruta de pesos o un GGUF suelto),
+/// no se dice nada: mejor callar que mentir (R-GGUF-19).
+fn base_del_modelo(
+    peticion: &Peticion,
+    cab: Option<&verificar::Cabecera>,
+) -> (Option<String>, Option<String>) {
+    let del_repo = match &peticion.fuente {
+        Fuente::Repo(repo) => Some(repo.clone()),
+        _ => None,
+    };
+    let base_model = cab
+        .and_then(|cab| cab.base_model.clone())
+        .or_else(|| del_repo.clone());
+    let base_model_name = cab.and_then(|cab| cab.base_model_name.clone()).or_else(|| {
+        del_repo
+            .as_ref()
+            .map(|repo| repo.rsplit('/').next().unwrap_or(repo).to_string())
+    });
+    (base_model, base_model_name)
 }
 
 /// Cómo se escribió la fuente, para el sidecar.
