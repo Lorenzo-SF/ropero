@@ -24,7 +24,7 @@ use std::process::Command;
 use ropero_core::Environment;
 
 use crate::Error;
-use crate::fases::{Checkpoint, Fase};
+use crate::fases::{Checkpoint, Estado, Fase};
 use crate::limpieza::{self, EstadoTirada, Origen};
 use crate::peticion::{Fuente, Imatrix, Peticion};
 use crate::plan::{self, Clase, Plan};
@@ -40,32 +40,82 @@ pub const CHECKPOINT: &str = ".ropero-forge.json";
 /// La herramienta que el sidecar declara, según lo que **de verdad** pasó
 /// (hallazgo 6): decir «llama-quantize» cuando no corrió es mentir.
 pub const HERRAMIENTA_CUANTIZA: &str = "ropero gguffer (llama.cpp llama-quantize)";
-pub const HERRAMIENTA_SIN_CUANTIZAR: &str = "ropero gguffer (sin cuantizar)";
+/// Lo generó el **conversor**: los pesos se convirtieron a GGUF, y no hubo
+/// cuantización (R-GGUF-20).
+pub const HERRAMIENTA_CONVERTIDO: &str =
+    "ropero gguffer (convertido con convert_hf_to_gguf.py: sin cuantizar)";
+/// Se **colocó** tal cual: el GGUF de origen ya estaba en ese quant y se
+/// copió (el cuantizador no corrió).
+pub const HERRAMIENTA_COLOCADO: &str =
+    "ropero gguffer (colocado: el GGUF de origen ya estaba en ese quant, sin cuantizar)";
 /// La salida ya estaba hecha y no se rehizo: el cuantizador **no** corrió,
 /// y el sidecar no puede decir que se cuantizó (R-GGUF-20).
 pub const HERRAMIENTA_YA_ESTABA: &str = "ropero gguffer (el GGUF ya estaba: no se cuantizó)";
 
-/// Lo que la fase 3 hizo de verdad (R-GGUF-20: el gguffer no miente).
+/// Lo que las fases 2 y 3 hicieron de verdad, salida a salida (R-GGUF-20:
+/// el gguffer no miente).
 ///
 /// Es lo que cuenta el informe y el sidecar: **no** lo que la tirada iba a
-/// hacer. Si el cuantizador no llegó a correr, aquí no hay quantizados, y
+/// hacer. Si el cuantizador no llegó a correr, aquí no hay cuantizados, y
 /// el informe no dice «cuantizado a …».
+///
+/// Los estados son:
+///
+/// - **convertido**: lo generó el conversor (la fase 2);
+/// - **colocado**: el GGUF de origen ya estaba en ese quant y se copió tal
+///   cual;
+/// - **cuantizado**: pasó por el cuantizador (la fase 3);
+/// - **ya existía**: la salida estaba y no se rehizo.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Cuantizacion {
-    /// Los quants que el cuantizador **cuantizó** (salieron de
-    /// `llama-quantize`).
-    pub cuantizados: Vec<String>,
-    /// Los quants que se **colocaron**: el GGUF de origen, tal cual (ya
-    /// estaba en ese quant, o es un dtype plano: no hay quant que hacer).
-    pub colocados: Vec<String>,
-    /// Los quants cuya salida **ya existía** y no se rehizo.
-    pub ya_existentes: Vec<String>,
+pub struct Estados {
+    /// El estado de cada salida, por quant (en el orden pedido).
+    pub por_quant: Vec<(String, Estado)>,
 }
 
-impl Cuantizacion {
+impl Estados {
     /// Si el cuantizador llegó a correr.
     pub fn cuantizo(&self) -> bool {
-        !self.cuantizados.is_empty()
+        !self.de_estado(Estado::Cuantizado).is_empty()
+    }
+
+    /// El estado de una salida: lo que pasó con ella.
+    ///
+    /// Lo que no se sabe, **no se cuenta**: una salida de la que nadie dijo
+    /// nada es «ya existía» (no se rehizo, y no se cuantizó).
+    pub fn estado_de(&self, quant: &str) -> Estado {
+        self.por_quant
+            .iter()
+            .find(|(q, _)| q == quant)
+            .map(|(_, estado)| *estado)
+            .unwrap_or(Estado::YaExistia)
+    }
+
+    /// Los quants de un estado (los cuantizados, los colocados…).
+    pub fn de_estado(&self, estado: Estado) -> Vec<String> {
+        self.por_quant
+            .iter()
+            .filter(|(_, e)| *e == estado)
+            .map(|(quant, _)| quant.clone())
+            .collect()
+    }
+
+    /// Fija el estado de una salida (la última fase que habló de ella gana).
+    pub fn fija(&mut self, quant: &str, estado: Estado) {
+        match self.por_quant.iter_mut().find(|(q, _)| q == quant) {
+            Some((_, e)) => *e = estado,
+            None => self.por_quant.push((quant.to_string(), estado)),
+        }
+    }
+
+    /// La herramienta que el sidecar declara: la que **de verdad** se usó
+    /// (R-GGUF-20).
+    pub fn herramienta_de(&self, quant: &str) -> String {
+        match self.estado_de(quant) {
+            Estado::Cuantizado => HERRAMIENTA_CUANTIZA.to_string(),
+            Estado::Convertido => HERRAMIENTA_CONVERTIDO.to_string(),
+            Estado::Colocado => HERRAMIENTA_COLOCADO.to_string(),
+            Estado::YaExistia => HERRAMIENTA_YA_ESTABA.to_string(),
+        }
     }
 }
 
@@ -87,9 +137,8 @@ pub struct Informe {
     /// La tirada **cambió** respecto al checkpoint: la petición es otra (o el
     /// checkpoint no dice de qué petición es) y se rehace desde el principio.
     pub cambio: Option<String>,
-    /// Lo que hizo la fase 3: los quants cuantizados, los colocados y los
-    /// que ya estaban (R-GGUF-20).
-    pub cuantizacion: Cuantizacion,
+    /// Lo que hicieron las fases 2 y 3 con cada salida (R-GGUF-20).
+    pub estados: Estados,
 }
 
 /// Fabrica los GGUFs que pide la petición.
@@ -155,7 +204,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
             pesos_conservados: Some(plan.work.clone()),
             ya_estaba: true,
             cambio,
-            cuantizacion: Cuantizacion::default(),
+            estados: Estados::default(),
         });
     }
 
@@ -164,27 +213,22 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         None => Some(Fase::Fuente),
     };
 
-    // Lo que la cuantización hizo de verdad: en esta tirada, o en una tirada
+    // Lo que las fases hicieron de verdad: en esta tirada, o en una tirada
     // anterior de esta misma (el checkpoint lo guarda). Antes esto se fijaba a
     // `viab.cuantizar` —lo que la tirada iba a hacer— y el informe decía
     // «cuantizado a Q4_K_M» sin que el cuantizador llegara a correr (R-GGUF-20:
     // no mentir sobre el resultado).
-    let mut cuantizacion = Cuantizacion::default();
+    let mut estados = Estados::default();
     if let Some(cp) = checkpoint.as_ref()
         && cp.fase.orden() >= Fase::Cuantizacion.orden()
     {
-        cuantizacion.cuantizados = cp.cuantizados.clone();
+        estados.por_quant = cp.estados.clone();
     }
 
     // ── FASE 1: la fuente ──────────────────────────────────────────────
     if siguiente.is_some_and(|f| f == Fase::Fuente) {
         fase_fuente(peticion, env, &plan)?;
-        escribe_cp(
-            &fichero_cp,
-            Fase::Fuente,
-            &huella,
-            &cuantizacion.cuantizados,
-        )?;
+        escribe_cp(&fichero_cp, Fase::Fuente, &huella, &estados)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Fuente);
 
@@ -199,17 +243,23 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     let intermedio_es_resultado = plan.salidas.iter().any(|s| s.ruta == plan.intermedio);
     if siguiente.is_some_and(|f| f == Fase::Conversion) {
         if !es_entrada {
-            fase_conversion(peticion, env, &toolchain, &plan, clase, &viab)?;
+            let conversion = fase_conversion(peticion, env, &toolchain, &plan, clase, &viab)?;
+            // Lo que el conversor genera es una salida **convertida**: si
+            // ese fichero es además una de las salidas (el F16 pedido como
+            // salida), su estado es «convertido» y no «ya existía» (R-GGUF-20:
+            // el sidecar nombra lo que pasó de verdad).
+            if let Conversion::Convertido(ruta) = &conversion {
+                for salida in &plan.salidas {
+                    if salida.ruta == *ruta {
+                        estados.fija(&salida.quant, Estado::Convertido);
+                    }
+                }
+            }
         }
         // La fuente `--gguf` no pasa por el conversor, pero la fase está
         // hecha igual: sin este checkpoint, el fichero se queda atrás
         // («fuente») y la reanudación no sabe por dónde seguir.
-        escribe_cp(
-            &fichero_cp,
-            Fase::Conversion,
-            &huella,
-            &cuantizacion.cuantizados,
-        )?;
+        escribe_cp(&fichero_cp, Fase::Conversion, &huella, &estados)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Conversion);
 
@@ -240,16 +290,26 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         {
             baja_imatrix(imx, env, &plan)?;
         }
-        cuantizacion = fase_cuantizacion(peticion, &toolchain, &plan, clase, &viab, &origen_quant)?;
-        escribe_cp(
-            &fichero_cp,
-            Fase::Cuantizacion,
-            &huella,
-            &cuantizacion.cuantizados,
+        // Lo que el conversor ya hizo (el F16 pedido como salida) no lo
+        // vuelve a decir la fase 3: su estado es «convertido», no «ya
+        // existía» (R-GGUF-20).
+        let convertidos = estados.de_estado(Estado::Convertido);
+        let de_la_fase_3 = fase_cuantizacion(
+            peticion,
+            &toolchain,
+            &plan,
+            clase,
+            &viab,
+            &origen_quant,
+            &convertidos,
         )?;
+        for (quant, estado) in de_la_fase_3.por_quant {
+            estados.fija(&quant, estado);
+        }
+        escribe_cp(&fichero_cp, Fase::Cuantizacion, &huella, &estados)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Cuantizacion);
-    let cuantizo = cuantizacion.cuantizo();
+    let cuantizo = estados.cuantizo();
 
     // ── FASE 4: la verificación ────────────────────────────────────────
     if siguiente.is_some_and(|f| f == Fase::Verificacion) {
@@ -265,12 +325,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
                 });
             }
         }
-        escribe_cp(
-            &fichero_cp,
-            Fase::Verificacion,
-            &huella,
-            &cuantizacion.cuantizados,
-        )?;
+        escribe_cp(&fichero_cp, Fase::Verificacion, &huella, &estados)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Verificacion);
 
@@ -295,12 +350,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         // El checkpoint se escribe ANTES de los borrados: la limpieza
         // puede borrar el work con el propio checkpoint dentro (R-GGUF-16
         // y R-GGUF-17), y entonces ya no hay nada que reanudar.
-        escribe_cp(
-            &fichero_cp,
-            Fase::Limpieza,
-            &huella,
-            &cuantizacion.cuantizados,
-        )?;
+        escribe_cp(&fichero_cp, Fase::Limpieza, &huella, &estados)?;
         if ordenes.borrar_clon {
             borra_dir(&plan.work, "borrar el clon de los pesos")?;
         }
@@ -315,19 +365,14 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // ── FASE 6: la procedencia (R-GGUF-19: si no se puede, falla) ──────
     if siguiente.is_some_and(|f| f == Fase::Procedencia) {
         for salida in &plan.salidas {
-            escribe_procedencia(salida, peticion, clase, es_entrada, &cuantizacion, &plan)?;
+            escribe_procedencia(salida, peticion, clase, es_entrada, &estados, &plan)?;
         }
         // El checkpoint final sólo si el work sigue ahí: la limpieza
         // pudo borrarlo con el checkpoint dentro, y entonces no hay nada
         // que reanudar — un reintento con los GGUF ya hechos cae en «ya
         // estaba» (T-30).
         if plan.work.is_dir() {
-            escribe_cp(
-                &fichero_cp,
-                Fase::Procedencia,
-                &huella,
-                &cuantizacion.cuantizados,
-            )?;
+            escribe_cp(&fichero_cp, Fase::Procedencia, &huella, &estados)?;
         }
     }
 
@@ -365,11 +410,11 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         salidas: plan.salidas.iter().map(|s| s.ruta.clone()).collect(),
         cuantizo,
         quant_real: clase.nombre_quant(peticion.intermedio),
-        quant_cuantizado: quant_cuantizado(&cuantizacion),
+        quant_cuantizado: quant_cuantizado(&estados),
         pesos_conservados,
         ya_estaba: false,
         cambio,
-        cuantizacion,
+        estados,
     })
 }
 
@@ -378,11 +423,12 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
 /// Son los que el cuantizador **cuantizó**: los planos (F16, BF16) son
 /// conversión de dtype, no cuantización, y los que ya estaban en su quant
 /// no se tocan.
-fn quant_cuantizado(cuantizacion: &Cuantizacion) -> Option<String> {
-    if cuantizacion.cuantizados.is_empty() {
+fn quant_cuantizado(estados: &Estados) -> Option<String> {
+    let cuantizados = estados.de_estado(Estado::Cuantizado);
+    if cuantizados.is_empty() {
         return None;
     }
-    Some(cuantizacion.cuantizados.join(", "))
+    Some(cuantizados.join(", "))
 }
 
 /// El informe de una tirada, en líneas (R-GGUF-20: el mensaje honesto).
@@ -399,24 +445,35 @@ pub fn lineas(informe: &Informe) -> Vec<String> {
         // reanudación (T-30).
         lineas.push(cambio.clone());
     }
+    let colocados = informe.estados.de_estado(Estado::Colocado);
+    let ya_existentes = informe.estados.de_estado(Estado::YaExistia);
+    let convertidos = informe.estados.de_estado(Estado::Convertido);
     if informe.cuantizo {
         // La verdad: se cuantizó, y a qué quant (R-GGUF-20).
         if let Some(quant) = &informe.quant_cuantizado {
             lineas.push(format!("cuantizado a {quant}"));
         }
+        // Y lo que **no** se cuantizó, con su estado: una tirada puede
+        // cuantizar un quant y dejar otro como estaba (R-GGUF-20).
+        if !ya_existentes.is_empty() {
+            lineas.push(format!(
+                "no se cuantizó: {} ya estaba hecho y no se rehizo",
+                ya_existentes.join(", ")
+            ));
+        }
     } else if !informe.ya_estaba {
         // Lo que **no** se cuantizó se dice como fue (R-GGUF-20): el mensaje
         // viejo («el quant pedido se perdió en la conversión») era mentira
         // cuando no hubo conversión (la colocación de un `--gguf`).
-        if !informe.cuantizacion.colocados.is_empty() {
+        if !colocados.is_empty() {
             lineas.push(format!(
                 "no se cuantizó: {} ya estaba en ese quant y se colocó tal cual",
-                informe.cuantizacion.colocados.join(", ")
+                colocados.join(", ")
             ));
-        } else if !informe.cuantizacion.ya_existentes.is_empty() {
+        } else if !ya_existentes.is_empty() {
             lineas.push(format!(
                 "no se cuantizó: {} ya estaba hecho y no se rehizo",
-                informe.cuantizacion.ya_existentes.join(", ")
+                ya_existentes.join(", ")
             ));
         } else {
             lineas.push(format!(
@@ -424,6 +481,11 @@ pub fn lineas(informe: &Informe) -> Vec<String> {
                 informe.quant_real
             ));
         }
+    }
+    // Los convertidos (R-GGUF-20): el informe nombra el estado real de cada
+    // salida (un F16 recién convertido no es «el GGUF ya estaba»).
+    if !convertidos.is_empty() {
+        lineas.push(format!("convertido a GGUF: {}", convertidos.join(", ")));
     }
     if informe.ya_estaba {
         lineas.push("ya estaba: no se ha hecho nada (usa --force para rehacer)".to_string());
@@ -593,6 +655,18 @@ fn fase_fuente(peticion: &Peticion, env: &Environment, plan: &Plan) -> Result<()
     }
 }
 
+/// Lo que hizo la fase 2 (la conversión).
+///
+/// El sidecar nombra el estado real de cada salida (R-GGUF-20): un GGUF
+/// **recién convertido** no es «el GGUF ya estaba».
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Conversion {
+    /// El conversor generó el fichero.
+    Convertido(PathBuf),
+    /// El fichero ya estaba (de una tirada anterior): no se rehizo.
+    YaExistia(PathBuf),
+}
+
 /// La fase 2: la conversión a GGUF.
 fn fase_conversion(
     peticion: &Peticion,
@@ -601,7 +675,7 @@ fn fase_conversion(
     plan: &Plan,
     clase: Clase,
     viab: &plan::Viabilidad,
-) -> Result<(), Error> {
+) -> Result<Conversion, Error> {
     // Si va a haber cuantización, la conversión produce el **intermedio**
     // (de ahí salen los quants). Si no —colocación o conversión plana—,
     // produce directamente el GGUF final.
@@ -611,7 +685,9 @@ fn fase_conversion(
         plan.salidas[0].ruta.clone()
     };
     if destino.is_file() {
-        return Ok(());
+        // Ya estaba (de una tirada anterior): no se rehizo, y el sidecar no
+        // puede decir que se convirtió ahora.
+        return Ok(Conversion::YaExistia(destino));
     }
     // Sin conversor no hay conversión (R-GGUF-55): `convert` es `None` cuando
     // la fuente ya es un GGUF y sólo hay que cuantizar. Llegar aquí con `None`
@@ -662,7 +738,7 @@ fn fase_conversion(
         cola,
         reintento: linea.clone(),
     })?;
-    Ok(())
+    Ok(Conversion::Convertido(destino))
 }
 
 /// Si el conversor entiende un flag (lo busca en su texto).
@@ -676,6 +752,10 @@ fn el_conversor_entiende(convert: &Path, flag: &str) -> bool {
 /// cuantizó, los que se colocaron (copiados) y los que ya estaban hechos
 /// (R-GGUF-20: el informe y el sidecar cuentan esto, no lo que la tirada iba
 /// a hacer).
+///
+/// `convertidos` son los quants de las salidas que **ya son** del conversor
+/// (el F16 pedido como salida): de ésos la fase 3 no dice nada, porque su
+/// estado es «convertido» y no «ya existía».
 fn fase_cuantizacion(
     peticion: &Peticion,
     toolchain: &Toolchain,
@@ -683,13 +763,18 @@ fn fase_cuantizacion(
     clase: Clase,
     viab: &plan::Viabilidad,
     origen: &Path,
-) -> Result<Cuantizacion, Error> {
-    let mut hecho = Cuantizacion::default();
+    convertidos: &[String],
+) -> Result<Estados, Error> {
+    let mut hecho = Estados::default();
     if !viab.cuantizar {
         // Los quants que ya están en el GGUF (omitidos) y los que son planos
         // (F32/F16/BF16: no hay quant que hacer) se **colocan**: el GGUF de
         // origen se copia a su ruta (R-GGUF-7: se sale 0 sin borrar nada).
         for salida in &plan.salidas {
+            if convertidos.contains(&salida.quant) {
+                // Lo generó el conversor: su estado ya está puesto.
+                continue;
+            }
             if (viab.omitidos.contains(&salida.quant) || viab.planos.contains(&salida.quant))
                 && salida.ruta != origen
                 && origen.is_file()
@@ -704,7 +789,7 @@ fn fase_cuantizacion(
                     &salida.ruta,
                     "colocar el GGUF (ya está en ese quant)",
                 )?;
-                hecho.colocados.push(salida.quant.clone());
+                hecho.fija(&salida.quant, Estado::Colocado);
             }
         }
         return Ok(hecho);
@@ -720,10 +805,15 @@ fn fase_cuantizacion(
         if viab.omitidos.contains(&salida.quant) {
             continue;
         }
+        if convertidos.contains(&salida.quant) {
+            // Lo generó el conversor (el F16 pedido como salida): no es «ya
+            // existía», y el cuantizador no lo tocó.
+            continue;
+        }
         if salida.ruta.is_file() {
             // El que ya existe de una tirada anterior: no se rehace, y no se
             // dice que se cuantizó (el cuantizador no corrió).
-            hecho.ya_existentes.push(salida.quant.clone());
+            hecho.fija(&salida.quant, Estado::YaExistia);
             continue;
         }
         crea_dir(salida.ruta.parent().unwrap_or(Path::new(".")))?;
@@ -766,7 +856,7 @@ fn fase_cuantizacion(
         let _ = clase;
         // El cuantizador **sí** corrió: el quant se cuenta como cuantizado
         // (y el informe lo dice).
-        hecho.cuantizados.push(salida.quant.clone());
+        hecho.fija(&salida.quant, Estado::Cuantizado);
     }
     Ok(hecho)
 }
@@ -847,27 +937,29 @@ fn escribe_procedencia(
     peticion: &Peticion,
     clase: Clase,
     es_entrada: bool,
-    cuantizacion: &Cuantizacion,
+    estados: &Estados,
     plan: &Plan,
 ) -> Result<(), Error> {
-    let imatrix = peticion.imatrix.as_ref().map(|imx| match imx {
-        Imatrix::Local(fichero) => ImatrixInfo {
-            fichero: fichero
+    // El hash del imatrix: el del fichero (el local nunca se borra; el remoto
+    // puede que sí: su caché la lleva la limpieza).
+    let hash_imatrix = hash_del_imatrix(peticion, plan);
+    let imatrix = peticion.imatrix.as_ref().map(|imx| ImatrixInfo {
+        fichero: match imx {
+            Imatrix::Local(fichero) => fichero
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
-            repo: None,
-            // El hash de la matriz: con él se sabe **cuál** se usó (la v1 lo
-            // tenía, y el model card lo enseña).
-            sha256: sha256::sha256_de(fichero),
+            Imatrix::Remota { file, .. } => file.clone(),
         },
-        Imatrix::Remota { repo, file } => ImatrixInfo {
-            fichero: file.clone(),
-            repo: Some(repo.clone()),
-            // El remoto está en la caché del work: su hash es el de **ese**
-            // fichero.
-            sha256: sha256::sha256_de(&cache_imatrix(plan, repo, file)),
+        repo: match imx {
+            Imatrix::Local(_) => None,
+            Imatrix::Remota { repo, .. } => Some(repo.clone()),
         },
+        // El hash de la matriz: con él se sabe **cuál** se usó (la v1 lo
+        // tenía, y el model card lo enseña). Es el que se calculó en la
+        // fase 3, antes de que la limpieza borrara la caché del work
+        // (hallazgo 1).
+        sha256: hash_imatrix.map(|hash| hash.to_string()),
     });
     // La cabecera del GGUF producido: el arch, los bloques y el modelo base
     // (R-GGUF-19: la v1 los tenía en el sidecar, y el model card los lee).
@@ -895,13 +987,9 @@ fn escribe_procedencia(
         } else {
             Some(clase.sufijo_intermedio(peticion.intermedio).to_string())
         },
-        herramienta: if cuantizacion.cuantizados.contains(&salida.quant) {
-            HERRAMIENTA_CUANTIZA.to_string()
-        } else if cuantizacion.colocados.contains(&salida.quant) {
-            HERRAMIENTA_SIN_CUANTIZAR.to_string()
-        } else {
-            HERRAMIENTA_YA_ESTABA.to_string()
-        },
+        // La herramienta dice el **estado real** de esta salida (R-GGUF-20):
+        // convertido, colocado, cuantizado o ya existía.
+        herramienta: estados.herramienta_de(&salida.quant),
         imatrix,
         mtp: None,
         fecha: fecha_utc(),
@@ -1170,6 +1258,21 @@ fn sin_sidecar(plan: &Plan) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
+/// El **sha256** del imatrix de la petición, si se puede calcular.
+///
+/// El local es el fichero del usuario; el remoto es el de la **caché** del
+/// work (`<work>/imatrix/<repo>/<fichero>`), que la limpieza borra en la
+/// fase 5: por eso el hash se calcula en la fase 3 y se guarda en el
+/// checkpoint (hallazgo 1).
+fn hash_del_imatrix(peticion: &Peticion, plan: &Plan) -> Option<String> {
+    let imx = peticion.imatrix.as_ref()?;
+    let ruta = match imx {
+        Imatrix::Local(fichero) => fichero.clone(),
+        Imatrix::Remota { repo, file } => cache_imatrix(plan, repo, file),
+    };
+    sha256::sha256_de(&ruta)
+}
+
 /// El origen de la tirada, para la política de limpieza.
 fn origen_de(peticion: &Peticion) -> Origen {
     match &peticion.fuente {
@@ -1205,14 +1308,14 @@ fn escribe(ruta: &Path, texto: &str) -> Result<(), String> {
 ///
 /// El directorio puede no existir todavía (un `--gguf` local no crea el
 /// work hasta la limpieza).
-fn escribe_cp(ruta: &Path, fase: Fase, huella: &str, cuantizados: &[String]) -> Result<(), Error> {
+fn escribe_cp(ruta: &Path, fase: Fase, huella: &str, estados: &Estados) -> Result<(), Error> {
     if let Some(padre) = ruta.parent() {
         crea_dir(padre)?;
     }
     let temporal = temporal_de(ruta);
     escribe(
         &temporal,
-        &Checkpoint::con_cuantizados(fase, huella, cuantizados).a_json(),
+        &Checkpoint::con_estado(fase, huella, &estados.por_quant).a_json(),
     )
     .map_err(|detalle| Error::Disco {
         que: format!("escribir el checkpoint ({})", fase.nombre()),
