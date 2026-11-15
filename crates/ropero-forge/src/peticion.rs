@@ -1,0 +1,423 @@
+//! La petición de `ropero gguffer` y sus **validaciones duras**.
+//!
+//! Las validaciones se comprueban **antes de nada** (R-GGUF-6: *antes de
+//! nada* es antes de descargar, antes de mirar el motor, antes de todo):
+//! bajan 60 GB tontos con la misma facilidad que un error de uso.
+//!
+//! El orden de la comprobación es el del doc (R-GGUF-3/5/6/7): la fuente
+//! primero, después el imatrix, después las salidas.
+
+use std::path::PathBuf;
+
+use crate::Error;
+use crate::quants;
+
+/// De dónde salen los pesos: **una de tres**, excluyentes (R-GGUF-3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fuente {
+    /// Un repo de HuggingFace, a descargar: `owner/name`.
+    Repo(String),
+    /// Un directorio de pesos ya clonado.
+    Path(PathBuf),
+    /// Un GGUF existente: un fichero local o `owner/repo`.
+    Gguf(String),
+}
+
+impl Fuente {
+    /// Cómo se escribió, para los mensajes.
+    pub fn describe(&self) -> String {
+        match self {
+            Fuente::Repo(repo) => format!("--repo {repo}"),
+            Fuente::Path(path) => format!("--path {}", path.to_string_lossy()),
+            Fuente::Gguf(gguf) => format!("--gguf {gguf}"),
+        }
+    }
+}
+
+/// El formato del GGUF **intermedio** (doc CLI v2 §11.2): `f16` o `bf16`,
+/// con `f16` por defecto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Intermedio {
+    /// El intermedio sale en F16 (el default).
+    #[default]
+    F16,
+    /// El intermedio sale en BF16.
+    Bf16,
+}
+
+impl Intermedio {
+    /// El nombre que se le pasa al conversor (`--outtype`).
+    pub fn outtype(self) -> &'static str {
+        match self {
+            Intermedio::F16 => "f16",
+            Intermedio::Bf16 => "bf16",
+        }
+    }
+
+    /// El sufijo que lleva el fichero del intermedio.
+    pub fn sufijo(self) -> &'static str {
+        match self {
+            Intermedio::F16 => "F16",
+            Intermedio::Bf16 => "BF16",
+        }
+    }
+}
+
+/// La importance matrix: un **fichero local** (`--imatrix`) o la **pareja
+/// remota** (`--imatrix-repo` + `--imatrix-file`). Las dos formas son
+/// excluyentes (R-GGUF-6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Imatrix {
+    /// El fichero, aquí.
+    Local(PathBuf),
+    /// El fichero, en un repo de HuggingFace.
+    Remota { repo: String, file: String },
+}
+
+/// La petición del gguffer, tal y como la escribió el usuario.
+///
+/// Es **dato**, no ejecución (R-GGUF-2): lo que hace falta para planear la
+/// tirada sin tocar el disco. Se construye con [`Peticion::de_flags`],
+/// que es donde viven las validaciones duras.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Peticion {
+    /// La fuente de los pesos (una de tres).
+    pub fuente: Fuente,
+    /// Los quants pedidos, ya partidos por coma y en mayúsculas.
+    pub quants: Vec<String>,
+    /// La importance matrix, si se pidió.
+    pub imatrix: Option<Imatrix>,
+    /// `--out NOMBRE|RUTA`: nombre, directorio o ruta exacta.
+    pub out: Option<String>,
+    /// `--out-principal RUTA`: la ruta exacta del primer quant.
+    pub out_principal: Option<String>,
+    /// El formato del intermedio (default `f16`).
+    pub intermedio: Intermedio,
+    /// No borra los pesos de origen.
+    pub keep_source: bool,
+    /// No borra el GGUF intermedio.
+    pub keep_intermedio: bool,
+    /// Genera el GGUF sin las cabeceras MTP.
+    pub no_mtp: bool,
+    /// Genera el GGUF sin las cabeceras DFlash.
+    pub no_dflash: bool,
+    /// Sobrescribe y fuerza.
+    pub force: bool,
+    /// Lista los quants disponibles y se sale.
+    pub list_quants: bool,
+    /// Diagnóstico del entorno: enseña qué haría, sin escribir nada.
+    pub diagnostico: bool,
+}
+
+/// Los flags crudos del `gguffer`, tal y como los leyó la CLI.
+///
+/// Es el argumento único de [`Peticion::de_flags`]: la CLI los lee de
+/// `clap`, los mete aquí y el dominio valida. Ningún flag se interpreta
+/// en la CLI (R-ARQ-1: la lógica no vive allí).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Flags {
+    /// `--repo OWNER/NAME`.
+    pub repo: Option<String>,
+    /// `--path DIR`.
+    pub path: Option<String>,
+    /// `--gguf FICHERO|OWNER/REPO`.
+    pub gguf: Option<String>,
+    /// `--quant TIPO[,TIPO...]` (repetible).
+    pub quants: Vec<String>,
+    /// `--imatrix FICHERO`.
+    pub imatrix: Option<String>,
+    /// `--imatrix-repo OWNER/NAME`.
+    pub imatrix_repo: Option<String>,
+    /// `--imatrix-file NOMBRE`.
+    pub imatrix_file: Option<String>,
+    /// `--out NOMBRE|RUTA`.
+    pub out: Option<String>,
+    /// `--out-principal RUTA`.
+    pub out_principal: Option<String>,
+    /// `--intermedio f16|bf16`.
+    pub intermedio: Option<String>,
+    /// `--keep-source`.
+    pub keep_source: bool,
+    /// `--keep-intermedio`.
+    pub keep_intermedio: bool,
+    /// `--no-mtp`.
+    pub no_mtp: bool,
+    /// `--no-dflash`.
+    pub no_dflash: bool,
+    /// `--force`.
+    pub force: bool,
+    /// `--list-quants`.
+    pub list_quants: bool,
+    /// `--diagnostico`.
+    pub diagnostico: bool,
+}
+
+impl Flags {
+    /// `--repo OWNER/NAME`.
+    pub fn con_repo(mut self, repo: &str) -> Flags {
+        self.repo = Some(repo.to_string());
+        self
+    }
+
+    /// `--path DIR`.
+    pub fn con_path(mut self, path: &str) -> Flags {
+        self.path = Some(path.to_string());
+        self
+    }
+
+    /// `--gguf FICHERO|OWNER/REPO`.
+    pub fn con_gguf(mut self, gguf: &str) -> Flags {
+        self.gguf = Some(gguf.to_string());
+        self
+    }
+
+    /// Los valores de `--quant` (repetible y con coma).
+    pub fn con_quants(mut self, quants: &[&str]) -> Flags {
+        self.quants = quants.iter().map(|q| q.to_string()).collect();
+        self
+    }
+
+    /// `--imatrix FICHERO`.
+    pub fn con_imatrix(mut self, imatrix: &str) -> Flags {
+        self.imatrix = Some(imatrix.to_string());
+        self
+    }
+
+    /// La pareja remota: `--imatrix-repo OWNER/NAME` + `--imatrix-file`.
+    pub fn con_imatrix_remota(mut self, repo: &str, file: &str) -> Flags {
+        self.imatrix_repo = Some(repo.to_string());
+        self.imatrix_file = Some(file.to_string());
+        self
+    }
+
+    /// `--out NOMBRE|RUTA`.
+    pub fn con_out(mut self, out: &str) -> Flags {
+        self.out = Some(out.to_string());
+        self
+    }
+
+    /// `--out-principal RUTA`.
+    pub fn con_out_principal(mut self, out: &str) -> Flags {
+        self.out_principal = Some(out.to_string());
+        self
+    }
+
+    /// `--intermedio f16|bf16`.
+    pub fn con_intermedio(mut self, intermedio: &str) -> Flags {
+        self.intermedio = Some(intermedio.to_string());
+        self
+    }
+
+    /// `--diagnostico`.
+    pub fn con_diagnostico(mut self) -> Flags {
+        self.diagnostico = true;
+        self
+    }
+}
+
+impl Peticion {
+    /// Monta la petición desde los **flags crudos** de la CLI, con las
+    /// validaciones duras del doc (R-GGUF-3/5/6/7), **en orden**.
+    ///
+    /// - la fuente (`--repo`/`--path`/`--gguf`): **una sola**;
+    /// - el imatrix: `--imatrix` excluyente con el par, y la pareja junta;
+    /// - los quants: repetibles y con coma (R-GGUF-7);
+    /// - las salidas: R-GGUF-4 y R-GGUF-5;
+    /// - el intermedio: sólo `f16` o `bf16`.
+    pub fn de_flags(flags: Flags) -> Result<Peticion, Error> {
+        let Flags {
+            repo,
+            path,
+            gguf,
+            quants,
+            imatrix,
+            imatrix_repo,
+            imatrix_file,
+            out,
+            out_principal,
+            intermedio,
+            keep_source,
+            keep_intermedio,
+            no_mtp,
+            no_dflash,
+            force,
+            list_quants,
+            diagnostico,
+        } = flags;
+
+        // ── (1) la fuente: exactamente una (R-GGUF-3) ──────────────────
+        let fuentes: Vec<Fuente> = [
+            repo.map(Fuente::Repo),
+            path.map(|p| Fuente::Path(PathBuf::from(p))),
+            gguf.map(Fuente::Gguf),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let fuente = match fuentes.len() {
+            0 => {
+                return Err(Error::Uso(
+                    "falta la fuente: pasa --path DIR, --repo OWNER/NAME o \
+                     --gguf FICHERO|OWNER/REPO (una sola)"
+                        .to_string(),
+                ));
+            }
+            1 => fuentes
+                .into_iter()
+                .next()
+                .unwrap_or(Fuente::Repo(String::new())),
+            _ => {
+                let escritas: Vec<String> = fuentes.iter().map(Fuente::describe).collect();
+                return Err(Error::Uso(format!(
+                    "la fuente es una sola: {} son excluyentes",
+                    escritas.join(", ")
+                )));
+            }
+        };
+        if let Fuente::Repo(repo) = &fuente
+            && !repo.contains('/')
+        {
+            return Err(Error::Uso(format!(
+                "--repo tiene que ser OWNER/NAME (recibido: '{repo}')"
+            )));
+        }
+
+        // ── (2) el imatrix: las reglas duras (R-GGUF-6) ────────────────
+        let imatrix = junta_imatrix(imatrix, imatrix_repo, imatrix_file)?;
+        // Un imatrix sin `--quant` no tiene sentido: no hay nada que
+        // cuantizar. La excepción es `--diagnostico`, que está exenta.
+        if imatrix.is_some() && quants.is_empty() && !diagnostico {
+            return Err(Error::Uso(
+                "el imatrix no hace falta sin --quant: no hay nada que cuantizar. \
+                 quítalo, o añade --quant TIPO"
+                    .to_string(),
+            ));
+        }
+
+        // ── (3) los quants: repetibles y con coma (R-GGUF-7) ───────────
+        let quants = partir_quants(&quants);
+        for quant in &quants {
+            if quants::numero_de(quant).is_none() {
+                return Err(Error::QuantInvalido {
+                    quant: quant.clone(),
+                });
+            }
+        }
+
+        // ── (4) las salidas (R-GGUF-4 y R-GGUF-5) ──────────────────────
+        // Con varios quants, `--out` no puede ser la ruta exacta de un
+        // fichero: cada quant necesita la suya.
+        if quants.len() > 1 && out.as_deref().is_some_and(|out| out.ends_with(".gguf")) {
+            return Err(Error::Uso(
+                "con varios quants, --out debe ser un nombre o un directorio \
+                 (la ruta exacta es de un solo fichero)"
+                    .to_string(),
+            ));
+        }
+        // `--out-principal` exige una ruta de fichero `.gguf`.
+        if let Some(principal) = out_principal.as_deref()
+            && !principal.ends_with(".gguf")
+        {
+            return Err(Error::Uso(format!(
+                "--out-principal necesita la ruta de un fichero .gguf \
+                 (recibido: '{principal}')"
+            )));
+        }
+
+        // ── (5) el intermedio: sólo f16 o bf16 ─────────────────────────
+        let intermedio = match intermedio
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            None | Some("f16") => Intermedio::F16,
+            Some("bf16") => Intermedio::Bf16,
+            Some(otro) => {
+                return Err(Error::Uso(format!(
+                    "--intermedio sólo admite f16 o bf16 (recibido: '{otro}')"
+                )));
+            }
+        };
+
+        Ok(Peticion {
+            fuente,
+            quants,
+            imatrix,
+            out,
+            out_principal,
+            intermedio,
+            keep_source,
+            keep_intermedio,
+            no_mtp,
+            no_dflash,
+            force,
+            list_quants,
+            diagnostico,
+        })
+    }
+
+    /// Si la petición pide **cuantizar de verdad**: hay quants que no son
+    /// planos (F32/F16/BF16). Es lo que decide si hace falta el imatrix.
+    pub fn pide_cuantizacion(&self) -> bool {
+        self.quants.iter().any(|q| {
+            quants::numero_de(q)
+                .map(quants::es_quantizado)
+                .unwrap_or(false)
+        })
+    }
+}
+
+/// Junta las tres formas del imatrix en la **una** que la petición lleva.
+///
+/// - `--imatrix` es **excluyente** con el par `--imatrix-repo` +
+///   `--imatrix-file` (R-GGUF-6).
+/// - El par va **siempre juntos**: usar sólo una de las dos es error.
+fn junta_imatrix(
+    imatrix: Option<String>,
+    imatrix_repo: Option<String>,
+    imatrix_file: Option<String>,
+) -> Result<Option<Imatrix>, Error> {
+    let (local, repo, file) = (
+        imatrix.is_some(),
+        imatrix_repo.is_some(),
+        imatrix_file.is_some(),
+    );
+    if local && (repo || file) {
+        return Err(Error::Uso(
+            "--imatrix es excluyente con --imatrix-repo/--imatrix-file: \
+             usa una de las dos formas"
+                .to_string(),
+        ));
+    }
+    if repo != file {
+        return Err(Error::Uso(
+            "--imatrix-repo y --imatrix-file van siempre en pareja: falta \
+             la otra mitad del par"
+                .to_string(),
+        ));
+    }
+    match (imatrix, imatrix_repo, imatrix_file) {
+        (Some(fichero), None, None) => Ok(Some(Imatrix::Local(PathBuf::from(fichero)))),
+        (None, Some(repo), Some(file)) => Ok(Some(Imatrix::Remota { repo, file })),
+        (None, None, None) => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+/// Parte los quants de `--quant` (repetible y con coma, R-GGUF-7):
+/// `["IQ2_M,IQ3_XS", "Q4_K_M"]` → `["IQ2_M", "IQ3_XS", "Q4_K_M"]`.
+///
+/// Los nombres no distinguen mayúsculas: el motor los imprime en
+/// mayúsculas y el usuario puede escribir `q4_k_m`.
+pub fn partir_quants(valores: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for valor in valores {
+        for parte in valor.split(',') {
+            let parte = parte.trim();
+            if !parte.is_empty() {
+                out.push(parte.to_ascii_uppercase());
+            }
+        }
+    }
+    out
+}
