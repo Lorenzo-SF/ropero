@@ -439,7 +439,7 @@ fn validate_escribe_una_linea_ok_en_stdout() {
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 1, "stdout={stdout}");
-    assert!(lines[0].starts_with("OK:"), "stdout={stdout}");
+    assert!(lines[0].starts_with("ok:"), "stdout={stdout}");
 }
 
 /// `ropero template` vuelca la plantilla.

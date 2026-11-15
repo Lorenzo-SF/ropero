@@ -3,9 +3,29 @@
 //! La CLI imprime; el core decide **qué** se imprime (doc B §3.3). Aquí
 //! viven las líneas de `ropero engines`: una por motor, con su color, su
 //! madurez y si encaja con esta máquina.
+//!
+//! ## La forma
+//!
+//! ```text
+//! MOTORES
+//!   motor          color        madurez     puertos     formatos
+//!   ────────────────────────────────────────────────────────────
+//!   llama-server   naranja      proven      8100-8199   GGUF
+//!   fastflowlm     rojo         proven      8400-8499   Q4NX
+//!     no: sólo funciona en Linux; necesita una NPU AMD XDNA
+//! ```
+//!
+//! El motor que no encaja **no** pierde su fila: la deja con una nota
+//! debajo, que dice por qué. La nota es una fila que ocupa toda la tabla:
+//! no descuadra la rejilla (doc CLI v2 §2).
 
 use crate::compat::{CompatReport, SystemInfo, evaluate_manifest_set};
+use crate::estilo::{ANCHO_MAXIMO, Celda, Columna, Seccion, Tabla};
 use crate::manifest::EngineManifest;
+use crate::palette::Palette;
+
+/// El título de la sección de los motores.
+const TITULO: &str = "MOTORES";
 
 /// Una fila de la lista de motores.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,8 +74,11 @@ pub fn engine_rows(
     filas
 }
 
-/// Las filas de motores, en el orden de los ids canónicos.
-fn sorted_by_canonical_id(manifiestos: &[EngineManifest]) -> Vec<EngineManifest> {
+/// Los motores en el orden de los ids canónicos (la leyenda del doc).
+///
+/// Es el mismo orden en todas las salidas: el listado de motores y el
+/// informe del doctor enseñan los motores en la misma fila.
+pub fn sorted_by_canonical_id(manifiestos: &[EngineManifest]) -> Vec<EngineManifest> {
     let mut ordenados: Vec<EngineManifest> = manifiestos.to_vec();
     ordenados.sort_by_key(|m| {
         crate::CANONICAL_IDS
@@ -68,45 +91,38 @@ fn sorted_by_canonical_id(manifiestos: &[EngineManifest]) -> Vec<EngineManifest>
 
 /// Las líneas de `ropero engines`.
 ///
-/// El formato de una fila es:
-///
-/// ```text
-///   llama-server    naranja         proven    8100-8199   GGUF
-/// ```
-///
-/// y el de un motor incompatible añade las razones:
-///
-/// ```text
-///   fastflowlm      rojo            proven    8400-8499   Q4NX   (no: sólo funciona en Linux; necesita una NPU AMD XDNA)
-/// ```
+/// La tabla es la del sistema de formato (doc CLI v2 §2): los puertos se
+/// alinean a la derecha (son números) y el nombre del motor va en el color
+/// de la leyenda (§4).
 pub fn engine_lines(
     manifiestos: &[EngineManifest],
     sistema: &SystemInfo,
     todos: bool,
+    paleta: &Palette,
 ) -> Vec<String> {
-    engine_rows(manifiestos, sistema, todos)
-        .iter()
-        .map(engine_row_text)
-        .collect()
-}
-
-/// La línea de una fila de motores.
-pub fn engine_row_text(fila: &EngineRow) -> String {
-    let m = &fila.manifest;
-    let formatos = m.formats.join(", ");
-    let mut linea = format!(
-        "  {:<14} {:<15} {:<10} {:<10} {}",
-        m.id.as_str(),
-        m.color.as_str(),
-        m.maturity.as_str(),
-        m.port_range.to_string(),
-        formatos
-    );
-    if !fila.compatible {
-        let razones = fila.reasons.join("; ");
-        linea.push_str(&format!("   (no: {razones})"));
+    let filas = engine_rows(manifiestos, sistema, todos);
+    let mut tabla = Tabla::nivel(1)
+        .columna(Columna::texto("motor").maximo(ANCHO_MAXIMO))
+        .columna(Columna::texto("color"))
+        .columna(Columna::texto("madurez"))
+        .columna(Columna::numero("puertos"))
+        .columna(Columna::texto("formatos").maximo(ANCHO_MAXIMO));
+    for fila in &filas {
+        tabla.fila(vec![
+            Celda::motor(fila.manifest.id.as_str(), fila.manifest.color),
+            Celda::plana(fila.manifest.color.as_str()),
+            Celda::plana(fila.manifest.maturity.as_str()),
+            Celda::plana(fila.manifest.port_range.to_string()),
+            Celda::plana(fila.manifest.formats.join(", ")),
+        ]);
+        if !fila.compatible {
+            let razones = fila.reasons.join("; ");
+            tabla.nota(Celda::plana(format!("no: {razones}")));
+        }
     }
-    linea
+    let mut seccion = Seccion::nueva(TITULO);
+    seccion.cuerpo(tabla.lineas(paleta));
+    seccion.lineas()
 }
 
 /// La línea de un motor incompatible, con **todas** sus razones.

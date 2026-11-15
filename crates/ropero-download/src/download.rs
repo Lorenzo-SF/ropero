@@ -567,13 +567,14 @@ fn absoluta(path: &Path) -> PathBuf {
 ///
 /// El tamaño es **informativo** (R-MOD-20): no se verifica nada con él, sólo
 /// se dice para que el usuario sepa lo que va a bajar.
+///
+/// El tamaño lleva la **forma única** de la salida (doc CLI v2 §2): el
+/// `~` y los dos decimales los pone [`ropero_core::tamano_declarado`], no
+/// esta función (si los pusiera aquí, un tamaño que ya trae `~` saldría
+/// con dos).
 pub fn pregunta_de_descarga(plan: &Plan) -> String {
-    let tamano = if plan.size.is_empty() {
-        "?"
-    } else {
-        &plan.size
-    };
-    format!("¿Descargar {} (~{tamano})? [s/N]: ", plan.modelo)
+    let tamano = ropero_core::tamano_declarado(&plan.size).unwrap_or_else(|| "?".to_string());
+    format!("¿Descargar {} ({tamano})? [s/N]: ", plan.modelo)
 }
 
 /// La pregunta en el terminal: el default es **no**.

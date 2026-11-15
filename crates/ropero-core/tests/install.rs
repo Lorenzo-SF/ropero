@@ -60,6 +60,22 @@ file = "manual.gguf"
 manual = true
 "#;
 
+/// Un modelo con el tamaño declarado **sin** el `~` de origen: la salida lo
+/// normaliza igual que al del `~3.5 GB`.
+const CON_TAMANO: &str = r#"
+[model]
+name = "groot"
+engine = "llama-server"
+
+[files]
+gguf = "groot.gguf"
+
+[download]
+repo = "ejemplo/groot"
+file = "groot.gguf"
+size = "13.6 GB"
+"#;
+
 /// Un modelo con sólo `[build]`.
 const SOLO_BUILD: &str = r#"
 [model]
@@ -475,7 +491,36 @@ fn el_menu_de_modelos_no_ofrece_los_de_descarga_manual() {
     assert_eq!(menu.nombres, vec!["nemotron".to_string()]);
 }
 
+/// El menú de modelos da a los tamaños **la misma forma** que el listado.
+///
+/// Es la regla única de la salida (doc CLI v2 §2): `~N.NN UNIDAD`, con y sin
+/// `~` de origen. Un menú con `13.6 GB` y otro con `~3.5 GB` descuadraban
+/// la columna del tamaño.
+#[test]
+fn el_menu_de_modelos_da_una_sola_forma_al_tamano() {
+    let llama = motor("llama-server", "naranja");
+    let cat = build_catalog(vec![spec_en(CON_TAMANO, "groot.toml")], vec![]).expect("catálogo");
+    let motores = [MotorDelMenu {
+        manifest: &llama,
+        instalado: true,
+    }];
+    let menu = menu_modelos(&cat, &motores, &Palette::plain());
+    let fila = menu
+        .lineas
+        .iter()
+        .find(|l| l.contains("groot"))
+        .expect("el modelo sale en el menú");
+    assert!(fila.contains("~13.60 GB"), "fila={fila}");
+    assert!(!fila.contains("13.6 GB"), "fila={fila}");
+    // Y el artefacto va en su columna, con su nombre entero.
+    assert!(fila.contains("groot.gguf"), "fila={fila}");
+}
+
 /// El menú de motores numera sus opciones y lleva su color.
+///
+/// El número, el color y el estado van en la **fila** del motor: la primera
+/// línea del menú es la cabecera de la tabla, y no lleva ninguno de ellos
+/// (doc CLI v2 §2).
 #[test]
 fn el_menu_de_motores_numera_y_colorea() {
     let llama = motor("llama-server", "naranja");
@@ -485,10 +530,61 @@ fn el_menu_de_motores_numera_y_colorea() {
     }];
     let menu = menu_engines(&motores, &Palette::plain());
     assert_eq!(menu.nombres, vec!["llama-server".to_string()]);
-    assert!(menu.lineas[0].contains("  1"), "{:?}", menu.lineas);
-    assert!(menu.lineas[0].contains("llama-server"), "{:?}", menu.lineas);
-    assert!(menu.lineas[0].contains("naranja"), "{:?}", menu.lineas);
-    assert!(menu.lineas[0].contains("ya instalado"), "{:?}", menu.lineas);
+    let fila = menu
+        .lineas
+        .iter()
+        .find(|l| l.contains("llama-server"))
+        .expect("debe salir la fila del motor");
+    assert!(fila.contains("  1"), "fila={fila}");
+    assert!(fila.contains("naranja"), "fila={fila}");
+    assert!(fila.contains("ya instalado"), "fila={fila}");
+}
+
+/// El menú de motores es **una** tabla: una cabecera y una fila por motor.
+///
+/// Dos motores no son dos líneas sueltas: comparten la cabecera y la regla,
+/// y la numeración corre por las filas.
+#[test]
+fn el_menu_de_motores_pone_una_sola_cabecera() {
+    let llama = motor("llama-server", "naranja");
+    let vllm = motor("vllm", "morado");
+    let motores = [
+        MotorDelMenu {
+            manifest: &llama,
+            instalado: true,
+        },
+        MotorDelMenu {
+            manifest: &vllm,
+            instalado: false,
+        },
+    ];
+    let menu = menu_engines(&motores, &Palette::plain());
+    assert_eq!(
+        menu.nombres,
+        vec!["llama-server".to_string(), "vllm".to_string()]
+    );
+    let cabeceras: Vec<&String> = menu
+        .lineas
+        .iter()
+        .filter(|l| l.trim_start().starts_with("nº"))
+        .collect();
+    assert_eq!(cabeceras.len(), 1, "{:?}", menu.lineas);
+    let reglas: Vec<&String> = menu
+        .lineas
+        .iter()
+        .filter(|l| l.trim_start().starts_with('─'))
+        .collect();
+    assert_eq!(reglas.len(), 1, "{:?}", menu.lineas);
+    // La numeración corre por las filas, no por las cabeceras.
+    let segunda = menu
+        .lineas
+        .iter()
+        .find(|l| l.contains("vllm"))
+        .expect("debe salir la fila de vllm");
+    assert!(segunda.contains("  2"), "fila={segunda}");
+    for linea in &menu.lineas {
+        assert_eq!(linea.trim_end(), linea, "linea={linea:?}");
+    }
 }
 
 /// La respuesta del menú acepta **números** y **nombres**.

@@ -85,6 +85,19 @@ fn modelo(nombre: &str, motor: EngineId, descargado: bool) -> ModelState {
     }
 }
 
+/// Un modelo cuyo artefacto es un **tag** del almacén del motor (FLM).
+///
+/// No tiene fichero: su artefacto no es un GGUF, es una etiqueta.
+fn modelo_tag(nombre: &str, motor: EngineId) -> ModelState {
+    let mut estado = modelo(nombre, motor, true);
+    estado.spec.model.format = ropero_core::ModelFormat::Q4nx;
+    estado.spec.files.gguf = None;
+    if let Some(descarga) = estado.spec.download.as_mut() {
+        descarga.file = String::new();
+    }
+    estado
+}
+
 /// Una foto con todo instalado.
 fn todo_instalado() -> Snapshot {
     Snapshot::new(
@@ -368,4 +381,148 @@ fn el_recuento_de_un_grupo_es_el_numero_de_modelos() {
         .find(|g| g.manifest.id == EngineId::LlamaServer)
         .expect("debe estar llama-server");
     assert_eq!(llama.models.len(), 2);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// El formato del listado (doc CLI v2 §2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Las líneas del listado de una foto, sin color.
+fn listado(foto: &Snapshot, todos: bool) -> Vec<String> {
+    let razones = BTreeMap::new();
+    ropero_core::listing::list_lines(foto, todos, &Palette::plain(), &razones)
+}
+
+/// Las filas de los modelos (las que llevan el tamaño).
+fn filas_de_modelo(lineas: &[String]) -> Vec<&String> {
+    lineas.iter().filter(|l| l.contains("GB")).collect()
+}
+
+/// La columna del tamaño se alinea a la **derecha**: es un número.
+///
+/// La "GB" de todos los tamaños cae en la misma columna.
+#[test]
+fn el_listado_alinea_el_tamano_a_la_derecha() {
+    let lineas = listado(&todo_instalado(), false);
+    let filas = filas_de_modelo(&lineas);
+    assert!(filas.len() >= 3, "lineas={lineas:?}");
+    let columnas: Vec<usize> = filas
+        .iter()
+        .map(|l| l.find("GB").expect("la fila tiene tamaño"))
+        .collect();
+    assert!(
+        columnas.windows(2).all(|w| w[0] == w[1]),
+        "los tamaños no se alinean: {filas:?}"
+    );
+}
+
+/// El artefacto va en **su propia** columna: su nombre largo no empuja al
+/// tamaño.
+#[test]
+fn el_listado_separa_el_tamano_del_artefacto() {
+    let lineas = listado(&todo_instalado(), false);
+    let filas = filas_de_modelo(&lineas);
+    let artefactos = ["alfa.gguf", "beta.gguf", "gamma.gguf"];
+    let posiciones: Vec<usize> = filas
+        .iter()
+        .zip(artefactos)
+        .map(|(l, artefacto)| l.find(artefacto).expect("la fila tiene artefacto"))
+        .collect();
+    assert!(
+        posiciones.windows(2).all(|w| w[0] == w[1]),
+        "los artefactos no se alinean: {filas:?}"
+    );
+}
+
+/// La cabecera del listado sale **una sola vez**: el motor es una fila de
+/// grupo, no otra tabla.
+#[test]
+fn el_listado_pone_una_sola_cabecera() {
+    let lineas = listado(&todo_instalado(), false);
+    let cabeceras: Vec<&String> = lineas
+        .iter()
+        .filter(|l| l.trim_start().starts_with("modelo"))
+        .collect();
+    assert_eq!(cabeceras.len(), 1, "lineas={lineas:?}");
+}
+
+/// Los grupos del listado se separan con una **regla**.
+#[test]
+fn los_grupos_del_listado_se_separan_con_una_regla() {
+    let lineas = listado(&todo_instalado(), false);
+    let reglas: Vec<&String> = lineas
+        .iter()
+        .filter(|l| l.trim_start().starts_with('─'))
+        .collect();
+    // La regla de la cabecera y una por grupo menos el primero.
+    assert_eq!(reglas.len(), 2, "lineas={lineas:?}");
+}
+
+/// El tamaño tiene **una sola forma**: `~N.NN UNIDAD`.
+#[test]
+fn el_tamano_tiene_una_sola_forma() {
+    assert_eq!(
+        ropero_core::tamano_declarado("~3.5 GB").as_deref(),
+        Some("~3.50 GB")
+    );
+    assert_eq!(
+        ropero_core::tamano_declarado("18.90 GB").as_deref(),
+        Some("~18.90 GB")
+    );
+    assert_eq!(
+        ropero_core::tamano_declarado("13.6 GB").as_deref(),
+        Some("~13.60 GB")
+    );
+    assert_eq!(
+        ropero_core::tamano_declarado("~4 GB").as_deref(),
+        Some("~4.00 GB")
+    );
+}
+
+/// Un tamaño que **no se sabe** no se inventa: un cero no es un tamaño.
+#[test]
+fn un_tamano_desconocido_no_se_inventa() {
+    assert_eq!(ropero_core::tamano_declarado(""), None);
+    assert_eq!(ropero_core::tamano_declarado("0 GB"), None);
+}
+
+/// Un modelo sin fichero declara su artefacto por **clase**: un `tag` del
+/// almacén de FLM (no es un GGUF).
+#[test]
+fn el_artefacto_sin_fichero_dice_la_clase_del_artefacto() {
+    let spec = modelo_tag("d3mini", EngineId::FastFlowLm).spec;
+    assert_eq!(ropero_core::listing::artefacto_de(&spec), "tag");
+}
+
+/// El tag declarado sale tal cual: es el nombre del artefacto.
+#[test]
+fn el_artefacto_muestra_el_tag_declarado() {
+    let mut spec = modelo_tag("lfm3", EngineId::FastFlowLm).spec;
+    spec.model.path = "lfm3:1.7b".to_string();
+    assert_eq!(ropero_core::listing::artefacto_de(&spec), "lfm3:1.7b");
+}
+
+/// Ninguna línea del listado lleva espacios al final.
+#[test]
+fn el_listado_no_deja_espacios_al_final() {
+    for linea in listado(&todo_instalado(), true) {
+        assert_eq!(linea.trim_end(), linea, "linea={linea:?}");
+    }
+}
+
+/// Con el `--all`, lo que no está disponible va en **su propia columna**.
+#[test]
+fn el_listado_marca_los_no_disponibles_en_una_columna() {
+    let lineas = listado(&todo_instalado(), true);
+    let epsilon = lineas
+        .iter()
+        .find(|l| l.contains("epsilon"))
+        .expect("debe salir epsilon");
+    assert!(epsilon.contains("no disponible"), "linea={epsilon:?}");
+    // Y la columna existe: la marca no se come el artefacto.
+    let cabecera = lineas
+        .iter()
+        .find(|l| l.contains("estado"))
+        .expect("debe salir la columna del estado");
+    assert!(cabecera.contains("estado"), "cabecera={cabecera:?}");
 }

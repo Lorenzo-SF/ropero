@@ -14,6 +14,29 @@
 //! Un recurso que no se puede leer **no se inventa**: sale `no disponible`.
 //! Es la diferencia entre un `status` que miente y uno que informa.
 //!
+//! ## La forma
+//!
+//! ```text
+//! ESTADO DE LA MÁQUINA
+//!   recurso   reloj      temperatura
+//!   ────────────────────────────────────────
+//!   CPU       3.40 GHz   58.00 °C
+//!   dGPU      2.10 GHz   45.00 °C
+//!     NVIDIA GeForce RTX 5080
+//!   iGPU      no disponible
+//!
+//!   recurso   uso         total
+//!   ────────────────────────────────────────
+//!   RAM       8192.00 MB  32768.00 MB
+//!   SWAP      31698.00 MB 8192.00 MB
+//!     (incluye 31186.00 MB de zram)
+//! ```
+//!
+//! Son dos tablas (la de los procesadores y la de la memoria) con el
+//! **mismo** sistema de formato del resto de la salida (doc CLI v2 §2):
+//! los números a la derecha, el texto a la izquierda y el nombre de la
+//! GPU y el zram como notas de su fila.
+//!
 //! ## La captura
 //!
 //! La lectura de `/proc/cpuinfo`, `/sys/class/thermal`, `nvidia-smi` y
@@ -21,6 +44,9 @@
 //! **decisión** (qué se enseña y cómo se formatea), que es pura.
 
 use std::fmt::Write as _;
+
+use crate::estilo::{Celda, Columna, Seccion, Tabla};
+use crate::palette::Palette;
 
 /// Un recurso con su medida y su unidad.
 ///
@@ -77,6 +103,9 @@ pub struct MachineState {
 /// El texto de un recurso ausente.
 pub const NO_DISPONIBLE: &str = "no disponible";
 
+/// El título de la sección del estado.
+const TITULO: &str = "ESTADO DE LA MÁQUINA";
+
 /// Formatea una medida, o dice que no está.
 pub fn format_reading(reading: &Option<Reading>) -> String {
     match reading {
@@ -90,55 +119,69 @@ pub fn format_reading(reading: &Option<Reading>) -> String {
 /// Es una función **pura**: recibe la foto y devuelve el texto. Por eso se
 /// puede probar sin máquina y sin disco.
 pub fn status_text(maquina: &MachineState) -> String {
-    let mut out = String::new();
-    out.push_str("ESTADO DE LA MÁQUINA\n\n");
-    out.push_str(&format!(
-        "  CPU      {:<18}{}\n",
-        format_reading(&maquina.cpu_ghz),
-        format_reading(&maquina.cpu_temp_c)
-    ));
-    out.push_str("            frecuencia       temperatura\n");
+    let mut seccion = Seccion::nueva(TITULO);
+    seccion.cuerpo(tabla_de_procesadores(maquina).lineas(&Palette::plain()));
+    seccion.linea("");
+    seccion.cuerpo(tabla_de_memoria(maquina).lineas(&Palette::plain()));
+    let mut texto = seccion.lineas().join("\n");
+    texto.push('\n');
+    texto
+}
 
-    let dgpu = maquina
-        .dgpu
-        .as_ref()
-        .map(|g| {
-            format!(
-                "  dGPU     {:<18}{}   {}\n",
-                format_reading(&g.ghz),
-                format_reading(&g.temp_c),
-                g.name
-            )
-        })
-        .unwrap_or_else(|| format!("  dGPU     {NO_DISPONIBLE}\n"));
-    out.push_str(&dgpu);
+/// La tabla de los procesadores: la CPU y las GPUs.
+fn tabla_de_procesadores(maquina: &MachineState) -> Tabla {
+    let mut tabla = Tabla::nivel(1)
+        .columna(Columna::texto("recurso"))
+        .columna(Columna::texto("reloj"))
+        .columna(Columna::texto("temperatura"));
+    tabla.fila(vec![
+        Celda::plana("CPU"),
+        Celda::plana(format_reading(&maquina.cpu_ghz)),
+        Celda::plana(format_reading(&maquina.cpu_temp_c)),
+    ]);
+    for (nombre, gpu) in [("dGPU", &maquina.dgpu), ("iGPU", &maquina.igpu)] {
+        let Some(gpu) = gpu else {
+            tabla.fila(vec![
+                Celda::plana(nombre),
+                Celda::plana(NO_DISPONIBLE),
+                Celda::plana(String::new()),
+            ]);
+            continue;
+        };
+        tabla.fila(vec![
+            Celda::plana(nombre),
+            Celda::plana(format_reading(&gpu.ghz)),
+            Celda::plana(format_reading(&gpu.temp_c)),
+        ]);
+        // El nombre de la GPU es una nota de su fila: lo que dice el driver.
+        tabla.nota(Celda::plana(gpu.name.clone()));
+    }
+    tabla
+}
 
-    let igpu = maquina
-        .igpu
-        .as_ref()
-        .map(|g| {
-            format!(
-                "  iGPU     {:<18}{}   {}\n",
-                format_reading(&g.ghz),
-                format_reading(&g.temp_c),
-                g.name
-            )
-        })
-        .unwrap_or_else(|| format!("  iGPU     {NO_DISPONIBLE}\n"));
-    out.push_str(&igpu);
-
-    let ram = format_reading(&maquina.memory.ram_used_mb);
-    let ram_total = format_reading(&maquina.memory.ram_total_mb);
-    out.push_str(&format!("  RAM      {ram} de {ram_total}\n"));
-
-    let swap = format_reading(&maquina.memory.swap_used_mb);
-    let swap_total = format_reading(&maquina.memory.swap_total_mb);
-    let zram = match &maquina.memory.zram_mb {
-        Some(z) => format!("  (incluye {} de zram)", format_reading(&Some(z.clone()))),
-        None => String::new(),
-    };
-    out.push_str(&format!("  SWAP     {swap} de {swap_total}{zram}\n"));
-    out
+/// La tabla de la memoria: la RAM y el swap.
+fn tabla_de_memoria(maquina: &MachineState) -> Tabla {
+    let mut tabla = Tabla::nivel(1)
+        .columna(Columna::texto("recurso"))
+        .columna(Columna::numero("uso"))
+        .columna(Columna::numero("total"));
+    let ram = &maquina.memory;
+    tabla.fila(vec![
+        Celda::plana("RAM"),
+        Celda::plana(format_reading(&ram.ram_used_mb)),
+        Celda::plana(format_reading(&ram.ram_total_mb)),
+    ]);
+    tabla.fila(vec![
+        Celda::plana("SWAP"),
+        Celda::plana(format_reading(&ram.swap_used_mb)),
+        Celda::plana(format_reading(&ram.swap_total_mb)),
+    ]);
+    // El zram va **aparte**: el swap lo incluye, pero no se confunde con él.
+    if let Some(zram) = &ram.zram_mb {
+        let nota = format!("(incluye {} de zram)", format_reading(&Some(zram.clone())));
+        tabla.nota(Celda::plana(nota));
+    }
+    tabla
 }
 
 /// Las líneas del `status`, una por recurso.

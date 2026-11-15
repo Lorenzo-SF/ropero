@@ -71,14 +71,19 @@ fn los_motores_incompatibles_dicen_por_que() {
     assert_eq!(code, 0, "stderr={stderr}");
     // `mlx-serve` es sólo macOS: en cualquier otra máquina no encaja, y el
     // motivo tiene que estar escrito.
-    let linea = stdout
-        .lines()
-        .find(|l| l.contains("mlx-serve"))
+    let lineas: Vec<&str> = stdout.lines().collect();
+    let posicion = lineas
+        .iter()
+        .position(|l| l.contains("mlx-serve"))
         .expect("debe salir la línea de mlx-serve");
-    assert!(linea.contains("(no:"), "linea={linea}");
+    // El motivo va en la nota de debajo de su fila (doc CLI v2 §2).
+    let nota = lineas
+        .get(posicion + 1)
+        .expect("debe salir la nota del motivo");
+    assert!(nota.contains("no:"), "nota={nota}");
     assert!(
-        linea.contains("macOS") || linea.contains("Metal"),
-        "linea={linea}"
+        nota.contains("macOS") || nota.contains("Metal"),
+        "nota={nota}"
     );
 }
 

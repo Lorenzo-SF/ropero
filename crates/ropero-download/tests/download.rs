@@ -471,9 +471,10 @@ fn el_modo_desatendido_no_pregunta_y_el_interactivo_si() {
     assert!(!pregunto, "en modo desatendido no se pregunta");
 
     // Interactivo: la pregunta lleva el tamaño (R-MOD-20: es informativo).
+    // El tamaño lleva la forma única de la salida: `~` y dos decimales.
     let pregunta = pregunta_de_descarga(&plan);
     assert!(
-        pregunta.contains("~4 GB"),
+        pregunta.contains("~4.00 GB"),
         "la pregunta no dice el tamaño: {pregunta}"
     );
     assert!(
