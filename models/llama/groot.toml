@@ -1,7 +1,7 @@
 [model]
 name    = "groot"
 engine  = "llama-server"
-context = 65536 
+context = 131072 
 
 [files]
 gguf = "Groot-19B-A3B-261023-NVFP4.gguf"
@@ -18,13 +18,14 @@ default = "think"
 [args]
 base = [
     "--n-gpu-layers", "999",
-    # "--moe-cache","soft", 
+    "--n-cpu-moe", "13",
+    "--moe-cache","soft", 
     "--kv-unified",
     "--kv-offload",
     "--cache-reuse", "512",
     
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q8_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
 
     "--n-predict", "8192",
     "--keep", "16384",
@@ -36,8 +37,8 @@ base = [
     "--spec-draft-n-max", "3",     
     "--spec-draft-n-min", "0",     
     "--spec-draft-p-min", "0.8",     
-    "--spec-draft-type-k", "q8_0",  
-    "--spec-draft-type-v", "q8_0",  
+    "--spec-draft-type-k", "turbo3",  
+    "--spec-draft-type-v", "turbo3",  
 
     # "--spec-type", "ngram-map-k4v",
     # "--spec-ngram-map-k4v-size-n", "24",
