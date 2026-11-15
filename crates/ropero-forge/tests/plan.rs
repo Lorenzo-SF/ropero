@@ -12,6 +12,7 @@ use ropero_core::Environment;
 use ropero_forge::Error;
 use ropero_forge::peticion::{Flags, Fuente, Intermedio, Peticion};
 use ropero_forge::plan::{self, Clase, Plan};
+use ropero_forge::procedencia::Procedencia;
 use ropero_forge::quants;
 
 fn peticion(quants: &[&str]) -> Peticion {
@@ -215,5 +216,85 @@ fn el_nombre_base_segun_la_fuente() {
     assert_eq!(
         plan::nombre_de_fuente(&Fuente::Gguf("acme/modelo.Q4_K_M.gguf".to_string())),
         "modelo"
+    );
+}
+
+/// El nombre sale del **fichero tal cual**: sólo se quita la extensión.
+///
+/// El defecto: recortar los «dígitos finales» se comía parte del nombre real
+/// (`modelo-F16.gguf` → `modelo-F`, `qwen3.gguf` → `qwen`), y con él el nombre
+/// de la salida y el del sidecar `<out>.fuente.json` no correspondían con el
+/// artefacto.
+#[test]
+fn el_nombre_del_fichero_no_pierde_los_digitos() {
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/modelo-F16.gguf".to_string())),
+        "modelo-F16"
+    );
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/qwen3.gguf".to_string())),
+        "qwen3"
+    );
+    // Los dígitos en medio tampoco se tocan.
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/qwen3-8b.gguf".to_string())),
+        "qwen3-8b"
+    );
+}
+
+/// La colisión: dos ficheros con el mismo nombre base y **distinta extensión**
+/// son artefactos distintos.
+///
+/// La regla determinista es que sólo se quita la extensión del artefacto que se
+/// produce (`.gguf`); cualquier otra extensión se conserva en el nombre, y un
+/// directorio se nombra tal cual (no es un fichero, así que su punto no es una
+/// extensión). Con esa regla dos artefactos distintos no comparten nombre, ni
+/// el sidecar `<out>.fuente.json`.
+#[test]
+fn dos_ficheros_con_el_mismo_nombre_base_no_comparten_nombre() {
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/qwen3.gguf".to_string())),
+        "qwen3"
+    );
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/qwen3.safetensors".to_string())),
+        "qwen3.safetensors"
+    );
+    assert_ne!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/qwen3.gguf".to_string())),
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/qwen3.safetensors".to_string()))
+    );
+    // Un directorio se nombra tal cual: `qwen3.5` no es una extensión.
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Path(PathBuf::from("/models/qwen3.5"))),
+        "qwen3.5"
+    );
+    assert_ne!(
+        plan::nombre_de_fuente(&Fuente::Path(PathBuf::from("/models/qwen3.5"))),
+        plan::nombre_de_fuente(&Fuente::Path(PathBuf::from("/models/qwen3")))
+    );
+}
+
+/// El efecto práctico del defecto: la salida, y con ella el sidecar
+/// `<out>.fuente.json`, se llamaban con el nombre recortado.
+#[test]
+fn la_salida_y_el_sidecar_se_llaman_como_el_artefacto() {
+    let flags = Flags {
+        gguf: Some("/tmp/pesos/modelo-F16.gguf".to_string()),
+        quants: vec!["F16".to_string()],
+        ..Flags::default()
+    };
+    let peticion = Peticion::de_flags(flags).expect("la petición es válida");
+    let env = Environment::default();
+    let plan = Plan::de(&peticion, &env, Clase::Ninguno).expect("el plan");
+
+    assert_eq!(plan.nombre, "modelo-F16");
+    let out_dir = env.env_path("GGUF_DIR", "models/gguf");
+    assert_eq!(plan.salidas[0].ruta, out_dir.join("modelo-F16.gguf"));
+    // El sidecar es `<salida>.fuente.json`: con el recorte de dígitos habría
+    // salido `modelo-F-F16.gguf.fuente.json`, que no es el artefacto.
+    assert_eq!(
+        Procedencia::ruta(&plan.salidas[0].ruta),
+        out_dir.join("modelo-F16.gguf.fuente.json")
     );
 }
