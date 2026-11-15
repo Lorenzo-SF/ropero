@@ -164,6 +164,13 @@ impl Dobles {
         fs::write(dir.join("modelo.safetensors"), vec![0u8; 64]).expect("escribir el peso");
     }
 
+    /// Un fichero suelto del fixture (el imatrix remoto).
+    fn fichero(&self, repo: &str, nombre: &str) {
+        let dir = self.base.join("hf-repos").join(repo);
+        fs::create_dir_all(&dir).expect("crear el repo del fixture");
+        fs::write(dir.join(nombre), b"imatrix de prueba").expect("escribir el fichero");
+    }
+
     /// Un directorio de pesos local (la fuente `--path`).
     fn pesos(&self) {
         let dir = self.base.join("pesos");
@@ -485,6 +492,37 @@ fn el_f16_pedido_como_salida_sobrevive_a_la_limpieza() {
     assert!(f16.is_file(), "el F16 pedido se borró: es una salida");
     // …y el quant de verdad también.
     assert!(dobles.base.join("gguf/modelo-Q4_K_M.gguf").is_file());
+}
+
+/// El imatrix **remoto** (`--imatrix-repo` + `--imatrix-file`) llega al
+/// cuantizador: se baja a la caché y su ruta va en el argv.
+#[test]
+fn el_imatrix_remoto_llega_al_cuantizador() {
+    let dobles = Dobles::nuevo();
+    dobles.con_motor();
+    dobles.repo("acme/modelo");
+    dobles.fichero("owner/imatrix", "imatrix.dat");
+    let (code, stdout, stderr) = dobles.ejecuta(&[
+        "gguffer",
+        "--repo",
+        "acme/modelo",
+        "--quant",
+        "Q4_K_M",
+        "--imatrix-repo",
+        "owner/imatrix",
+        "--imatrix-file",
+        "imatrix.dat",
+    ]);
+    assert_eq!(code, CODIGO_OK, "stdout={stdout} stderr={stderr}");
+    let quant = dobles.log("quant.log");
+    assert!(quant.contains("--imatrix"), "dice {quant}");
+    let esperado = dobles
+        .base
+        .join("work/acme__modelo/imatrix/owner__imatrix/imatrix.dat");
+    assert!(
+        quant.contains(&esperado.to_string_lossy().to_string()),
+        "el cuantizador no recibió la ruta del imatrix: {quant}"
+    );
 }
 
 /// **R-GGUF-16**: al fallar la cuantización **no se borra nada**: el clon

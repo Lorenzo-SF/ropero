@@ -468,7 +468,12 @@ fn fase_cuantizacion(
         }
         return Ok(());
     }
-    let imx = peticion.imatrix.as_ref();
+    let imx = peticion.imatrix.as_ref().map(|imx| ruta_imatrix(imx, plan));
+    let imx = match imx {
+        Some(Ok(ruta)) => Some(ruta),
+        Some(Err(error)) => return Err(error),
+        None => None,
+    };
     let log = plan.work.join("cuantizacion.log");
     for salida in &plan.salidas {
         if viab.omitidos.contains(&salida.quant) {
@@ -480,9 +485,12 @@ fn fase_cuantizacion(
         }
         crea_dir(salida.ruta.parent().unwrap_or(Path::new(".")))?;
         let mut args: Vec<String> = Vec::new();
-        if let Some(Imatrix::Local(fichero)) = imx {
+        if let Some(ruta) = imx.as_ref() {
+            // La importance matrix va **delante** de los posicionales
+            // (R-GGUF-39: `llama-quantize` sólo parsea opciones mientras
+            // el argumento empiece por `--`).
             args.push("--imatrix".to_string());
-            args.push(fichero.to_string_lossy().into_owned());
+            args.push(ruta.to_string_lossy().into_owned());
         }
         args.push(origen.to_string_lossy().into_owned());
         args.push(salida.ruta.to_string_lossy().into_owned());
@@ -506,6 +514,41 @@ fn fase_cuantizacion(
         let _ = clase;
     }
     Ok(())
+}
+
+/// La ruta del imatrix que se le pasa al cuantizador.
+///
+/// Un imatrix **local**: el fichero, tal cual (lo trajo el usuario). Uno
+/// **remoto**: el fichero de la **caché** (el que se acaba de bajar), que
+/// es lo único que el cuantizador puede leer. Si la descarga no lo dejó
+/// donde debía, es un error: cuantizar sin imatrix es cuantizar a ciegas,
+/// y el GGUF sale peor sin que nadie lo diga.
+fn ruta_imatrix(imx: &Imatrix, plan: &Plan) -> Result<PathBuf, Error> {
+    match imx {
+        Imatrix::Local(fichero) => Ok(fichero.clone()),
+        Imatrix::Remota { repo, file } => {
+            let ruta = cache_imatrix(plan, repo, file);
+            if !ruta.is_file() {
+                return Err(Error::ImatrixNoEsta {
+                    repo: repo.clone(),
+                    fichero: file.clone(),
+                    ruta: ruta.to_string_lossy().into_owned(),
+                });
+            }
+            Ok(ruta)
+        }
+    }
+}
+
+/// La ruta del imatrix remoto en la caché: `<work>/imatrix/<repo>/<fichero>`.
+///
+/// El repo va con las barras cambiadas por dos guiones bajos (el mismo
+/// truco que el work: un directorio por repo, sin.makedirs raros).
+fn cache_imatrix(plan: &Plan, repo: &str, fichero: &str) -> PathBuf {
+    plan.work
+        .join("imatrix")
+        .join(repo.replace('/', "__"))
+        .join(fichero)
 }
 
 /// **R-GGUF-14**: el error de imatrix del cuantizador, **traducido**.
@@ -705,11 +748,14 @@ fn baja_imatrix(imx: &Imatrix, env: &Environment, plan: &Plan) -> Result<(), Err
         Imatrix::Local(_) => return Ok(()),
         Imatrix::Remota { repo, file } => (repo.clone(), file.clone()),
     };
-    let cache = plan.work.join("imatrix").join(repo.replace('/', "__"));
-    let destino = cache.join(&file);
+    let destino = cache_imatrix(plan, &repo, &file);
     if destino.is_file() {
         return Ok(());
     }
+    let cache = destino
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| plan.work.join("imatrix"));
     crea_dir(&cache)?;
     baja_fichero(env, &repo, &file, &cache)
 }
