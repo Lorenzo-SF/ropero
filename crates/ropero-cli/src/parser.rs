@@ -19,7 +19,22 @@
 //! binario es el **nombre del modelo**. Por eso el parser tiene un
 //! `external_subcommand`: lo que no reconoce como comando se devuelve tal
 //! cual, y es el arranque de un modelo (doc CLI v2 §8).
+//!
+//! ## El parser habla español
+//!
+//! `clap` trae sus mensajes en inglés («Usage:», «unexpected argument»,
+//! «For more information») y su ayuda descuadra las descripciones: los
+//! comandos se describen en una columna y las opciones en otra. Por eso
+//! aquí `clap` **sólo parsea**: la ayuda la compone el dominio
+//! ([`ropero_core::surface`]) y los errores de uso los traduce
+//! [`Parser`] al vocabulario del CLI.
+//!
+//! Los códigos de salida no cambian: la ayuda y la versión salen con `0` y
+//! un error de uso con `2` (doc CLI v2 §3).
 
+use std::ffi::OsString;
+
+use clap::error::{ContextKind, ErrorKind};
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 
 use ropero_core::surface::{self, FlagKind};
@@ -45,16 +60,186 @@ pub fn version() -> &'static str {
     })
 }
 
+/// Qué ayuda se enseña cuando el usuario la pide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ayuda {
+    /// La del binario: `ropero --help`.
+    Binario,
+    /// La del arranque de un modelo: `ropero <modelo> --help`.
+    Arranque,
+}
+
+/// El parser del CLI, con la salida **en español**.
+///
+/// Es el mismo `clap` de siempre, envuelto: parsea igual, pero la ayuda y
+/// los errores de uso los pone el dominio. Así el CLI habla **un** idioma
+/// (doc CLI v2 §2).
+pub struct Parser {
+    /// El comando de `clap`, que sólo parsea.
+    comando: ClapCommand,
+    /// Qué ayuda se enseña cuando se pide.
+    ayuda: Ayuda,
+}
+
+impl Parser {
+    /// Parsea los argumentos.
+    ///
+    /// Si se pide la ayuda o la versión, las imprime y sale con `0`; si el
+    /// uso está mal, el error sale **en español** y se sale con `2`.
+    pub fn get_matches_from<I, T>(&self, itr: I) -> ArgMatches
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone,
+    {
+        let args: Vec<OsString> = itr.into_iter().map(Into::into).collect();
+        match self.comando.clone().try_get_matches_from(args.clone()) {
+            Ok(matches) => {
+                self.atiende_ayuda(&matches);
+                matches
+            }
+            Err(error) => self.atiende_error(&error, &args),
+        }
+    }
+
+    /// Si se pidió la ayuda o la versión, las imprime y sale con `0`.
+    fn atiende_ayuda(&self, matches: &ArgMatches) {
+        let pide_ayuda = matches.get_flag("help")
+            || matches
+                .subcommand()
+                .is_some_and(|(_, sub)| sub.get_flag("help"));
+        if pide_ayuda {
+            ropero_core::out(&self.texto_de_ayuda(matches), false);
+            std::process::exit(0);
+        }
+        if matches.try_contains_id("version_flag").unwrap_or(false)
+            && matches.get_flag("version_flag")
+        {
+            ropero_core::out_line(&format!("ropero {}", version()));
+            std::process::exit(0);
+        }
+    }
+
+    /// El texto de la ayuda que corresponde a lo que se ha pedido.
+    fn texto_de_ayuda(&self, matches: &ArgMatches) -> String {
+        match matches.subcommand() {
+            Some((cmd, _)) => ayuda_de_comando(cmd),
+            None => match self.ayuda {
+                Ayuda::Binario => ayuda_del_binario(),
+                Ayuda::Arranque => ayuda_de_arranque(),
+            },
+        }
+    }
+
+    /// Traduce el error de `clap` y sale con `2`.
+    fn atiende_error(&self, error: &clap::Error, args: &[OsString]) -> ! {
+        match error.kind() {
+            ErrorKind::DisplayHelp => {
+                ropero_core::out(&self.texto_de_ayuda_error(args), false);
+                std::process::exit(0);
+            }
+            ErrorKind::DisplayVersion => {
+                ropero_core::out_line(&format!("ropero {}", version()));
+                std::process::exit(0);
+            }
+            _ => {
+                if args.iter().any(|a| a == "--help" || a == "-h") {
+                    ropero_core::out(&self.texto_de_ayuda_error(args), false);
+                    std::process::exit(0);
+                }
+                let mensaje = surface::usage_message(&self.comando_de_uso(args), &traduce(error));
+                ropero_core::err_line(&mensaje);
+                std::process::exit(2);
+            }
+        }
+    }
+
+    /// La ayuda que corresponde cuando el parseo falla pero se pidió ayuda.
+    fn texto_de_ayuda_error(&self, args: &[OsString]) -> String {
+        match self.ayuda {
+            Ayuda::Arranque => ayuda_de_arranque(),
+            Ayuda::Binario => args
+                .iter()
+                .skip(1)
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .find(|arg| es_comando(arg))
+                .map(|cmd| ayuda_de_comando(&cmd))
+                .unwrap_or_else(ayuda_del_binario),
+        }
+    }
+
+    /// El comando al que pertenece el error: la pista de dónde está el uso.
+    ///
+    /// Es el primer token que es un comando del contrato: `ropero install
+    /// --bogus` habla del uso de `install`, no del binario entero.
+    fn comando_de_uso(&self, args: &[OsString]) -> String {
+        match self.ayuda {
+            Ayuda::Binario => args
+                .iter()
+                .skip(1)
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .find(|arg| es_comando(arg))
+                .unwrap_or_default(),
+            Ayuda::Arranque => "<modelo>".to_string(),
+        }
+    }
+}
+
+/// Traduce el error de `clap` al vocabulario del CLI.
+///
+/// `clap` habla inglés; aquí el error dice **qué falla** y **qué hacer**
+/// (P-13), en el mismo idioma que el resto de la salida.
+fn traduce(error: &clap::Error) -> String {
+    let contexto = |kind: ContextKind| {
+        error
+            .get(kind)
+            .map(|valor| valor.to_string())
+            .unwrap_or_default()
+    };
+    match error.kind() {
+        ErrorKind::UnknownArgument => {
+            format!(
+                "opción desconocida: '{}'",
+                contexto(ContextKind::InvalidArg)
+            )
+        }
+        ErrorKind::InvalidSubcommand => format!(
+            "comando desconocido: '{}'",
+            contexto(ContextKind::InvalidSubcommand)
+        ),
+        ErrorKind::InvalidValue => format!(
+            "valor inválido para {}: '{}'",
+            contexto(ContextKind::InvalidArg),
+            contexto(ContextKind::InvalidValue)
+        ),
+        ErrorKind::MissingRequiredArgument => {
+            format!("falta el argumento {}", contexto(ContextKind::InvalidArg))
+        }
+        ErrorKind::TooManyValues | ErrorKind::WrongNumberOfValues => {
+            format!(
+                "demasiados valores para {}",
+                contexto(ContextKind::InvalidArg)
+            )
+        }
+        ErrorKind::ArgumentConflict => {
+            format!(
+                "opciones en conflicto: {}",
+                contexto(ContextKind::InvalidArg)
+            )
+        }
+        _ => "no se pudo entender la línea de comandos".to_string(),
+    }
+}
+
 /// El binario `ropero`.
 ///
 /// `allow_external_subcommands` es lo que permite `ropero <modelo>`: lo
 /// que no es un comando conocido se devuelve como externo.
 ///
-/// La plantilla de ayuda está en español (doc CLI v2 §2): `clap` trae
-/// "Usage:", "Commands:" y "Options:" en inglés, y un CLI en español que
-/// enseña cabeceras en inglés está a medio hacer.
-pub fn build() -> ClapCommand {
-    ClapCommand::new("ropero")
+/// La plantilla de ayuda y los errores los pone el dominio, no `clap`:
+/// `clap` trae "Usage:", "Commands:" y "Options:" en inglés, y un CLI en
+/// español que enseña cabeceras en inglés está a medio hacer.
+pub fn build() -> Parser {
+    let comando = ClapCommand::new("ropero")
         .version(version())
         .about("motores y modelos de inferencia, en una sola herramienta")
         .disable_help_subcommand(true)
@@ -62,10 +247,13 @@ pub fn build() -> ClapCommand {
         .disable_version_flag(true)
         .subcommand_required(false)
         .arg_required_else_help(false)
-        .help_template(TEMPLATE)
         .arg(flag_help())
         .arg(flag_version())
-        .subcommands(comandos())
+        .subcommands(comandos());
+    Parser {
+        comando,
+        ayuda: Ayuda::Binario,
+    }
 }
 
 /// Si un token es el nombre de un comando del contrato.
@@ -76,15 +264,84 @@ pub fn es_comando(token: &str) -> bool {
     surface::COMMANDS.iter().any(|c| c.name == token)
 }
 
+/// La ayuda de un comando concreto.
+fn ayuda_de_comando(cmd: &str) -> String {
+    let Some(comando) = surface::COMMANDS.iter().find(|c| c.name == cmd) else {
+        return surface::help_text();
+    };
+    let mut out = format!("{}\n\nUSO:  ropero {}\n", comando.summary, comando.usage);
+    let flags = surface::flags_de(cmd);
+    if !flags.is_empty() {
+        out.push_str("\nOPCIONES\n");
+        for flag in flags {
+            let nombre = match flag.kind {
+                surface::FlagKind::Switch => format!("--{}", flag.name),
+                surface::FlagKind::Value | surface::FlagKind::Many => {
+                    let valor = flag.value_name.unwrap_or("VALOR");
+                    format!("--{} <{}>", flag.name, valor)
+                }
+            };
+            out.push_str(&format!("  {nombre}:  {}\n", flag.help));
+        }
+        out.push_str("  -h, --help:  esta ayuda\n");
+    }
+    out.push_str(&format!("\n  más: ropero {cmd} --help\n"));
+    out
+}
+
+/// La ayuda del arranque de un modelo.
+fn ayuda_de_arranque() -> String {
+    let mut out = format!(
+        "{}\n\nUSO:  ropero {}\n\nOPCIONES\n",
+        surface::help::RUN,
+        surface::RUN_USAGE
+    );
+    for flag in surface::flags_de("run") {
+        let nombre = match flag.kind {
+            surface::FlagKind::Switch => format!("--{}", flag.name),
+            surface::FlagKind::Value | surface::FlagKind::Many => {
+                let valor = flag.value_name.unwrap_or("VALOR");
+                format!("--{} <{}>", flag.name, valor)
+            }
+        };
+        out.push_str(&format!("  {nombre}:  {}\n", flag.help));
+    }
+    out.push_str("  -h, --help:  esta ayuda\n");
+    out.push_str("\n  más: ropero <modelo> --help\n");
+    out
+}
+
+/// La ayuda completa del binario.
+fn ayuda_del_binario() -> String {
+    let mut entradas: Vec<(String, String)> = surface::COMMANDS
+        .iter()
+        .map(|c| (c.usage.to_string(), c.summary.to_string()))
+        .collect();
+    entradas.push((
+        surface::RUN_USAGE.to_string(),
+        surface::RUN_SUMMARY.to_string(),
+    ));
+    entradas.push(("--help".to_string(), "esta ayuda".to_string()));
+    let ancho = entradas.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    let mut out = String::from(
+        "motores y modelos de inferencia, en una sola herramienta\n\nUSO: ropero <comando> [opciones]\n\nCOMANDOS:\n",
+    );
+    for (uso, resumen) in &entradas {
+        out.push_str(&format!("  {uso:<ancho$}:  {resumen}\n"));
+    }
+    out.push_str("\n  ropero <comando> --help\n");
+    out
+}
+
 /// El flag `--help`, en español.
 ///
-/// `clap` lo pone en inglés ("Print help"): el doc pide las frases en
-/// español, así que se sustituye.
+/// `clap` lo pone en inglés ("Print help") y además lo pinta él: aquí el
+/// flag sólo dice que se pidió la ayuda y la pinta el dominio.
 fn flag_help() -> Arg {
     Arg::new("help")
         .long("help")
         .short('h')
-        .action(ArgAction::Help)
+        .action(ArgAction::SetTrue)
         .help("esta ayuda")
 }
 
@@ -92,23 +349,12 @@ fn flag_help() -> Arg {
 ///
 /// `clap` lo pone en inglés ("Print version").
 fn flag_version() -> Arg {
-    Arg::new("version")
+    Arg::new("version_flag")
         .long("version")
         .short('V')
-        .action(ArgAction::Version)
+        .action(ArgAction::SetTrue)
         .help("la versión")
 }
-
-/// La plantilla de la ayuda, en español.
-const TEMPLATE: &str = "\
-{about-with-newline}
-USO: {usage}
-
-COMANDOS:
-{subcommands}
-{options}
-más: ropero <comando> --help
-";
 
 /// Los subcomandos del contrato, con sus flags y sus argumentos.
 fn comandos() -> Vec<ClapCommand> {
@@ -117,7 +363,6 @@ fn comandos() -> Vec<ClapCommand> {
         let mut clap = ClapCommand::new(comando.name)
             .about(comando.summary)
             .long_about(comando.summary)
-            .help_template(TEMPLATE_SUB)
             .disable_help_flag(true)
             .arg(flag_help());
         for flag in surface::flags_de(comando.name) {
@@ -136,29 +381,22 @@ fn comandos() -> Vec<ClapCommand> {
 /// modelo. La decisión de cuál de las dos cosas es se toma **antes** de
 /// parsear (en [`crate::dispatch`]), y este parser sólo se usa en el
 /// segundo caso.
-pub fn arranque() -> ClapCommand {
-    let mut clap = ClapCommand::new("ropero <modelo>")
+pub fn arranque() -> Parser {
+    let mut comando = ClapCommand::new("ropero <modelo>")
         .about(surface::help::RUN)
         .long_about(surface::help::RUN)
-        .help_template(TEMPLATE_SUB)
         .disable_help_flag(true)
         .disable_version_flag(true)
         .arg(flag_help())
         .arg(Arg::new("modelo").value_name("MODELO").required(true));
     for flag in surface::flags_de("run") {
-        clap = clap.arg(flag_de(flag));
+        comando = comando.arg(flag_de(flag));
     }
-    clap
+    Parser {
+        comando,
+        ayuda: Ayuda::Arranque,
+    }
 }
-
-/// La plantilla de la ayuda de un subcomando, en español.
-const TEMPLATE_SUB: &str = "\
-{about-with-newline}
-USO: {usage}
-
-{options}
-más: ropero <comando> --help
-";
 
 /// Los argumentos posicionales de un comando.
 ///
