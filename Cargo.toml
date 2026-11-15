@@ -6,6 +6,7 @@ members = [
     "crates/ropero-download",
     "crates/ropero-forge",
     "crates/ropero-server",
+    "crates/ropero-bateria",
     "crates/ropero-cli",
 ]
 
