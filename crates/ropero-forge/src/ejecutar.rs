@@ -104,8 +104,13 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // borraba: se destruía un GGUF recién producido. La comprobación va
     // **antes** de la fase 5, que es la que borra.
     let intermedio_es_resultado = plan.salidas.iter().any(|s| s.ruta == plan.intermedio);
-    if siguiente.is_some_and(|f| f == Fase::Conversion) && !es_entrada {
-        fase_conversion(peticion, env, &toolchain, &plan, clase, &viab)?;
+    if siguiente.is_some_and(|f| f == Fase::Conversion) {
+        if !es_entrada {
+            fase_conversion(peticion, env, &toolchain, &plan, clase, &viab)?;
+        }
+        // La fuente `--gguf` no pasa por el conversor, pero la fase está
+        // hecha igual: sin este checkpoint, el fichero se queda atrás
+        // («fuente») y la reanudación no sabe por dónde seguir.
         escribe_cp(&fichero_cp, Fase::Conversion)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Conversion);
@@ -442,12 +447,22 @@ fn fase_conversion(
         peticion.intermedio.outtype().to_string(),
     ];
     // `--no-mtp` sólo si el conversor lo entiende: un flag que no existe
-    // hace fallar el conversor con "unrecognized arguments".
+    // hace fallar el conversor con "unrecognized arguments" (R-GGUF-36).
     if peticion.no_mtp && !el_conversor_entiende(&toolchain.convert, "no-mtp") {
         // Se avisa y se sigue sin el: el conversor viejo no lo tiene.
         crate::avisa("este conversor no sabe excluir la MTP (--no-mtp); sigo sin el");
     } else if peticion.no_mtp {
         args.push("--no-mtp".to_string());
+    }
+    // `--no-dflash` igual que `--no-mtp`: se pasa si el conversor lo
+    // entiende, y si no, **se dice** (no se acepta en silencio: el
+    // usuario tiene que saber que el GGUF lleva las cabeceras DFlash).
+    if peticion.no_dflash && !el_conversor_entiende(&toolchain.convert, "no-dflash") {
+        crate::avisa(
+            "este conversor no sabe excluir las cabeceras DFlash (--no-dflash); sigo con ellas",
+        );
+    } else if peticion.no_dflash {
+        args.push("--no-dflash".to_string());
     }
     let _ = clase;
     let log = plan.work.join("conversion.log");
@@ -528,9 +543,18 @@ fn fase_cuantizacion(
             args.join(" ")
         );
         if let Err(cola_error) = ejecuta(&toolchain.quantize, &args, &log) {
-            // R-GGUF-16: NO se borra nada (salvo el fichero a medias que
-            // dejó el cuantizador, que está corrupto).
-            let _ = std::fs::remove_file(&salida.ruta);
+            // R-GGUF-16: NO se borra nada: el clon y el GGUF intermedio
+            // se quedan, para poder reintentar **sólo** la cuantización
+            // (que es la parte cara).
+            //
+            // Lo único que se borra es el GGUF **a medias** que dejó el
+            // cuantizador (está corrupto): si se quedara, la siguiente
+            // tirada creería que la salida está hecha (`ya_estan_todas`)
+            // y no la reharía. Y nunca es el intermedio: el intermedio es
+            // justamente lo que hace falta para reintentar.
+            if salida.ruta != plan.intermedio {
+                let _ = std::fs::remove_file(&salida.ruta);
+            }
             return Err(Error::Cuantizacion {
                 quant: salida.quant.clone(),
                 cola: cola_error.clone(),
@@ -883,16 +907,37 @@ fn escribe(ruta: &Path, texto: &str) -> Result<(), String> {
     std::fs::write(ruta, texto).map_err(|e| e.to_string())
 }
 
-/// Escribe el checkpoint de una fase completada. El directorio puede no
-/// existir todavía (un `--gguf` local no crea el work hasta la limpieza).
+/// Escribe el checkpoint de una fase completada, **atómicamente**.
+///
+/// Se escribe a un temporal y se renombra: el rename es atómico, así que
+/// el checkpoint nunca queda a medias (dos tiradas a la vez no pueden
+/// corromperlo) y un corte de luz no lo deja truncado.
+///
+/// El directorio puede no existir todavía (un `--gguf` local no crea el
+/// work hasta la limpieza).
 fn escribe_cp(ruta: &Path, fase: Fase) -> Result<(), Error> {
     if let Some(padre) = ruta.parent() {
         crea_dir(padre)?;
     }
-    escribe(ruta, &Checkpoint::de(fase).a_json()).map_err(|detalle| Error::Disco {
+    let temporal = temporal_de(ruta);
+    escribe(&temporal, &Checkpoint::de(fase).a_json()).map_err(|detalle| Error::Disco {
         que: format!("escribir el checkpoint ({})", fase.nombre()),
         detalle,
+    })?;
+    std::fs::rename(&temporal, ruta).map_err(|detalle| Error::Disco {
+        que: format!("renombrar el checkpoint ({})", fase.nombre()),
+        detalle: detalle.to_string(),
     })
+}
+
+/// El nombre del temporal de un fichero: `<nombre>.tmp`, al lado.
+fn temporal_de(ruta: &Path) -> PathBuf {
+    let mut nombre = ruta
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    nombre.push_str(".tmp");
+    ruta.with_file_name(nombre)
 }
 
 /// Crea un directorio (y sus padres).

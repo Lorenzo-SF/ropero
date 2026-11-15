@@ -49,6 +49,25 @@ with open(os.path.join(here, "..", "conv.log"), "a") as f:
     f.write(" ".join(args) + "\n")
 "#;
 
+/// El conversor que **sí** sabe excluir las cabeceras DFlash.
+///
+/// El de arriba sólo menciona `no-mtp`: el que understands `no-dflash`
+/// es otro conversor, y con él el flag se le puede pasar.
+const CONVERT_CON_DFLASH: &str = r#"#!/usr/bin/env python3
+# El conversor falso: escribe la salida con la magic GGUF.
+# Este conversor entiende --no-mtp y --no-dflash (no-mtp y no-dflash aparecen aqui).
+import os, sys
+
+args = sys.argv[1:]
+out = args[args.index("--outfile") + 1]
+with open(out, "wb") as f:
+    f.write(b"GGUF")
+    f.write(bytes(2048))
+here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(here, "..", "conv.log"), "a") as f:
+    f.write(" ".join(args) + "\n")
+"#;
+
 /// El cuantizador falso: `[--imatrix IMX] <in> <out> <QUANT>`, que copia
 /// la entrada al final y graba sus argumentos en `quant.log` (tres niveles
 /// por encima de sí: está en `motor/build/bin`).
@@ -140,6 +159,17 @@ impl Dobles {
         let motor = self.base.join("motor");
         fs::create_dir_all(motor.join("build/bin")).expect("crear build/bin");
         fs::write(motor.join("convert_hf_to_gguf.py"), CONVERT_FALSO).expect("el conversor");
+        let quantize = motor.join("build/bin/llama-quantize");
+        fs::write(&quantize, QUANTIZE_FALSO).expect("el cuantizador");
+        fs::set_permissions(&quantize, permisos_ejecutable()).expect("permisos");
+        self
+    }
+
+    /// El motor falso con un conversor que **sí** entiende `--no-dflash`.
+    fn con_motor_con_dflash(&self) -> &Dobles {
+        let motor = self.base.join("motor");
+        fs::create_dir_all(motor.join("build/bin")).expect("crear build/bin");
+        fs::write(motor.join("convert_hf_to_gguf.py"), CONVERT_CON_DFLASH).expect("el conversor");
         let quantize = motor.join("build/bin/llama-quantize");
         fs::write(&quantize, QUANTIZE_FALSO).expect("el cuantizador");
         fs::set_permissions(&quantize, permisos_ejecutable()).expect("permisos");
@@ -530,6 +560,58 @@ fn el_imatrix_remoto_llega_al_cuantizador() {
         quant.contains(&esperado.to_string_lossy().to_string()),
         "el cuantizador no recibió la ruta del imatrix: {quant}"
     );
+}
+
+/// `--no-dflash` se pasa al conversor **que lo entiende** (como
+/// `--no-mtp`, R-GGUF-36): un flag que el conversor no conoce hace
+/// fallar la conversión.
+#[test]
+fn el_no_dflash_se_pasa_al_conversor_que_lo_entiende() {
+    let dobles = Dobles::nuevo();
+    dobles.con_motor_con_dflash();
+    dobles.repo("acme/modelo");
+    let (code, stdout, stderr) = dobles.ejecuta(&[
+        "gguffer",
+        "--repo",
+        "acme/modelo",
+        "--quant",
+        "Q4_K_M",
+        "--imatrix",
+        &dobles.imatrix_fichero(),
+        "--no-dflash",
+    ]);
+    assert_eq!(code, CODIGO_OK, "stdout={stdout} stderr={stderr}");
+    let conv = dobles.log("conv.log");
+    assert!(
+        conv.contains("--no-dflash"),
+        "el conversor no lo recibió: {conv}"
+    );
+}
+
+/// `--no-dflash` **no se acepta en silencio**: si el conversor no lo
+/// entiende, el comando lo dice (el GGUF llevar las cabeceras DFlash es
+/// información que el usuario necesita).
+#[test]
+fn el_no_dflash_avisa_si_el_conversor_no_lo_entiende() {
+    let dobles = Dobles::nuevo();
+    dobles.con_motor();
+    dobles.repo("acme/modelo");
+    let (code, stdout, stderr) = dobles.ejecuta(&[
+        "gguffer",
+        "--repo",
+        "acme/modelo",
+        "--quant",
+        "Q4_K_M",
+        "--imatrix",
+        &dobles.imatrix_fichero(),
+        "--no-dflash",
+    ]);
+    assert_eq!(code, CODIGO_OK, "stdout={stdout} stderr={stderr}");
+    // El aviso dice qué pasa…
+    assert!(stderr.contains("DFlash"), "no avisa: {stderr}");
+    // …y el conversor (que no lo entiende) no lo recibe.
+    let conv = dobles.log("conv.log");
+    assert!(!conv.contains("--no-dflash"), "no se le pasó: {conv}");
 }
 
 /// **R-GGUF-16**: al fallar la cuantización **no se borra nada**: el clon

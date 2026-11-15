@@ -318,13 +318,11 @@ impl Plan {
             }
             Fuente::Path(path) => (path.clone(), path.clone()),
             Fuente::Gguf(gguf) => {
-                // Un GGUF ya hecho no se clona: el work es su carpeta, y
-                // con un repo el GGUF se baja a un work propio.
-                let work = if Path::new(gguf).is_absolute() && !gguf.contains('/') {
-                    PathBuf::from(".")
-                } else {
-                    work_root.join(format!("gguf_{}", gguf.replace('/', "__")))
-                };
+                // Un GGUF ya hecho no se clona: su work es un
+                // directorio **propio** dentro del work root (el
+                // checkpoint y la caché del imatrix viven ahí, y el
+                // directorio del usuario no se toca nunca).
+                let work = work_root.join(format!("gguf_{}", gguf.replace('/', "__")));
                 (work.clone(), work)
             }
         };

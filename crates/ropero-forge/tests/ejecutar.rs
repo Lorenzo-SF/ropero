@@ -103,8 +103,32 @@ case "$modo" in
   imatrix)
     echo "llama-quantize: Missing importance matrix for tensor blk.64.attn_k.weight" >&2
     exit 1 ;;
+  parcial)
+    # Deja el GGUF **a medias** y falla: el fichero queda corrupto.
+    cp -f "$in" "$out" || exit 1
+    echo "llama-quantize: fallo a medias" >&2
+    exit 1 ;;
 esac
 cp -f "$in" "$out" || exit 1
+"#;
+
+/// El conversor que **sí** sabe excluir las cabeceras DFlash.
+///
+/// Es el mismo conversor falso, pero su texto menciona `no-dflash`: así
+/// el motor lo entiende (y el flag se le puede pasar).
+const CONVERT_CON_DFLASH: &str = r#"#!/usr/bin/env python3
+# El conversor falso: escribe la salida con la magic GGUF.
+# Este conversor entiende --no-mtp y --no-dflash (no-mtp y no-dflash aparecen aqui).
+import os, sys
+
+args = sys.argv[1:]
+out = args[args.index("--outfile") + 1]
+with open(out, "wb") as f:
+    f.write(b"GGUF")
+    f.write(bytes(2048))
+here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(here, "..", "conv.log"), "a") as f:
+    f.write(" ".join(args) + "\n")
 "#;
 
 /// La tirada de pruebas: los dobles y el entorno.
@@ -249,6 +273,22 @@ impl Tirada {
     /// El GGUF de salida que el plan de la petición dice.
     fn salida(&self) -> PathBuf {
         self.base.join("gguf").join("modelo-IQ2_M.gguf")
+    }
+
+    /// El checkpoint del work (el único `.ropero-forge.json` que hay).
+    fn checkpoint_del_work(&self) -> String {
+        let dir = self.base.join("work");
+        let entradas = match fs::read_dir(&dir) {
+            Ok(entradas) => entradas,
+            Err(_) => return String::new(),
+        };
+        for entrada in entradas.flatten() {
+            let ruta = entrada.path().join(".ropero-forge.json");
+            if ruta.is_file() {
+                return fs::read_to_string(&ruta).unwrap_or_default();
+            }
+        }
+        String::new()
     }
 
     fn log(&self, nombre: &str) -> String {
@@ -576,6 +616,154 @@ fn la_segunda_tirada_reanuda_en_la_cuantizacion() {
     assert!(tirada.salida().is_file());
 }
 
+/// La fuente `--gguf` **también** deja checkpoint en la fase
+/// «conversion» (aunque no haya conversión): si no, el checkpoint se
+/// queda atrás («fuente») y la reanudación no sabe por dónde seguir.
+#[test]
+fn el_gguf_de_entrada_deja_el_checkpoint_en_la_conversion() {
+    let tirada = Tirada::nueva().con_dobles();
+    let entrada = tirada.base.join("entrada").join("modelo.gguf");
+    fs::create_dir_all(entrada.parent().unwrap()).expect("crear entrada");
+    fs::write(&entrada, {
+        let mut v = b"GGUF".to_vec();
+        v.extend(vec![0u8; 2048]);
+        v
+    })
+    .expect("escribir el GGUF de entrada");
+    fs::write(tirada.base.join("imatrix.dat"), b"imatrix de fixture").expect("imatrix");
+    let flags = Flags::default()
+        .con_gguf(&entrada.to_string_lossy())
+        .con_quants(&["IQ2_M"])
+        .con_imatrix(&tirada.base.join("imatrix.dat").to_string_lossy());
+
+    // La primera tirada falla en la cuantización.
+    let peticion = Peticion::de_flags(flags.clone()).expect("la petición");
+    tirada.modo("imatrix");
+    let error = ejecutar::forja(&peticion, &tirada.env).expect_err("la cuantización");
+    assert!(
+        matches!(error, Error::Cuantizacion { .. }),
+        "salió: {error:?}"
+    );
+    tirada.modo("");
+
+    // El checkpoint dice por dónde se sigue: la conversión (aunque el
+    // GGUF de entrada no pase por el conversor).
+    let cp = tirada.checkpoint_del_work();
+    assert!(
+        cp.contains("conversion"),
+        "el checkpoint se quedó atrás: {cp}"
+    );
+
+    // Y la segunda tirada reanuda y **cuantiza** de verdad.
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("el reintento");
+    assert!(
+        tirada.salida().is_file(),
+        "la segunda tirada no cuantizó: se quedó sin hacer nada"
+    );
+}
+
+/// El GGUF **a medias** que dejó el cuantizador (falló después de
+/// escribirlo) sí se borra: está corrupto, y si se quedara, la siguiente
+/// tirada creería que la salida está hecha y no la reharía.
+///
+/// Lo que **no** se borra nunca aquí son el clon y el intermedio
+/// (R-GGUF-16): sin ellos no se puede reintentar sólo la cuantización.
+#[test]
+fn el_gguf_a_medias_se_borra_pero_el_clon_y_el_intermedio_no() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    tirada.modo("parcial");
+    let error = ejecutar::forja(&tirada.peticion(), &tirada.env).expect_err("la cuantización");
+    tirada.modo("");
+    assert!(
+        matches!(error, Error::Cuantizacion { .. }),
+        "salió: {error:?}"
+    );
+
+    // El GGUF a medias, fuera: está corrupto.
+    assert!(!tirada.salida().exists(), "el GGUF a medias se queda");
+    // El clon y el intermedio, dentro: se pueden reintentar.
+    assert!(
+        tirada.base.join("work/acme__modelo").is_dir(),
+        "el clon se queda (R-GGUF-16)"
+    );
+    assert!(
+        tirada.base.join("gguf/modelo-F16.gguf").is_file(),
+        "el intermedio se queda (R-GGUF-16)"
+    );
+}
+
+/// El checkpoint se escribe **de un tirón**: a un temporal y renombrando
+/// (el rename es atómico). Así dos tiradas a la vez no pueden dejar el
+/// checkpoint a medias, y no queda ningún temporal atrás.
+#[test]
+fn el_checkpoint_se_escribe_atomico_y_no_deja_temporales() {
+    use std::os::unix::fs::MetadataExt;
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    // Un checkpoint de antes, escrito a mano: el work existe.
+    let cp = tirada.base.join("work/acme__modelo/.ropero-forge.json");
+    fs::create_dir_all(cp.parent().unwrap()).expect("crear el work");
+    fs::write(&cp, "{\n  \"fase\": \"fuente\"\n}\n").expect("escribir el checkpoint");
+    let antes = fs::metadata(&cp).expect("el checkpoint").ino();
+
+    // `--keep-source`: el work (y el checkpoint) sobreviven.
+    let mut flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"])
+        .con_imatrix(&tirada.base.join("imatrix.dat").to_string_lossy());
+    fs::write(tirada.base.join("imatrix.dat"), b"imatrix de fixture").expect("imatrix");
+    flags.keep_source = true;
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    // El checkpoint se **sustituye** (el rename es atómico): no es el
+    // mismo fichero truncado y reescrito.
+    let despues = fs::metadata(&cp).expect("el checkpoint").ino();
+    assert_ne!(
+        antes, despues,
+        "el checkpoint se reescribió en el sitio: no es atómico"
+    );
+    // El checkpoint está y se lee.
+    let texto = fs::read_to_string(&cp).expect("el checkpoint está");
+    assert!(Checkpoint::de_json(&texto).is_some(), "dice {texto}");
+    // Y no quedó ningún temporal por el camino.
+    let leftovers: Vec<String> = fs::read_dir(tirada.base.join("work/acme__modelo"))
+        .expect("el work")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temporales sin renombrar: {leftovers:?}"
+    );
+}
+
+/// `--no-dflash` se pasa al conversor **que lo entiende** (como
+/// `--no-mtp`, R-GGUF-36): un flag que el conversor no conoce hace
+/// fallar la conversión.
+#[test]
+fn el_no_dflash_se_pasa_al_conversor_que_lo_entiende() {
+    let tirada = Tirada::nueva().con_dobles().con_dflash();
+    tirada.repo("acme/modelo", "");
+    let mut flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["IQ2_M"])
+        .con_imatrix(&tirada.base.join("imatrix.dat").to_string_lossy());
+    fs::write(tirada.base.join("imatrix.dat"), b"imatrix de fixture").expect("imatrix");
+    flags.no_dflash = true;
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    let llamada = tirada.log("conv.log");
+    assert!(
+        llamada.contains("--no-dflash"),
+        "el conversor no recibió el flag: {llamada}"
+    );
+}
+
 /// **R-GGUF-9 y R-GGUF-7**: un repo que ya viene en el quant pedido se
 /// **coloca** (se convierte y se sale 0, sin cuantizar y sin borrar).
 #[test]
@@ -737,6 +925,13 @@ fn keep_source_conserva_los_pesos() {
 // ── Los helpers que faltaban en Tirada ──────────────────────────────────────
 
 impl Tirada {
+    /// Un conversor que **sí** entiende `--no-dflash`.
+    fn con_dflash(self) -> Self {
+        let convert = self.base.join("motor/convert_hf_to_gguf.py");
+        fs::write(&convert, CONVERT_CON_DFLASH).expect("escribir el conversor");
+        self
+    }
+
     /// Un `hf` falso sin motor: sólo para el test de T-29.
     fn con_hf_falso(self) -> Self {
         let bin = self.base.join("bin");
