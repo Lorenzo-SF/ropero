@@ -11,6 +11,9 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
 ropero-core = { path = "../ropero-core" }
+# ropero-bateria: el dominio puro de la batería de pruebas (el índice, los
+# puntuadores y el informe).
+ropero-bateria = { path = "../ropero-bateria" }
 # ropero-forge: la forja de GGUFs (F6).
 ropero-forge = { path = "../ropero-forge" }
 # ropero-download: la descarga real de los modelos con `hf`.

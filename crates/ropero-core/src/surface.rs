@@ -154,6 +154,13 @@ pub const COMMANDS: &[Command] = &[
         phase: None,
         state: CommandState::Ready,
     },
+    Command {
+        name: "test",
+        usage: "test [--modelo <id>] [--grupo A..F] [--test <id>] [--dimension <nombre>] [--todos]",
+        summary: "lanza la batería de pruebas contra un modelo",
+        phase: None,
+        state: CommandState::Ready,
+    },
 ];
 
 /// La invocación del arranque de un modelo: `ropero <modelo>`.
@@ -322,6 +329,33 @@ pub const FLAGS_RUN: &[Flag] = &[
     Flag::value("ctx", "N", "fuerza el contexto"),
 ];
 
+/// Los flags de `ropero test` (doc CLI v2 §13).
+///
+/// El índice de la batería tiene **dos** taxonomías: los grupos (A–F) y las
+/// doce dimensiones del perfil. El doc habla de «lanzar por tipo»: aquí el
+/// «tipo» es la **dimensión**, y `--tipo` es su **alias** (el índice no
+/// declara ningún «tipo»). Los dos no pueden ir a la vez.
+pub const FLAGS_TEST: &[Flag] = &[
+    Flag::value(
+        "modelo",
+        "MODELO",
+        "el modelo que se prueba (sin él, se elige de los disponibles)",
+    ),
+    Flag::value("grupo", "A..F", "el grupo de tests que se lanza"),
+    Flag::value("test", "ID|FICHERO", "un solo test (su id o su fichero)"),
+    Flag::value(
+        "dimension",
+        "NOMBRE",
+        "las tests de una dimensión del índice (prefijo único vale)",
+    ),
+    Flag::value("tipo", "NOMBRE", "alias de --dimension"),
+    Flag::switch("todos", "toda la batería"),
+    Flag::switch(
+        "json",
+        "el informe en JSON por stdout (el texto va a stderr)",
+    ),
+];
+
 /// Los flags de cada comando, por nombre de comando.
 ///
 /// Es la tabla que el parser consulta: así el contrato de los flags vive
@@ -333,6 +367,7 @@ pub fn flags_de(cmd: &str) -> &'static [Flag] {
         "gguffer" => FLAGS_GGUFFER,
         "list" | "engines" => FLAGS_ALL,
         "run" => FLAGS_RUN,
+        "test" => FLAGS_TEST,
         _ => &[],
     }
 }
@@ -366,6 +401,8 @@ pub mod help {
     pub const LEVELS: &str = "niveles de razonamiento declarados";
     /// `ropero path`
     pub const PATH: &str = "rutas resueltas del modelo";
+    /// `ropero test`
+    pub const TEST: &str = "lanza la batería de pruebas contra un modelo";
     /// `ropero <modelo>`
     pub const RUN: &str = "arranca el modelo en su motor";
 }

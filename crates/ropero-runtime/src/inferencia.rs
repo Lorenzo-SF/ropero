@@ -23,19 +23,20 @@
 //! si no hay, el error dice dónde ponerla.
 
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ropero_bateria::indice::{Bateria, parse_indice};
 use ropero_bateria::informe::{Informe, Metrica, RespuestaTest, Tokens};
 use ropero_bateria::json::{self, Json};
 use ropero_bateria::puntuadores::puntua;
+use ropero_bateria::seleccion::{Seleccion, selecciona};
 use ropero_core::{Catalog, EngineManifest, Environment};
 
 use crate::launch::now_epoch;
 use crate::probe::abre_peticion;
 use crate::run::{RunOutcome, RunRequest};
-use crate::state::{PortState, read_state};
+use crate::state::read_state;
 
 /// Cuánto se espera a cada lectura del motor.
 const TIMEOUT_DE_LECTURA: Duration = Duration::from_secs(600);
@@ -65,6 +66,13 @@ impl ErrorInferencia {
             mensaje: mensaje.into(),
             codigo: 2,
         }
+    }
+
+    /// Informa del error: lo escribe en stderr (todo lo humano va allí) y
+    /// devuelve su código de salida.
+    pub fn informa(&self) -> i32 {
+        ropero_core::err_line(&format!("error: {}", self.mensaje));
+        self.codigo
     }
 }
 
@@ -187,6 +195,9 @@ fn manda(
     cuerpo: &str,
     api_key: Option<&str>,
 ) -> Result<(u16, String, Option<u64>, u64), ErrorInferencia> {
+    // El reloj arranca antes de conectar: la latencia total es la que ve
+    // el usuario, conexión incluida.
+    let inicio = Instant::now();
     let mut stream = abre_peticion(
         puerto,
         "POST",
@@ -201,7 +212,6 @@ fn manda(
         ))
     })?;
 
-    let inicio = Instant::now();
     let mut acumulado = Vec::new();
     let mut primer_token_ms: Option<u64> = None;
     let mut buffer = [0u8; 8192];
@@ -358,6 +368,113 @@ fn resumen(texto: &str) -> String {
 // La tirada completa
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// El modelo que se prueba: el pedido, o el que se elige del menú.
+///
+/// Sin `--modelo` se muestran los **disponibles** (motor instalado y
+/// modelo descargado) y se espera selección; sin terminal eso es un **error
+/// de uso** (código 2) que dice qué hacer.
+pub fn modelo_de(
+    catalogo: &Catalog,
+    motores: &[EngineManifest],
+    env: &Environment,
+    pedido: Option<String>,
+) -> Result<String, ErrorInferencia> {
+    let Some(modelo) = pedido else {
+        return elegir_modelo(catalogo, motores, env);
+    };
+    if ropero_core::find_spec(catalogo, &modelo).is_none() {
+        return Err(ErrorInferencia::uso(format!(
+            "modelo desconocido: '{modelo}' (ropero list → los del catálogo)"
+        )));
+    }
+    Ok(modelo)
+}
+
+/// Elige el modelo de los **disponibles**: motor instalado y modelo
+/// descargado (doc CLI v2 §13).
+///
+/// Sin terminal es un **error de uso** (código 2) que dice qué hacer: un
+/// menú que se traga un EOF acabaría eligiendo por su cuenta.
+pub fn elegir_modelo(
+    catalogo: &Catalog,
+    motores: &[EngineManifest],
+    env: &Environment,
+) -> Result<String, ErrorInferencia> {
+    if !crate::install::hay_tty() {
+        return Err(ErrorInferencia::uso(
+            "sin terminal no se puede elegir el modelo: usa \
+             'ropero test --modelo <id>' (ropero list → los modelos disponibles)",
+        ));
+    }
+    let detector = crate::Detector { env };
+    let modelos: Vec<ropero_core::ModelSpec> = catalogo
+        .models
+        .iter()
+        .chain(catalogo.fired.iter())
+        .cloned()
+        .collect();
+    let foto = ropero_core::snapshot::build_snapshot(motores, &modelos, &detector);
+    let disponibles = ropero_core::snapshot::available_models(&foto);
+    if disponibles.is_empty() {
+        return Err(ErrorInferencia::uso(
+            "no hay modelos disponibles (motor instalado y modelo descargado): \
+             'ropero list' → los que hay, 'ropero install' → los que faltan",
+        ));
+    }
+    let nombres: Vec<String> = disponibles
+        .iter()
+        .map(|m| m.spec.model.name.clone())
+        .collect();
+    for (i, nombre) in nombres.iter().enumerate() {
+        ropero_core::err_line(&format!("  {}. {nombre}", i + 1));
+    }
+    let respuesta = crate::install::pregunta("elige el modelo que se prueba: ")
+        .ok_or_else(|| ErrorInferencia::uso("no hay respuesta: se cancela"))?;
+    let elegidos = ropero_core::install::resuelve_seleccion(&respuesta, &nombres)
+        .map_err(|e| ErrorInferencia::uso(e.to_string()))?;
+    elegidos
+        .into_iter()
+        .next()
+        .ok_or_else(|| ErrorInferencia::uso("no se eligió ningún modelo"))
+}
+
+/// El comando `ropero test`, de principio a fin.
+///
+/// El orden importa: primero se resuelve **qué** se lanza (si el grupo o el
+/// test no existen, es un error de uso y no se toca el motor), después se
+/// elige el modelo y sólo entonces se tira.
+///
+/// Devuelve el código de salida.
+pub fn tira(
+    catalogo: &Catalog,
+    motores: &[EngineManifest],
+    env: &Environment,
+    root: &Path,
+    modelo: Option<String>,
+    seleccion: &Seleccion,
+    json: bool,
+) -> i32 {
+    let bateria = match lee_indice(root) {
+        Ok(bateria) => bateria,
+        Err(e) => return e.informa(),
+    };
+    let ids = match selecciona(&bateria, seleccion) {
+        Ok(ids) => ids,
+        Err(e) => return ErrorInferencia::uso(e.mensaje).informa(),
+    };
+    let modelo = match modelo_de(catalogo, motores, env, modelo) {
+        Ok(modelo) => modelo,
+        Err(e) => return e.informa(),
+    };
+    match tira_la_bateria(catalogo, motores, env, root, &bateria, &ids, &modelo) {
+        Ok(informe) => {
+            imprime(&informe, json);
+            0
+        }
+        Err(e) => e.informa(),
+    }
+}
+
 /// Lanza la batería contra un modelo y devuelve el informe.
 ///
 /// `ids` son los tests que se lanzan, **en el orden del índice**. Cada test
@@ -368,10 +485,10 @@ pub fn tira_la_bateria(
     motores: &[EngineManifest],
     env: &Environment,
     root: &Path,
-    modelo: &str,
+    bateria: &Bateria,
     ids: &[String],
+    modelo: &str,
 ) -> Result<Informe, ErrorInferencia> {
-    let bateria = lee_indice(root)?;
     let state_dir = crate::state::state_dir(&env.home, env.get("ROPERO_STATE_DIR"));
     let motor = match motor_de(modelo, &state_dir) {
         Some(motor) => motor,
@@ -383,7 +500,7 @@ pub fn tira_la_bateria(
     let mut respuestas = Vec::with_capacity(ids.len());
     for id in ids {
         let test = bateria
-            .test(id)
+            .test(id.as_str())
             .ok_or_else(|| ErrorInferencia::uso(format!("el test '{id}' no está en la batería")))?;
         let prompt = lee_test(root, &test.fichero)?;
         let respuesta = match pregunta(motor.puerto, modelo, &prompt, api_key) {
@@ -407,7 +524,7 @@ pub fn tira_la_bateria(
                 continue;
             }
         };
-        let puntuacion = puntua(id, &respuesta.texto);
+        let puntuacion = puntua(id.as_str(), &respuesta.texto);
         let metrica = respuesta.metrica;
         let respuesta_test = RespuestaTest {
             id: id.clone(),
@@ -420,7 +537,7 @@ pub fn tira_la_bateria(
     }
 
     Ok(Informe::nuevo(
-        bateria,
+        bateria.clone(),
         modelo,
         &motor.motor,
         &motor.nivel,
@@ -461,9 +578,15 @@ fn guarda(state_dir: &Path, marca: &str, respuesta: &RespuestaTest) {
     let _ = std::fs::write(ruta, respuesta.a_json());
 }
 
-/// El directorio donde se guardan las salidas de una tirada.
-pub fn directorio_de_tirada(state_dir: &Path, marca: &str) -> PathBuf {
-    state_dir.join("tests").join(marca)
+/// Imprime el informe: el JSON son los **datos** (stdout) y el texto es lo
+/// humano (stderr).
+pub fn imprime(informe: &Informe, json: bool) {
+    if json {
+        ropero_core::out_line(&informe.a_json());
+        ropero_core::err_line(informe.a_texto().trim_end());
+    } else {
+        ropero_core::out_line(informe.a_texto().trim_end());
+    }
 }
 
 /// Arranca el motor del modelo y lo deja en pie.
@@ -506,9 +629,4 @@ fn mensaje_de(outcome: &RunOutcome) -> String {
         .error
         .clone()
         .unwrap_or_else(|| format!("no se pudo arrancar el motor (código {})", outcome.code))
-}
-
-/// El estado en disco de un puerto, para consultar el motor en pie.
-pub fn estado_de_puerto(state_dir: &Path, puerto: u16) -> Option<PortState> {
-    read_state(state_dir, puerto)
 }

@@ -28,6 +28,7 @@ mod gguffer;
 mod install;
 mod parser;
 mod summary;
+mod test;
 
 use clap::ArgMatches;
 
@@ -77,6 +78,7 @@ fn comando(matches: &ArgMatches) -> i32 {
         "args" => commands::args(&parser::modelo(sub), &parser::tokens(sub)),
         "levels" => commands::levels(&parser::modelo(sub)),
         "path" => commands::path(&parser::modelo(sub)),
+        "test" => test::run(sub),
         _ => 2,
     }
 }
