@@ -561,3 +561,31 @@ impl Tirada {
         self
     }
 }
+
+/// El **ETXTBSY** («Text file busy») es una carrera, no un error: el
+/// fichero que se ejecuta lo tiene otro proceso abierto para escribir
+/// (un `fork` en paralelo hereda el descriptor). La forja reintenta, y la
+/// tirada sale bien.
+///
+/// Aquí la carrera se provoca a propósito: el `hf` falso se abre para
+/// escritura y se mantiene abierto un rato, así que el primer exec
+/// falla con ETXTBSY.
+#[test]
+fn el_texto_ocupado_no_tira_la_tirada() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    // El `hf` falso, abierto para escribir: no se puede ejecutar.
+    let hf = tirada.base.join("bin/hf");
+    let escritor = fs::OpenOptions::new()
+        .write(true)
+        .open(&hf)
+        .expect("abrir el hf");
+    // Y se cierra dentro de un momento, en otro hilo.
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        drop(escritor);
+    });
+    let informe = ejecutar::forja(&tirada.peticion(), &tirada.env).expect("la tirada");
+    assert!(informe.cuantizo, "la tirada sale: {informe:?}");
+    assert!(tirada.salida().is_file(), "el GGUF está");
+}

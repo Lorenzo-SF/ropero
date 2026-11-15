@@ -218,6 +218,40 @@ pub fn sugerencia_hermanos(repo: &str) -> Vec<String> {
     ]
 }
 
+/// El nombre base de un modelo, según de dónde salga.
+///
+/// - un **repo**: la hoja del repo (`acme/modelo` → `modelo`);
+/// - un **directorio**: su nombre;
+/// - un **GGUF**: su nombre sin la extensión `.gguf`, sin el sufijo
+///   `-GGUF` de los repos de cuantizaciones, y sin el `.QUANT` final si
+///   lo lleva (`modelo.Q4_K_M.gguf` → `modelo`).
+///
+/// Es el nombre con el que salen los GGUFs (`<nombre>-<QUANT>.gguf`) y el
+/// que se busca para saber **qué hay publicado** de ese modelo.
+pub fn nombre_de_fuente(fuente: &Fuente) -> String {
+    match fuente {
+        Fuente::Repo(repo) => repo.rsplit('/').next().unwrap_or(repo).to_string(),
+        Fuente::Path(path) => path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        Fuente::Gguf(gguf) => {
+            let fichero = gguf.rsplit('/').next().unwrap_or(gguf);
+            let nombre = fichero
+                .trim_end_matches(".gguf")
+                .trim_end_matches("-GGUF")
+                .trim_end_matches(|c: char| c.is_ascii_digit())
+                .trim_end_matches(['-', '.'])
+                .to_string();
+            nombre
+                .rsplit_once('.')
+                .filter(|(_, sufijo)| quants::numero_de(sufijo).is_some())
+                .map(|(base, _)| base.to_string())
+                .unwrap_or(nombre)
+        }
+    }
+}
+
 /// La ruta de la salida de un quant: `<nombre>-<QUANT>.gguf`, **sin
 /// repetir** el sufijo si el nombre ya lo trae: pedir NVFP4 del repo
 /// `acme/modelo-NVFP4` no produce `modelo-NVFP4-NVFP4` (R-GGUF-9: el
@@ -276,35 +310,14 @@ impl Plan {
         let out_dir_base = env.env_path("GGUF_DIR", "models/gguf").to_path_buf();
 
         // ── el nombre base y el directorio de trabajo ─────────────────
-        let (mut nombre, work, source_dir) = match &peticion.fuente {
+        let mut nombre = nombre_de_fuente(&peticion.fuente);
+        let (work, source_dir) = match &peticion.fuente {
             Fuente::Repo(repo) => {
-                let hoja = repo.rsplit('/').next().unwrap_or(repo).to_string();
                 let work = work_root.join(repo.replace('/', "__"));
-                (hoja, work.clone(), work)
+                (work.clone(), work)
             }
-            Fuente::Path(path) => {
-                let hoja = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                (hoja, path.clone(), path.clone())
-            }
+            Fuente::Path(path) => (path.clone(), path.clone()),
             Fuente::Gguf(gguf) => {
-                // El nombre del fichero final es el del repo sin el
-                // sufijo `-GGUF` (que es como se llaman los repos de
-                // cuantizaciones), sin el del shard y sin el del tipo.
-                let fichero = gguf.rsplit('/').next().unwrap_or(gguf);
-                let nombre = fichero
-                    .trim_end_matches(".gguf")
-                    .trim_end_matches("-GGUF")
-                    .trim_end_matches(|c: char| c.is_ascii_digit())
-                    .trim_end_matches(['-', '.'])
-                    .to_string();
-                let nombre = nombre
-                    .rsplit_once('.')
-                    .filter(|(_, sufijo)| quants::numero_de(sufijo).is_some())
-                    .map(|(base, _)| base.to_string())
-                    .unwrap_or(nombre);
                 // Un GGUF ya hecho no se clona: el work es su carpeta, y
                 // con un repo el GGUF se baja a un work propio.
                 let work = if Path::new(gguf).is_absolute() && !gguf.contains('/') {
@@ -312,7 +325,7 @@ impl Plan {
                 } else {
                     work_root.join(format!("gguf_{}", gguf.replace('/', "__")))
                 };
-                (nombre, work.clone(), work)
+                (work.clone(), work)
             }
         };
         // `--out <nombre>` manda: el GGUF final se llama como se pidió.

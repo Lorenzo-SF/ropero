@@ -24,6 +24,8 @@
 //! | [`procedencia`] | el sidecar de procedencia (R-GGUF-19) | no |
 //! | [`ejecutar`] | la tirada: las seis fases de verdad | sí |
 //! | [`verificar`] | la verificación mínima de un GGUF | sí |
+//! | [`listado`] | la lista de quants (`--list-quants`) | sí |
+//! | [`reporte`] | lo que dice el comando (líneas y error) | no |
 //!
 //! Lo puro va delante a propósito: el plan, la viabilidad, la política de
 //! limpieza y la procedencia se pueden afirmar en un test sin que se baje
@@ -42,10 +44,12 @@ use std::fmt;
 pub mod ejecutar;
 pub mod fases;
 pub mod limpieza;
+pub mod listado;
 pub mod peticion;
 pub mod plan;
 pub mod procedencia;
 pub mod quants;
+pub mod reporte;
 pub mod toolchain;
 pub mod verificar;
 
@@ -54,7 +58,45 @@ pub use fases::{Checkpoint, Fase};
 pub use peticion::{Fuente, Imatrix, Intermedio, Peticion};
 pub use plan::{Clase, Plan, Viabilidad};
 pub use procedencia::{MtpInfo, Procedencia};
+pub use reporte::Reporte;
 pub use toolchain::{Motor, Toolchain};
+
+/// La tirada del `ropero gguffer`, de principio a fin.
+///
+/// Es la **entrada única** del comando: los tres modos que tiene.
+///
+/// | Modo | Qué hace |
+/// |---|---|
+/// | la tirada | las seis fases de verdad (R-GGUF-15) |
+/// | `--list-quants` | qué quants hay: los del motor y los publicados |
+/// | `--diagnostico` | qué motor hay, dónde, y qué falta |
+///
+/// Los dos modos de consulta **no fabrican nada** y por eso no exigen
+/// fuente ni imatrix con `--quant` (R-GGUF-6); el resto de las reglas
+/// duras siguen valiendo ([`peticion::valida_consulta`]).
+///
+/// Lo que sale es un [`Reporte`]: las líneas y, si algo falla, el error.
+/// La CLI los imprime y traduce el error a su código de salida: aquí no
+/// se decide nada (R-ARQ-1).
+pub fn gguffer(flags: peticion::Flags, env: &ropero_core::Environment) -> Reporte {
+    if flags.list_quants || flags.diagnostico {
+        if let Err(error) = peticion::valida_consulta(&flags) {
+            return Reporte::error(error);
+        }
+        return if flags.list_quants {
+            listado::listar(env, &flags)
+        } else {
+            toolchain::diagnostico(env)
+        };
+    }
+    match peticion::Peticion::de_flags(flags) {
+        Err(error) => Reporte::error(error),
+        Ok(peticion) => match ejecutar::forja(&peticion, env) {
+            Ok(informe) => Reporte::nuevo(ejecutar::lineas(&informe)),
+            Err(error) => Reporte::error(error),
+        },
+    }
+}
 
 /// Un aviso de la forja: va a **stderr** (stdout es para los datos).
 pub fn avisa(mensaje: &str) {
@@ -210,6 +252,25 @@ impl Error {
                  --imatrix-repo REPO --imatrix-file FICHERO   (a bajarlo de ahí)"
                     .to_string(),
             ),
+            // R-GGUF-16: el error dice **cómo se reintenta sólo la fase
+            // cara** (y la traducción del error de imatrix, R-GGUF-14).
+            Error::Conversion { reintento, .. } => Some(format!(
+                "para reintentar sólo la conversión:\n  {reintento}"
+            )),
+            Error::Cuantizacion {
+                reintento,
+                traduccion,
+                ..
+            } => {
+                let mut pista = String::new();
+                if let Some(traduccion) = traduccion {
+                    pista.push_str(traduccion);
+                    pista.push('\n');
+                }
+                pista.push_str("para reintentar sólo la cuantización:\n  ");
+                pista.push_str(reintento);
+                Some(pista)
+            }
             _ => None,
         }
     }

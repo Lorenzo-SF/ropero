@@ -99,7 +99,7 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         .is_some_and(|s| s.ruta == plan.intermedio);
     if siguiente.is_some_and(|f| f == Fase::Conversion) && !es_entrada {
         fase_conversion(peticion, env, &toolchain, &plan, clase, &viab)?;
-        // escribe_cp(&fichero_cp, Fase::Conversion)?;
+        escribe_cp(&fichero_cp, Fase::Conversion)?;
     }
     siguiente = siguiente_y_cp(siguiente, Fase::Conversion);
 
@@ -147,6 +147,8 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     siguiente = siguiente_y_cp(siguiente, Fase::Verificacion);
 
     // ── FASE 5: la limpieza (la política decide, aquí se ejecuta) ──────
+    // El estado es el **real**: si no se cuantizó, no se cuantizó (R-GGUF-18:
+    // sin cuantización el intermedio **es** el GGUF final, y no se borra).
     let estado = EstadoTirada {
         origen: origen_de(peticion),
         verifico: true,
@@ -155,12 +157,6 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         intermedio_es_entrada: es_entrada,
         keep_source: peticion.keep_source,
         keep_intermedio: peticion.keep_intermedio,
-    };
-    // MUTACIÓN (R-GGUF-16): borrar aunque haya fallado la cuantización.
-    let estado = EstadoTirada {
-        verifico: true,
-        cuantizo: true,
-        ..estado
     };
     let ordenes = limpieza::ordenes(&estado);
     if siguiente.is_some_and(|f| f == Fase::Limpieza) {
@@ -203,6 +199,30 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
         pesos_conservados,
         ya_estaba: false,
     })
+}
+
+/// El informe de una tirada, en líneas (R-GGUF-20: el mensaje honesto).
+///
+/// Es el dominio quien compone las líneas: la CLI las imprime y ya
+/// (R-ARQ-1).
+pub fn lineas(informe: &Informe) -> Vec<String> {
+    let mut lineas = Vec::new();
+    for salida in &informe.salidas {
+        lineas.push(format!("{}", salida.to_string_lossy()));
+    }
+    if !informe.cuantizo && !informe.ya_estaba {
+        lineas.push(format!(
+            "no se cuantizó: el GGUF ya estaba en {} (el quant pedido se perdió en la conversión)",
+            informe.quant_real
+        ));
+    }
+    if informe.ya_estaba {
+        lineas.push("ya estaba: no se ha hecho nada (usa --force para rehacer)".to_string());
+    }
+    if let Some(pesos) = &informe.pesos_conservados {
+        lineas.push(format!("pesos conservados en: {}", pesos.to_string_lossy()));
+    }
+    lineas
 }
 
 /// La fase siguiente, si la que venía ya no es la que se acaba de hacer.
@@ -653,7 +673,7 @@ fn baja_con(
     if let Some(fichero) = fichero {
         args.push(fichero.to_string());
     }
-    let estado = Command::new(hf).args(&args).status().map_err(|_| None)?;
+    let estado = con_reintento(|| Command::new(hf).args(&args).status()).map_err(|_| None)?;
     if estado.success() {
         Ok(())
     } else {
@@ -695,10 +715,8 @@ fn baja_imatrix(imx: &Imatrix, env: &Environment, plan: &Plan) -> Result<(), Err
 /// el error enseña, porque el último error del conversor o del
 /// cuantizador dice por qué.
 fn ejecuta(programa: &Path, args: &[String], log: &Path) -> Result<(), Vec<String>> {
-    let salida = Command::new(programa)
-        .args(args)
-        .output()
-        .map_err(|_| Vec::new())?;
+    let salida =
+        con_reintento(|| Command::new(programa).args(args).output()).map_err(|_| Vec::new())?;
     let texto = format!(
         "{}{}",
         String::from_utf8_lossy(&salida.stdout),
@@ -709,6 +727,35 @@ fn ejecuta(programa: &Path, args: &[String], log: &Path) -> Result<(), Vec<Strin
         return Ok(());
     }
     Err(cola(&texto, 20))
+}
+
+/// Los intentos cuando el **exec** falla con ETXTBSY.
+const INTENTOS_EXEC: usize = 10;
+
+/// La pausa base entre intentos (crece con cada uno).
+const PAUSA_EXEC: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Ejecuta algo, reintentando si falla con **ETXTBSY**.
+///
+/// «Text file busy» pasa cuando el fichero que se ejecuta lo tiene otro
+/// proceso abierto para escribir. Es una **carrera** de milisegundos (un
+/// `fork` en paralelo hereda el descriptor abierto), no un error del
+/// comando: lo correcto es reintentar. Sin esto, una tirada puede morir
+/// porque otro proceso escribía un script en ese instante.
+fn con_reintento<T>(mut accion: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut intento = 0;
+    loop {
+        let resultado = accion();
+        let ocupado = matches!(
+            &resultado,
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy
+        );
+        if !ocupado || intento >= INTENTOS_EXEC {
+            return resultado;
+        }
+        intento += 1;
+        std::thread::sleep(PAUSA_EXEC * intento as u32);
+    }
 }
 
 /// El `python3` del `PATH`, con el que corre el conversor.

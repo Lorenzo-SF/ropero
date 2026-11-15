@@ -367,6 +367,63 @@ impl Peticion {
     }
 }
 
+/// La validación de una **consulta**: `--list-quants` y `--diagnostico`.
+///
+/// Son las mismas reglas duras que la tirada (fuente única, imatrix en su
+/// forma, quants que existen, intermedio válido), con **dos excepciones**:
+///
+/// - **no hace falta fuente**: una consulta no fabrica nada, así que no hay
+///   pesos de donde sacar;
+/// - el imatrix **no** exige `--quant` (R-GGUF-6): el diagnóstico está
+///   exento, porque preguntar por el entorno no es cuantizar.
+///
+/// Lo que **no** se valida aquí es lo que no tiene sentido en una
+/// consulta: que la fuente exista, y que el imatrix esté.
+pub fn valida_consulta(flags: &Flags) -> Result<(), Error> {
+    // ── la fuente: una sola, pero ninguna vale ──────────────────────────
+    let fuentes: Vec<Fuente> = [
+        flags.repo.clone().map(Fuente::Repo),
+        flags.path.clone().map(|p| Fuente::Path(PathBuf::from(p))),
+        flags.gguf.clone().map(Fuente::Gguf),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if fuentes.len() > 1 {
+        let escritas: Vec<String> = fuentes.iter().map(Fuente::describe).collect();
+        return Err(Error::Uso(format!(
+            "la fuente es una sola: {} son excluyentes",
+            escritas.join(", ")
+        )));
+    }
+
+    // ── el imatrix: excluyente con el par, y el par junto ─────────────
+    junta_imatrix(
+        flags.imatrix.clone(),
+        flags.imatrix_repo.clone(),
+        flags.imatrix_file.clone(),
+    )?;
+
+    // ── los quants: tienen que existir ─────────────────────────────────
+    for quant in partir_quants(&flags.quants) {
+        if quants::numero_de(&quant).is_none() {
+            return Err(Error::QuantInvalido { quant });
+        }
+    }
+
+    // ── el intermedio: sólo f16 o bf16 ──────────────────────────────────
+    if let Some(intermedio) = flags.intermedio.as_deref() {
+        let ok = intermedio.eq_ignore_ascii_case("f16") || intermedio.eq_ignore_ascii_case("bf16");
+        if !ok {
+            return Err(Error::Uso(format!(
+                "--intermedio sólo admite f16 o bf16 (recibido: '{intermedio}')"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Junta las tres formas del imatrix en la **una** que la petición lleva.
 ///
 /// - `--imatrix` es **excluyente** con el par `--imatrix-repo` +

@@ -29,8 +29,10 @@
 //! problema que no era de la descarga (H-27); este mensaje no.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::Error;
+use crate::reporte::Reporte;
 
 /// Qué motor se encontró.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -262,8 +264,11 @@ pub fn es_ejecutable(ruta: &Path) -> bool {
 /// El informe del `--diagnostico`: qué motor se encuentra, dónde, qué
 /// herramientas hay y qué falta.
 ///
-/// Es **sólo lectura**: un diagnóstico no toca nada (doc CLI v2 §11.2).
-pub fn diagnostico(env: &ropero_core::Environment) -> Vec<String> {
+/// Es **sólo lectura**: un diagnóstico no toca nada (doc CLI v2 §11.2). Y
+/// lleva **el error** de la precondición, para que el comando pueda salir
+/// con 1 diciendo lo que falta (R-GGUF-56): el informe se enseña entero y
+/// además se dice qué hacer.
+pub fn diagnostico(env: &ropero_core::Environment) -> Reporte {
     let dir_fork = dir_del_motor(env, "LLAMA_DIR", "llama.cpp");
     let dir_oficial = dir_del_motor(env, "LLAMA_OFFICIAL_DIR", "llama.cpp-official");
     let mut lineas = vec![
@@ -308,12 +313,15 @@ pub fn diagnostico(env: &ropero_core::Environment) -> Vec<String> {
             .unwrap_or_else(|| "no está".to_string()),
     ));
     match buscar(env) {
-        Ok(toolchain) => lineas.push(format!(
-            "  => se usaría {} ({}), con el cuantizador {}",
-            toolchain.motor.nombre(),
-            toolchain.motor.dir().to_string_lossy(),
-            toolchain.quantize.to_string_lossy()
-        )),
+        Ok(toolchain) => {
+            lineas.push(format!(
+                "  => se usaría {} ({}), con el cuantizador {}",
+                toolchain.motor.nombre(),
+                toolchain.motor.dir().to_string_lossy(),
+                toolchain.quantize.to_string_lossy()
+            ));
+            Reporte::nuevo(lineas)
+        }
         Err(error) => {
             lineas.push("  => falta motor:".to_string());
             for linea in error.to_string().lines() {
@@ -322,9 +330,68 @@ pub fn diagnostico(env: &ropero_core::Environment) -> Vec<String> {
             if let Some(pista) = error.pista() {
                 lineas.push(format!("     qué hacer: {pista}"));
             }
+            Reporte::con_error(lineas, error)
         }
     }
-    lineas
+}
+
+/// Los quants que **publica el motor**, con la ruta del cuantizador.
+///
+/// El motor imprime sus quants en la ayuda del cuantizador:
+///
+/// ```text
+///   0  or F32
+///  15  or Q4_K : alias for Q4_K_M
+///  15  or Q4_K_M
+/// ```
+///
+/// El número es el `llama_ftype`, que es justo el `general.file_type` del
+/// GGUF: por eso la lista sirve para saber si un GGUF ya está en el quant
+/// pedido. Las líneas de **alias** se saltan (el nombre bueno es el
+/// canónico: ver el módulo [`crate::quants`]).
+pub fn quants_del_motor(env: &ropero_core::Environment) -> Option<(PathBuf, Vec<(u32, String)>)> {
+    let toolchain = buscar(env).ok()?;
+    let salida = Command::new(&toolchain.quantize)
+        .arg("--help")
+        .output()
+        .ok()?;
+    let texto = format!(
+        "{}{}",
+        String::from_utf8_lossy(&salida.stdout),
+        String::from_utf8_lossy(&salida.stderr)
+    );
+    let mut lista = Vec::new();
+    for linea in texto.lines() {
+        if linea.contains("alias for") {
+            continue;
+        }
+        if let Some((num, nombre)) = parsea_quant(linea) {
+            lista.push((num, nombre));
+        }
+    }
+    if lista.is_empty() {
+        None
+    } else {
+        Some((toolchain.quantize, lista))
+    }
+}
+
+/// Parsea una línea de la ayuda del cuantizador: `  15 or Q4_K_M : ...`
+/// → `(15, "Q4_K_M")`.
+fn parsea_quant(linea: &str) -> Option<(u32, String)> {
+    let mut palabras = linea.split_whitespace();
+    let numero = palabras.next()?.parse::<u32>().ok()?;
+    if palabras.next()? != "or" {
+        return None;
+    }
+    let nombre = palabras.next()?;
+    if !nombre
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    {
+        return None;
+    }
+    Some((numero, nombre.to_string()))
 }
 
 /// «está» / «NO está», para el diagnóstico.

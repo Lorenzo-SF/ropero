@@ -89,7 +89,7 @@ pub const COMMANDS: &[Command] = &[
         usage: "gguffer --repo OWNER/NAME",
         summary: "fabrica un GGUF a partir de pesos o de un repo",
         phase: None,
-        state: CommandState::Parsed,
+        state: CommandState::Ready,
     },
     Command {
         name: "status",
@@ -257,25 +257,32 @@ pub const FLAGS_STOP: &[Flag] = &[];
 pub const FLAGS_GGUFFER: &[Flag] = &[
     Flag::value("repo", "OWNER/NAME", "repo de HuggingFace de origen"),
     Flag::value("path", "DIR", "directorio de pesos locales de origen"),
+    Flag::value(
+        "gguf",
+        "FICHERO|OWNER/REPO",
+        "GGUF ya hecho, de donde cuantizar",
+    ),
     Flag::many("quant", "TIPO", "tipo(s) de cuantización"),
     Flag::value("imatrix", "FICHERO", "matriz de importancia local"),
-    Flag {
-        name: "imatrix-repo",
-        kind: FlagKind::Value,
-        help: "repo de la matriz de importancia remota",
-        value_name: Some("OWNER/NAME"),
-        default: None,
-        requires: Some("imatrix-file"),
-    },
-    Flag {
-        name: "imatrix-file",
-        kind: FlagKind::Value,
-        help: "fichero de la matriz de importancia remota",
-        value_name: Some("NOMBRE"),
-        default: None,
-        requires: Some("imatrix-repo"),
-    },
+    // El par remoto va **siempre junto**, pero lo comprueba el dominio
+    // (ropero-forge), no `clap`: el mensaje tiene que ser el del doc, en
+    // español, y el que dice **qué hacer** (P-13).
+    Flag::value(
+        "imatrix-repo",
+        "OWNER/NAME",
+        "repo de la matriz de importancia remota (con --imatrix-file)",
+    ),
+    Flag::value(
+        "imatrix-file",
+        "NOMBRE",
+        "fichero de la matriz de importancia remota (con --imatrix-repo)",
+    ),
     Flag::value("out", "NOMBRE|RUTA", "nombre o ruta del GGUF de salida"),
+    Flag::value(
+        "out-principal",
+        "RUTA",
+        "ruta exacta del GGUF del primer quant",
+    ),
     Flag {
         name: "intermedio",
         kind: FlagKind::Value,

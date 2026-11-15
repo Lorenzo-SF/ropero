@@ -52,6 +52,30 @@ fn run(args: &[&str]) -> (i32, String, String) {
     )
 }
 
+/// El mismo comando, pero **sin motor**: los dos motores apuntan a un
+/// directorio que no existe, y el `$HOME` también.
+///
+/// Sin esto los tests del `gguffer` dependerían de la máquina: en una que
+/// tenga `~/llama.cpp` la precondición se cumpliría y el código de salida
+/// sería otro.
+fn run_sin_motor(args: &[&str]) -> (i32, String, String) {
+    let base = std::env::temp_dir().join("ropero-cli-contract-sin-motor");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let out = bin()
+        .args(args)
+        .env("HOME", &base)
+        .env("LLAMA_DIR", base.join("no-fork"))
+        .env("LLAMA_OFFICIAL_DIR", base.join("no-oficial"))
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
 /// Los códigos de salida de la tabla del doc CLI v2 §3.
 const CODIGO_OK: i32 = 0;
 const CODIGO_ERROR_EJECUCION: i32 = 1;
@@ -135,21 +159,39 @@ fn un_argumento_de_mas_sale_con_dos() {
 /// Los comandos que se parsean pero todavía no se ejecutan dicen **qué
 /// falta** y salen con 1 (no con 2: el uso es correcto).
 ///
-/// `install` **no** está aquí: ya funciona (F5). Su contrato es otro: sin
-/// lista y sin terminal es un **error de uso** (código 2), porque el menú
-/// necesita una terminal (R-INST-26).
+/// Ya **no queda ninguno**: `gguffer` fue el último (F6), y los once
+/// comandos del contrato están **listos**. Lo que se comprueba ahora es
+/// lo contrario: que ninguno diga «todavía no está implementado», que es
+/// la respuesta de un comando pendiente.
 #[test]
-fn los_comandos_pendientes_dicen_que_falta_y_salen_con_uno() {
+fn ningun_comando_dice_que_todavia_no_esta_implementado() {
+    for cmd in [
+        "install", "stop", "gguffer", "status", "doctor", "list", "template", "engines",
+        "validate", "args", "levels", "path",
+    ] {
+        let (code, _stdout, stderr) = run(&[cmd]);
+        assert!(
+            !stderr.contains("todavía no está implementado"),
+            "{cmd} sigue pendiente: {stderr}"
+        );
+        // Y ninguno sale con el código de un pendiente (1) por esa razón.
+        assert_ne!(
+            (code, stderr.contains("todavía no está implementado")),
+            (1, true),
+            "{cmd}: {stderr}"
+        );
+    }
+}
+
+/// `ropero gguffer` **funciona** (F6): sin fuente es un **error de uso**
+/// (código 2), y el mensaje dice **qué hacer** (P-13).
+#[test]
+fn gguffer_sin_fuente_dice_que_falta_y_sale_con_dos() {
     let (code, _stdout, stderr) = run(&["gguffer"]);
-    assert_eq!(
-        code, CODIGO_ERROR_EJECUCION,
-        "gguffer salió con {code}: {stderr}"
-    );
-    assert!(
-        stderr.contains("todavía no está implementado"),
-        "gguffer: stderr={stderr}"
-    );
-    assert!(stderr.contains("gguffer"), "gguffer: stderr={stderr}");
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+    for flag in ["--path", "--repo", "--gguf"] {
+        assert!(stderr.contains(flag), "no dice {flag}: {stderr}");
+    }
 }
 
 /// `ropero install` sin lista y **sin terminal** es un error de uso
@@ -226,35 +268,77 @@ fn los_flags_del_arranque_se_aceptan() {
     }
 }
 
-/// Los 15 flags del `gguffer` del doc CLI v2 §11.2 se aceptan.
+/// Los flags del `gguffer` del doc CLI v2 §11.2 (más `--gguf` y
+/// `--out-principal`) se **aceptan**: el parser no rechaza ninguno.
+///
+/// Cada flag va en una invocación que **no choca** con otra regla (la
+/// fuente es una, el imatrix exige `--quant`, el par remoto va junto), y
+/// lo que se comprueba es el código de salida **esperado**: 1, porque en
+/// una máquina sin motor lo que falla es la precondición (R-GGUF-54), no
+/// el uso. Un flag rechazado por el parser saldría con 2.
 #[test]
 fn los_flags_del_gguffer_se_aceptan() {
-    let flags: &[(&str, Option<&str>)] = &[
-        ("--repo", Some("owner/name")),
-        ("--path", Some("/tmp/pesos")),
-        ("--quant", Some("q4_k_m")),
-        ("--imatrix", Some("imatrix.dat")),
-        ("--out", Some("salida.gguf")),
-        ("--intermedio", Some("bf16")),
-        ("--keep-source", None),
-        ("--keep-intermedio", None),
-        ("--no-mtp", None),
-        ("--no-dflash", None),
-        ("--force", None),
-        ("--list-quants", None),
-        ("--diagnostico", None),
+    let pesos = "/tmp/pesos";
+    let casos: &[(&[&str], i32)] = &[
+        (&["--repo", "owner/name"], CODIGO_ERROR_EJECUCION),
+        (&["--path", pesos], CODIGO_ERROR_EJECUCION),
+        (&["--gguf", "pesos.gguf"], CODIGO_ERROR_EJECUCION),
+        (
+            &["--path", pesos, "--quant", "q4_k_m"],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (
+            &[
+                "--path",
+                pesos,
+                "--quant",
+                "q4_k_m",
+                "--imatrix",
+                "imatrix.dat",
+            ],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (
+            &[
+                "--path",
+                pesos,
+                "--quant",
+                "q4_k_m",
+                "--imatrix-repo",
+                "owner/name",
+                "--imatrix-file",
+                "imatrix.dat",
+            ],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (
+            &["--path", pesos, "--out", "salida.gguf"],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (
+            &["--path", pesos, "--out-principal", "salida.gguf"],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (
+            &["--path", pesos, "--intermedio", "bf16"],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (&["--path", pesos, "--keep-source"], CODIGO_ERROR_EJECUCION),
+        (
+            &["--path", pesos, "--keep-intermedio"],
+            CODIGO_ERROR_EJECUCION,
+        ),
+        (&["--path", pesos, "--no-mtp"], CODIGO_ERROR_EJECUCION),
+        (&["--path", pesos, "--no-dflash"], CODIGO_ERROR_EJECUCION),
+        (&["--path", pesos, "--force"], CODIGO_ERROR_EJECUCION),
+        (&["--list-quants"], CODIGO_ERROR_EJECUCION),
+        (&["--diagnostico"], CODIGO_ERROR_EJECUCION),
     ];
-    for (flag, valor) in flags {
+    for (flags, esperado) in casos {
         let mut args = vec!["gguffer"];
-        args.push(flag);
-        if let Some(v) = valor {
-            args.push(v);
-        }
-        let (code, _stdout, stderr) = run(&args);
-        assert_eq!(
-            code, CODIGO_ERROR_EJECUCION,
-            "{args:?} salió con {code}: {stderr}"
-        );
+        args.extend(flags.iter().copied());
+        let (code, _stdout, stderr) = run_sin_motor(&args);
+        assert_eq!(code, *esperado, "{args:?} salió con {code}: {stderr}");
     }
 }
 
@@ -277,8 +361,12 @@ fn la_imatrix_remota_va_en_pareja() {
 /// La pareja completa sí se acepta.
 #[test]
 fn la_pareja_de_imatrix_se_acepta() {
-    let (code, _stdout, stderr) = run(&[
+    let (code, _stdout, stderr) = run_sin_motor(&[
         "gguffer",
+        "--path",
+        "/tmp/pesos",
+        "--quant",
+        "q4_k_m",
         "--imatrix-repo",
         "owner/name",
         "--imatrix-file",

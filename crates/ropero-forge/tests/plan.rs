@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use ropero_core::Environment;
 use ropero_forge::Error;
-use ropero_forge::peticion::{Flags, Intermedio, Peticion};
+use ropero_forge::peticion::{Flags, Fuente, Intermedio, Peticion};
 use ropero_forge::plan::{self, Clase, Plan};
 use ropero_forge::quants;
 
@@ -166,4 +166,29 @@ fn el_out_nombre_manda() {
     let plan = Plan::de(&peticion, &env, Clase::Ninguno).expect("el plan");
     assert_eq!(plan.nombre, "mi-quant");
     assert_eq!(plan.salidas[0].numero, quants::numero_de("IQ2_M").unwrap());
+}
+
+/// El nombre base de un modelo, según de dónde salga: es el nombre con el
+/// que se buscan los GGUFs **publicados** de ese modelo.
+#[test]
+fn el_nombre_base_segun_la_fuente() {
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Repo("acme/modelo".to_string())),
+        "modelo"
+    );
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Path(PathBuf::from("/tmp/pesos"))),
+        "pesos"
+    );
+    // De un GGUF: sin la extensión, y sin el `-GGUF` de los repos de
+    // cuantizaciones.
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/modelo-GGUF.gguf".to_string())),
+        "modelo"
+    );
+    // Y sin el `.QUANT` final, si lo lleva.
+    assert_eq!(
+        plan::nombre_de_fuente(&Fuente::Gguf("acme/modelo.Q4_K_M.gguf".to_string())),
+        "modelo"
+    );
 }

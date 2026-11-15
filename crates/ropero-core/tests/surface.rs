@@ -109,22 +109,20 @@ fn los_comandos_pendientes_dicen_que_falta() {
     }
 }
 
-/// `gguffer` se **parsea** pero no se ejecuta todavía: su estado es
-/// [`CommandState::Parsed`], no `Ready`.
-///
-/// `install` **no** está aquí: ya funciona (F5), y su estado es `Ready`.
+/// `gguffer` **funciona** (F6): su estado es [`CommandState::Ready`],
+/// como `install` (F5).
 #[test]
-fn gguffer_esta_parseado_pero_no_listo() {
+fn gguffer_esta_listo() {
     let cmd = COMMANDS
         .iter()
         .find(|c| c.name == "gguffer")
         .unwrap_or_else(|| panic!("falta 'gguffer'"));
     assert_eq!(
         cmd.state,
-        CommandState::Parsed,
-        "'gguffer' debería estar parseado"
+        CommandState::Ready,
+        "'gguffer' debería estar listo"
     );
-    assert!(!cmd.es_ready());
+    assert!(cmd.es_ready());
 }
 
 /// `install` funciona: su estado es [`CommandState::Ready`].

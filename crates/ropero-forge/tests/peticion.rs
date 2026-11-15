@@ -6,7 +6,7 @@
 //! puede costar una descarga.
 
 use ropero_forge::Error;
-use ropero_forge::peticion::{Flags, Peticion};
+use ropero_forge::peticion::{self, Flags, Peticion};
 
 /// El error de uso, para afinar las aserciones.
 fn uso(peticion: Result<Peticion, Error>) -> String {
@@ -191,4 +191,63 @@ fn el_intermedio_solo_admite_f16_y_bf16() {
             .con_intermedio("q8"),
     ));
     assert!(error.contains("f16 o bf16"), "dice {error}");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// La consulta (`--list-quants` y `--diagnostico`): las mismas reglas, con
+// dos excepciones del doc.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// La consulta **no exige fuente**: preguntar no es fabricar.
+#[test]
+fn la_consulta_no_exige_fuente() {
+    assert!(peticion::valida_consulta(&Flags::default()).is_ok());
+}
+
+/// La consulta **sí** dice que la fuente es una sola (R-GGUF-3).
+#[test]
+fn la_consulta_tambien_exige_una_fuente_sola() {
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_path("/tmp/pesos");
+    let error = peticion::valida_consulta(&flags).expect_err("dos fuentes");
+    match error {
+        Error::Uso(mensaje) => assert!(mensaje.contains("excluyentes"), "dice {mensaje}"),
+        otro => panic!("esperaba un error de uso, y salió: {otro:?}"),
+    }
+}
+
+/// El imatrix **no** exige `--quant` en la consulta (R-GGUF-6): el
+/// diagnóstico está exento.
+#[test]
+fn la_consulta_esta_exenta_de_la_regla_del_imatrix() {
+    let flags = Flags::default().con_imatrix("imx.dat");
+    assert!(
+        peticion::valida_consulta(&flags).is_ok(),
+        "el diagnóstico está exento"
+    );
+}
+
+/// Pero el imatrix local y el remoto siguen siendo **excluyentes**.
+#[test]
+fn la_consulta_tambiene_excluye_los_dos_imatrix() {
+    let flags = Flags::default()
+        .con_imatrix("imx.dat")
+        .con_imatrix_remota("acme/imx", "imx.dat");
+    let error = peticion::valida_consulta(&flags).expect_err("los dos imatrix");
+    match error {
+        Error::Uso(mensaje) => assert!(mensaje.contains("excluyente"), "dice {mensaje}"),
+        otro => panic!("esperaba un error de uso, y salió: {otro:?}"),
+    }
+}
+
+/// Un quant que no existe es error en la consulta, también.
+#[test]
+fn la_consulta_tambiene_exige_quants_que_existen() {
+    let flags = Flags::default().con_quants(&["Q9_K"]);
+    let error = peticion::valida_consulta(&flags).expect_err("el quant no existe");
+    assert!(
+        matches!(error, Error::QuantInvalido { .. }),
+        "sale: {error:?}"
+    );
 }
