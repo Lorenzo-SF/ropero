@@ -17,7 +17,7 @@
 //! tener la del motor. La tabla de reserva no miente: son los mismos
 //! números, pero los **publicados** por el motor pueden cambiar.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use ropero_core::Environment;
 
@@ -61,7 +61,7 @@ pub fn listar(env: &Environment, flags: &Flags) -> Reporte {
             }
         }
     }
-    match toolchain::buscar(env) {
+    match toolchain::buscar(env, true) {
         Ok(_) => Reporte::nuevo(lineas),
         Err(error) => Reporte::con_error(lineas, error),
     }
@@ -78,31 +78,74 @@ fn fuente_de(flags: &Flags) -> Option<Fuente> {
     flags.gguf.clone().map(Fuente::Gguf)
 }
 
-/// Los quants **ya publicados** de un modelo: los ficheros
-/// `<modelo>-<QUANT>.gguf` que hay en el directorio de salida.
+/// Los quants **ya publicados** de un modelo: los GGUFs que hay en el
+/// directorio de salida, tanto en su nivel plano como en el subdirectorio del
+/// modelo (`<GGUF_DIR>/<modelo>/`), que es donde los deja el downloader
+/// (R-MOD-6). Mirar sólo el nivel plano hacía que un modelo ya descargado
+/// saliera como «(ninguno)».
 ///
-/// Se leen del disco (el directorio de salida): son las cuantizaciones que
-/// ya están hechas, que es lo que se puede **bajar** en vez de fabricar.
+/// Se leen del disco: son las cuantizaciones que ya están hechas, que es lo
+/// que se puede **bajar** en vez de fabricar. La línea enseña el fichero con
+/// su carpeta, que es la ruta por la que se baja.
 fn publicados(env: &Environment, nombre: &str) -> Vec<(String, String)> {
     let dir = env.env_path("GGUF_DIR", "models/gguf");
     let Ok(entradas) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
-    let prefijo = format!("{nombre}-");
     let mut out = Vec::new();
     for entrada in entradas.flatten() {
-        let fichero = entrada.file_name().to_string_lossy().into_owned();
-        let Some(sufijo) = fichero.strip_prefix(&prefijo) else {
-            continue;
-        };
-        let Some(sufijo) = sufijo.strip_suffix(".gguf") else {
-            continue;
-        };
-        if quants::numero_de(sufijo).is_none() {
+        let ruta = entrada.path();
+        if ruta.is_file() {
+            if let Some(quant) = cuantizacion_de(&ruta, nombre) {
+                out.push((quant, nombre_de_file(&ruta)));
+            }
             continue;
         }
-        out.push((sufijo.to_string(), fichero));
+        // El primer nivel de subdirectorios: la carpeta del modelo.
+        let Ok(sub) = std::fs::read_dir(&ruta) else {
+            continue;
+        };
+        let carpeta = nombre_de_file(&ruta);
+        for entrada in sub.flatten() {
+            let ruta = entrada.path();
+            if !ruta.is_file() {
+                continue;
+            }
+            if let Some(quant) = cuantizacion_de(&ruta, nombre) {
+                out.push((quant, format!("{carpeta}/{}", nombre_de_file(&ruta))));
+            }
+        }
     }
     out.sort();
     out
+}
+
+/// El quant de un GGUF publicado, por lo que **dice** su nombre: el trozo
+/// después del último separador (`modelo-Q4_K_M.gguf` → `Q4_K_M`), o el quant
+/// que lleva en el propio nombre del modelo (`modelo-NVFP4.gguf` → `NVFP4`).
+///
+/// Sólo cuenta si el fichero es de ese modelo: la línea no debe mezclar
+/// modelos.
+fn cuantizacion_de(ruta: &Path, nombre: &str) -> Option<String> {
+    let fichero = nombre_de_file(ruta);
+    let stem = fichero.strip_suffix(".gguf")?;
+    let es_del_modelo = stem == nombre
+        || stem.starts_with(&format!("{nombre}-"))
+        || ruta
+            .parent()
+            .map(|padre| nombre_de_file(padre) == nombre)
+            .unwrap_or(false);
+    if !es_del_modelo {
+        return None;
+    }
+    let quant = stem.rsplit('-').next()?;
+    quants::numero_de(quant)?;
+    Some(quant.to_string())
+}
+
+/// El nombre del fichero (o del directorio), sin la ruta.
+fn nombre_de_file(ruta: &Path) -> String {
+    ruta.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
