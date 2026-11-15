@@ -221,10 +221,23 @@ pub fn sugerencia_hermanos(repo: &str) -> Vec<String> {
 /// El nombre base de un modelo, según de dónde salga.
 ///
 /// - un **repo**: la hoja del repo (`acme/modelo` → `modelo`);
-/// - un **directorio**: su nombre;
-/// - un **GGUF**: su nombre sin la extensión `.gguf`, sin el sufijo
-///   `-GGUF` de los repos de cuantizaciones, y sin el `.QUANT` final si
-///   lo lleva (`modelo.Q4_K_M.gguf` → `modelo`).
+/// - un **directorio**: su nombre **tal cual** (`/models/qwen3.5` → `qwen3.5`:
+///   un directorio no es un fichero, así que su punto no es una extensión);
+/// - un **GGUF**: el basename del fichero **tal cual**, quitando **sólo** la
+///   extensión `.gguf` —la extensión del artefacto que se produce—, y las dos
+///   convenciones de los repos de cuantizaciones: el sufijo `-GGUF` y el
+///   `.QUANT` final si es un quant de verdad (`modelo.Q4_K_M.gguf` → `modelo`).
+///
+/// Los dígitos finales **no** se recortan: `modelo-F16.gguf` es `modelo-F16` y
+/// `qwen3.gguf` es `qwen3`. Recortarlos hacía `modelo-F` y `qwen`, que no es el
+/// artefacto: con ese nombre la salida y el sidecar `<out>.fuente.json` no
+/// correspondían con el GGUF producido.
+///
+/// La colisión, con regla determinista: sólo se quita la extensión del
+/// artefacto, así que dos ficheros con el mismo nombre base y **distinta
+/// extensión** (`qwen3.gguf` y `qwen3.safetensors`) siguen teniendo nombres
+/// distintos y no comparten salida ni sidecar. Como la fuente es **una y sólo
+/// una** (R-GGUF-3), en una tirada no hay dos nombres que desempatar.
 ///
 /// Es el nombre con el que salen los GGUFs (`<nombre>-<QUANT>.gguf`) y el
 /// que se busca para saber **qué hay publicado** de ese modelo.
@@ -237,17 +250,15 @@ pub fn nombre_de_fuente(fuente: &Fuente) -> String {
             .unwrap_or_default(),
         Fuente::Gguf(gguf) => {
             let fichero = gguf.rsplit('/').next().unwrap_or(gguf);
-            let nombre = fichero
-                .trim_end_matches(".gguf")
-                .trim_end_matches("-GGUF")
-                .trim_end_matches(|c: char| c.is_ascii_digit())
-                .trim_end_matches(['-', '.'])
-                .to_string();
-            nombre
-                .rsplit_once('.')
-                .filter(|(_, sufijo)| quants::numero_de(sufijo).is_some())
-                .map(|(base, _)| base.to_string())
-                .unwrap_or(nombre)
+            let sin_extension = fichero.strip_suffix(".gguf").unwrap_or(fichero);
+            let nombre = sin_extension
+                .strip_suffix("-GGUF")
+                .unwrap_or(sin_extension)
+                .trim_end_matches(['-', '.']);
+            match nombre.rsplit_once('.') {
+                Some((base, sufijo)) if quants::numero_de(sufijo).is_some() => base.to_string(),
+                _ => nombre.to_string(),
+            }
         }
     }
 }
