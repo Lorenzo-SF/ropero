@@ -99,13 +99,15 @@ fn el_checkpoint_de_la_conversion_reanuda_en_la_cuantizacion() {
     assert_eq!(checkpoint, Fase::Cuantizacion);
 }
 
-/// El checkpoint guarda el **estado** de cada salida (R-GGUF-20).
+/// El checkpoint guarda el **estado** de cada salida y el **hash** del
+/// imatrix (R-GGUF-20, R-GGUF-19).
 ///
 /// El estado es lo que permite que una tirada reanudada diga la verdad en
-/// el sidecar: si el cuantizador corrió en una tirada anterior, el sidecar
-/// lo dice (y si lo que corrió fue el conversor, también).
+/// el sidecar (si el cuantizador corrió en una tirada anterior, el sidecar
+/// lo dice), y el hash es el del imatrix **remoto**: su caché la borra la
+/// limpieza, y sin el hash el sidecar no dice cuál matriz se usó.
 #[test]
-fn el_checkpoint_guarda_los_estados_de_cada_salida() {
+fn el_checkpoint_guarda_los_estados_y_el_hash_del_imatrix() {
     let escrito = Checkpoint::con_estado(
         Fase::Cuantizacion,
         "0123456789abcdef",
@@ -113,13 +115,19 @@ fn el_checkpoint_guarda_los_estados_de_cada_salida() {
             ("Q4_K_M".to_string(), Estado::Cuantizado),
             ("F16".to_string(), Estado::Convertido),
         ],
+        Some("abc123"),
     );
     let json = escrito.clone().a_json();
     assert!(json.contains("\"estados\""), "dice {json}");
+    assert!(
+        json.contains("\"imatrix_sha256\": \"abc123\""),
+        "dice {json}"
+    );
 
     let leido = Checkpoint::de_json(&json).expect("se lee");
     assert_eq!(leido, escrito, "el estado se perdió en el round-trip");
     assert_eq!(leido.estados.len(), 2, "los estados no se leen");
+    assert_eq!(leido.imatrix_sha256.as_deref(), Some("abc123"));
 }
 
 /// Un checkpoint del formato **viejo** (que sólo dice los quants
@@ -138,4 +146,5 @@ fn un_checkpoint_del_formato_viejo_no_inventa_estados() {
         ],
         "el checkpoint viejo dice sólo lo que cuantizó"
     );
+    assert_eq!(viejo.imatrix_sha256, None, "se inventó un hash");
 }

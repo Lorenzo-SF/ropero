@@ -615,6 +615,46 @@ fn el_imatrix_remoto_llega_al_cuantizador() {
     );
 }
 
+/// El `sha256` del imatrix **remoto** llega al sidecar (hallazgo 1).
+///
+/// El defecto: el imatrix remoto vive en la caché del work
+/// (`<work>/imatrix/<repo>/<fichero>`), y la fase 5 (limpieza) **borra el
+/// work** antes de que la fase 6 escriba el sidecar: el hash salía sin
+/// escribir, y el sidecar afirmaba el fichero y el repo pero no **cuál**
+/// matriz se usó.
+#[test]
+fn el_hash_del_imatrix_remoto_llega_al_sidecar() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    tirada.fichero_fixture("owner/imatrix", "Q4_K_M.dat", b"imatrix de fixture");
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M"])
+        .con_imatrix_remota("owner/imatrix", "Q4_K_M.dat");
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    // La caché del work ya no está: la limpieza la borró (y con ella, el
+    // imatrix que se usó).
+    assert!(
+        !tirada.base.join("work/acme__modelo").exists(),
+        "el work se borró (la limpieza)"
+    );
+    // El sidecar dice el hash de **ese** fichero: el de la matriz que se
+    // cuantizó.
+    let esperado =
+        ropero_forge::sha256::sha256_de(&tirada.base.join("hf-repos/owner/imatrix/Q4_K_M.dat"))
+            .expect("el hash del imatrix");
+    let sidecar = fs::read_to_string(Procedencia::ruta(
+        &tirada.base.join("gguf/modelo-Q4_K_M.gguf"),
+    ))
+    .expect("el sidecar está");
+    assert!(
+        sidecar.contains(&format!("\"sha256\": \"{esperado}\"")),
+        "el sidecar no dice el hash del imatrix remoto: {sidecar}"
+    );
+}
+
 /// Si la descarga del imatrix remoto **no deja el fichero** en la caché,
 /// la tirada falla con un error claro: **no se cuantiza sin imatrix**.
 #[test]

@@ -134,6 +134,10 @@ impl Estado {
 /// una tirada reanudada diría «no se cuantizó» de algo que sí se cuantizó, y
 /// una tirada cuyas salidas ya estaban diría «se cuantizó» sin que el
 /// cuantizador llegara a correr (R-GGUF-20: no mentir sobre el resultado).
+///
+/// El **sha256 del imatrix** se calcula en la fase 3, antes de que la
+/// limpieza borre la caché del work: el imatrix remoto vive ahí, y sin su
+/// hash el sidecar no dice **cuál** matriz se usó (R-GGUF-19).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checkpoint {
     /// La última fase completada.
@@ -142,6 +146,8 @@ pub struct Checkpoint {
     pub huella: String,
     /// El estado de cada salida, por quant.
     pub estados: Vec<(String, Estado)>,
+    /// El **sha256** del imatrix usado, si se calculó.
+    pub imatrix_sha256: Option<String>,
 }
 
 impl Checkpoint {
@@ -152,6 +158,7 @@ impl Checkpoint {
             fase,
             huella: String::new(),
             estados: Vec::new(),
+            imatrix_sha256: None,
         }
     }
 
@@ -161,16 +168,24 @@ impl Checkpoint {
             fase,
             huella: huella.to_string(),
             estados: Vec::new(),
+            imatrix_sha256: None,
         }
     }
 
     /// El checkpoint de una fase completada **por esta petición**, con lo que
-    /// las fases hicieron de verdad (los estados de las salidas).
-    pub fn con_estado(fase: Fase, huella: &str, estados: &[(String, Estado)]) -> Self {
+    /// las fases hicieron de verdad (los estados de las salidas y el hash del
+    /// imatrix).
+    pub fn con_estado(
+        fase: Fase,
+        huella: &str,
+        estados: &[(String, Estado)],
+        imatrix_sha256: Option<&str>,
+    ) -> Self {
         Checkpoint {
             fase,
             huella: huella.to_string(),
             estados: estados.to_vec(),
+            imatrix_sha256: imatrix_sha256.map(|h| h.to_string()),
         }
     }
 
@@ -188,11 +203,16 @@ impl Checkpoint {
             .map(|(quant, estado)| format!("{quant}:{}", estado.nombre()))
             .collect::<Vec<_>>()
             .join(", ");
+        let hash = match &self.imatrix_sha256 {
+            None => String::new(),
+            Some(hash) => format!(",\n  \"imatrix_sha256\": \"{}\"", escapa(hash)),
+        };
         format!(
-            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\",\n  \"estados\": \"{}\"\n}}\n",
+            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\",\n  \"estados\": \"{}\"{}\n}}\n",
             self.fase.nombre(),
             escapa(&self.huella),
-            escapa(&estados)
+            escapa(&estados),
+            hash
         )
     }
 
@@ -226,6 +246,9 @@ impl Checkpoint {
             fase: *fase,
             huella: valor(texto, "huella").unwrap_or_default().to_string(),
             estados,
+            imatrix_sha256: valor(texto, "imatrix_sha256")
+                .filter(|h| !h.is_empty())
+                .map(|h| h.to_string()),
         })
     }
 }
