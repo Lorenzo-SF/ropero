@@ -168,6 +168,31 @@ fn el_out_nombre_manda() {
     assert_eq!(plan.salidas[0].numero, quants::numero_de("IQ2_M").unwrap());
 }
 
+/// El work de un `--gguf` local es un directorio **propio** dentro del
+/// work root: el checkpoint y la caché del imatrix viven ahí, y el
+/// directorio del usuario no se toca.
+///
+/// (Antes había una rama muerta que ponía el work en «.», que además de
+/// noarse nunca, habría puesto el checkpoint en el directorio actual.)
+#[test]
+fn el_work_de_un_gguf_local_esta_en_el_work_root() {
+    let flags = Flags {
+        gguf: Some("/tmp/pesos/modelo.gguf".to_string()),
+        ..Flags::default()
+    };
+    let peticion = Peticion::de_flags(flags).expect("la petición es válida");
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert("GGUF_WORK_DIR".to_string(), "/cache/gguffer".to_string());
+    let env = Environment::new(vars, PathBuf::from("/home/usuario"), PathBuf::from("/cwd"));
+    let plan = Plan::de(&peticion, &env, Clase::Ninguno).expect("el plan");
+
+    let work = plan.work.to_string_lossy().into_owned();
+    assert!(work.starts_with("/cache/gguffer"), "dice {work}");
+    assert_ne!(plan.work, PathBuf::from("."));
+    // Y no es el directorio del GGUF del usuario.
+    assert_ne!(plan.work, PathBuf::from("/tmp/pesos"));
+}
+
 /// El nombre base de un modelo, según de dónde salga: es el nombre con el
 /// que se buscan los GGUFs **publicados** de ese modelo.
 #[test]
