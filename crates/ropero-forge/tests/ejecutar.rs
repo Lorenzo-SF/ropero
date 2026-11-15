@@ -596,6 +596,29 @@ fn el_informe_de_una_tirada_reanudada_no_miente() {
     );
 }
 
+/// El informe **no** afirma un quant que no está en disco: el checkpoint
+/// puede ser de otra tirada, y el GGUF que se pide puede no existir.
+#[test]
+fn el_informe_no_afirma_un_quant_que_no_esta_en_disco() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    // Un checkpoint de otra tirada, ya en la última fase.
+    let cp = tirada.base.join("work/acme__modelo/.ropero-forge.json");
+    fs::create_dir_all(cp.parent().unwrap()).expect("crear el work");
+    fs::write(&cp, "{\n  \"fase\": \"procedencia\"\n}\n").expect("escribir el checkpoint");
+
+    let informe = ejecutar::forja(&tirada.peticion(), &tirada.env).expect("la tirada");
+    assert!(
+        !informe.cuantizo,
+        "el informe afirma un quant que no está: {informe:?}"
+    );
+    let lineas = ejecutar::lineas(&informe);
+    assert!(
+        !lineas.iter().any(|l| l.contains("cuantizado a")),
+        "las líneas afirman un quant que no está: {lineas:?}"
+    );
+}
+
 /// La reanudación: tras el fallo de cuantización, la segunda tirada no
 /// vuelve a descargar ni a convertir (T-30: el checkpoint manda).
 #[test]

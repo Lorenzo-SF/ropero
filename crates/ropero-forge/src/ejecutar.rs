@@ -132,7 +132,12 @@ pub fn forja(peticion: &Peticion, env: &Environment) -> Result<Informe, Error> {
     // actualizaba si la fase se ejecutaba, y una tirada **reanudada**
     // (el checkpoint ya pasado la cuantización) decía «no se cuantizó»
     // de algo que sí se cuantizó.
+    //
+    // Se comprueba además que los GGUFs estén: el checkpoint dice que
+    // se cuantizó **aquello** que se cuantizó entonces, y el informe no
+    // puede afirmar un quant que no está en disco.
     let mut cuantizo = viab.cuantizar
+        && ya_estan_todas(&plan)
         && checkpoint.is_some_and(|cp| cp.fase.orden() >= Fase::Cuantizacion.orden());
     if siguiente.is_some_and(|f| f == Fase::Cuantizacion) {
         if let Some(imx) = peticion.imatrix.as_ref()
