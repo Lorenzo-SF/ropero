@@ -31,6 +31,8 @@ const HF_FALSO: &str = r#"#!/bin/sh
 base="${0%/*}"
 fixture="$base/../hf-repos"
 log="$base/../hf.log"
+modo=""
+if [ -f "$base/../hf-modo" ]; then modo=$(cat "$base/../hf-modo"); fi
 repo=""; dir=""; fichero=""
 prev=""
 n=0
@@ -43,6 +45,12 @@ done
 [ -n "$repo" ] && [ -n "$dir" ] || exit 2
 if [ -n "$fichero" ]; then
   mkdir -p "$(dirname "$dir/$fichero")"
+  # El modo «fantasma»: la descarga «sale bien» pero no deja el fichero
+  # (para ver qué pasa cuando el imatrix no aparece en la caché).
+  if [ "$modo" = "fantasma" ]; then
+    printf 'download %s %s -> %s\n' "$repo" "$fichero" "$dir" >> "$log"
+    exit 0
+  fi
   cp -f "$fixture/$repo/$fichero" "$dir/$fichero" || exit 1
 else
   mkdir -p "$dir"
@@ -177,6 +185,19 @@ impl Tirada {
             fs::write(dir.join("config.json"), config).expect("escribir config.json");
         }
         fs::write(dir.join("peso.safetensors"), vec![0u8; 64]).expect("escribir los pesos");
+    }
+
+    /// Un fichero suelto del fixture (el imatrix remoto, por ejemplo).
+    fn fichero_fixture(&self, repo: &str, nombre: &str, contenido: &[u8]) {
+        let dir = self.base.join("hf-repos").join(repo);
+        fs::create_dir_all(&dir).expect("crear el repo del fixture");
+        fs::write(dir.join(nombre), contenido).expect("escribir el fichero");
+    }
+
+    /// El `hf` falso, en modo «fantasma»: la descarga de un fichero suelto
+    /// «sale bien» pero no lo deja donde debía.
+    fn hf_fantasma(&self) {
+        fs::write(self.base.join("hf-modo"), "fantasma").expect("escribir el modo");
     }
 
     /// Un env sin motor (las dos variables apuntan a nada).
@@ -409,6 +430,78 @@ fn el_f16_que_es_solo_intermedio_se_borra() {
     assert!(
         !tirada.base.join("gguf/modelo-F16.gguf").exists(),
         "el intermedio se borra: nadie lo pidió"
+    );
+}
+
+/// El imatrix **remoto** (`--imatrix-repo` + `--imatrix-file`) llega al
+/// cuantizador: se baja a la caché y su ruta va en el argv, delante de
+/// los posicionales (R-GGUF-39).
+///
+/// El defecto: el fichero se bajaba a la caché y **nunca** se pasaba al
+/// cuantizador: la cuantización corría sin imatrix.
+#[test]
+fn el_imatrix_remoto_llega_al_cuantizador() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    tirada.fichero_fixture("owner/imatrix", "Q4_K_M.dat", b"imatrix de fixture");
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M"])
+        .con_imatrix_remota("owner/imatrix", "Q4_K_M.dat");
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    let args = tirada.log("quant.log");
+    assert!(
+        args.contains("--imatrix"),
+        "el cuantizador no recibió el imatrix: {args}"
+    );
+    let esperado = tirada
+        .base
+        .join("work/acme__modelo/imatrix/owner__imatrix/Q4_K_M.dat");
+    assert!(
+        args.contains(&esperado.to_string_lossy().to_string()),
+        "el cuantizador no recibió la ruta del imatrix: {args}"
+    );
+}
+
+/// Si la descarga del imatrix remoto **no deja el fichero** en la caché,
+/// la tirada falla con un error claro: **no se cuantiza sin imatrix**.
+#[test]
+fn sin_el_imatrix_remoto_no_se_cuantiza() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    tirada.fichero_fixture("owner/imatrix", "Q4_K_M.dat", b"imatrix de fixture");
+    // La descarga «sale bien», pero el fichero no aparece.
+    tirada.hf_fantasma();
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M"])
+        .con_imatrix_remota("owner/imatrix", "Q4_K_M.dat");
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let error = ejecutar::forja(&peticion, &tirada.env).expect_err("sin imatrix");
+
+    match &error {
+        Error::ImatrixNoEsta {
+            repo,
+            fichero,
+            ruta,
+        } => {
+            assert_eq!(repo, "owner/imatrix");
+            assert_eq!(fichero, "Q4_K_M.dat");
+            assert!(ruta.contains("imatrix"), "dice {ruta}");
+        }
+        otro => panic!("esperaba un ImatrixNoEsta, y salió: {otro:?}"),
+    }
+    // Y el cuantizador no se llamó: no se cuantiza a ciegas.
+    assert!(
+        tirada.log("quant.log").trim().is_empty(),
+        "el cuantizador no debe llamarse sin imatrix"
+    );
+    // El error dice **qué hacer**.
+    assert!(
+        error.to_string().contains("imatrix"),
+        "el error nombra el imatrix: {error}"
     );
 }
 

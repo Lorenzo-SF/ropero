@@ -173,6 +173,16 @@ pub enum Error {
         /// Los quants que la necesitan.
         faltan: Vec<String>,
     },
+    /// El imatrix remoto **no está** donde tenía que estar: la descarga
+    /// no lo dejó en la caché. No se cuantiza sin imatrix.
+    ImatrixNoEsta {
+        /// El repo de donde se iba a bajar.
+        repo: String,
+        /// El fichero que se pidió.
+        fichero: String,
+        /// Dónde se buscó (la ruta de la caché).
+        ruta: String,
+    },
     /// Falló la conversión a GGUF.
     Conversion {
         /// La cola del log del conversor: el último error, tal cual.
@@ -252,6 +262,10 @@ impl Error {
                  --imatrix-repo REPO --imatrix-file FICHERO   (a bajarlo de ahí)"
                     .to_string(),
             ),
+            Error::ImatrixNoEsta { repo, fichero, .. } => Some(format!(
+                "el imatrix no se pudo bajar de {repo}: comprueba que {fichero} existe en ese \
+                 repo, o bájalo a mano y pásalo con --imatrix FICHERO"
+            )),
             // R-GGUF-16: el error dice **cómo se reintenta sólo la fase
             // cara** (y la traducción del error de imatrix, R-GGUF-14).
             Error::Conversion { reintento, .. } => Some(format!(
@@ -307,6 +321,14 @@ impl fmt::Display for Error {
                 f,
                 "vas a cuantizar a {} y no hay imatrix",
                 faltan.join(", ")
+            ),
+            Error::ImatrixNoEsta {
+                repo,
+                fichero,
+                ruta,
+            } => write!(
+                f,
+                "el imatrix no está: {repo}/{fichero} (se buscó en {ruta})"
             ),
             Error::Conversion { .. } => write!(f, "falló la conversión a GGUF"),
             Error::Cuantizacion { quant, .. } => write!(f, "falló la cuantización a {quant}"),
