@@ -1,6 +1,6 @@
 //! Las seis fases y el **checkpoint** (R-GGUF-15, T-30).
 
-use ropero_forge::fases::{Checkpoint, Fase};
+use ropero_forge::fases::{Checkpoint, Estado, Fase};
 
 /// Las seis fases, **en orden fijo** (R-GGUF-15).
 #[test]
@@ -97,4 +97,45 @@ fn el_checkpoint_de_la_conversion_reanuda_en_la_cuantizacion() {
         .siguiente()
         .expect("la cuantización");
     assert_eq!(checkpoint, Fase::Cuantizacion);
+}
+
+/// El checkpoint guarda el **estado** de cada salida (R-GGUF-20).
+///
+/// El estado es lo que permite que una tirada reanudada diga la verdad en
+/// el sidecar: si el cuantizador corrió en una tirada anterior, el sidecar
+/// lo dice (y si lo que corrió fue el conversor, también).
+#[test]
+fn el_checkpoint_guarda_los_estados_de_cada_salida() {
+    let escrito = Checkpoint::con_estado(
+        Fase::Cuantizacion,
+        "0123456789abcdef",
+        &[
+            ("Q4_K_M".to_string(), Estado::Cuantizado),
+            ("F16".to_string(), Estado::Convertido),
+        ],
+    );
+    let json = escrito.clone().a_json();
+    assert!(json.contains("\"estados\""), "dice {json}");
+
+    let leido = Checkpoint::de_json(&json).expect("se lee");
+    assert_eq!(leido, escrito, "el estado se perdió en el round-trip");
+    assert_eq!(leido.estados.len(), 2, "los estados no se leen");
+}
+
+/// Un checkpoint del formato **viejo** (que sólo dice los quants
+/// cuantizados) se lee: lo que no se sabe, no se inventa.
+#[test]
+fn un_checkpoint_del_formato_viejo_no_inventa_estados() {
+    let viejo = Checkpoint::de_json(
+        "{\n  \"fase\": \"cuantizacion\",\n  \"cuantizados\": \"Q4_K_M, IQ2_M\"\n}\n",
+    )
+    .expect("se lee");
+    assert_eq!(
+        viejo.estados,
+        vec![
+            ("Q4_K_M".to_string(), Estado::Cuantizado),
+            ("IQ2_M".to_string(), Estado::Cuantizado),
+        ],
+        "el checkpoint viejo dice sólo lo que cuantizó"
+    );
 }

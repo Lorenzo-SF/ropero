@@ -520,6 +520,55 @@ fn el_f16_pedido_como_salida_sobrevive_a_la_limpieza() {
     assert!(tirada.base.join("gguf/modelo-Q4_K_M.gguf").is_file());
 }
 
+/// El sidecar nombra el **estado real** de cada salida (hallazgo 2).
+///
+/// El defecto: con `--quant Q4_K_M --quant F16` el F16 lo acaba de
+/// **convertir** el conversor en esa misma tirada, y el sidecar decía
+/// «ropero gguffer (el GGUF ya estaba: no se cuantizó)»: la parte «no se
+/// cuantizó» es cierta, pero «ya estaba» es **mentira** (R-GGUF-20).
+#[test]
+fn el_sidecar_nombra_el_estado_real_de_cada_salida() {
+    let tirada = Tirada::nueva().con_dobles();
+    tirada.repo("acme/modelo", "");
+    let flags = Flags::default()
+        .con_repo("acme/modelo")
+        .con_quants(&["Q4_K_M", "F16"])
+        .con_imatrix(&tirada.imatrix());
+    let peticion = Peticion::de_flags(flags).expect("la petición");
+    let informe = ejecutar::forja(&peticion, &tirada.env).expect("la tirada");
+
+    // El F16: lo generó el conversor en esta misma tirada.
+    let f16 = tirada.base.join("gguf/modelo-F16.gguf");
+    let sidecar = fs::read_to_string(Procedencia::ruta(&f16)).expect("el sidecar del F16");
+    assert!(
+        sidecar.contains("convertido"),
+        "el sidecar no dice que se convirtió: {sidecar}"
+    );
+    assert!(
+        !sidecar.contains("ya estaba"),
+        "el sidecar miente: el F16 lo acaba de convertir el conversor: {sidecar}"
+    );
+
+    // El Q4_K_M: pasó por el cuantizador (y eso es lo que dice).
+    let q4 = tirada.base.join("gguf/modelo-Q4_K_M.gguf");
+    let sidecar = fs::read_to_string(Procedencia::ruta(&q4)).expect("el sidecar del Q4_K_M");
+    assert!(
+        sidecar.contains("llama-quantize"),
+        "el sidecar no dice que se cuantizó: {sidecar}"
+    );
+
+    // Y el informe nombra el estado real de cada salida (R-GGUF-20).
+    let lineas = ejecutar::lineas(&informe);
+    assert!(
+        lineas.iter().any(|l| l.contains("convertido a GGUF: F16")),
+        "el informe no dice que se convirtió: {lineas:?}"
+    );
+    assert!(
+        lineas.iter().any(|l| l.contains("cuantizado a Q4_K_M")),
+        "el informe no dice que se cuantizó: {lineas:?}"
+    );
+}
+
 /// El F16 que es **sólo** el intermedio (nadie lo pidió) sí se borra:
 /// R-GGUF-18 dice que el intermedio se borra cuando ya no lo necesita
 /// nadie. Esta es la contramutación del test anterior.

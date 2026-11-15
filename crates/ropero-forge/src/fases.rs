@@ -74,8 +74,50 @@ impl Fase {
     }
 }
 
+/// El estado de una salida: lo que pasó con ella (R-GGUF-20).
+///
+/// Lo guarda el checkpoint para que una tirada reanudada pueda decir la
+/// verdad en el sidecar: si el cuantizador corrió en una tirada anterior,
+/// el sidecar lo dice (y si lo que corrió fue el conversor, también).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Estado {
+    /// Lo generó el **conversor** (la fase 2): los pesos se convirtieron a
+    /// GGUF, y no hubo cuantización.
+    Convertido,
+    /// Pasó por el **cuantizador** (la fase 3).
+    Cuantizado,
+    /// Se **colocó** tal cual: el GGUF de origen ya estaba en ese quant y
+    /// se copió (no hubo cuantización).
+    Colocado,
+    /// La salida **ya existía** y no se rehizo.
+    YaExistia,
+}
+
+impl Estado {
+    /// Su nombre, tal y como va en el checkpoint.
+    pub fn nombre(self) -> &'static str {
+        match self {
+            Estado::Convertido => "convertido",
+            Estado::Cuantizado => "cuantizado",
+            Estado::Colocado => "colocado",
+            Estado::YaExistia => "ya_existia",
+        }
+    }
+
+    /// El estado por su nombre (el del checkpoint).
+    pub fn de_nombre(nombre: &str) -> Option<Estado> {
+        match nombre {
+            "convertido" => Some(Estado::Convertido),
+            "cuantizado" => Some(Estado::Cuantizado),
+            "colocado" => Some(Estado::Colocado),
+            "ya_existia" => Some(Estado::YaExistia),
+            _ => None,
+        }
+    }
+}
+
 /// El checkpoint de una tirada: la **última fase completada**, **de qué
-/// petición** es y **qué cuantizó** la fase 3.
+/// petición** es, **qué se hizo con cada salida** y **el hash del imatrix**.
 ///
 /// Al reanudar, la tirada empieza por la fase siguiente a la guardada.
 /// Un checkpoint que dice `Conversion` significa: la fuente y la
@@ -88,7 +130,7 @@ impl Fase {
 /// ([`crate::peticion::Peticion::huella`]), no su texto: el JSON no se
 /// rompe con las barras o comillas de una ruta.
 ///
-/// Los **quants cuantizados** son lo que la fase 3 hizo de verdad: sin ellos,
+/// Los **estados** son lo que las fases 2 y 3 hicieron de verdad: sin ellos,
 /// una tirada reanudada diría «no se cuantizó» de algo que sí se cuantizó, y
 /// una tirada cuyas salidas ya estaban diría «se cuantizó» sin que el
 /// cuantizador llegara a correr (R-GGUF-20: no mentir sobre el resultado).
@@ -98,8 +140,8 @@ pub struct Checkpoint {
     pub fase: Fase,
     /// La huella de la petición que completó esa fase (vacía si no se sabe).
     pub huella: String,
-    /// Los quants que la fase 3 **cuantizó** de verdad.
-    pub cuantizados: Vec<String>,
+    /// El estado de cada salida, por quant.
+    pub estados: Vec<(String, Estado)>,
 }
 
 impl Checkpoint {
@@ -109,7 +151,7 @@ impl Checkpoint {
         Checkpoint {
             fase,
             huella: String::new(),
-            cuantizados: Vec::new(),
+            estados: Vec::new(),
         }
     }
 
@@ -118,17 +160,17 @@ impl Checkpoint {
         Checkpoint {
             fase,
             huella: huella.to_string(),
-            cuantizados: Vec::new(),
+            estados: Vec::new(),
         }
     }
 
     /// El checkpoint de una fase completada **por esta petición**, con lo que
-    /// la fase 3 cuantizó de verdad.
-    pub fn con_cuantizados(fase: Fase, huella: &str, cuantizados: &[String]) -> Self {
+    /// las fases hicieron de verdad (los estados de las salidas).
+    pub fn con_estado(fase: Fase, huella: &str, estados: &[(String, Estado)]) -> Self {
         Checkpoint {
             fase,
             huella: huella.to_string(),
-            cuantizados: cuantizados.to_vec(),
+            estados: estados.to_vec(),
         }
     }
 
@@ -140,11 +182,17 @@ impl Checkpoint {
     /// El **estado** del checkpoint, tal y como va al fichero (JSON
     /// mínimo, escrito a mano como el sidecar de procedencia).
     pub fn a_json(self) -> String {
+        let estados = self
+            .estados
+            .iter()
+            .map(|(quant, estado)| format!("{quant}:{}", estado.nombre()))
+            .collect::<Vec<_>>()
+            .join(", ");
         format!(
-            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\",\n  \"cuantizados\": \"{}\"\n}}\n",
+            "{{\n  \"fase\": \"{}\",\n  \"huella\": \"{}\",\n  \"estados\": \"{}\"\n}}\n",
             self.fase.nombre(),
             escapa(&self.huella),
-            escapa(&self.cuantizados.join(", "))
+            escapa(&estados)
         )
     }
 
@@ -154,24 +202,51 @@ impl Checkpoint {
     /// **no es un checkpoint**: la tirada empieza de cero (y eso es lo
     /// seguro: reanudar con un estado medio entendido borra o salta cosas
     /// que no toca). La huella es opcional: un checkpoint del formato viejo
-    /// se lee con huella vacía, y `es_de` dice que no es de nadie. Los quants
-    /// cuantizados también: un checkpoint viejo no dice cuáles, y no se
-    /// inventan.
+    /// se lee con huella vacía, y `es_de` dice que no es de nadie. Los
+    /// estados también: un checkpoint viejo dice cuáles se cuantizaron (y
+    /// nada más), y no se inventa lo que no está.
     pub fn de_json(texto: &str) -> Option<Self> {
         let fase = valor(texto, "fase")?;
         let fase = Fase::TODAS.iter().find(|f| f.nombre() == fase)?;
-        let cuantizados = valor(texto, "cuantizados")
-            .unwrap_or_default()
-            .split(',')
-            .map(|q| q.trim().to_string())
-            .filter(|q| !q.is_empty())
-            .collect();
+        let estados = estados_de(valor(texto, "estados").unwrap_or_default());
+        // Un checkpoint del formato viejo: dice cuáles se cuantizaron, y
+        // nada más (lo que no se sabe, no se inventa).
+        let estados = if estados.is_empty() {
+            valor(texto, "cuantizados")
+                .unwrap_or_default()
+                .split(',')
+                .map(|q| q.trim())
+                .filter(|q| !q.is_empty())
+                .map(|q| (q.to_string(), Estado::Cuantizado))
+                .collect()
+        } else {
+            estados
+        };
         Some(Checkpoint {
             fase: *fase,
             huella: valor(texto, "huella").unwrap_or_default().to_string(),
-            cuantizados,
+            estados,
         })
     }
+}
+
+/// Los estados de un checkpoint: «Q4_K_M:cuantizado, F16:convertido».
+///
+/// Lo que no se entiende se salta: un checkpoint con rubbish se lee lo que
+/// se puede, y lo demás no está.
+fn estados_de(texto: &str) -> Vec<(String, Estado)> {
+    texto
+        .split(',')
+        .filter_map(|par| {
+            let (quant, nombre) = par.split_once(':')?;
+            let quant = quant.trim();
+            if quant.is_empty() {
+                return None;
+            }
+            let estado = Estado::de_nombre(nombre.trim())?;
+            Some((quant.to_string(), estado))
+        })
+        .collect()
 }
 
 /// El valor de una clave de un JSON plano de un nivel (el checkpoint se
