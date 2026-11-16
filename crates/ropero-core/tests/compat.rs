@@ -26,6 +26,8 @@ fn manifiesto(con_reglas: Vec<CompatRule>) -> EngineManifest {
             binaries: vec!["x".to_string()],
             paths: vec!["/x".to_string()],
         },
+        serve: None,
+        install: None,
         compat: con_reglas,
     }
 }

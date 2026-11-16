@@ -25,6 +25,10 @@ use ropero_core::install::{self, Decision, Token, Via};
 
 /// `ropero install [<nada>|engines|models]`.
 pub fn run(sub: &ArgMatches) -> i32 {
+    let force = sub.get_flag("force");
+    if force && sub.get_one::<String>("que").map(String::as_str) == Some("models") {
+        return uso("'--force' sólo se admite con 'ropero install engines'");
+    }
     let Ok(s) = crate::discovery::scan() else {
         return 1;
     };
@@ -36,7 +40,7 @@ pub fn run(sub: &ArgMatches) -> i32 {
             if tokens.iter().any(|t| matches!(t, Token::Prio(_))) {
                 return uso(&install::prio_solo_para_models());
             }
-            engines(&s, &tokens)
+            engines(&s, &tokens, force)
         }
         Some("models") => models(&s, &tokens),
         Some(otro) => uso(&format!(
@@ -44,7 +48,7 @@ pub fn run(sub: &ArgMatches) -> i32 {
         )),
         None => {
             // `ropero install` a secas: engines y luego models (doc CLI v2 §9).
-            let codigo = engines(&s, &tokens);
+            let codigo = engines(&s, &tokens, force);
             if codigo != 0 {
                 return codigo;
             }
@@ -54,12 +58,12 @@ pub fn run(sub: &ArgMatches) -> i32 {
 }
 
 /// `ropero install engines [<lista>]`.
-fn engines(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
+fn engines(s: &crate::discovery::Scan, tokens: &[Token], force: bool) -> i32 {
     let sistema = ropero_runtime::capture_system_info();
     let filas = ropero_core::engine_rows(&s.engines, &sistema, true);
     let lista = install::nombres_de(tokens);
     let eleccion = if lista.is_empty() {
-        match elegir_motores(&filas) {
+        match elegir_motores(&filas, &s.env) {
             Ok(elegidos) => elegidos,
             Err(codigo) => return codigo,
         }
@@ -74,7 +78,7 @@ fn engines(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
         ropero_core::err_line(&format!("aviso: {aviso}"));
     }
     for fila in elegidos.instalar {
-        let codigo = enlaza_motor(&fila.manifest, &s.env);
+        let codigo = enlaza_motor(&fila.manifest, &s.env, force);
         if codigo != 0 {
             return codigo;
         }
@@ -82,9 +86,13 @@ fn engines(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
     0
 }
 
-/// Instala un motor: sólo crea el **enlace** (R-INST-1).
-fn enlaza_motor(manifest: &ropero_core::EngineManifest, env: &ropero_core::Environment) -> i32 {
-    match ropero_runtime::install::instala_motor(manifest, env) {
+/// Compila el motor si su manifiesto declara receta y finalmente crea el enlace.
+fn enlaza_motor(
+    manifest: &ropero_core::EngineManifest,
+    env: &ropero_core::Environment,
+    force: bool,
+) -> i32 {
+    match ropero_runtime::install::instala_motor(manifest, env, force) {
         Ok(estado) => {
             let (mensaje, codigo) = install::mensaje_motor(manifest.id.as_str(), &estado);
             if codigo == 0 {
@@ -102,7 +110,7 @@ fn enlaza_motor(manifest: &ropero_core::EngineManifest, env: &ropero_core::Envir
 }
 
 /// El menú de motores: sin terminal es un **error de uso** (R-INST-26).
-fn elegir_motores(filas: &[EngineRow]) -> Result<Vec<String>, i32> {
+fn elegir_motores(filas: &[EngineRow], env: &ropero_core::Environment) -> Result<Vec<String>, i32> {
     if !ropero_runtime::install::hay_tty() {
         return Err(uso(&install::falta_tty_engines()));
     }
@@ -111,7 +119,7 @@ fn elegir_motores(filas: &[EngineRow]) -> Result<Vec<String>, i32> {
         .filter(|f| f.compatible)
         .map(|f| install::MotorDelMenu {
             manifest: &f.manifest,
-            instalado: ropero_runtime::engine_installed(&f.manifest),
+            instalado: ropero_runtime::engine_installed_with_env(&f.manifest, env),
         })
         .collect();
     let menu = install::menu_engines(&compatibles, &Palette::color());
@@ -153,6 +161,42 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
         // Un `--prio` ignorado **se avisa** y no aborta (doc B §4.10.7).
         if let Some(aviso) = &elegido.aviso {
             ropero_core::err_line(aviso);
+        }
+        let engine_manifest = s.engines.iter().find(|m| m.id == elegido.spec.model.engine);
+        if elegido.spec.model.format == ropero_core::ModelFormat::Ninfer
+            && elegido.spec.model.engine == ropero_core::EngineId::Ignis
+        {
+            let Some(manifest) = engine_manifest else {
+                ropero_core::err_line("error: falta el manifiesto de Ignis");
+                codigo = 1;
+                continue;
+            };
+            match ropero_runtime::ignis::pull_model(manifest, elegido.spec, &s.env) {
+                Ok(0) => {
+                    ropero_core::out_line(&format!("{}: descargado con Ignis", elegido.nombre));
+                }
+                Ok(status) => {
+                    ropero_core::err_line(&format!(
+                        "error: '{}' no se pudo descargar con Ignis (código {status})",
+                        elegido.nombre
+                    ));
+                    codigo = 1;
+                }
+                Err(error) => {
+                    ropero_core::err_line(&format!("error: {error}"));
+                    codigo = 1;
+                }
+            }
+            continue;
+        }
+        let flm_delegado = ropero_core::flm::is_flm_model(elegido.spec)
+            && engine_manifest.is_some_and(ropero_runtime::flm::delegated);
+        if flm_delegado {
+            let manifest = engine_manifest.expect("comprobado");
+            if baja_modelo_flm(&elegido.nombre, elegido.spec, manifest) != 0 {
+                codigo = 1;
+            }
+            continue;
         }
         let via = match install::elegir_via(elegido.spec, elegido.prio) {
             Ok(Decision::Via(via)) => via,
@@ -222,6 +266,45 @@ fn informa_error(nombre: &str, e: &ropero_download::Error) -> i32 {
     1
 }
 
+/// Instala un modelo FLM delegando en el almacén del motor (`flm pull <tag>`).
+fn baja_modelo_flm(
+    nombre: &str,
+    spec: &ropero_core::ModelSpec,
+    manifest: &ropero_core::EngineManifest,
+) -> i32 {
+    match ropero_runtime::flm::pull_model(manifest, spec) {
+        Ok(resultados) => {
+            let mut ok = true;
+            for res in &resultados {
+                if !res.stdout.is_empty() {
+                    ropero_core::out(&res.stdout, false);
+                }
+                if !res.stderr.is_empty() {
+                    ropero_core::err_line(res.stderr.trim_end());
+                }
+                if !res.ok() {
+                    ropero_core::err_line(&format!(
+                        "error: '{nombre}' no se pudo instalar con FLM (código {})",
+                        res.status
+                    ));
+                    ok = false;
+                }
+            }
+            if ok {
+                let tags = ropero_runtime::flm::tags(spec).join(", ");
+                ropero_core::out_line(&format!("{nombre}: instalado con FLM ({tags})"));
+                0
+            } else {
+                1
+            }
+        }
+        Err(e) => {
+            ropero_core::err_line(&format!("error: {e}"));
+            1
+        }
+    }
+}
+
 /// El menú de modelos: sólo los de los motores **instalados** (T-25).
 fn elegir_modelos(s: &crate::discovery::Scan) -> Result<Vec<String>, i32> {
     if !ropero_runtime::install::hay_tty() {
@@ -232,7 +315,7 @@ fn elegir_modelos(s: &crate::discovery::Scan) -> Result<Vec<String>, i32> {
         .iter()
         .map(|manifest| install::MotorDelMenu {
             manifest,
-            instalado: ropero_runtime::engine_installed(manifest),
+            instalado: ropero_runtime::engine_installed_with_env(manifest, &s.env),
         })
         .collect();
     let menu = install::menu_modelos(&s.catalog, &motores, &Palette::color());

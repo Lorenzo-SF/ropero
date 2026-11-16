@@ -1,29 +1,40 @@
 // ropero-runtime: procesos, puertos y estado en disco.
 
 mod catalog_scan;
+pub mod colorize;
+pub mod config_bootstrap;
 pub mod device;
+pub mod flm;
 pub mod foreground;
+pub mod ignis;
 pub mod inferencia;
 pub mod install;
 pub mod launch;
 mod machine;
 pub mod probe;
 pub mod process;
+pub mod remove;
 pub mod run;
 pub mod state;
 pub mod stop;
 mod sys_engine;
 pub mod sysinfo;
+pub mod usage;
 
 pub use catalog_scan::*;
+pub use colorize::*;
+pub use config_bootstrap::*;
 pub use device::*;
+pub use flm::*;
 pub use foreground::*;
 pub use launch::*;
 pub use machine::*;
 pub use probe::*;
 pub use process::*;
+pub use remove::*;
 pub use run::*;
 pub use state::*;
 pub use stop::*;
 pub use sys_engine::*;
 pub use sysinfo::*;
+pub use usage::*;

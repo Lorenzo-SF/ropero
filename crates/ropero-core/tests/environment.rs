@@ -148,10 +148,11 @@ fn env_path_sin_variable_quita_el_tilde_y_la_diagonal() {
         env.env_path("GGUF_DIR", "~/models/gguf"),
         PathBuf::from("/home/usuario/models/gguf")
     );
-    // Lo que **no** empieza por `~/` también cuelga del `$HOME`.
+    // `LOG_DIR` es una ruta gobernada por la configuración: su defecto es
+    // `<config>/logs`, no `~/.logs/ropero` ni `~/logs`.
     assert_eq!(
         env.env_path("LOG_DIR", "logs"),
-        PathBuf::from("/home/usuario/logs")
+        PathBuf::from("/home/usuario/.config/ropero/logs")
     );
 }
 

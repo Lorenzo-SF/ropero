@@ -749,6 +749,13 @@ pub fn aviso_prio_ignorado(modelo: &str, ignorado: &Ignorado) -> String {
 /// Lo que pasó al instalar un motor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EstadoMotor {
+    /// La receta compiló y se regeneraron los enlaces en `$BIN_DIR`.
+    Actualizado {
+        /// El binario instalado por la receta.
+        origen: PathBuf,
+        /// El enlace principal regenerado.
+        destino: PathBuf,
+    },
     /// Ya estaba enlazado en `$BIN_DIR`: **no se toca nada**.
     YaEnlazado(PathBuf),
     /// Se acaba de crear el enlace.
@@ -770,6 +777,10 @@ pub enum EstadoMotor {
 /// cuando no (1).
 pub fn mensaje_motor(motor: &str, estado: &EstadoMotor) -> (String, i32) {
     match estado {
+        EstadoMotor::Actualizado { origen, destino } => (
+            motor_actualizado(motor, &origen.to_string_lossy(), &destino.to_string_lossy()),
+            0,
+        ),
         EstadoMotor::YaEnlazado(destino) => {
             (motor_ya_enlazado(motor, &destino.to_string_lossy()), 0)
         }
@@ -782,6 +793,11 @@ pub fn mensaje_motor(motor: &str, estado: &EstadoMotor) -> (String, i32) {
     }
 }
 
+/// El motor se compiló/reinstaló y sus enlaces se regeneraron.
+pub fn motor_actualizado(motor: &str, origen: &str, destino: &str) -> String {
+    format!("{motor}: compilación actualizada · symlinks regenerados · {destino} → {origen}")
+}
+
 /// El mensaje de un motor que **ya estaba enlazado**.
 pub fn motor_ya_enlazado(motor: &str, destino: &str) -> String {
     format!("{motor}: ya está enlazado en {destino} (no se toca nada)")
@@ -792,16 +808,10 @@ pub fn motor_enlazado(motor: &str, origen: &str, destino: &str) -> String {
     format!("{motor}: enlace creado · {destino} → {origen}")
 }
 
-/// El mensaje de un motor cuyo **binario no se encuentra**.
-///
-/// El mensaje dice **qué hacer** (P-13): el instalador sólo crea enlaces,
-/// así que el binario lo pone el instalador del motor.
+/// El mensaje de un motor cuyo **binario no se encuentra** ni tiene receta de build.
 pub fn motor_sin_binario(motor: &str) -> String {
     format!(
-        "no encuentro el binario de '{motor}': ni en el PATH, ni en el directorio de \
-         binarios, ni en las rutas declaradas\n  \
-         (instálalo con el instalador de su motor y vuelve a intentarlo: \
-         ropero install engines sólo crea enlaces)"
+        "no encuentro el binario de '{motor}' y su manifiesto no declara una receta de compilación; instala sus dependencias y configura install.source en el manifiesto"
     )
 }
 

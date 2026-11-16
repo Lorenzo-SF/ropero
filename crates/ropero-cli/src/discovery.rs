@@ -16,36 +16,55 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use ropero_core::config::{Config, EstadoConfig};
 use ropero_core::{Catalog, EngineManifest, Environment, ModelSpec, Snapshot};
 
 /// El escaneo del catálogo, con el entorno ya capturado.
 pub struct Scan {
-    /// El catálogo de modelos.
     pub catalog: Catalog,
-    /// Los problemas del escaneo (acumulados, no abortan).
     pub problems: Vec<String>,
-    /// Cuántos ficheros TOML se leyeron.
     pub files: usize,
-    /// El directorio de modelos.
     pub base: PathBuf,
-    /// La raíz del catálogo.
     pub root: PathBuf,
-    /// Los textos leídos, por ruta.
     pub texts: BTreeMap<PathBuf, String>,
-    /// El entorno del proceso, ya capturado.
     pub env: Environment,
-    /// Los manifiestos de motor leídos de `engines/`.
     pub engines: Vec<EngineManifest>,
+    pub estado_config: EstadoConfig,
+    pub config: Config,
 }
 
 /// Escanea el catálogo y devuelve la foto.
 ///
-/// Los avisos del parseo se avisan por stderr: no son errores, así que no
-/// cambian el código de salida.
+/// La configuración ilegible (parseo/lectura) es un error explícito: nunca se
+/// oculta con una configuración efectiva de reemplazo.
 pub fn scan() -> Result<Scan, i32> {
     let env = capture_environment();
-    let root = ropero_runtime::find_root(&env, &ropero_runtime::exe_ancestors()).map_err(fail)?;
-    let leido = ropero_runtime::scan(&root).map_err(fail)?;
+    let (estado_config, config, env) = ropero_runtime::prepara_config(&env).map_err(fail)?;
+    let scan = scan_with_config(env, estado_config, config)?;
+    if let Some(error) = &scan.estado_config.error {
+        return Err(fail(format!("configuración inválida: {error}")));
+    }
+    Ok(scan)
+}
+
+/// Escanea tolerando configuración ilegible, para comandos que deben reportarla
+/// (`config`, `doctor`).
+pub fn scan_tolerant() -> Result<Scan, i32> {
+    let env = capture_environment();
+    let (estado_config, config, env) = ropero_runtime::carga_config(&env).map_err(fail)?;
+    scan_with_config(env, estado_config, config)
+}
+
+fn scan_with_config(
+    env: Environment,
+    mut estado_config: EstadoConfig,
+    config: Config,
+) -> Result<Scan, i32> {
+    let root = ropero_runtime::resolve_catalog_root(&env, &config).map_err(fail)?;
+    let leido = ropero_runtime::scan(&root, &env).map_err(fail)?;
+    if estado_config.error.is_none() {
+        estado_config.error = leido.config_error.clone();
+    }
     for aviso in &leido.notices {
         ropero_core::err_line(aviso);
     }
@@ -61,6 +80,8 @@ pub fn scan() -> Result<Scan, i32> {
         texts: leido.texts,
         env,
         engines: leido.engines,
+        estado_config,
+        config,
     })
 }
 
@@ -84,7 +105,10 @@ fn fail(e: impl std::fmt::Display) -> i32 {
 /// - Un **motor** está instalado si su `detect` lo encuentra.
 /// - Un **modelo** está descargado si sus ficheros `[files]` existen.
 pub fn snapshot(scan: &Scan) -> Snapshot {
-    let detector = ropero_runtime::Detector { env: &scan.env };
+    let detector = ropero_runtime::Detector {
+        env: &scan.env,
+        engines: &scan.engines,
+    };
     let modelos: Vec<ModelSpec> = scan
         .catalog
         .models

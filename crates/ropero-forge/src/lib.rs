@@ -80,19 +80,25 @@ pub use toolchain::{Motor, Toolchain};
 /// La CLI los imprime y traduce el error a su código de salida: aquí no
 /// se decide nada (R-ARQ-1).
 pub fn gguffer(flags: peticion::Flags, env: &ropero_core::Environment) -> Reporte {
+    let mut entorno = env.clone();
+    if flags.turbo_llama {
+        entorno
+            .vars
+            .insert("ROPERO_GGUFFER_ENGINE".into(), "turbo-llama".into());
+    }
     if flags.list_quants || flags.diagnostico {
         if let Err(error) = peticion::valida_consulta(&flags) {
             return Reporte::error(error);
         }
         return if flags.list_quants {
-            listado::listar(env, &flags)
+            listado::listar(&entorno, &flags)
         } else {
-            toolchain::diagnostico(env)
+            toolchain::diagnostico(&entorno)
         };
     }
     match peticion::Peticion::de_flags(flags) {
         Err(error) => Reporte::error(error),
-        Ok(peticion) => match ejecutar::forja(&peticion, env) {
+        Ok(peticion) => match ejecutar::forja(&peticion, &entorno) {
             Ok(informe) => Reporte::nuevo(ejecutar::lineas(&informe)),
             Err(error) => Reporte::error(error),
         },

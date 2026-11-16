@@ -1,6 +1,6 @@
 # Manifiesto del motor `turbo-llama` (doc B §4.3).
 #
-# Es el **fork privado** del dueño (turboquant). Antes de ADR-004 este motor
+# Es el fork del dueño (turboquant), publicado en GitHub. Antes de ADR-004 este motor
 # se llamaba `llama-server`, y el oficial `llama-server-official`: el
 # renombrado invierte los dos nombres para que `llama-server` sea el oficial.
 #
@@ -10,7 +10,7 @@
 id = "turbo-llama"
 label = "turbo-llama (fork)"
 color = "amarillo"
-description = "llama.cpp (fork privado del dueño, turboquant)"
+description = "llama.cpp (fork del dueño, turboquant)"
 
 # R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
 maturity = "proven"
@@ -19,8 +19,8 @@ maturity = "proven"
 formats = ["gguf"]
 
 # El rango de puertos propio (doc CLI v2 §5.1).
-port_min = 8200
-port_max = 8299
+port_min = 9990
+port_max = 9999
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["git", "cmake", "ninja", "curl", "cc"]
@@ -37,5 +37,13 @@ compat = [
 
 # Cómo se sabe que está instalado.
 [detect]
-binaries = ["llama-server"]
-paths = ["/usr/local/bin/llama-server", "/opt/homebrew/bin/llama-server"]
+binaries = ["turbo-llama-server"]
+paths = ["/usr/local/bin/turbo-llama-server", "/opt/homebrew/bin/turbo-llama-server"]
+
+[install]
+# Comparte la receta de compilación multiplataforma de llama-server oficial.
+# Los binarios instalados reciben el prefijo turbo- para distinguirlos.
+source = "https://github.com/lorenzo-sf/turbo-llama.git"
+source_dir = "~/.local/share/ropero/engines/turbo-llama"
+binary = "bin/llama-server"
+cmake_args = ["-DGGML_NATIVE=ON", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TESTS=OFF"]

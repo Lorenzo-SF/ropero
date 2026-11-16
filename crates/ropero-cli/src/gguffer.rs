@@ -56,6 +56,7 @@ fn flags_de(sub: &ArgMatches) -> Flags {
             .unwrap_or_default()
     };
     Flags {
+        turbo_llama: sub.get_flag("turbo-llama"),
         repo: valor("repo"),
         path: valor("path"),
         gguf: valor("gguf"),

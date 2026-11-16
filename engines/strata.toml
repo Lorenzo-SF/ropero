@@ -23,8 +23,8 @@ formats = ["gguf", "strata-pack"]
 # El rango de puertos propio (doc CLI v2 §5.1). Incluye el 9999 que usan
 # por defecto los scripts de referencia, para que un motor lanzado por ropero
 # y otro lanzado a mano no se pisen.
-port_min = 9900
-port_max = 9999
+port_min = 9920
+port_max = 9929
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["curl", "python3"]

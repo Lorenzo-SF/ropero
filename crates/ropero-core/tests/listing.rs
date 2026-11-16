@@ -36,6 +36,8 @@ fn motor(id: EngineId, color: EngineColor, instalado: bool, puerto: u16) -> Engi
             port_range: PortRange::new(puerto, puerto + 99),
             deps: Vec::new(),
             detect: DetectSpec::default(),
+            serve: None,
+            install: None,
             compat: Vec::new(),
         },
     }

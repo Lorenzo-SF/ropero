@@ -12,6 +12,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use crate::EngineId;
+use crate::config::{Config, Ruta};
+
 /// El entorno del proceso, ya capturado.
 ///
 /// Es el parámetro que sustituye a la E/S en el dominio: lo que antes se
@@ -24,6 +27,8 @@ pub struct Environment {
     pub home: PathBuf,
     /// El directorio de trabajo del proceso.
     pub cwd: PathBuf,
+    /// La configuración resuelta, si ya se cargó.
+    pub config: Option<Config>,
 }
 
 impl Environment {
@@ -38,7 +43,14 @@ impl Environment {
             vars,
             home: home.into(),
             cwd: cwd.into(),
+            config: None,
         }
+    }
+
+    /// Asocia la configuración resuelta a este entorno.
+    pub fn with_config(mut self, config: Config) -> Self {
+        self.config = Some(config);
+        self
     }
 
     /// El valor de una variable de entorno, si está definida.
@@ -64,7 +76,21 @@ impl Environment {
 
     /// Ruta de una variable de entorno, con valor por defecto relativo a
     /// `$HOME`.
+    ///
+    /// Si hay configuración resuelta y la variable es una de las rutas que
+    /// la configuración gobierna, se usa el valor final de la configuración
+    /// (env > archivo > defecto). Sin configuración cargada, se aplican las
+    /// variables sobre los valores por defecto del sistema de configuración.
     pub fn env_path(&self, var: &str, default_rel: &str) -> PathBuf {
+        if let Some(config) = &self.config
+            && let Some(ruta) = config.ruta_de_var(var)
+        {
+            return ruta.valor.clone();
+        }
+        let inicial = crate::config::config_inicial(&self.vars, &self.home, &self.cwd);
+        if let Some(ruta) = inicial.ruta_de_var(var) {
+            return ruta.valor.clone();
+        }
         let raw = match self.vars.get(var) {
             Some(v) => v.clone(),
             None => format!(
@@ -74,6 +100,30 @@ impl Environment {
             ),
         };
         self.expand_path(&raw)
+    }
+
+    /// Ruta de artefactos para un engine, respetando los overrides globales
+    /// de entorno por encima de la configuración específica del engine.
+    pub fn engine_artifact_path(&self, engine: EngineId, var: &str, default_rel: &str) -> PathBuf {
+        if self.vars.contains_key(var) {
+            return self.env_path(var, default_rel);
+        }
+        let config = self.config_resuelta();
+        let ruta: Ruta = match var {
+            crate::config::VAR_GGUF => config.gguf_dir_de(engine),
+            crate::config::VAR_SAFETENSORS => config.safetensors_dir_de(engine),
+            "ARTIFACTS_DIR" => config.artifacts_dir_de(engine),
+            _ => return self.env_path(var, default_rel),
+        };
+        ruta.valor
+    }
+
+    /// La configuración resuelta si existe, o la configuración inicial
+    /// derivada del entorno.
+    pub fn config_resuelta(&self) -> Config {
+        self.config
+            .clone()
+            .unwrap_or_else(|| crate::config::config_inicial(&self.vars, &self.home, &self.cwd))
     }
 }
 

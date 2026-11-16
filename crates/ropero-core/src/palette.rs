@@ -96,6 +96,8 @@ pub fn engine_ansi(color: EngineColor) -> Option<u8> {
         EngineColor::Morado => Some(99),
         // 193: verde pálido (#d7ff00, el "verde suave" de la paleta).
         EngineColor::VerdePalido => Some(193),
+        // 51: cian claro para Ignis.
+        EngineColor::Cian => Some(51),
         // Sin color: el motor no tiene color asignado.
         EngineColor::SinColor => None,
     }

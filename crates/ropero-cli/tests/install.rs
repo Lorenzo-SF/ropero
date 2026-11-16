@@ -29,6 +29,7 @@ maturity = "proven"
 formats = ["gguf"]
 port_min = 8200
 port_max = 8299
+deps = ["git"]
 
 [detect]
 binaries = ["llama-server"]
@@ -283,23 +284,39 @@ fn install_a_secas_sin_terminal_es_error_de_uso() {
     assert!(stderr.contains("terminal"), "stderr={stderr}");
 }
 
+#[test]
+fn install_force_solo_se_admite_para_engines() {
+    let fake = Fake::nuevo("force-solo-engines");
+    let (code, _stdout, stderr) = fake.corre(&["install", "models", "modelo-alpha", "--force"]);
+    assert_eq!(code, 2, "stderr={stderr}");
+    assert!(stderr.contains("sólo se admite"), "stderr={stderr}");
+}
+
+#[test]
+fn install_force_sin_subcomando_se_aplica_a_fase_engines() {
+    let fake = Fake::nuevo("force-fase-engines");
+    let (code, _stdout, stderr) = fake.corre(&["install", "--force"]);
+    assert_eq!(code, 2, "stderr={stderr}");
+    assert!(stderr.contains("ropero install engines"), "stderr={stderr}");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // La instalación real de motores
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// `ropero install engines <id>` crea el **enlace** y sale con 0.
 ///
-/// El enlace se llama como el `basename` del binario resuelto (R-INST-25)
-/// y vive en el `$BIN_DIR` (R-INST-24).
+/// Turbo aplica el prefijo a los enlaces de sus ejecutables para convivir
+/// con llama-server oficial.
 #[test]
 fn install_engines_crea_el_enlace_en_el_bin_dir() {
     let fake = Fake::nuevo("engines-enlace").con_binario("llama-server");
     let (code, stdout, stderr) = fake.corre(&["install", "engines", "turbo-llama"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert_eq!(fake.enlaces(), vec!["llama-server".to_string()]);
+    assert_eq!(fake.enlaces(), vec!["turbo-llama-server".to_string()]);
     // El mensaje dice que se ha enlazado, y dice **dónde**.
     assert!(stdout.contains("enlace creado"), "stdout={stdout}");
-    assert!(stdout.contains("llama-server"), "stdout={stdout}");
+    assert!(stdout.contains("turbo-llama-server"), "stdout={stdout}");
 }
 
 /// El motor que **ya está enlazado** se dice y **no se toca**.
@@ -308,7 +325,7 @@ fn install_engines_no_toca_un_motor_ya_enlazado() {
     let fake = Fake::nuevo("engines-ya-enlazado").con_binario("llama-server");
     let (code, _stdout, _stderr) = fake.corre(&["install", "engines", "turbo-llama"]);
     assert_eq!(code, 0);
-    let destino = fake.bin.join("llama-server");
+    let destino = fake.bin.join("turbo-llama-server");
     let antes = std::fs::read_link(&destino).expect("enlace");
     let (code, stdout, stderr) = fake.corre(&["install", "engines", "turbo-llama"]);
     assert_eq!(code, 0, "stderr={stderr}");
@@ -328,8 +345,8 @@ fn install_engines_sin_binario_dice_que_hacer() {
         "stderr={stderr}"
     );
     assert!(
-        stderr.contains("instálalo"),
-        "el mensaje no dice qué hacer: {stderr}"
+        stderr.contains("no declara una receta de compilación"),
+        "el mensaje debe aclarar que este manifiesto no trae receta: {stderr}"
     );
     assert!(fake.enlaces().is_empty(), "no se ha creado ningún enlace");
 }
@@ -338,15 +355,15 @@ fn install_engines_sin_binario_dice_que_hacer() {
 #[test]
 fn install_engines_no_pisa_un_fichero_real() {
     let fake = Fake::nuevo("engines-ocupado").con_binario("llama-server");
-    std::fs::write(fake.bin.join("llama-server"), "soy un fichero\n").expect("fichero real");
+    std::fs::write(fake.bin.join("turbo-llama-server"), "soy un fichero\n").expect("fichero real");
     let (code, _stdout, stderr) = fake.corre(&["install", "engines", "turbo-llama"]);
     assert_eq!(code, 1, "stderr={stderr}");
     assert!(
-        stderr.contains("no lo toco"),
-        "el mensaje debe decir que no se toca: {stderr}"
+        stderr.contains("destino ocupado"),
+        "el mensaje debe decir que el destino está ocupado: {stderr}"
     );
     // Y el fichero sigue siendo un fichero, no un enlace.
-    let contenido = std::fs::read_to_string(fake.bin.join("llama-server")).expect("fichero");
+    let contenido = std::fs::read_to_string(fake.bin.join("turbo-llama-server")).expect("fichero");
     assert_eq!(contenido, "soy un fichero\n");
 }
 
@@ -356,7 +373,7 @@ fn install_engines_acepta_alias_legacy() {
     let fake = Fake::nuevo("engines-alias").con_binario("llama-server");
     let (code, stdout, stderr) = fake.corre(&["install", "engines", "turbo"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert_eq!(fake.enlaces(), vec!["llama-server".to_string()]);
+    assert_eq!(fake.enlaces(), vec!["turbo-llama-server".to_string()]);
     assert!(stdout.contains("turbo-llama"), "stdout={stdout}");
 }
 
@@ -375,7 +392,7 @@ fn install_engines_acepta_lista_con_comas() {
     let fake = Fake::nuevo("engines-comas").con_binario("llama-server");
     let (code, _stdout, stderr) = fake.corre(&["install", "engines", "turbo-llama,turbo"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert_eq!(fake.enlaces(), vec!["llama-server".to_string()]);
+    assert_eq!(fake.enlaces(), vec!["turbo-llama-server".to_string()]);
 }
 
 /// `ropero install` sin lista no es un comando desconocido: es un error de

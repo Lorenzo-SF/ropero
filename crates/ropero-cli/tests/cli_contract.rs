@@ -65,6 +65,7 @@ fn run_sin_motor(args: &[&str]) -> (i32, String, String) {
     let out = bin()
         .args(args)
         .env("HOME", &base)
+        .env("PATH", base.join("empty-path"))
         .env("LLAMA_DIR", base.join("no-fork"))
         .env("LLAMA_OFFICIAL_DIR", base.join("no-oficial"))
         .output()
@@ -301,6 +302,7 @@ fn los_flags_del_arranque_se_aceptan() {
         vec!["--api-key", "clave"],
         vec!["--no-api-key"],
         vec!["--ctx", "4096"],
+        vec!["--log-level", "debug"],
     ] {
         let mut args = vec!["modelo-alpha"];
         args.extend(flag.iter().copied());
@@ -376,6 +378,7 @@ fn los_flags_del_gguffer_se_aceptan() {
         (&["--path", pesos, "--no-dflash"], CODIGO_ERROR_EJECUCION),
         (&["--path", pesos, "--force"], CODIGO_ERROR_EJECUCION),
         (&["--list-quants"], CODIGO_ERROR_EJECUCION),
+        (&["--path", pesos, "--turbo-llama"], CODIGO_ERROR_EJECUCION),
         (&["--diagnostico"], CODIGO_ERROR_EJECUCION),
     ];
     for (flags, esperado) in casos {
@@ -419,19 +422,11 @@ fn la_pareja_de_imatrix_se_acepta() {
     assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
 }
 
-/// El error de ejecución (1) es el de un fallo de E/S o de un recurso que
-/// no está.
-///
-/// El caso que se puede provocar de forma determinista es `template` sobre
-/// un catálogo **sin** plantilla: no es un error de uso (el comando y sus
-/// argumentos son correctos), sino un fallo de ejecución, así que sale con 1
-/// (no con 2).
+/// Si el catálogo no tiene plantilla, se imprime una de referencia y se
+/// sugiere destino en `models/` sin escribir.
 #[test]
 fn un_catalogo_sin_plantilla_sale_con_uno() {
     let base = std::env::temp_dir().join("ropero-cli-contract-sin-plantilla");
-    // El directorio se limpia antes: si una corrida anterior dejó un motor
-    // viejo dentro, el catálogo tendría dos copias del mismo modelo y el
-    // escaneo fallaría por el choque de alias (no por la plantilla).
     let _ = std::fs::remove_dir_all(&base);
     let turbo = base.join("turbo-llama");
     std::fs::create_dir_all(&turbo).unwrap();
@@ -443,6 +438,8 @@ fn un_catalogo_sin_plantilla_sale_con_uno() {
     let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
         .arg("template")
         .env("ROPERO_MODELS_DIR", &base)
+        .env("HOME", &base)
+        .env("XDG_CONFIG_HOME", base.join("xdg"))
         .env("GGUF_DIR", base.join("gguf"))
         .env("SAFETENSORS_DIR", base.join("safetensors"))
         .env("LOG_DIR", base.join("logs"))
@@ -450,8 +447,15 @@ fn un_catalogo_sin_plantilla_sale_con_uno() {
         .output()
         .unwrap();
     let code = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("[model]"), "stdout={stdout}");
+    assert!(
+        stderr.contains("sugerencia: guarda la plantilla"),
+        "stderr={stderr}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 /// El código de SIGINT está documentado para F3.

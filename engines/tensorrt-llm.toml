@@ -15,8 +15,8 @@ maturity = "proven"
 formats = ["safetensors", "pytorch-bin", "trt-checkpoint", "trt-engine"]
 
 # El rango de puertos propio (doc CLI v2 §5.1).
-port_min = 8500
-port_max = 8599
+port_min = 9950
+port_max = 9959
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["uv", "nvidia-smi"]

@@ -6,7 +6,7 @@ lo que la contradiga.
 
 Este documento es un **contrato**, no una guía de estilo: transcribe la
 especificación del CLI tal como la dio el dueño. Donde la especificación fue
-ambigua, la ambigüedad queda registrada en [§17](#17-pendientes-de-decisión) y
+ambigua, la ambigüedad queda registrada en [§19](#19-pendientes-de-decisión) y
 **no** se ha resuelto aquí por decisión propia.
 
 ---
@@ -15,10 +15,19 @@ ambigua, la ambigüedad queda registrada en [§17](#17-pendientes-de-decisión) 
 
 Define la superficie pública del binario `ropero` v2:
 
-- Los once comandos (o invocaciones) que el usuario ve.
+- Los comandos (o invocaciones) que el usuario ve.
 - Los códigos de salida.
 - La leyenda de motores con sus colores.
 - Las decisiones de diseño que el dueño ha tomado y que este documento fija.
+
+> **Actualización (ADR-008)**: se añade `ropero config` para mostrar rutas y
+> origen; el catálogo normal es externo en `<config>/models/<engine>` con
+> manifiestos en `<config>/engines/`; no se auto-descubre el repositorio en
+> uso normal, pero se conservan los overrides `ROPERO_MODELS_DIR`/`ROPERO_ROOT`
+> (incluido el caso en que apuntan al directorio `models/` de una raíz). Los
+> logs por defecto viven en `<config>/logs`. El directorio y `config.toml` se
+> crean en el primer uso sin sobrescribir. `ropero template` sugiere destino en
+> `models/` sin escribir.
 
 No define: el formato interno del TOML (doc A §4.2), el contrato de motor
 (doc A §4.3), el ciclo de vida del runtime (doc A §4.5) ni el protocolo del
@@ -57,7 +66,7 @@ El sistema vive en el dominio (`ropero_core::estilo`) y sus reglas son:
 | **Títulos** | El título de una sección va en el **margen** y en **mayúsculas**; su cuerpo, un nivel más dentro. La sangría es de **dos espacios** por nivel. |
 | **Color** | El color es el de la leyenda de motores ([§4](#4-leyenda-de-motores)) y **sólo** se usa en el **nombre del motor**. Ningún título, ninguna cabecera y ningún dato llevan color. |
 | **Tamaños** | El tamaño de un artefacto es el de su descarga: **aproximado** (`~`) y con **dos decimales** (`~18.90 GB`). Lo que no se sabe **no se inventa**: sale `—`. |
-| **Artefactos** | La columna del artefacto dice **qué** se baja, y lo dice el **formato** (R-MOD-6): el fichero (`gguf`), el directorio del checkpoint (`safetensors`), el **tag** del almacén (`q4nx`) o el paquete del catálogo (`strata`). Un modelo cuyo artefacto es un tag dice **el tag** (venga de `[model].path` o de `--decision`), nunca «no disponible»; si el tag no se sabe, dice la **clase** (`tag`). |
+| **Artefactos** | La columna del artefacto dice **qué** se baja, y lo dice el **formato** (R-MOD-6): el fichero (`gguf`), el directorio del checkpoint (`safetensors`), el **tag** del almacén (`q4nx`), el paquete del catálogo (`strata`) o el id de modelo (`ninfer`). |
 | **Final de línea** | Ninguna línea lleva **espacios al final**: rompen el diff y descolocan al copiar. |
 
 Hay **dos** excepciones, y sólo dos:
@@ -129,17 +138,26 @@ gobierna, y queda fijada en
 | Engine | Color | Qué es | Formatos |
 |---|---|---|---|
 | `llama-server` | naranja | llama.cpp (repo oficial) | GGUF (nativo) |
-| `turbo-llama` | amarillo | llama.cpp (fork de la cuenta del dueño, actualmente privado) | GGUF (nativo) |
+| `turbo-llama` | amarillo | llama.cpp (fork de la cuenta del dueño, repositorio público) | GGUF (nativo) |
 | `flm` | rojo | FastFlowLM (sólo Linux, sólo CPU AMD compatible) | Q4NX (nativo NPU AMD XDNA2), GGUF (entrada compatible con determinados backends y conversiones) |
 | `mlx` | gris | MLX-LM + mlx-server (sólo macOS ARM) | Safetensors estructura MLX (nativo), cuantizados MLX (4-bit, 8-bit…) |
 | `airllm` | blanco | único engine sin gateway; ropero integra uno | Safetensors, PyTorch (.bin); compresión propia 4-bit y 8-bit |
 | `tensorrt-llm` | verde pistacho | TensorRT-LLM (sólo Linux, sólo dGPU RTX) | Safetensors, .bin/.pth, checkpoints TRT y .engine; FP16/BF16/FP8/INT4 AWQ… |
 | `vllm` | morado | vLLM (Linux y macOS) | Safetensors (principal), .bin, GGUF (experimental), AWQ/GPTQ/BitsAndBytes |
 | `strata` | verde pálido | Strata (Linux y macOS) | GGUF (nativo); descargar/preparar/tunear/usar modelos externos con `groot.sh`, `qwen-abliterated.sh`, `qwen36.sh` de referencia |
+| `ignis` | cian | Ignis (Linux x86_64, NVIDIA RTX) | `.ninfer` (artefactos de su catálogo, incluye companions) |
 
 Notas de la tabla:
 
 - `airllm` es el **único** motor sin gateway: es ropero quien integra uno.
+- `ignis` se instala desde su release Linux verificado en
+  `~/.local/share/ropero/engines/ignis`; `~/.local/bin/ignis-server` apunta al
+  binario activo. El catálogo expone Qwen3.8-27B y Qwen3.8-Flash-Next.
+  `ropero install models` delega descarga y companions a `ignis-server model
+  download`; en 27B el id 16 GB se elige cuando `nvidia-smi` informa una GPU
+  de hasta 20 GB. Los artefactos viven por defecto en `~/models/ignis`,
+  configurable con `[engines.ignis].artifacts_dir`. El arranque gestionado
+  fija `--download-enabled false` y usa lo ya descargado.
 - `strata` no descarga modelos por sí mismo: la descarga, la preparación y el
   afinado se hacen con los scripts de referencia
   ([`groot.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/groot.sh),
@@ -159,19 +177,20 @@ tener varios motores sirviendo a la vez sin que se pisen.
 
 | Engine | Rango de puertos |
 |---|---|
-| `llama-server` | `8100-8199` |
-| `turbo-llama` | `8200-8299` |
-| `mlx` | `8300-8399` |
-| `flm` | `8400-8499` |
-| `tensorrt-llm` | `8500-8599` |
-| `vllm` | `8600-8699` |
-| `airllm` | `8700-8799` |
-| `strata` | `9900-9999` |
+| `llama-server` (oficial) | `9980-9989` |
+| `turbo-llama` (fork) | `9990-9999` |
+| `mlx-serve` | `9960-9969` |
+| `fastflowlm` | `9970-9979` |
+| `tensorrt-llm` | `9950-9959` |
+| `vllm` | `9940-9949` |
+| `airllm` | `9930-9939` |
+| `strata` | `9920-9929` |
+| `ignis` | `9910-9919` |
 
-El rango de `strata` (`9900-9999`) **incluye el `9999`** que usan por defecto
-los scripts de referencia (`groot.sh`, `qwen-abliterated.sh`, `qwen36.sh`), de
-modo que un motor lanzado por ropero y uno lanzado a mano con esos scripts no
-se pisan por defecto.
+El ropero viejo usaba un puerto base por motor y dejaba diez puertos
+descendentes entre bases. Rust conserva esas bases como extremo superior de
+rango. `strata` queda en `9920-9929`; `9999` pertenece a Turbo-Llama, igual que
+al `llama-server` del ropero viejo.
 
 ### 5.2 Códigos de salida de la invocación mínima
 
@@ -233,6 +252,10 @@ mensaje dice cuál de las tres falla.
 | `--api-key` | Fija la clave de API del gateway. |
 | `--no-api-key` | Arranca **sin** clave de API. |
 | `--ctx` | Fuerza el **contexto**. |
+| `--log-level` | Nivel común de log: `error`, `warn`, `info`, `debug` o `trace`; se traduce al control nativo del engine cuando existe. |
+| `--background` | Arranca **desacoplado**, sin salida a la terminal (tampoco `ROPERO_PORT`), y guarda los logs bajo `logs_dir`. |
+
+Por defecto, la salida del motor se muestra en la terminal (colorizada cuando procede) y el flujo normal sigue generando el fichero de log del modelo para fallos y estado. Se registra además un log de uso local append-only en `logs_dir` (timestamp, modelo, motor, puerto, resultado y modo), sin API keys ni flags/argumentos sensibles. La cobertura de colorizado es común/semántica; si no hay formato específico por motor se usa este colorizador seguro.
 
 `--cpu` en un engine que no lo soporta es **error de uso** (código `2`).
 
@@ -250,6 +273,21 @@ mensaje dice cuál de las tres falla.
   selección**.
 - **Con lista**: instala **directamente**, sin preguntar. Es el modo
   **automatizable**.
+
+- Si el manifiesto declara `[install].source`, clona (solo si el directorio no
+  contiene ya un árbol ajeno), configura y compila antes de enlazar el binario.
+  Si ya existe un checkout, pregunta si se reutiliza o se borra y clona de
+  nuevo. `--force` omite la pregunta, borra el código fuente de cada motor
+  seleccionado con receta y realiza una instalación limpia. Sin terminal,
+  un checkout existente requiere `--force`.
+- Recetas actuales: `llama-server` compila upstream `ggml-org/llama.cpp`;
+  `turbo-llama` compila `lorenzo-sf/turbo-llama`. Ambos usan los mismos
+  argumentos de compilación por sistema operativo y ninguno aplica parches
+  del instalador heredado. Ambos
+  enlazan todos los ejecutables generados en `bin`; los del fork usan el
+  prefijo `turbo-` (por ejemplo `turbo-llama-server`). Los enlaces se vuelven
+  a crear al instalar. Los demás motores no declaran hoy una receta de clonado
+  y compilación en el manifest.
 
 La lista acepta **ids o alias**, separados por **espacios o comas**.
 
@@ -318,6 +356,7 @@ cuando el resultado pedido ya es el de fábrica.
 | `--force` | Sobrescribe / fuerza. |
 | `--list-quants` | Lista los tipos de cuantización disponibles. |
 | `--diagnostico` | Modo diagnóstico: enseña qué haría, sin escribir nada. |
+| `--turbo-llama` | Usa las herramientas compiladas del fork Turbo-Llama; por defecto usa llama.cpp oficial. |
 
 `--imatrix-repo` y `--imatrix-file` **van en pareja**: usar sólo una de las
 dos es **error de uso** (código `2`).
@@ -364,10 +403,19 @@ El comando debe ofrecer **lanzar por tipo, por grupo, uno solo, o todos**.
 
 Chequea:
 
-1. Las **dependencias del propio ropero**, incluido que **ropero esté
+1. La **configuración** de ropero (archivo, estado y rutas relevantes).
+2. Las **dependencias del propio ropero**, incluido que **ropero esté
    instalado y en el PATH**.
-2. Por **cada engine** — disponible o no — **sus dependencias**, para ver qué
+3. Por **cada engine** — disponible o no — **sus dependencias**, para ver qué
    está **OK** y qué se **puede instalar**.
+
+**No modifica artefactos de modelos**. Puede ejecutar el bootstrap idempotente
+de configuración (crear directorio y `config.toml` por defecto si faltan, sin
+sobrescribir) y tolera configuración ilegible para poder diagnosticarla.
+
+**No modifica artefactos de modelos**. Puede ejecutar el bootstrap idempotente
+de configuración (crear directorio y `config.toml` por defecto si faltan, sin
+sobrescribir) y tolera configuración ilegible para poder diagnosticarla.
 
 ## 15. `ropero list`
 
@@ -383,11 +431,63 @@ del almacén (`q4nx`) es **el tag**, nunca «no disponible».
 
 ## 16. `ropero template`
 
-Imprime el **TOML template completo** con **comentarios de uso**.
+Imprime la **plantilla de modelo** (TOML) y sugiere un destino en el
+directorio `models/` del catálogo de usuario. **No escribe la plantilla ni
+modifica artefactos de modelos**. Si el catálogo no contiene `_template.toml`,
+se muestra una plantilla de referencia.
+
+Como parte del arranque normal, puede ejecutarse el bootstrap idempotente de
+configuración (crear `<config>/` y `config.toml` por defecto si faltan, sin
+sobrescribir).
+
+## 17. `ropero config`
+
+Muestra la configuración resuelta de ropero: rutas efectivas y su origen
+(variable de entorno, archivo o valor por defecto). **No modifica artefactos de
+modelos**.
+
+El `config.toml` admite las cinco rutas globales y overrides opcionales bajo
+`[engines.<id>]`: `models_toml_dir`, `gguf_dir`, `safetensors_dir`,
+`port_min`, `port_max` y `color`. La precedencia de rutas es variable global
+de entorno, override del engine, campo global del archivo y valor por defecto.
+Los overrides de puerto/color sustituyen los valores del manifest. `color`
+acepta sólo nombres de la leyenda. Las recetas de instalación, dependencias y
+hooks permanecen fijos en los manifests/código; no son configurables.
+
+Puede ejecutar el bootstrap idempotente de configuración en el primer uso
+(crear directorio y `config.toml` por defecto sin sobrescribir) para poder
+informar del estado real; si el archivo existe pero es ilegible o inválido, lo
+reporta sin ocultarlo.
+
+## 18. `ropero <modelo> remove`
+
+Elimina los artefactos **derivables** del TOML y de las rutas del modelo.
+
+- **Sintaxis**: `ropero <alias|modelo> remove`.
+- **Confirmación**: antes de borrar pide confirmación interactiva en un TTY.
+  Si no hay TTY o la respuesta se cancela/no es afirmativa, **no se borra nada**.
+- **Alcance**: sólo elimina ficheros atribuibles al modelo (rutas resueltas de
+  `[files]` y auxiliares de runtime declarados). No elimina directorios
+  compartidos ni datos no declarados; el directorio concreto del modelo en
+  `GGUF_DIR` sólo se retira si queda vacío tras borrar ficheros concretos.
+- **Artefactos compartidos**: si otro TOML activo o retirado referencia la
+  misma ruta resuelta (o una ruta de checkpoint Safetensors padre/hija que
+  solaparía un borrado recursivo, o el mismo tag FLM), se informa de ese modelo
+  y se conserva el artefacto solapado. Se pueden eliminar tras confirmación los
+  artefactos exclusivos del modelo seleccionado. Compartir el repo de origen
+  no cuenta si los destinos instalados son distintos.
+- **Safetensors**: `[model].path` identifica el checkpoint que se descargó. El
+  plan muestra esa ruta exacta y, tras confirmación, elimina su contenido y el
+  directorio del checkpoint; nunca borra la raíz compartida de
+  `SAFETENSORS_DIR`, rechaza rutas que salgan de ella y no sigue enlaces
+  simbólicos intermedios.
+- **FLM**: con motor FLM delegado, elimina cada tag declarado que se instaló
+  (modelo principal y auxiliares) con una llamada `flm remove <tag>` por tag.
+- **Mensajes**: en español, con salida clara del plan y del resultado.
 
 ---
 
-## 17. Pendientes de decisión
+## 19. Pendientes de decisión
 
 Puntos que la especificación del dueño dejó abiertos y que **no** se han
 resuelto aquí:
@@ -408,7 +508,7 @@ resuelto aquí:
 
 ---
 
-## 18. Trazabilidad
+## 20. Trazabilidad
 
 | Sección | Origen |
 |---|---|
@@ -420,6 +520,16 @@ resuelto aquí:
 | §6-§16 Comandos | Decisión del dueño, 2026-11-14 |
 | §9.3 `--prio` | [Doc B §4.10.7](ropero-construccion.md#4107-el-contrato-de---prio) (contrato normativo; el doc A, R-MOD-29, remite a él) |
 | §13 Batería de tests | [`docs/tests/indice.md`](../docs/tests/indice.md) |
-| §17 Pendientes | Ambigüedades de la especificación del dueño, sin resolver |
+| §18 `ropero <modelo> remove` | Contrato de implementación (eliminación segura de artefactos derivables), 2026-11-15 |
+| §19 Pendientes | Ambigüedades de la especificación del dueño, sin resolver |
 | §11.4 Scripts de Strata | [`groot.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/groot.sh), [`qwen-abliterated.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen-abliterated.sh), [`qwen36.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen36.sh) |
 | §4, §5.1 Nomenclatura y puertos | [ADR-004](../docs/adr/ADR-004-nomenclatura-de-motores.md) |
+# Revisión normativa del CLI (2026-11-16)
+
+La especificación posterior y prioritaria está registrada en
+`ropero-especificacion.md` §4.14 (R-CLI-18…27, R-CFG-1…2 y R-MOD-32…34).
+Este documento debe leerse subordinado a esos requisitos cuando exista
+divergencia. En particular, el resumen sin argumentos, `--api-key`/
+`--no-api-key`, `--ctx`, instalación interactiva y por lista, la selección de
+pruebas por grupo, la elegibilidad de `list`, y la ayuda breve por comando son
+parte del contrato objetivo.

@@ -24,6 +24,7 @@ pub fn resolve_placeholder(name: &str, ctx: &ResolveContext) -> Result<String, A
             }),
         "ctx" => Ok(ctx.context.to_string()),
         "gguf_dir" => Ok(ctx.files.gguf_dir.clone()),
+        "artifacts_dir" => Ok(ctx.files.artifacts_dir.clone()),
         "safetensors_dir" => Ok(ctx.files.safetensors_dir.clone()),
         "model_path" => Ok(ctx.files.model_path.clone()),
         _ => {

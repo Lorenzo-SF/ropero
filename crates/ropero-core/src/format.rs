@@ -23,6 +23,7 @@ pub enum ArtifactLocation {
     SafetensorsDir,
     FlmTag,
     StrataCatalog,
+    NinferDir,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
@@ -36,6 +37,8 @@ pub enum ModelFormat {
     Q4nx,
     #[serde(rename = "strata")]
     Strata,
+    #[serde(rename = "ninfer")]
+    Ninfer,
 }
 
 impl ModelFormat {
@@ -45,6 +48,7 @@ impl ModelFormat {
             Self::Safetensors => "safetensors",
             Self::Q4nx => "q4nx",
             Self::Strata => "strata",
+            Self::Ninfer => "ninfer",
         }
     }
 
@@ -55,6 +59,7 @@ impl ModelFormat {
             Self::Safetensors => ArtifactLocation::SafetensorsDir,
             Self::Q4nx => ArtifactLocation::FlmTag,
             Self::Strata => ArtifactLocation::StrataCatalog,
+            Self::Ninfer => ArtifactLocation::NinferDir,
         }
     }
 
@@ -74,6 +79,18 @@ impl ModelFormat {
             Self::Safetensors => format!("$SAFETENSORS_DIR/{path}"),
             Self::Q4nx => path.to_string(),
             Self::Strata => path.to_string(),
+            Self::Ninfer => {
+                let artifact = if path.is_empty() {
+                    file.unwrap_or("")
+                } else {
+                    path
+                };
+                if artifact.is_empty() {
+                    "$ARTIFACTS_DIR".to_string()
+                } else {
+                    format!("$ARTIFACTS_DIR/{artifact}")
+                }
+            }
         }
     }
 }

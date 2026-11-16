@@ -19,8 +19,8 @@ formats = ["gguf"]
 
 # El rango de puertos propio (doc CLI v2 §5.1), para que varios motores
 # puedan servir a la vez sin pisarse.
-port_min = 8100
-port_max = 8199
+port_min = 9980
+port_max = 9989
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["git", "cmake", "ninja", "curl", "cc"]
@@ -39,3 +39,9 @@ compat = [
 [detect]
 binaries = ["llama-server"]
 paths = ["/usr/local/bin/llama-server", "/opt/homebrew/bin/llama-server"]
+
+[install]
+source = "https://github.com/ggml-org/llama.cpp.git"
+source_dir = "~/.local/share/ropero/engines/llama-server"
+binary = "bin/llama-server"
+cmake_args = ["-DGGML_NATIVE=ON", "-DLLAMA_BUILD_SERVER=ON", "-DLLAMA_BUILD_TESTS=OFF"]

@@ -1,5 +1,11 @@
 # Changelog
 
+## En trabajo — instalación de motores
+- `ropero install engines` ejecuta recetas declaradas `[install]` para compilar
+  `llama-server` upstream y el fallback público de `turbo-llama` antes de crear
+  el enlace. La receta turbo no aplica los parches privados turboquant; otros
+  motores sin receta siguen requiriendo su runtime/binario.
+
 Este fichero registra los cambios de **ropero v2**, la reimplementación en Rust
 que se está construyendo en `crates/`. Los cambios de la v1 funcional que vive
 en `ropero-code/` siguen en su propio
@@ -7,6 +13,38 @@ en `ropero-code/` siguen en su propio
 
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el
 versionado sigue [SemVer](https://semver.org/lang/es/).
+
+## [Sin publicar] (working tree)
+
+Cambios de contrato/operación documentados para el árbol de trabajo actual:
+
+- **Configuración y catálogo (ADR-008):** catálogo externo por defecto en
+  `<config>/models/<motor>/` con manifiestos en `<config>/engines/`; bootstrap
+  idempotente de `<config>/` y `config.toml` sin sobrescribir; precedencia
+  `entorno > config.toml > defecto` para `models_dir`, `gguf_dir`,
+  `safetensors_dir`, `bin_dir`, `logs_dir` (por defecto `<config>/logs`).
+  Overrides `ROPERO_MODELS_DIR`/`ROPERO_ROOT` preservados; TOML/manifiestos del
+  repositorio para desarrollo/pruebas sin autodiscovery en uso normal.
+- **Superficie CLI:** `ropero config` muestra rutas/origen; `ropero doctor`
+  incluye estado de configuración; `ropero template` sugiere plantilla sin
+  escribirla. Estos comandos no modifican artefactos de modelos (puede ocurrir
+  bootstrap idempotente de configuración).
+- **FLM delegado (ADR-010):** tag primario `[model].path` o `--decision`;
+  instalación/eliminación/listado delegados al manifiesto cuando aplica;
+  `flm serve <tag>` con defaults y `--ctx-len` si falta; estado por
+  `flm list --json` de **mejor esfuerzo** (sin afirmar verificación end-to-end).
+- **Ejecución y logs (ADR-010):** `--background` desacoplado sin salida terminal
+  ni `ROPERO_PORT`, logs en `logs_dir`; foreground con salida en vivo
+  (colorizado semántico común más patrones característicos por motor) y
+  log de modelo; registro de uso append-only en `logs_dir/usage.log` (sin API
+  keys ni flags/argumentos).
+- **Eliminación de modelos (ADR-010):** `ropero <alias> remove` con plan de
+  artefactos derivables, confirmación interactiva en TTY, sin borrar
+  compartidos/no declarados, retirada del directorio de modelo en `GGUF_DIR`
+  sólo si queda vacío, eliminación del checkpoint safetensors exacto declarado y
+  eliminación delegada de todos los tags FLM declarados que se instalaron.
+- **Migración:** copiar TOML heredados a `~/.config/ropero/models/<motor>/` y
+  manifiestos a `~/.config/ropero/engines/` (o rutas configuradas).
 
 ## [0.1.0] - 2026-11-15
 

@@ -16,8 +16,8 @@ maturity = "integrated"
 formats = ["safetensors", "pytorch-bin", "gguf", "awq", "gptq"]
 
 # El rango de puertos propio (doc CLI v2 §5.1).
-port_min = 8600
-port_max = 8699
+port_min = 9940
+port_max = 9949
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["uv", "python3"]

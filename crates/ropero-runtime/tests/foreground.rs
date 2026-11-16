@@ -62,6 +62,10 @@ impl Engine for MotorVivo {
             Some(0)
         }
     }
+
+    fn detach(&self, _pid: u32) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[test]

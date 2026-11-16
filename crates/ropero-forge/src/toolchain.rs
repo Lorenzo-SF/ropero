@@ -84,6 +84,8 @@ pub struct Toolchain {
 /// **comprobados** contra el disco por quien llama.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Busqueda {
+    /// El usuario eligió explícitamente el fork.
+    pub preferir_fork: bool,
     /// El directorio del fork (`$LLAMA_DIR`), si está.
     pub dir_fork: Option<PathBuf>,
     /// El directorio del oficial (`$LLAMA_OFFICIAL_DIR`), si está.
@@ -115,14 +117,35 @@ pub fn ensure_toolchain(
     hace_falta_conversor: bool,
 ) -> Result<Toolchain, Error> {
     // ── el motor, y el conversor sólo si hay que convertir ─────────────
-    // El orden: el fork primero, el oficial después (R-GGUF-57).
-    let motor = if busqueda.convert_fork.is_some() {
+    // Ropero usa llama.cpp oficial por defecto; el fork se conserva como
+    // alternativa si el oficial no está disponible.
+    if busqueda.preferir_fork
+        && busqueda.convert_fork.is_none()
+        && (hace_falta_conversor
+            || (busqueda.quantize_fork.is_none() && busqueda.quantize_en_path.is_none()))
+    {
+        return Err(Error::SinMotor {
+            falta: "herramientas de Turbo-Llama".to_string(),
+            donde: describe_dir(
+                busqueda.dir_fork.as_deref(),
+                "~/.local/share/ropero/engines/turbo-llama",
+            ),
+        });
+    }
+    let motor = if busqueda.preferir_fork
+        && (busqueda.convert_fork.is_some()
+            || (!hace_falta_conversor && busqueda.quantize_fork.is_some()))
+    {
         Motor::Fork {
             dir: busqueda.dir_fork.clone().unwrap_or_default(),
         }
     } else if busqueda.convert_oficial.is_some() {
         Motor::Oficial {
             dir: busqueda.dir_oficial.clone().unwrap_or_default(),
+        }
+    } else if busqueda.convert_fork.is_some() {
+        Motor::Fork {
+            dir: busqueda.dir_fork.clone().unwrap_or_default(),
         }
     } else if hace_falta_conversor {
         // El conversor no admite sustituto (R-GGUF-55).
@@ -138,14 +161,14 @@ pub fn ensure_toolchain(
         // No hay que convertir: la fuente ya es un GGUF, y con sólo el
         // cuantizador se fabrica (R-GGUF-55).
         busqueda
-            .dir_fork
+            .dir_oficial
             .as_ref()
-            .map(|dir| Motor::Fork { dir: dir.clone() })
+            .map(|dir| Motor::Oficial { dir: dir.clone() })
             .or_else(|| {
                 busqueda
-                    .dir_oficial
+                    .dir_fork
                     .as_ref()
-                    .map(|dir| Motor::Oficial { dir: dir.clone() })
+                    .map(|dir| Motor::Fork { dir: dir.clone() })
             })
             .unwrap_or(Motor::Ninguno)
     };
@@ -227,10 +250,15 @@ pub fn buscar(
     env: &ropero_core::Environment,
     hace_falta_conversor: bool,
 ) -> Result<Toolchain, Error> {
-    let dir_fork = dir_del_motor(env, "LLAMA_DIR", "llama.cpp");
-    let dir_oficial = dir_del_motor(env, "LLAMA_OFFICIAL_DIR", "llama.cpp-official");
+    let dir_fork = dir_del_motor(env, "LLAMA_DIR", ".local/share/ropero/engines/turbo-llama");
+    let dir_oficial = dir_del_motor(
+        env,
+        "LLAMA_OFFICIAL_DIR",
+        ".local/share/ropero/engines/llama-server",
+    );
 
     let mut busqueda = Busqueda {
+        preferir_fork: env.get("ROPERO_GGUFFER_ENGINE") == Some("turbo-llama"),
         dir_fork: dir_fork.clone(),
         dir_oficial: dir_oficial.clone(),
         convert_fork: dir_fork
@@ -247,23 +275,28 @@ pub fn buscar(
     };
     // El cuantizador del build del motor que toque: se comprueba en los
     // dos, y [`ensure_toolchain`] elige el del motor que salga.
+    let build_tool = |dir: &Path, name: &str| {
+        [
+            dir.join("build-ropero/bin").join(name),
+            dir.join("build-ropero/install/bin").join(name),
+            dir.join("build/bin").join(name),
+        ]
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+    };
     busqueda.quantize_fork = dir_fork
-        .as_ref()
-        .map(|dir| dir.join("build/bin/llama-quantize"))
-        .filter(|candidato| candidato.is_file());
+        .as_deref()
+        .and_then(|dir| build_tool(dir, "llama-quantize"));
     busqueda.quantize_oficial = dir_oficial
-        .as_ref()
-        .map(|dir| dir.join("build/bin/llama-quantize"))
-        .filter(|candidato| candidato.is_file());
-    busqueda.split_en_build = dir_fork
-        .as_ref()
-        .map(|dir| dir.join("build/bin/llama-gguf-split"))
-        .filter(|candidato| candidato.is_file())
+        .as_deref()
+        .and_then(|dir| build_tool(dir, "llama-quantize"));
+    busqueda.split_en_build = dir_oficial
+        .as_deref()
+        .and_then(|dir| build_tool(dir, "llama-gguf-split"))
         .or_else(|| {
-            dir_oficial
-                .as_ref()
-                .map(|dir| dir.join("build/bin/llama-gguf-split"))
-                .filter(|candidato| candidato.is_file())
+            dir_fork
+                .as_deref()
+                .and_then(|dir| build_tool(dir, "llama-gguf-split"))
         });
 
     ensure_toolchain(&busqueda, hace_falta_conversor)

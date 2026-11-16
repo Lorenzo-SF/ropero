@@ -2,10 +2,9 @@
 //!
 //! ## Qué hay aquí y por qué
 //!
-//! Instalar un motor es **crear un enlace** (R-INST-1): ni copiar, ni
-//! descargar, ni compilar. Y para crearlo hace falta saber dos cosas que
-//! sólo existen fuera del proceso: si hay terminal (para el menú) y dónde
-//! está el binario del motor.
+//! Los motores con receta `install.source` se clonan y compilan primero; los
+//! demás requieren un binario ya instalado. En ambos casos se crea el enlace
+//! en `$BIN_DIR`.
 //!
 //! La **precedencia** del binario es la del doc A (R-INST-24):
 //! **PATH → `$BIN_DIR` → rutas largas**. El motor que se usa es el que
@@ -16,8 +15,119 @@ use std::path::{Path, PathBuf};
 
 use ropero_core::EngineManifest;
 use ropero_core::Environment;
+use std::process::{Command, Stdio};
 
 use crate::catalog_scan::es_ejecutable;
+
+fn llama_server_cmake_args(env: &Environment) -> Result<Vec<String>, String> {
+    let os = env.get("ROPERO_BUILD_OS").unwrap_or(std::env::consts::OS);
+    match os {
+        "macos" | "darwin" => Ok([
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_OSX_ARCHITECTURES=arm64",
+            "-DCMAKE_C_COMPILER=clang",
+            "-DCMAKE_CXX_COMPILER=clang++",
+            "-DCMAKE_C_FLAGS=-O3 -mcpu=native",
+            "-DCMAKE_CXX_FLAGS=-O3 -mcpu=native",
+            "-DGGML_METAL=ON",
+            "-DGGML_METAL_NDEBUG=ON",
+            "-DGGML_METAL_EMBED_LIBRARY=ON",
+            "-DGGML_NATIVE=ON",
+            "-DGGML_ACCELERATE=ON",
+            "-DGGML_OPENMP=OFF",
+            "-DGGML_BLAS=OFF",
+            "-DLLAMA_OPENSSL=ON",
+            "-DBUILD_SHARED_LIBS=OFF",
+            "-DLLAMA_BUILD_SERVER=ON",
+            "-DLLAMA_BUILD_TOOLS=ON",
+            "-DLLAMA_BUILD_APP=OFF",
+            "-DLLAMA_BUILD_EXAMPLES=OFF",
+            "-DLLAMA_BUILD_TESTS=OFF",
+            "-DLLAMA_BUILD_UI=OFF",
+            "-DLLAMA_BUILD_HTML=OFF",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()),
+        "linux" => llama_server_linux_cmake_args(env),
+        other => Err(format!(
+            "no hay receta de compilación de llama-server para {other}"
+        )),
+    }
+}
+
+fn llama_server_linux_cmake_args(env: &Environment) -> Result<Vec<String>, String> {
+    let cuda = env
+        .get("ROPERO_CUDA_PATH")
+        .map(PathBuf::from)
+        .or_else(|| ["/opt/cuda-13.3", "/opt/cuda"].iter().map(PathBuf::from).find(|p| p.join("bin/nvcc").is_file()))
+        .ok_or_else(|| "no se encontró nvcc (ROPERO_CUDA_PATH o /opt/cuda); llama-server requiere CUDA en Linux".to_string())?;
+    let nvcc = cuda.join("bin/nvcc");
+    if !nvcc.is_file() {
+        return Err(format!("no se encontró nvcc en {}", nvcc.display()));
+    }
+    let host_cxx = env
+        .get("ROPERO_HOST_CXX")
+        .map(PathBuf::from)
+        .or_else(|| {
+            ["/usr/bin/g++-14", "/usr/bin/g++-13", "/usr/bin/clang++"]
+                .iter()
+                .map(PathBuf::from)
+                .find(|p| p.is_file())
+        })
+        .ok_or_else(|| {
+            "no se encontró compilador C++ host (g++-14, g++-13 o clang++)".to_string()
+        })?;
+    let host_cc = host_cxx
+        .to_string_lossy()
+        .replace("g++", "gcc")
+        .replace("clang++", "clang");
+    let mut args = vec![
+        "-DCMAKE_BUILD_TYPE=Release".to_string(),
+        format!("-DCUDA_TOOLKIT_ROOT_DIR={}", cuda.display()),
+        format!("-DCMAKE_CUDA_COMPILER={}", nvcc.display()),
+        format!("-DCMAKE_CUDA_HOST_COMPILER={}", host_cxx.display()),
+        format!("-DCMAKE_CXX_COMPILER={}", host_cxx.display()),
+        format!("-DCMAKE_C_COMPILER={host_cc}"),
+    ];
+    args.extend(
+        [
+            "-DCMAKE_CXX_FLAGS=-march=native -O3",
+            "-DCMAKE_C_FLAGS=-march=native -O3",
+            "-DCMAKE_CUDA_FLAGS=--use_fast_math -O3",
+            "-DCMAKE_CUDA_ARCHITECTURES=native",
+            "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON",
+            "-DGGML_CUDA=ON",
+            "-DGGML_CUDA_FA=ON",
+            "-DGGML_CUDA_FA_ALL_QUANTS=ON",
+            "-DGGML_CUDA_GRAPHS=ON",
+            "-DGGML_CUDA_FORCE_MMQ=OFF",
+            "-DGGML_CUDA_FORCE_CUBLAS=OFF",
+            "-DGGML_CUDA_COMPRESSION_MODE=speed",
+            "-DGGML_RPC=ON",
+            "-DGGML_OPENMP=ON",
+            "-DGGML_NATIVE=ON",
+            "-DGGML_AVX2=ON",
+            "-DGGML_AVX512=ON",
+            "-DGGML_AVX512_VBMI=ON",
+            "-DGGML_AVX512_VNNI=ON",
+            "-DGGML_AVX512_BF16=ON",
+            "-DGGML_FMA=ON",
+            "-DLLAMA_OPENSSL=ON",
+            "-DBUILD_SHARED_LIBS=OFF",
+            "-DLLAMA_BUILD_SERVER=ON",
+            "-DLLAMA_BUILD_TOOLS=ON",
+            "-DLLAMA_BUILD_APP=OFF",
+            "-DLLAMA_BUILD_EXAMPLES=OFF",
+            "-DLLAMA_BUILD_TESTS=OFF",
+            "-DLLAMA_BUILD_UI=OFF",
+            "-DLLAMA_BUILD_HTML=OFF",
+        ]
+        .into_iter()
+        .map(str::to_string),
+    );
+    Ok(args)
+}
 
 /// Si hay terminal: los menús y las preguntas sólo tienen sentido con TTY.
 ///
@@ -87,34 +197,663 @@ pub use ropero_core::install::EstadoMotor;
 /// Instala un motor: **sólo crea el enlace** (R-INST-1).
 ///
 /// El nombre del enlace es el `basename` del binario resuelto (R-INST-25).
-pub fn instala_motor(manifest: &EngineManifest, env: &Environment) -> Result<EstadoMotor, String> {
+pub fn instala_motor(
+    manifest: &EngineManifest,
+    env: &Environment,
+    force: bool,
+) -> Result<EstadoMotor, String> {
     let dir = bin_dir(env);
-    let Some(origen) = resolve_binario(manifest, env) else {
-        return Ok(EstadoMotor::SinBinario);
-    };
-    let Some(nombre) = origen.file_name() else {
+    if manifest.id == ropero_core::EngineId::Ignis {
+        return instala_ignis(manifest, env, force, &dir);
+    }
+    let (origen, source_dir) =
+        if let Some(install) = manifest.install.as_ref().filter(|i| i.source.is_some()) {
+            compila_motor(manifest, install, env, force)?
+        } else if let Some(origen) = resolve_binario(manifest, env) {
+            (origen, None)
+        } else {
+            return Ok(EstadoMotor::SinBinario);
+        };
+    enlaza_ejecutables(
+        manifest,
+        &origen,
+        source_dir.as_deref(),
+        source_dir.is_some(),
+        &dir,
+    )
+}
+
+/// Instala el release oficial de Ignis en el almacén de motores de Ropero.
+/// Descarga el tarball y su checksum con `gh`, valida SHA-256, y enlaza el
+/// servidor desde `~/.local/bin`; los pesos quedan fuera de esta instalación.
+fn instala_ignis(
+    manifest: &EngineManifest,
+    env: &Environment,
+    force: bool,
+    bin_dir: &Path,
+) -> Result<EstadoMotor, String> {
+    let _ = force;
+    if !cfg!(target_os = "linux") || !cfg!(target_arch = "x86_64") {
+        return Err("Ignis sólo publica aquí un binario CUDA para Linux x86_64".to_string());
+    }
+    let gh = which_en(env, "gh").ok_or_else(|| "falta la dependencia de Ignis: gh".to_string())?;
+    let tar =
+        which_en(env, "tar").ok_or_else(|| "falta la dependencia de Ignis: tar".to_string())?;
+    let sha256sum = which_en(env, "sha256sum")
+        .ok_or_else(|| "falta la dependencia de Ignis: sha256sum".to_string())?;
+    let ldd =
+        which_en(env, "ldd").ok_or_else(|| "falta la dependencia de Ignis: ldd".to_string())?;
+    let release = Command::new(&gh)
+        .args([
+            "release",
+            "view",
+            "--repo",
+            "gpillon/ignis",
+            "--json",
+            "tagName",
+            "--jq",
+            ".tagName",
+        ])
+        .output()
+        .map_err(|e| format!("no se pudo consultar el release de Ignis: {e}"))?;
+    if !release.status.success() {
         return Err(format!(
-            "el binario de '{}' no tiene nombre",
-            manifest.id.as_str()
+            "gh release view de gpillon/ignis terminó con {}: {}",
+            release.status,
+            String::from_utf8_lossy(&release.stderr).trim()
         ));
-    };
-    let destino = dir.join(nombre);
-    match std::fs::symlink_metadata(&destino) {
-        Ok(meta) => {
-            if meta.file_type().is_symlink() {
-                Ok(EstadoMotor::YaEnlazado(destino))
-            } else {
-                Ok(EstadoMotor::Ocupado(destino))
+    }
+    let version = String::from_utf8_lossy(&release.stdout).trim().to_string();
+    if version.is_empty()
+        || !version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return Err(format!("tag de release de Ignis no válido: {version:?}"));
+    }
+    let archive_name = format!("ignis-{version}-x86_64-unknown-linux-gnu.tar.gz");
+    let scratch =
+        std::env::temp_dir().join(format!("ropero-ignis-{}-{version}", std::process::id()));
+    if scratch.exists() {
+        return Err(format!(
+            "el directorio temporal ya existe y no se modificará: {}",
+            scratch.display()
+        ));
+    }
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("no se pudo crear {}: {e}", scratch.display()))?;
+    let result = (|| {
+        let status = Command::new(&gh)
+            .args([
+                "release",
+                "download",
+                &version,
+                "--repo",
+                "gpillon/ignis",
+                "--pattern",
+                &format!("{archive_name}*"),
+                "--dir",
+            ])
+            .arg(&scratch)
+            .status()
+            .map_err(|e| format!("no se pudo descargar el release de Ignis: {e}"))?;
+        if !status.success() {
+            return Err(format!("gh release download de Ignis terminó con {status}"));
+        }
+        let checksum = scratch.join(format!("{archive_name}.sha256"));
+        if !checksum.is_file() {
+            return Err(format!(
+                "el release de Ignis no contiene {}",
+                checksum.display()
+            ));
+        }
+        let status = Command::new(&sha256sum)
+            .args([
+                "-c",
+                checksum
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .as_ref(),
+            ])
+            .current_dir(&scratch)
+            .status()
+            .map_err(|e| format!("no se pudo verificar SHA-256 del release de Ignis: {e}"))?;
+        if !status.success() {
+            return Err("la verificación SHA-256 del release de Ignis falló".to_string());
+        }
+        let root = env.home.join(".local/share/ropero/engines/ignis");
+        let version_dir = root.join(&version);
+        if version_dir.exists() && force {
+            let metadata = std::fs::symlink_metadata(&version_dir)
+                .map_err(|e| format!("no se pudo inspeccionar {}: {e}", version_dir.display()))?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "no se limpia una ruta de instalación que no sea un directorio real: {}",
+                    version_dir.display()
+                ));
+            }
+            std::fs::remove_dir_all(&version_dir).map_err(|e| {
+                format!(
+                    "no se pudo limpiar la instalación anterior {}: {e}",
+                    version_dir.display()
+                )
+            })?;
+        }
+        std::fs::create_dir_all(&version_dir)
+            .map_err(|e| format!("no se pudo crear {}: {e}", version_dir.display()))?;
+        let status = Command::new(&tar)
+            .args(["-xzf"])
+            .arg(scratch.join(&archive_name))
+            .arg("-C")
+            .arg(&version_dir)
+            .status()
+            .map_err(|e| format!("no se pudo extraer el release de Ignis: {e}"))?;
+        if !status.success() {
+            return Err(format!("tar de Ignis terminó con {status}"));
+        }
+        let executable = busca_archivo(&version_dir, "ignis-server")
+            .filter(|path| es_ejecutable(path))
+            .ok_or_else(|| {
+                format!(
+                    "el release de Ignis no contiene un ignis-server ejecutable bajo {}",
+                    version_dir.display()
+                )
+            })?;
+        let libraries = Command::new(&ldd)
+            .arg(&executable)
+            .output()
+            .map_err(|e| format!("no se pudo revisar las bibliotecas de Ignis con ldd: {e}"))?;
+        let ldd_output = format!(
+            "{}{}",
+            String::from_utf8_lossy(&libraries.stdout),
+            String::from_utf8_lossy(&libraries.stderr)
+        );
+        if !libraries.status.success() || ldd_output.contains("not found") {
+            return Err(format!(
+                "el binario de Ignis tiene bibliotecas compartidas ausentes:\n{}",
+                ldd_output.trim()
+            ));
+        }
+        enlaza_ejecutables(manifest, &executable, None, false, bin_dir)
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn busca_archivo(root: &Path, nombre: &str) -> Option<PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.file_name().is_some_and(|name| name == nombre) && path.is_file() {
+                return Some(path);
+            }
+            if path.is_dir() {
+                pending.push(path);
             }
         }
-        Err(_) => {
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("no puedo crear {}: {e}", dir.display()))?;
-            std::os::unix::fs::symlink(&origen, &destino)
-                .map_err(|e| format!("no puedo enlazar {}: {e}", destino.display()))?;
-            Ok(EstadoMotor::Enlazado { origen, destino })
+    }
+    None
+}
+
+fn enlaza_ejecutables(
+    manifest: &EngineManifest,
+    principal: &Path,
+    source_dir: Option<&Path>,
+    compilado: bool,
+    dir: &Path,
+) -> Result<EstadoMotor, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("no puedo crear {}: {e}", dir.display()))?;
+    let ejecutables = if let Some(source_dir) = source_dir {
+        ejecutables_compilados(source_dir, principal)?
+    } else {
+        vec![principal.to_path_buf()]
+    };
+    let turbo = manifest.id == ropero_core::EngineId::TurboLlama;
+    let enlaces: Vec<(PathBuf, PathBuf)> = ejecutables
+        .iter()
+        .map(|origen| {
+            let nombre = origen
+                .file_name()
+                .ok_or_else(|| format!("el ejecutable no tiene nombre: {}", origen.display()))?;
+            let nombre = if turbo {
+                format!("turbo-{}", nombre.to_string_lossy())
+            } else {
+                nombre.to_string_lossy().into_owned()
+            };
+            Ok((origen.clone(), dir.join(nombre)))
+        })
+        .collect::<Result<_, String>>()?;
+
+    // Inspecciona todos los destinos antes de cambiar ninguno: un fichero o
+    // enlace ajeno nunca se pisa y un conflicto no deja enlaces parciales.
+    let mut regenerar = Vec::new();
+    for (origen, destino) in &enlaces {
+        match std::fs::symlink_metadata(destino) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = std::fs::read_link(destino)
+                    .map_err(|e| format!("no puedo leer el enlace {}: {e}", destino.display()))?;
+                let target = normaliza_enlace(destino, &target);
+                let origen_normalizado = normaliza_ruta(origen);
+                let ignis_root = if manifest.id == ropero_core::EngineId::Ignis {
+                    origen
+                        .ancestors()
+                        .find(|path| path.file_name().is_some_and(|name| name == "ignis"))
+                        .map(normaliza_ruta)
+                } else {
+                    None
+                };
+                let es_propietario = target == origen_normalizado
+                    || ignis_root.is_some_and(|root| target.starts_with(root))
+                    || source_dir.is_some_and(|root| target.starts_with(normaliza_ruta(root)));
+                if !es_propietario {
+                    return Err(format!(
+                        "destino ocupado por un enlace ajeno: {} -> {}",
+                        destino.display(),
+                        target.display()
+                    ));
+                }
+                regenerar.push(destino.clone());
+            }
+            Ok(_) => {
+                return Err(format!(
+                    "destino ocupado por un fichero ajeno: {}",
+                    destino.display()
+                ));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("no puedo inspeccionar {}: {e}", destino.display())),
         }
     }
+
+    for destino in &regenerar {
+        std::fs::remove_file(destino)
+            .map_err(|e| format!("no puedo regenerar {}: {e}", destino.display()))?;
+    }
+    let mut principal_estado = None;
+    for (origen, destino) in &enlaces {
+        std::os::unix::fs::symlink(origen, destino)
+            .map_err(|e| format!("no puedo enlazar {}: {e}", destino.display()))?;
+        if origen == principal {
+            principal_estado = Some(if regenerar.contains(destino) {
+                EstadoMotor::YaEnlazado(destino.clone())
+            } else {
+                EstadoMotor::Enlazado {
+                    origen: origen.clone(),
+                    destino: destino.clone(),
+                }
+            });
+        }
+    }
+    if let Some(source_dir) = source_dir {
+        elimina_enlaces_obsoletos(dir, source_dir, &enlaces)?;
+    }
+    if compilado {
+        return Ok(EstadoMotor::Actualizado {
+            origen: principal.to_path_buf(),
+            destino: enlaces
+                .iter()
+                .find(|(origen, _)| origen == principal)
+                .map(|(_, destino)| destino.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "no se enlazó el ejecutable principal de {}",
+                        manifest.id.as_str()
+                    )
+                })?,
+        });
+    }
+    principal_estado
+        .ok_or_else(|| format!("no se pudo crear el enlace de {}", manifest.id.as_str()))
+}
+
+fn ejecutables_compilados(source_dir: &Path, principal: &Path) -> Result<Vec<PathBuf>, String> {
+    let build_dir = source_dir.join("build-ropero");
+    let mut por_nombre = std::collections::BTreeMap::new();
+    for bin_dir in [build_dir.join("bin"), build_dir.join("install/bin")] {
+        let entries = std::fs::read_dir(&bin_dir).map_err(|e| {
+            format!(
+                "no puedo leer los ejecutables de {}: {e}",
+                bin_dir.display()
+            )
+        })?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| format!("no puedo leer una entrada de {}: {e}", bin_dir.display()))?;
+            let path = entry.path();
+            if path.is_file() && es_ejecutable(&path) {
+                if let Some(name) = path.file_name() {
+                    // El segundo directorio es install/bin y prevalece en
+                    // caso de que CMake haya instalado el mismo ejecutable.
+                    por_nombre.insert(name.to_os_string(), path);
+                }
+            }
+        }
+    }
+    if !por_nombre.values().any(|path| path == principal) {
+        return Err(format!(
+            "el ejecutable principal {} no aparece entre los bins compilados",
+            principal.display()
+        ));
+    }
+    Ok(por_nombre.into_values().collect())
+}
+
+fn elimina_enlaces_obsoletos(
+    dir: &Path,
+    source_dir: &Path,
+    enlaces: &[(PathBuf, PathBuf)],
+) -> Result<(), String> {
+    let vigentes: std::collections::BTreeSet<PathBuf> =
+        enlaces.iter().map(|(_, destino)| destino.clone()).collect();
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        format!(
+            "no puedo revisar enlaces obsoletos en {}: {e}",
+            dir.display()
+        )
+    })?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|e| format!("no puedo leer una entrada de {}: {e}", dir.display()))?;
+        let path = entry.path();
+        if vigentes.contains(&path) {
+            continue;
+        }
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {}
+            Ok(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("no puedo inspeccionar {}: {e}", path.display())),
+        }
+        let target = std::fs::read_link(&path)
+            .map_err(|e| format!("no puedo leer el enlace {}: {e}", path.display()))?;
+        if normaliza_enlace(&path, &target).starts_with(normaliza_ruta(source_dir)) {
+            std::fs::remove_file(&path).map_err(|e| {
+                format!(
+                    "no puedo retirar el enlace obsoleto {}: {e}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn normaliza_enlace(link: &Path, target: &Path) -> PathBuf {
+    if target.is_absolute() {
+        normaliza_ruta(target)
+    } else {
+        normaliza_ruta(&link.parent().unwrap_or(Path::new(".")).join(target))
+    }
+}
+
+fn normaliza_ruta(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+/// Clona y compila una receta declarada. Reutilizar o borrar un checkout
+/// existente requiere decisión explícita; no ejecuta comandos de shell.
+fn compila_motor(
+    manifest: &EngineManifest,
+    install: &ropero_core::EngineInstallSpec,
+    env: &Environment,
+    force: bool,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    let source = install
+        .source
+        .as_deref()
+        .ok_or_else(|| "el manifiesto no declara install.source".to_string())?;
+    let source_root = env.home.join(".local/share/ropero/engines");
+    let expected_source = source_root.join(manifest.id.as_str());
+    let source_dir = install
+        .source_dir
+        .as_deref()
+        .map(|raw| env.expand_path(raw))
+        .unwrap_or_else(|| expected_source.clone());
+    if source_dir != expected_source {
+        return Err(format!(
+            "ruta fuente no permitida para '{}': debe ser {} (manifest indicó {})",
+            manifest.id.as_str(),
+            expected_source.display(),
+            source_dir.display()
+        ));
+    }
+    valida_ruta_fuente_segura(&env.home, &source_dir)?;
+    let git =
+        which_en(env, "git").ok_or_else(|| "falta la dependencia de build: git".to_string())?;
+    let cmake =
+        which_en(env, "cmake").ok_or_else(|| "falta la dependencia de build: cmake".to_string())?;
+    let _ninja =
+        which_en(env, "ninja").ok_or_else(|| "falta la dependencia de build: ninja".to_string())?;
+    let args = if matches!(
+        manifest.id,
+        ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama
+    ) {
+        let args = llama_server_cmake_args(env)?;
+        valida_compiladores(manifest, env)?;
+        args
+    } else {
+        install.cmake_args.clone()
+    };
+    if force && source_dir.exists() {
+        std::fs::remove_dir_all(&source_dir).map_err(|e| {
+            format!(
+                "no se pudo borrar el código fuente {}: {e}",
+                source_dir.display()
+            )
+        })?;
+    }
+    let mut source_exists = source_dir.join("CMakeLists.txt").is_file();
+    if source_exists && !force {
+        if !hay_tty() {
+            return Err(format!(
+                "ya existe un checkout en {}; usa --force para borrarlo o ejecuta con terminal para elegir si reutilizarlo",
+                source_dir.display()
+            ));
+        }
+        let respuesta = pregunta(&format!("Ya existe el repositorio {}. ¿Usar el existente (u) o borrar y clonar de nuevo (b)? [u/b]: ", source_dir.display()))
+            .ok_or_else(|| "no se recibió respuesta; instalación cancelada".to_string())?;
+        match respuesta.to_lowercase().as_str() {
+            "u" | "usar" | "" => {}
+            "b" | "borrar" | "reclonar" => {
+                std::fs::remove_dir_all(&source_dir).map_err(|e| {
+                    format!(
+                        "no se pudo borrar el código fuente {}: {e}",
+                        source_dir.display()
+                    )
+                })?;
+                source_exists = false;
+            }
+            _ => {
+                return Err(
+                    "respuesta no válida; escribe 'u' o 'b'. Instalación cancelada".to_string(),
+                );
+            }
+        }
+    }
+    if !source_exists {
+        if source_dir.exists() {
+            let mut entries = std::fs::read_dir(&source_dir)
+                .map_err(|e| format!("no se pudo inspeccionar {}: {e}", source_dir.display()))?;
+            if entries.next().is_some() {
+                return Err(format!(
+                    "el directorio fuente '{}' ya existe y no parece un checkout válido; no se modifica",
+                    source_dir.display()
+                ));
+            }
+        } else if let Some(parent) = source_dir.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
+        }
+        let output = Command::new(git)
+            .args(["clone", "--depth", "1", source])
+            .arg(&source_dir)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|e| format!("no se pudo ejecutar git clone: {e}"))?;
+        if !output.success() {
+            return Err(format!("git clone de {source} terminó con {output}"));
+        }
+    }
+    let build_dir = source_dir.join("build-ropero");
+    let mut configure = Command::new(&cmake);
+    configure
+        .arg("-S")
+        .arg(&source_dir)
+        .arg("-B")
+        .arg(&build_dir);
+    configure.args(["-G", "Ninja"]);
+    configure.args(&args);
+    let status = configure
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("no se pudo ejecutar cmake configure: {e}"))?;
+    if !status.success() {
+        return Err(format!("cmake configure terminó con {status}"));
+    }
+    let mut build = Command::new(&cmake);
+    build.arg("--build").arg(&build_dir);
+    if !matches!(
+        manifest.id,
+        ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama
+    ) && let Some(target) = &install.target
+    {
+        build.args(["--target", target]);
+    }
+    let status = build
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("no se pudo ejecutar cmake --build: {e}"))?;
+    if !status.success() {
+        return Err(format!("cmake --build terminó con {status}"));
+    }
+    let install_dir = build_dir.join("install");
+    let status = Command::new(&cmake)
+        .arg("--install")
+        .arg(&build_dir)
+        .arg("--prefix")
+        .arg(&install_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("no se pudo ejecutar cmake --install: {e}"))?;
+    if !status.success() {
+        return Err(format!("cmake --install terminó con {status}"));
+    }
+    let binary = install.binary.as_deref().unwrap_or("bin/llama-server");
+    let executable = install_dir.join(binary);
+    if !es_ejecutable(&executable) {
+        return Err(format!(
+            "el build terminó pero no existe el ejecutable {}",
+            executable.display()
+        ));
+    }
+    Ok((executable, Some(source_dir)))
+}
+
+fn valida_ruta_fuente_segura(home: &Path, source_dir: &Path) -> Result<(), String> {
+    let root = home.join(".local/share/ropero/engines");
+    let relative = source_dir.strip_prefix(home).map_err(|_| {
+        format!(
+            "la ruta fuente queda fuera de HOME: {}",
+            source_dir.display()
+        )
+    })?;
+    let mut current = home.to_path_buf();
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(format!(
+                "ruta fuente no normalizada: {}",
+                source_dir.display()
+            ));
+        }
+        current.push(component.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(format!(
+                    "se rechaza la ruta fuente porque contiene un enlace simbólico: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Err(e) => {
+                return Err(format!(
+                    "no se pudo inspeccionar {}: {e}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    if !source_dir.starts_with(&root) {
+        return Err(format!("la ruta fuente debe estar bajo {}", root.display()));
+    }
+    Ok(())
+}
+
+fn valida_compiladores(manifest: &EngineManifest, env: &Environment) -> Result<(), String> {
+    let os = env.get("ROPERO_BUILD_OS").unwrap_or(std::env::consts::OS);
+    let requeridos: &[&str] = match os {
+        "macos" | "darwin" => &["clang", "clang++"],
+        "linux" => &[], // C/C++ se validan con las rutas host seleccionadas abajo.
+        other => {
+            return Err(format!(
+                "no hay receta de compilación de {} para {other}",
+                manifest.id.as_str()
+            ));
+        }
+    };
+    for nombre in requeridos {
+        if which_en(env, nombre).is_none() {
+            return Err(format!(
+                "falta compilador requerido para la receta: {nombre}"
+            ));
+        }
+    }
+    if os == "linux" {
+        let host_cxx = env
+            .get("ROPERO_HOST_CXX")
+            .map(PathBuf::from)
+            .or_else(|| {
+                ["/usr/bin/g++-14", "/usr/bin/g++-13", "/usr/bin/clang++"]
+                    .iter()
+                    .map(PathBuf::from)
+                    .find(|p| p.is_file())
+            })
+            .ok_or_else(|| "falta compilador C++ host para Linux".to_string())?;
+        if !host_cxx.is_file() {
+            return Err(format!(
+                "no se encontró compilador C++ host en {}",
+                host_cxx.display()
+            ));
+        }
+        let host_cc = host_cxx
+            .to_string_lossy()
+            .replace("g++", "gcc")
+            .replace("clang++", "clang");
+        if !Path::new(&host_cc).is_file() {
+            return Err(format!("no se encontró compilador C host en {host_cc}"));
+        }
+    }
+    Ok(())
 }
 
 /// Si una ruta es un enlace simbólico.
@@ -144,4 +883,308 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
     let respuesta = pregunta(texto).ok_or_else(|| "no hay respuesta: se cancela".to_string())?;
     ropero_core::install::Via::de_respuesta(&respuesta)
         .ok_or_else(|| "respuesta no válida: escribe 'd' (download) o 'b' (build)".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compila_motor, enlaza_ejecutables};
+    use ropero_core::{
+        DetectSpec, EngineColor, EngineId, EngineInstallSpec, EngineManifest, Environment,
+        Maturity, PortRange,
+    };
+    use std::collections::BTreeMap;
+
+    fn executable(path: &std::path::Path, script: &str) {
+        std::fs::write(path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(path, permissions).unwrap();
+        }
+    }
+
+    #[test]
+    fn receta_manifestada_clona_configura_compila_y_resuelve_binario() {
+        let base = std::env::temp_dir().join(format!("ropero-build-engine-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let path = base.join("path");
+        let home = base.join("home");
+        let source = home.join(".local/share/ropero/engines/llama-server");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        executable(
+            &path.join("git"),
+            "#!/bin/sh\nfor last do :; done\nmkdir -p \"$last\"\nprintf '# project' > \"$last/CMakeLists.txt\"\n",
+        );
+        executable(
+            &path.join("cmake"),
+            "#!/bin/sh\nif [ \"$1\" = \"-S\" ]; then\n  while [ $# -gt 0 ]; do case \"$1\" in -B) shift; build=$1;; esac; shift; done\n  mkdir -p \"$build/bin\"\nelif [ \"$1\" = \"--build\" ]; then\n  build=$2\n  mkdir -p \"$build/bin\"\n  printf '#!/bin/sh\\nexit 0\\n' > \"$build/bin/llama-server\"\n  chmod +x \"$build/bin/llama-server\"\nelse\n  build=$2\n  while [ $# -gt 0 ]; do case \"$1\" in --prefix) shift; prefix=$1;; esac; shift; done\n  mkdir -p \"$prefix/bin\"\n  cp \"$build/bin/llama-server\" \"$prefix/bin/llama-server\"\nfi\n",
+        );
+        executable(&path.join("ninja"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("clang"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("clang++"), "#!/bin/sh\nexit 0\n");
+
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), path.display().to_string());
+        vars.insert("ROPERO_BUILD_OS".to_string(), "macos".to_string());
+        let env = Environment::new(vars, &home, &base);
+        let manifest = EngineManifest {
+            id: EngineId::LlamaServer,
+            label: "llama-server".to_string(),
+            color: EngineColor::default(),
+            description: String::new(),
+            maturity: Maturity::default(),
+            formats: vec!["gguf".to_string()],
+            port_range: PortRange {
+                min: 8100,
+                max: 8199,
+            },
+            deps: vec!["git".to_string(), "cmake".to_string(), "ninja".to_string()],
+            detect: DetectSpec::default(),
+            serve: None,
+            install: Some(EngineInstallSpec {
+                source: Some("https://example.invalid/repo.git".to_string()),
+                source_dir: Some("~/.local/share/ropero/engines/llama-server".to_string()),
+                target: Some("llama-server".to_string()),
+                cmake_args: Vec::new(),
+                binary: Some("bin/llama-server".to_string()),
+                ..EngineInstallSpec::default()
+            }),
+            compat: Vec::new(),
+        };
+
+        let (binary, compiled_source) =
+            compila_motor(&manifest, manifest.install.as_ref().unwrap(), &env, false).unwrap();
+        assert_eq!(binary, source.join("build-ropero/install/bin/llama-server"));
+        assert_eq!(compiled_source.as_deref(), Some(source.as_path()));
+        assert!(binary.is_file());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    fn turbo_manifest() -> EngineManifest {
+        EngineManifest {
+            id: EngineId::TurboLlama,
+            label: "turbo-llama".to_string(),
+            color: EngineColor::default(),
+            description: String::new(),
+            maturity: Maturity::default(),
+            formats: vec!["gguf".to_string()],
+            port_range: PortRange {
+                min: 8200,
+                max: 8299,
+            },
+            deps: Vec::new(),
+            detect: DetectSpec::default(),
+            serve: None,
+            install: None,
+            compat: Vec::new(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn turbo_enlaza_todos_los_bins_prefiere_install_y_poda_links_propios() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("ropero-link-turbo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let source = base.join("source");
+        let build_bin = source.join("build-ropero/bin");
+        let install_bin = source.join("build-ropero/install/bin");
+        let local_bin = base.join("local-bin");
+        std::fs::create_dir_all(&build_bin).unwrap();
+        std::fs::create_dir_all(&install_bin).unwrap();
+        std::fs::create_dir_all(&local_bin).unwrap();
+        executable(&build_bin.join("llama-server"), "#!/bin/sh\nexit 0\n");
+        executable(&build_bin.join("llama-cli"), "#!/bin/sh\nexit 0\n");
+        executable(&install_bin.join("llama-server"), "#!/bin/sh\nexit 0\n");
+        executable(&install_bin.join("llama-quantize"), "#!/bin/sh\nexit 0\n");
+        let stale = source.join("old-build/bin/old-tool");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        executable(&stale, "#!/bin/sh\nexit 0\n");
+        symlink(&stale, local_bin.join("turbo-old-tool")).unwrap();
+        let principal = install_bin.join("llama-server");
+
+        let estado = enlaza_ejecutables(
+            &turbo_manifest(),
+            &principal,
+            Some(&source),
+            true,
+            &local_bin,
+        )
+        .unwrap();
+        let (mensaje, codigo) = ropero_core::install::mensaje_motor("turbo-llama", &estado);
+        assert_eq!(codigo, 0);
+        assert!(mensaje.contains("actualizada"), "{mensaje}");
+        assert!(mensaje.contains("regenerados"), "{mensaje}");
+        assert!(!mensaje.contains("no se toca nada"), "{mensaje}");
+
+        assert_eq!(
+            std::fs::read_link(local_bin.join("turbo-llama-server")).unwrap(),
+            principal
+        );
+        assert!(local_bin.join("turbo-llama-cli").is_symlink());
+        assert!(local_bin.join("turbo-llama-quantize").is_symlink());
+        assert!(!local_bin.join("turbo-old-tool").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn no_pisa_symlink_ajeno_aunque_destino_tenga_el_mismo_nombre() {
+        use std::os::unix::fs::symlink;
+
+        let base = std::env::temp_dir().join(format!("ropero-link-owned-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let source = base.join("source");
+        let build_bin = source.join("build-ropero/bin");
+        let install_bin = source.join("build-ropero/install/bin");
+        let local_bin = base.join("local-bin");
+        let foreign = base.join("foreign/llama-cli");
+        std::fs::create_dir_all(&build_bin).unwrap();
+        std::fs::create_dir_all(&install_bin).unwrap();
+        std::fs::create_dir_all(&foreign.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&local_bin).unwrap();
+        executable(&install_bin.join("llama-server"), "#!/bin/sh\nexit 0\n");
+        executable(&install_bin.join("llama-cli"), "#!/bin/sh\nexit 0\n");
+        executable(&foreign, "#!/bin/sh\nexit 0\n");
+        let foreign_link = local_bin.join("turbo-llama-cli");
+        symlink(&foreign, &foreign_link).unwrap();
+
+        let error = enlaza_ejecutables(
+            &turbo_manifest(),
+            &install_bin.join("llama-server"),
+            Some(&source),
+            true,
+            &local_bin,
+        )
+        .unwrap_err();
+        assert!(error.contains("enlace ajeno"), "{error}");
+        assert_eq!(std::fs::read_link(&foreign_link).unwrap(), foreign);
+        assert!(!local_bin.join("turbo-llama-server").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn force_falla_preflight_cuda_sin_borrar_el_checkout() {
+        let base =
+            std::env::temp_dir().join(format!("ropero-force-preflight-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let path = base.join("path");
+        let home = base.join("home");
+        let source = home.join(".local/share/ropero/engines/llama-server");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("CMakeLists.txt"), "# existing checkout").unwrap();
+        std::fs::write(source.join("keep.marker"), "keep").unwrap();
+        executable(&path.join("git"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("cmake"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("ninja"), "#!/bin/sh\nexit 0\n");
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), path.display().to_string());
+        vars.insert("ROPERO_BUILD_OS".to_string(), "linux".to_string());
+        vars.insert(
+            "ROPERO_CUDA_PATH".to_string(),
+            base.join("cuda-no-existe").display().to_string(),
+        );
+        let env = Environment::new(vars, &home, &base);
+        let manifest = llama_manifest("~/.local/share/ropero/engines/llama-server");
+
+        let error =
+            compila_motor(&manifest, manifest.install.as_ref().unwrap(), &env, true).unwrap_err();
+        assert!(error.contains("nvcc"), "{error}");
+        assert!(source.join("keep.marker").is_file());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn force_rechaza_source_dir_fuera_de_raiz_sin_borrarlo() {
+        let base = std::env::temp_dir().join(format!("ropero-force-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let path = base.join("path");
+        let home = base.join("home");
+        let outside = home.join("source");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("keep.marker"), "keep").unwrap();
+        executable(&path.join("git"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("cmake"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("ninja"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("clang"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("clang++"), "#!/bin/sh\nexit 0\n");
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), path.display().to_string());
+        vars.insert("ROPERO_BUILD_OS".to_string(), "macos".to_string());
+        let env = Environment::new(vars, &home, &base);
+        let manifest = llama_manifest("~/source");
+
+        let error =
+            compila_motor(&manifest, manifest.install.as_ref().unwrap(), &env, true).unwrap_err();
+        assert!(error.contains("ruta fuente no permitida"), "{error}");
+        assert!(outside.join("keep.marker").is_file());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn force_rechaza_source_dir_symlink_a_fuera_de_raiz() {
+        use std::os::unix::fs::symlink;
+
+        let base =
+            std::env::temp_dir().join(format!("ropero-force-symlink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let path = base.join("path");
+        let home = base.join("home");
+        let outside = home.join("outside");
+        let expected = home.join(".local/share/ropero/engines/llama-server");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(expected.parent().unwrap()).unwrap();
+        std::fs::write(outside.join("keep.marker"), "keep").unwrap();
+        symlink(&outside, &expected).unwrap();
+        executable(&path.join("git"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("cmake"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("ninja"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("clang"), "#!/bin/sh\nexit 0\n");
+        executable(&path.join("clang++"), "#!/bin/sh\nexit 0\n");
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), path.display().to_string());
+        vars.insert("ROPERO_BUILD_OS".to_string(), "macos".to_string());
+        let env = Environment::new(vars, &home, &base);
+        let manifest = llama_manifest("~/.local/share/ropero/engines/llama-server");
+
+        let error =
+            compila_motor(&manifest, manifest.install.as_ref().unwrap(), &env, true).unwrap_err();
+        assert!(error.contains("enlace simbólico"), "{error}");
+        assert!(outside.join("keep.marker").is_file());
+        assert!(expected.is_symlink());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    fn llama_manifest(source_dir: &str) -> EngineManifest {
+        EngineManifest {
+            id: EngineId::LlamaServer,
+            label: "llama-server".to_string(),
+            color: EngineColor::default(),
+            description: String::new(),
+            maturity: Maturity::default(),
+            formats: vec!["gguf".to_string()],
+            port_range: PortRange {
+                min: 8100,
+                max: 8199,
+            },
+            deps: vec!["git".to_string(), "cmake".to_string(), "ninja".to_string()],
+            detect: DetectSpec::default(),
+            serve: None,
+            install: Some(EngineInstallSpec {
+                source: Some("https://example.invalid/repo.git".to_string()),
+                source_dir: Some(source_dir.to_string()),
+                binary: Some("bin/llama-server".to_string()),
+                ..EngineInstallSpec::default()
+            }),
+            compat: Vec::new(),
+        }
+    }
 }

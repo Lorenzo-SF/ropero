@@ -106,6 +106,13 @@ pub const COMMANDS: &[Command] = &[
         state: CommandState::Ready,
     },
     Command {
+        name: "config",
+        usage: "config",
+        summary: "muestra la configuración, las rutas y su origen",
+        phase: None,
+        state: CommandState::Ready,
+    },
+    Command {
         name: "list",
         usage: "list [--all]",
         summary: "modelos disponibles, agrupados por motor",
@@ -115,7 +122,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "template",
         usage: "template",
-        summary: "vuelca la plantilla del catálogo",
+        summary: "muestra la plantilla del modelo y sugiere dónde guardarla",
         phase: None,
         state: CommandState::Ready,
     },
@@ -168,10 +175,16 @@ pub const COMMANDS: &[Command] = &[
 /// No es un comando del [`COMMANDS`] porque **no** es una palabra fija: lo
 /// que sigue al binario es el **nombre del modelo**. Aun así es parte del
 /// contrato (doc CLI v2 §8) y por eso tiene su propia entrada.
-pub const RUN_USAGE: &str = "<modelo> [--force] [--cpu] [--port N] [--api-key CLAVE] [--ctx N]";
+pub const RUN_USAGE: &str = "<modelo> [--force] [--cpu] [--port N] [--api-key CLAVE] [--no-api-key] [--ctx N] [--log-level NIVEL] [--background]";
 
 /// La frase de `ropero <modelo>` en la ayuda.
 pub const RUN_SUMMARY: &str = "arranca el modelo en su motor";
+
+/// La invocación de eliminación de un modelo: `ropero <modelo> remove`.
+pub const REMOVE_USAGE: &str = "<modelo> remove";
+
+/// La frase de `ropero <modelo> remove` en la ayuda.
+pub const REMOVE_SUMMARY: &str = "elimina los artefactos descargados de un modelo";
 
 /// La frase de `ropero` a secas (doc CLI v2 §6): es una ayuda breve.
 pub const RESUMEN_SUMMARY: &str = "resumen de la máquina: motores y modelos";
@@ -251,17 +264,27 @@ impl Flag {
 /// El `--prio` es **repetible**: puede ser global (antes de la lista) o
 /// por modelo (detrás del modelo), y en una invocación puede haber varios
 /// (doc B §4.10.7).
-pub const FLAGS_INSTALL: &[Flag] = &[Flag::many(
-    "prio",
-    "VIA",
-    "la vía de instalación: download o build (repetible)",
-)];
+pub const FLAGS_INSTALL: &[Flag] = &[
+    Flag::many(
+        "prio",
+        "VIA",
+        "la vía de instalación: download o build (repetible)",
+    ),
+    Flag::switch(
+        "force",
+        "borra el código fuente de los motores seleccionados y reinstala",
+    ),
+];
 
 /// Los flags de `ropero stop`.
 pub const FLAGS_STOP: &[Flag] = &[];
 
 /// Los flags de `ropero gguffer` (doc CLI v2 §11.2).
 pub const FLAGS_GGUFFER: &[Flag] = &[
+    Flag::switch(
+        "turbo-llama",
+        "usa las herramientas compiladas del fork Turbo-Llama",
+    ),
     Flag::value("repo", "OWNER/NAME", "repo de HuggingFace de origen"),
     Flag::value("path", "DIR", "directorio de pesos locales de origen"),
     Flag::value(
@@ -327,6 +350,15 @@ pub const FLAGS_RUN: &[Flag] = &[
     Flag::value("api-key", "CLAVE", "fija la clave de API del gateway"),
     Flag::switch("no-api-key", "arranca sin clave de API"),
     Flag::value("ctx", "N", "fuerza el contexto"),
+    Flag::value(
+        "log-level",
+        "NIVEL",
+        "nivel de log: error, warn, info, debug o trace",
+    ),
+    Flag::switch(
+        "background",
+        "arranca desacoplado, sin salida a la terminal, y guarda los logs",
+    ),
 ];
 
 /// Los flags de `ropero test` (doc CLI v2 §13).
@@ -456,6 +488,7 @@ pub fn help_text() -> String {
         out.push_str(&format!("  {:<38}{}\n", comando.usage, comando.summary));
     }
     out.push_str(&format!("  {:<38}{}\n", RUN_USAGE, RUN_SUMMARY));
+    out.push_str(&format!("  {:<38}{}\n", REMOVE_USAGE, REMOVE_SUMMARY));
     out.push_str("\n  ropero --help                     esta ayuda\n");
     out.push_str("\nmás: ropero <comando> --help\n");
     out

@@ -32,9 +32,11 @@ pub struct ResolvedPaths {
 /// entorno llega por parámetro (doc B §3.2.3).
 pub fn resolve_paths(spec: &ModelSpec, env: &Environment) -> ResolvedPaths {
     let real = crate::catalog::real_name(spec);
-    let gguf_dir = env.env_path("GGUF_DIR", "models/gguf");
-    let safetensors_dir = env.env_path("SAFETENSORS_DIR", "models/safetensors");
-    let log_dir = env.env_path("LOG_DIR", ".logs/ropero");
+    let gguf_dir = env.engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf");
+    let artifacts_dir = env.engine_artifact_path(spec.model.engine, "ARTIFACTS_DIR", "models");
+    let safetensors_dir =
+        env.engine_artifact_path(spec.model.engine, "SAFETENSORS_DIR", "models/safetensors");
+    let log_dir = env.env_path("LOG_DIR", "logs");
 
     let in_gguf = |p: &PathBuf| gguf_dir.join(&real).join(p).to_string_lossy().to_string();
 
@@ -86,6 +88,10 @@ pub fn resolve_paths(spec: &ModelSpec, env: &Environment) -> ResolvedPaths {
             (crate::EngineId::FastFlowLm, _) | (crate::EngineId::Strata, _) => {
                 spec.model.path.clone()
             }
+            (crate::EngineId::Ignis, crate::ModelFormat::Ninfer) => artifacts_dir
+                .join(&spec.model.path)
+                .to_string_lossy()
+                .to_string(),
             (_, crate::ModelFormat::Safetensors) => {
                 let p = PathBuf::from(&spec.model.path);
                 if p.is_absolute() {

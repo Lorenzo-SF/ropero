@@ -175,6 +175,11 @@ impl Engine for FakeEngine {
     fn wait(&self, _pid: u32, _deadline: Duration) -> Option<i32> {
         Some(0)
     }
+
+    fn detach(&self, pid: u32) -> Result<(), String> {
+        self.acciones().push(format!("detach {pid}"));
+        Ok(())
+    }
 }
 
 /// La sonda doble: responde lo que se le dice.

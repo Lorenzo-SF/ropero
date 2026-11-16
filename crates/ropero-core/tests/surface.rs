@@ -1,20 +1,20 @@
-//! La superficie del CLI v2: los once comandos, sus frases y su estado.
+//! La superficie del CLI: comandos, sus frases y su estado.
 //!
-//! El doc normativo (`docs-especificacion/ropero-cli.md`) fija once
-//! invocaciones. Este test es el **puerta ejecutable** de ese contrato:
-//! comprueba que la tabla de comandos es completa, que cada uno tiene
-//! frase, y que los que aún no están implementados lo dicen.
+//! El contrato de comandos vive en `ropero_core::surface`. Este test
+//! comprueba que la tabla es coherente y que los comandos declarados tienen
+//! frase y forma de uso.
 
-use ropero_core::surface::{self, CommandState};
-use ropero_core::{COMMANDS, Command};
+use ropero_core::COMMANDS;
+use ropero_core::surface::{self, Command, CommandState};
 
-/// Los once comandos del contrato, con su forma de invocación.
-const LOS_ONCE: &[(&str, &str)] = &[
+/// Los comandos del contrato actual, con su forma de invocación.
+const COMANDOS: &[(&str, &str)] = &[
     ("install", "install [engines|models] [modelo...]"),
     ("stop", "stop [modelo]"),
     ("gguffer", "gguffer --repo OWNER/NAME"),
     ("status", "status"),
     ("doctor", "doctor"),
+    ("config", "config"),
     ("list", "list [--all]"),
     ("template", "template"),
     ("engines", "engines [--all]"),
@@ -31,10 +31,10 @@ const LOS_ONCE: &[(&str, &str)] = &[
     ),
 ];
 
-/// Los once comandos están en la tabla, con su forma de invocación.
+/// Los comandos están en la tabla, con su forma de invocación.
 #[test]
 fn los_once_comandos_estan_declarados() {
-    for (nombre, uso) in LOS_ONCE {
+    for (nombre, uso) in COMANDOS {
         let cmd = COMMANDS
             .iter()
             .find(|c| c.name == *nombre)
@@ -43,7 +43,7 @@ fn los_once_comandos_estan_declarados() {
     }
     assert_eq!(
         COMMANDS.len(),
-        LOS_ONCE.len(),
+        COMANDOS.len(),
         "sobran comandos en la tabla"
     );
 }
@@ -58,7 +58,7 @@ fn ningun_comando_se_repite() {
     assert_eq!(nombres.len(), total, "hay un comando repetido");
 }
 
-/// Todo comando tiene una frase de **una** línea (doc CLI v2 §7).
+/// Todo comando tiene una frase de **una** línea.
 #[test]
 fn todo_comando_tiene_una_frase_de_una_linea() {
     for cmd in COMMANDS {
@@ -77,12 +77,12 @@ fn todo_comando_tiene_una_frase_de_una_linea() {
     }
 }
 
-/// Los once comandos son los del contrato: ni uno más, ni uno menos.
+/// Los comandos son exactamente los del contrato actual.
 #[test]
 fn la_tabla_es_exactamente_la_del_contrato() {
     let mut declarados: Vec<&str> = COMMANDS.iter().map(|c| c.name).collect();
     declarados.sort();
-    let mut esperados: Vec<&str> = LOS_ONCE.iter().map(|(n, _)| *n).collect();
+    let mut esperados: Vec<&str> = COMANDOS.iter().map(|(n, _)| *n).collect();
     esperados.sort();
     assert_eq!(declarados, esperados);
 }
@@ -155,8 +155,8 @@ fn stop_esta_listo() {
 #[test]
 fn los_comandos_listos_estan_marcados() {
     for nombre in [
-        "install", "status", "doctor", "list", "template", "engines", "validate", "args", "levels",
-        "path",
+        "install", "status", "doctor", "config", "list", "template", "engines", "validate", "args",
+        "levels", "path",
     ] {
         let cmd: &Command = COMMANDS
             .iter()

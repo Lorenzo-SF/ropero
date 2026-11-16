@@ -91,6 +91,7 @@ pub struct ResolvedFiles {
     pub mmproj: Option<String>,
     pub chat_template: Option<String>,
     pub gguf_dir: String,
+    pub artifacts_dir: String,
     pub safetensors_dir: String,
     pub model_path: String,
 }
@@ -121,8 +122,10 @@ pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
     use crate::ModelFormat;
 
     let real = crate::catalog::real_name(spec);
-    let gguf_dir = env.env_path("GGUF_DIR", "models/gguf");
-    let safetensors_dir = env.env_path("SAFETENSORS_DIR", "models/safetensors");
+    let gguf_dir = env.engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf");
+    let safetensors_dir =
+        env.engine_artifact_path(spec.model.engine, "SAFETENSORS_DIR", "models/safetensors");
+    let artifacts_dir = env.engine_artifact_path(spec.model.engine, "ARTIFACTS_DIR", "models");
     let gguf_name = env
         .get(&format!("ROPERO_{}_GGUF", crate::catalog::slug(&real)))
         .filter(|s| !s.is_empty())
@@ -149,8 +152,12 @@ pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
         .chat_template
         .as_ref()
         .map(|p| gguf_dir.join(&real).join(p).to_string_lossy().to_string());
-    let model_path = if spec.model.format == ModelFormat::Safetensors && !spec.model.path.is_empty()
-    {
+    let model_path = if spec.model.format == ModelFormat::Ninfer && !spec.model.path.is_empty() {
+        artifacts_dir
+            .join(&spec.model.path)
+            .to_string_lossy()
+            .to_string()
+    } else if spec.model.format == ModelFormat::Safetensors && !spec.model.path.is_empty() {
         let p = std::path::PathBuf::from(&spec.model.path);
         if p.is_absolute() {
             p.to_string_lossy().to_string()
@@ -171,6 +178,7 @@ pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
             mmproj,
             chat_template,
             gguf_dir: gguf_dir.to_string_lossy().to_string(),
+            artifacts_dir: artifacts_dir.to_string_lossy().to_string(),
             safetensors_dir: safetensors_dir.to_string_lossy().to_string(),
             model_path,
         },

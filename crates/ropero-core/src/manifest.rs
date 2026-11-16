@@ -33,7 +33,7 @@ use crate::engine::EngineId;
 
 /// El color de un motor en los listados (doc CLI v2 §4).
 ///
-/// Es un enum cerrado: la leyenda del doc fija ocho colores y un color
+/// Es un enum cerrado: la leyenda del doc fija los colores y un color
 /// fuera de la leyenda es un error de datos, no un texto libre.
 ///
 /// Los nombres son los **exactos** de la leyenda, tildes incluidas: el doc
@@ -60,6 +60,8 @@ pub enum EngineColor {
     Morado,
     #[serde(rename = "verde-pálido")]
     VerdePalido,
+    #[serde(rename = "cian")]
+    Cian,
 }
 
 impl EngineColor {
@@ -75,6 +77,7 @@ impl EngineColor {
             Self::VerdePistacho => "verde-pistacho",
             Self::Morado => "morado",
             Self::VerdePalido => "verde-pálido",
+            Self::Cian => "cian",
         }
     }
 }
@@ -241,6 +244,45 @@ pub struct CompatRule {
     pub min_ram_gb: Option<f64>,
 }
 
+/// Argumentos por defecto del arranque delegado (`flm serve <tag> ...`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ServeSpec {
+    /// Flags por defecto que se pasan tras el tag del modelo.
+    #[serde(default)]
+    pub defaults: Vec<String>,
+}
+
+/// Delegación de operaciones de almacén del motor (`flm pull/remove/list`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineInstallSpec {
+    /// Comando para bajar/instalar un tag: `<cmd...> <tag>`.
+    #[serde(default)]
+    pub pull: Vec<String>,
+    /// Comando para eliminar un tag: `<cmd...> <tag>`.
+    #[serde(default)]
+    pub remove: Vec<String>,
+    /// Comando para consultar el almacén (p. ej. `flm list --json`).
+    #[serde(default)]
+    pub list: Vec<String>,
+    /// Repositorio que se clona para compilar: `git clone <repo> <source>`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Ruta del clon; `~` se expande con HOME.
+    #[serde(default)]
+    pub source_dir: Option<String>,
+    /// Nombre del objetivo de CMake/Ninja.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Flags de configuración CMake. La CLI añade `-S`, `-B` y Release.
+    #[serde(default)]
+    pub cmake_args: Vec<String>,
+    /// Ruta del ejecutable relativo al árbol de build.
+    #[serde(default)]
+    pub binary: Option<String>,
+}
+
 impl CompatRule {
     /// El SO (o los SOs) de la regla, si la regla lo dice.
     pub fn os(&self) -> Option<&[Os]> {
@@ -300,6 +342,14 @@ pub struct EngineManifest {
     #[serde(default)]
     pub detect: DetectSpec,
 
+    /// Argumentos por defecto para el arranque delegado (p. ej. `flm serve`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serve: Option<ServeSpec>,
+
+    /// Delegación de operaciones de almacén/instalación del motor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<EngineInstallSpec>,
+
     /// Las reglas de SO y hardware.
     #[serde(default)]
     pub compat: Vec<CompatRule>,
@@ -331,6 +381,10 @@ struct EngineManifestFlat {
     deps: Vec<String>,
     #[serde(default)]
     detect: DetectSpec,
+    #[serde(default)]
+    serve: Option<ServeSpec>,
+    #[serde(default)]
+    install: Option<EngineInstallSpec>,
     #[serde(default)]
     compat: Vec<CompatRule>,
 }
@@ -411,6 +465,8 @@ pub fn parse_engine_manifest(
         port_range: PortRange::new(plano.port_min, plano.port_max),
         deps: plano.deps,
         detect: plano.detect,
+        serve: plano.serve,
+        install: plano.install,
         compat: plano.compat,
     })
 }

@@ -179,6 +179,9 @@ pub trait Engine: Send + Sync {
     ///
     /// Devuelve el código de salida, si lo hubo.
     fn wait(&self, pid: u32, deadline: Duration) -> Option<i32>;
+
+    /// Desacopla el proceso para que siga vivo tras salir ropero (background).
+    fn detach(&self, pid: u32) -> Result<(), String>;
 }
 
 /// Un proceso lanzado.
