@@ -7,7 +7,7 @@ engine  = "llama-server"
 context = 65536
 
 [files]
-gguf = "Qwen3.8-27B-UD-IQ2_S.gguf" #Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"
+gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"
 # gguf = "Qwen3.8-27B-UD-IQ3_S.gguf"
 
 [download]
