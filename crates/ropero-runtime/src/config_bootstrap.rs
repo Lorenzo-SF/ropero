@@ -12,6 +12,90 @@ use ropero_core::config::{
     self, Config, EstadoConfig, archivo_config, directorio_config, ejemplo_config,
 };
 
+pub(crate) const TESTS: &[(&str, &str)] = &[
+    ("indice.md", include_str!("../../../docs/tests/indice.md")),
+    (
+        "test-adherencia-persona-restricciones-duras.md",
+        include_str!("../../../docs/tests/test-adherencia-persona-restricciones-duras.md"),
+    ),
+    (
+        "test-autocritica.md",
+        include_str!("../../../docs/tests/test-autocritica.md"),
+    ),
+    (
+        "test-calibracion.md",
+        include_str!("../../../docs/tests/test-calibracion.md"),
+    ),
+    (
+        "test-comprension-ambiguedad.md",
+        include_str!("../../../docs/tests/test-comprension-ambiguedad.md"),
+    ),
+    (
+        "test-concision-reflejo.md",
+        include_str!("../../../docs/tests/test-concision-reflejo.md"),
+    ),
+    (
+        "test-creatividad-divergente-restricciones.md",
+        include_str!("../../../docs/tests/test-creatividad-divergente-restricciones.md"),
+    ),
+    (
+        "test-falsa-creencia-segunda-orden.md",
+        include_str!("../../../docs/tests/test-falsa-creencia-segunda-orden.md"),
+    ),
+    (
+        "test-inteligencia-fluida.md",
+        include_str!("../../../docs/tests/test-inteligencia-fluida.md"),
+    ),
+    (
+        "test-logico-deductivo.md",
+        include_str!("../../../docs/tests/test-logico-deductivo.md"),
+    ),
+    (
+        "test-memoria-trabajo.md",
+        include_str!("../../../docs/tests/test-memoria-trabajo.md"),
+    ),
+    (
+        "test-planificacion-dependencias-restricciones.md",
+        include_str!("../../../docs/tests/test-planificacion-dependencias-restricciones.md"),
+    ),
+    (
+        "test-razonamiento-bajo-informacion-incompleta.md",
+        include_str!("../../../docs/tests/test-razonamiento-bajo-informacion-incompleta.md"),
+    ),
+    (
+        "test-razonamiento-casual-contractual.md",
+        include_str!("../../../docs/tests/test-razonamiento-casual-contractual.md"),
+    ),
+    (
+        "test-razonamiento-matematico-competicion.md",
+        include_str!("../../../docs/tests/test-razonamiento-matematico-competicion.md"),
+    ),
+    (
+        "test-razonamiento-trampa.md",
+        include_str!("../../../docs/tests/test-razonamiento-trampa.md"),
+    ),
+    (
+        "test-resistencia-prompt-injection.md",
+        include_str!("../../../docs/tests/test-resistencia-prompt-injection.md"),
+    ),
+    (
+        "test-herramienta-calculadora.md",
+        include_str!("../../../docs/tests/test-herramienta-calculadora.md"),
+    ),
+    (
+        "test-herramienta-consulta.md",
+        include_str!("../../../docs/tests/test-herramienta-consulta.md"),
+    ),
+    (
+        "test-herramienta-dato-hostil.md",
+        include_str!("../../../docs/tests/test-herramienta-dato-hostil.md"),
+    ),
+    (
+        "test-herramienta-sin-resultados.md",
+        include_str!("../../../docs/tests/test-herramienta-sin-resultados.md"),
+    ),
+];
+
 /// Carga el estado y la configuración resuelta, creando el directorio y el
 /// archivo por defecto si no existen.
 ///
@@ -160,74 +244,10 @@ pub fn carga_config(env: &Environment) -> Result<(EstadoConfig, Config, Environm
     Ok((estado, config_resuelta, env_out))
 }
 
+/// Instala una copia de consulta sólo donde falte. El runner lee `TESTS`
+/// compilado con Ropero, para que una configuración antigua no oculte
+/// pruebas nuevas y las modificaciones locales no alteren la batería interna.
 fn prepara_docs_tests(config_dir: &std::path::Path) -> Result<(), String> {
-    const TESTS: &[(&str, &str)] = &[
-        ("indice.md", include_str!("../../../docs/tests/indice.md")),
-        (
-            "test-adherencia-persona-restricciones-duras.md",
-            include_str!("../../../docs/tests/test-adherencia-persona-restricciones-duras.md"),
-        ),
-        (
-            "test-autocritica.md",
-            include_str!("../../../docs/tests/test-autocritica.md"),
-        ),
-        (
-            "test-calibracion.md",
-            include_str!("../../../docs/tests/test-calibracion.md"),
-        ),
-        (
-            "test-comprension-ambiguedad.md",
-            include_str!("../../../docs/tests/test-comprension-ambiguedad.md"),
-        ),
-        (
-            "test-concision-reflejo.md",
-            include_str!("../../../docs/tests/test-concision-reflejo.md"),
-        ),
-        (
-            "test-creatividad-divergente-restricciones.md",
-            include_str!("../../../docs/tests/test-creatividad-divergente-restricciones.md"),
-        ),
-        (
-            "test-falsa-creencia-segunda-orden.md",
-            include_str!("../../../docs/tests/test-falsa-creencia-segunda-orden.md"),
-        ),
-        (
-            "test-inteligencia-fluida.md",
-            include_str!("../../../docs/tests/test-inteligencia-fluida.md"),
-        ),
-        (
-            "test-logico-deductivo.md",
-            include_str!("../../../docs/tests/test-logico-deductivo.md"),
-        ),
-        (
-            "test-memoria-trabajo.md",
-            include_str!("../../../docs/tests/test-memoria-trabajo.md"),
-        ),
-        (
-            "test-planificacion-dependencias-restricciones.md",
-            include_str!("../../../docs/tests/test-planificacion-dependencias-restricciones.md"),
-        ),
-        (
-            "test-razonamiento-bajo-informacion-incompleta.md",
-            include_str!("../../../docs/tests/test-razonamiento-bajo-informacion-incompleta.md"),
-        ),
-        (
-            "test-razonamiento-casual-contractual.md",
-            include_str!("../../../docs/tests/test-razonamiento-casual-contractual.md"),
-        ),
-        (
-            "test-razonamiento-matematico-competicion.md",
-            include_str!("../../../docs/tests/test-razonamiento-matematico-competicion.md"),
-        ),
-        (
-            "test-razonamiento-trampa.md",
-            include_str!("../../../docs/tests/test-razonamiento-trampa.md"),
-        ),
-        (
-            "test-resistencia-prompt-injection.md",
-            include_str!("../../../docs/tests/test-resistencia-prompt-injection.md"),
-        ),
-    ];
     let dir = config_dir.join("docs/tests");
     fs::create_dir_all(&dir).map_err(|e| format!("no se pudo crear {}: {e}", dir.display()))?;
     for (name, contents) in TESTS {
@@ -245,6 +265,28 @@ fn prepara_docs_tests(config_dir: &std::path::Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TESTS;
+
+    #[test]
+    fn los_prompts_compilados_contienen_todos_los_archivos_del_indice() {
+        let indice = TESTS
+            .iter()
+            .find(|(nombre, _)| *nombre == "indice.md")
+            .map(|(_, texto)| *texto)
+            .expect("el índice está compilado");
+        let bateria = ropero_bateria::indice::parse_indice(indice).expect("índice válido");
+        for test in bateria.tests {
+            assert!(
+                TESTS.iter().any(|(nombre, _)| *nombre == test.fichero),
+                "falta compilar el prompt {}",
+                test.fichero
+            );
+        }
+    }
 }
 
 /// Resuelve la raíz del catálogo según overrides o configuración externa.

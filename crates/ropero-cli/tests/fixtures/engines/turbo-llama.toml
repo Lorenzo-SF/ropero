@@ -38,4 +38,4 @@ compat = [
 # Cómo se sabe que está instalado.
 [detect]
 binaries = ["llama-server"]
-paths = ["/usr/local/bin/llama-server", "/opt/homebrew/bin/llama-server"]
+paths = []

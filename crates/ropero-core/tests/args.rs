@@ -23,6 +23,7 @@ fn ctx() -> ResolveContext {
             mmproj: None,
             chat_template: None,
             gguf_dir: "/g".to_string(),
+            artifacts_dir: "/a".to_string(),
             safetensors_dir: "/s".to_string(),
             model_path: String::new(),
         },

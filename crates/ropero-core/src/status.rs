@@ -48,7 +48,6 @@
 
 use std::fmt::Write as _;
 
-use crate::estilo::{Celda, Columna, Seccion, Tabla};
 use crate::palette::Palette;
 
 /// Un recurso con su medida y su unidad.
@@ -122,73 +121,76 @@ pub fn format_reading(reading: &Option<Reading>) -> String {
 /// Es una función **pura**: recibe la foto y devuelve el texto. Por eso se
 /// puede probar sin máquina y sin disco.
 pub fn status_text(maquina: &MachineState) -> String {
-    let mut seccion = Seccion::nueva(TITULO);
-    seccion.cuerpo(tabla_de_procesadores(maquina).lineas(&Palette::plain()));
-    seccion.linea("");
-    seccion.cuerpo(tabla_de_memoria(maquina).lineas(&Palette::plain()));
-    let mut texto = seccion.lineas().join("\n");
-    texto.push('\n');
-    texto
+    status_text_color(maquina, &Palette::plain())
 }
 
-/// La tabla de los procesadores: la CPU y las GPUs.
-///
-/// El reloj y la temperatura son **números**: van a la derecha, como el uso
-/// y el total de la memoria. La sección usa un solo criterio (doc CLI v2
-/// §2.1).
-fn tabla_de_procesadores(maquina: &MachineState) -> Tabla {
-    let mut tabla = Tabla::nivel(1)
-        .columna(Columna::texto("recurso"))
-        .columna(Columna::numero("reloj"))
-        .columna(Columna::numero("temperatura"));
-    tabla.fila(vec![
-        Celda::plana("CPU"),
-        Celda::plana(format_reading(&maquina.cpu_ghz)),
-        Celda::plana(format_reading(&maquina.cpu_temp_c)),
-    ]);
-    for (nombre, gpu) in [("dGPU", &maquina.dgpu), ("iGPU", &maquina.igpu)] {
-        let Some(gpu) = gpu else {
-            tabla.fila(vec![
-                Celda::plana(nombre),
-                Celda::plana(NO_DISPONIBLE),
-                Celda::plana(String::new()),
-            ]);
-            continue;
+/// Salida compacta y coloreada: temperatura y saturación de memoria por umbral.
+pub fn status_text_color(maquina: &MachineState, paleta: &Palette) -> String {
+    let mut lineas = vec![TITULO.to_string()];
+    let cpu_temp = lectura_color(paleta, &maquina.cpu_temp_c, true);
+    let cpu_clock = format_reading(&maquina.cpu_ghz);
+    lineas.push(format!(" CPU  {cpu_clock} · {cpu_temp}"));
+    for (label, gpu) in [("GPU", &maquina.dgpu), ("iGPU", &maquina.igpu)] {
+        if let Some(gpu) = gpu {
+            let device = paleta.paint_code(51, &gpu.name);
+            lineas.push(format!(
+                " {label}  {device} · {} · {}",
+                format_reading(&gpu.ghz),
+                lectura_color(paleta, &gpu.temp_c, true)
+            ));
+        } else if label == "GPU" {
+            lineas.push(format!(" GPU  {NO_DISPONIBLE}"));
+        }
+    }
+    let mem = &maquina.memory;
+    for (label, used, total) in [
+        ("RAM", &mem.ram_used_mb, &mem.ram_total_mb),
+        ("SWAP", &mem.swap_used_mb, &mem.swap_total_mb),
+    ] {
+        let display = match (used, total) {
+            (Some(u), Some(t)) if t.value > 0.0 => {
+                let pct = u.value * 100.0 / t.value;
+                paleta.paint_code(
+                    if pct < 70.0 {
+                        82
+                    } else if pct < 88.0 {
+                        220
+                    } else {
+                        196
+                    },
+                    &format!("{:.1}/{:.1} {} ({pct:.0}%)", u.value, t.value, u.unit),
+                )
+            }
+            _ => format!("{} / {}", format_reading(used), format_reading(total)),
         };
-        tabla.fila(vec![
-            Celda::plana(nombre),
-            Celda::plana(format_reading(&gpu.ghz)),
-            Celda::plana(format_reading(&gpu.temp_c)),
-        ]);
-        // El nombre de la GPU es una nota de su fila: lo que dice el driver.
-        tabla.nota(Celda::plana(gpu.name.clone()));
+        lineas.push(format!(" {label}  {display}"));
     }
-    tabla
+    if let Some(zram) = &mem.zram_mb {
+        lineas.push(format!(
+            "      zram {}",
+            format_reading(&Some(zram.clone()))
+        ));
+    }
+    lineas.push(String::new());
+    lineas.join("\n")
 }
 
-/// La tabla de la memoria: la RAM y el swap.
-fn tabla_de_memoria(maquina: &MachineState) -> Tabla {
-    let mut tabla = Tabla::nivel(1)
-        .columna(Columna::texto("recurso"))
-        .columna(Columna::numero("uso"))
-        .columna(Columna::numero("total"));
-    let ram = &maquina.memory;
-    tabla.fila(vec![
-        Celda::plana("RAM"),
-        Celda::plana(format_reading(&ram.ram_used_mb)),
-        Celda::plana(format_reading(&ram.ram_total_mb)),
-    ]);
-    tabla.fila(vec![
-        Celda::plana("SWAP"),
-        Celda::plana(format_reading(&ram.swap_used_mb)),
-        Celda::plana(format_reading(&ram.swap_total_mb)),
-    ]);
-    // El zram va **aparte**: el swap lo incluye, pero no se confunde con él.
-    if let Some(zram) = &ram.zram_mb {
-        let nota = format!("(incluye {} de zram)", format_reading(&Some(zram.clone())));
-        tabla.nota(Celda::plana(nota));
-    }
-    tabla
+fn lectura_color(paleta: &Palette, lectura: &Option<Reading>, temperatura: bool) -> String {
+    let Some(r) = lectura else {
+        return NO_DISPONIBLE.to_string();
+    };
+    let code = if temperatura {
+        if r.value < 65.0 {
+            82
+        } else if r.value < 80.0 {
+            220
+        } else {
+            196
+        }
+    } else {
+        255
+    };
+    paleta.paint_code(code, &format!("{:.1} {}", r.value, r.unit))
 }
 
 /// Las líneas del `status`, una por recurso.

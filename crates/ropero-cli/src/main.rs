@@ -23,6 +23,7 @@
 //! parser del arranque ([`parser::arranque`]), que es el del doc CLI v2 §8.
 
 mod commands;
+mod connect;
 mod discovery;
 mod gguffer;
 mod install;
@@ -76,6 +77,7 @@ fn comando(matches: &ArgMatches) -> i32 {
         "status" => commands::status(),
         "doctor" => commands::doctor(),
         "config" => commands::config(),
+        "connect" => connect::run(sub),
         "list" => commands::list(tiene_all(sub)),
         "engines" => commands::engines(tiene_all(sub)),
         "template" => commands::template(),

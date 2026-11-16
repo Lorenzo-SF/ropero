@@ -634,10 +634,9 @@ fn install_models_no_vuelve_a_bajar_un_modelo_ya_descargado() {
     );
 }
 
-/// La vía `build` dice la verdad: todavía **no** se fabrica, así que no se
-/// dice que se ha instalado nada.
+/// La vía `build` delega en forge y deja claro si no puede arrancar la receta.
 #[test]
-fn install_models_con_la_via_build_dice_que_no_esta_implementada() {
+fn install_models_con_la_via_build_intenta_forjar_y_muestra_el_bloqueo() {
     let fake = Fake::nuevo("models-build").con_hf();
     let (code, stdout, stderr) = fake.corre(&["install", "models", "modelo-gamma"]);
     assert_eq!(code, 1, "stderr={stderr}");
@@ -646,16 +645,12 @@ fn install_models_con_la_via_build_dice_que_no_esta_implementada() {
         "stdout={stdout}"
     );
     assert!(
-        stdout.contains("todavía no está implementado"),
-        "el mensaje no dice que no está implementado: {stdout}"
-    );
-    assert!(
         !stdout.contains("instalado"),
         "no puede decir que está instalado: {stdout}"
     );
     assert!(
-        stderr.contains("ropero-forge"),
-        "el mensaje no dice qué hacer: {stderr}"
+        stderr.contains("no hay motor llama.cpp disponible"),
+        "el bloqueo de preflight de forge debería ser explícito: {stderr}"
     );
 }
 

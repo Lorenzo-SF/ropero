@@ -257,6 +257,10 @@ pub struct ServeSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EngineInstallSpec {
+    /// Paquetes del sistema por gestor (`pacman`, `apt-get`, etc.). Ropero
+    /// sólo invoca el gestor si falta alguno y deja que éste pida privilegios.
+    #[serde(default)]
+    pub system_packages: std::collections::BTreeMap<String, Vec<String>>,
     /// Comando para bajar/instalar un tag: `<cmd...> <tag>`.
     #[serde(default)]
     pub pull: Vec<String>,
@@ -269,6 +273,15 @@ pub struct EngineInstallSpec {
     /// Repositorio que se clona para compilar: `git clone <repo> <source>`.
     #[serde(default)]
     pub source: Option<String>,
+    /// Rama, etiqueta o commit opcional del repositorio.
+    #[serde(default)]
+    pub source_ref: Option<String>,
+    /// Clonar también los submódulos.
+    #[serde(default)]
+    pub recursive: bool,
+    /// Subdirectorio que contiene el CMakeLists.txt.
+    #[serde(default)]
+    pub source_subdir: Option<String>,
     /// Ruta del clon; `~` se expande con HOME.
     #[serde(default)]
     pub source_dir: Option<String>,

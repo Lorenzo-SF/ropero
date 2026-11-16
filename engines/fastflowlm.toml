@@ -23,7 +23,7 @@ port_min = 9970
 port_max = 9979
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
-deps = ["git", "cmake", "ninja"]
+deps = ["git", "cmake", "ninja", "pkg-config", "xrt-smi"]
 
 # Las reglas de SO y hardware. Se evalúan **todas** y se acumulan.
 #
@@ -50,6 +50,26 @@ defaults = ["--host", "127.0.0.1", "--q-len", "20", "--socket", "20", "--pmode",
 
 # Operaciones de almacén delegadas a FLM. `<tag>` lo aporta el modelo.
 [install]
+source = "https://github.com/ROCm/FastFlowLM.git"
+source_ref = "v1.0.13"
+recursive = true
+source_subdir = "src"
+target = "flm"
+binary = "bin/flm"
+cmake_args = ["-DFLM_VERSION=1.0.13", "-DNPU_VERSION=32.0.203.304"]
+system_packages = {
+  pacman = [
+    "cmake", "gcc", "git", "ninja", "pkgconf", "libedit", "libdrm",
+    "util-linux-libs", "boost", "boost-libs", "xrt", "xrt-plugin-amdxdna",
+    "linux-firmware-other"
+  ],
+  "apt-get" = [
+    "build-essential", "cmake", "git", "ninja-build", "pkg-config",
+    "libedit-dev", "libdrm-dev", "uuid-dev", "libboost-dev",
+    "libboost-program-options-dev", "libxrt-dev", "libxrt-npu2",
+    "amdxdna-dkms"
+  ]
+}
 pull = ["flm", "pull"]
 remove = ["flm", "remove"]
 list = ["flm", "list", "--json"]

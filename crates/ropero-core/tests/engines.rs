@@ -5,7 +5,7 @@
 //! que acepta, la madurez, el rango de puertos, cómo se detecta que está
 //! instalado y de qué dependencias depende.
 //!
-//! Puerta de T-12: "Los 8 cargan y validan".
+//! Puerta de T-12: todos los motores canónicos cargan y validan.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -23,8 +23,8 @@ fn base_engines() -> PathBuf {
         .join("engines")
 }
 
-/// Los ocho ids canónicos, en el orden de la leyenda de motores.
-const LOS_OCHO: &[(&str, EngineId)] = &[
+/// Los ids canónicos, en el orden de la leyenda de motores.
+const LOS_MOTORES: &[(&str, EngineId)] = &[
     ("llama-server", EngineId::LlamaServer),
     ("turbo-llama", EngineId::TurboLlama),
     ("fastflowlm", EngineId::FastFlowLm),
@@ -33,6 +33,7 @@ const LOS_OCHO: &[(&str, EngineId)] = &[
     ("tensorrt-llm", EngineId::TensorRtLlm),
     ("vllm", EngineId::Vllm),
     ("strata", EngineId::Strata),
+    ("ignis", EngineId::Ignis),
 ];
 
 /// Carga un manifiesto del repo real.
@@ -45,13 +46,13 @@ fn carga(id: &str) -> EngineManifest {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Los ocho manifiestos cargan y validan
+// Los manifiestos cargan y validan
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Los ocho manifiestos existen en `engines/` y cargan sin errores.
+/// Los manifiestos existen en `engines/` y cargan sin errores.
 #[test]
 fn los_ocho_manifiestos_cargan() {
-    for (id, motor) in LOS_OCHO {
+    for (id, motor) in LOS_MOTORES {
         let manifiesto = carga(id);
         assert_eq!(manifiesto.id, *motor, "manifiesto={id}");
         assert_eq!(manifiesto.id.as_str(), *id, "manifiesto={id}");
@@ -61,7 +62,7 @@ fn los_ocho_manifiestos_cargan() {
 /// Cada manifiesto pasa la validación de su conjunto.
 #[test]
 fn los_ocho_manifiestos_validan() {
-    let manifiestos: Vec<EngineManifest> = LOS_OCHO.iter().map(|(id, _)| carga(id)).collect();
+    let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
     let errores = validate_engine_set(&manifiestos);
     assert!(
         errores.is_empty(),
@@ -74,7 +75,7 @@ fn los_ocho_manifiestos_validan() {
 /// Cada manifiesto tiene **el nombre de fichero** de su id.
 #[test]
 fn cada_manifiesto_vive_en_su_fichero() {
-    for (id, _) in LOS_OCHO {
+    for (id, _) in LOS_MOTORES {
         let path = base_engines().join(format!("{id}.toml"));
         assert!(path.is_file(), "falta {}", path.display());
     }
@@ -90,7 +91,7 @@ fn cada_manifiesto_vive_en_su_fichero() {
 /// gris, blanco, verde pistacho, morado y verde pálido.
 #[test]
 fn cada_motor_tiene_color_etiqueta_descripcion_y_formatos() {
-    for (id, _) in LOS_OCHO {
+    for (id, _) in LOS_MOTORES {
         let m = carga(id);
         assert!(!m.label.is_empty(), "{id}: la etiqueta está vacía");
         assert!(!m.description.is_empty(), "{id}: la descripción está vacía");
@@ -101,7 +102,7 @@ fn cada_motor_tiene_color_etiqueta_descripcion_y_formatos() {
             "{id}: no declara dependencias (las necesita el doctor)"
         );
         assert!(
-            !m.detect.binaries.is_empty() && !m.detect.paths.is_empty(),
+            !m.detect.binaries.is_empty() || !m.detect.paths.is_empty(),
             "{id}: no dice cómo detectarlo"
         );
     }
@@ -158,14 +159,14 @@ fn la_madurez_distingue_probados_de_no_probados() {
     assert_eq!(m.maturity, Maturity::Proven);
     assert_eq!(m.maturity.as_str(), "proven");
     // Y hay motores que no están probados: el conjunto no es todo "proven".
-    let manifiestos: Vec<EngineManifest> = LOS_OCHO.iter().map(|(id, _)| carga(id)).collect();
+    let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
     let probados = manifiestos
         .iter()
         .filter(|m| m.maturity == Maturity::Proven)
         .count();
     let no_probados = manifiestos.len() - probados;
     assert_eq!(probados, 6, "los 6 motores probados");
-    assert_eq!(no_probados, 2, "los 2 motores no probados");
+    assert_eq!(no_probados, 3, "los 3 motores no probados o integrados");
 }
 
 /// Las restricciones de SO y hardware del doc CLI v2 §4.
@@ -361,11 +362,11 @@ fn un_manifiesto_incompleto_es_un_error() {
 // El conjunto completo
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// El conjunto real de los 8 manifiestos valida entero y sin ids repetidos.
+/// El conjunto real de los nueve manifiestos valida entero y sin ids repetidos.
 #[test]
 fn el_conjunto_real_de_manifiestos_es_valido() {
-    let manifiestos: Vec<EngineManifest> = LOS_OCHO.iter().map(|(id, _)| carga(id)).collect();
-    assert_eq!(manifiestos.len(), 8);
+    let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
+    assert_eq!(manifiestos.len(), 9);
     let errores = validate_engine_set(&manifiestos);
     assert!(
         errores.is_empty(),
@@ -374,13 +375,13 @@ fn el_conjunto_real_de_manifiestos_es_valido() {
         errores
     );
     let ids: BTreeSet<&str> = manifiestos.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids.len(), 8, "los ocho ids son distintos");
+    assert_eq!(ids.len(), 9, "los nueve ids son distintos");
 }
 
-/// El conjunto real cubre los ocho ids canónicos, sin sobras ni faltas.
+/// El conjunto real cubre los ids canónicos, sin sobras ni faltas.
 #[test]
-fn el_conjunto_real_cubre_los_ocho_ids_canonicos() {
-    let manifiestos: Vec<EngineManifest> = LOS_OCHO.iter().map(|(id, _)| carga(id)).collect();
+fn el_conjunto_real_cubre_los_ids_canonicos() {
+    let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
     let ids: BTreeSet<String> = manifiestos
         .iter()
         .map(|m| m.id.as_str().to_string())
@@ -396,7 +397,7 @@ fn el_conjunto_real_cubre_los_ocho_ids_canonicos() {
 /// los motores en compatibles e incompatibles.
 #[test]
 fn el_conjunto_real_se_evalua() {
-    let manifiestos: Vec<EngineManifest> = LOS_OCHO.iter().map(|(id, _)| carga(id)).collect();
+    let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
     let linux = ropero_core::SystemInfo {
         os: Os::Linux,
         arch: "x86_64".to_string(),

@@ -12,7 +12,7 @@
 //! - `seleccion` resuelve `--todos / --grupo / --test / --dimension` contra
 //!   la batería; lo que no existe se rechaza con el valor recibido.
 //! - `puntuadores` comprueban sólo lo que un programa puede comprobar solo
-//!   (F2, F1, E1, D1, D2, D3). Los once tests que necesitan un juez quedan
+//!   (F2, F1, E1, D1, D2, D3, G1–G4). Los diez tests que necesitan un juez quedan
 //!   **pendientes**: su salida se guarda y no se le pone nota.
 //! - `json` escapa, construye y lee JSON a mano, sin dependencias: el cuerpo
 //!   del `POST`, el resultado guardado y la salida `--json`.

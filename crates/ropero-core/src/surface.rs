@@ -113,6 +113,13 @@ pub const COMMANDS: &[Command] = &[
         state: CommandState::Ready,
     },
     Command {
+        name: "connect",
+        usage: "connect (--list | --model MODELOS --agent AGENTE [--uninstall])",
+        summary: "conecta o desconecta modelos de agentes de código",
+        phase: None,
+        state: CommandState::Ready,
+    },
+    Command {
         name: "list",
         usage: "list [--all]",
         summary: "modelos disponibles, agrupados por motor",
@@ -163,7 +170,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "test",
-        usage: "test [--modelo <id>] [--grupo A..F] [--test <id>] [--dimension <nombre>] [--todos]",
+        usage: "test [--modelo <id>] [--grupo A..G] [--test <id>] [--dimension <nombre>] [--todos]",
         summary: "lanza la batería de pruebas contra un modelo",
         phase: None,
         state: CommandState::Ready,
@@ -278,6 +285,16 @@ pub const FLAGS_INSTALL: &[Flag] = &[
 
 /// Los flags de `ropero stop`.
 pub const FLAGS_STOP: &[Flag] = &[];
+pub const FLAGS_CONNECT: &[Flag] = &[
+    Flag::switch("list", "lista agentes y su tipo de integración"),
+    Flag::value(
+        "model",
+        "MODELOS",
+        "modelo(s) separados por coma o punto y coma",
+    ),
+    Flag::value("agent", "AGENTE", "agente de destino"),
+    Flag::switch("uninstall", "quita la conexión indicada"),
+];
 
 /// Los flags de `ropero gguffer` (doc CLI v2 §11.2).
 pub const FLAGS_GGUFFER: &[Flag] = &[
@@ -373,7 +390,7 @@ pub const FLAGS_TEST: &[Flag] = &[
         "MODELO",
         "el modelo que se prueba (sin él, se elige de los disponibles)",
     ),
-    Flag::value("grupo", "A..F", "el grupo de tests que se lanza"),
+    Flag::value("grupo", "A..G", "el grupo de tests que se lanza"),
     Flag::value("test", "ID|FICHERO", "un solo test (su id o su fichero)"),
     Flag::value(
         "dimension",
@@ -396,6 +413,7 @@ pub fn flags_de(cmd: &str) -> &'static [Flag] {
     match cmd {
         "install" => FLAGS_INSTALL,
         "stop" => FLAGS_STOP,
+        "connect" => FLAGS_CONNECT,
         "gguffer" => FLAGS_GGUFFER,
         "list" | "engines" => FLAGS_ALL,
         "run" => FLAGS_RUN,
@@ -483,14 +501,14 @@ pub fn resumen_esqueleto() -> String {
 /// Una frase por comando, y al final la sugerencia de `ropero <comando>
 /// --help`.
 pub fn help_text() -> String {
-    let mut out = String::from("USO: ropero <comando> [opciones]\n\nComandos:\n");
+    let mut out = String::from("USO: ropero <comando> [opciones]\n\nCOMANDOS\n");
     for comando in COMMANDS {
-        out.push_str(&format!("  {:<38}{}\n", comando.usage, comando.summary));
+        out.push_str(&format!("  {}\n    {}\n", comando.usage, comando.summary));
     }
-    out.push_str(&format!("  {:<38}{}\n", RUN_USAGE, RUN_SUMMARY));
-    out.push_str(&format!("  {:<38}{}\n", REMOVE_USAGE, REMOVE_SUMMARY));
-    out.push_str("\n  ropero --help                     esta ayuda\n");
-    out.push_str("\nmás: ropero <comando> --help\n");
+    out.push_str(&format!("  {RUN_USAGE}\n    {RUN_SUMMARY}\n"));
+    out.push_str(&format!("  {REMOVE_USAGE}\n    {REMOVE_SUMMARY}\n"));
+    out.push_str("  ropero --help\n    muestra esta ayuda\n");
+    out.push_str("\nAyuda detallada: ropero <comando> --help\n");
     out
 }
 

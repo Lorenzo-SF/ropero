@@ -45,6 +45,18 @@ pub struct Metrica {
 
     /// Los tokens.
     pub tokens: Tokens,
+
+    /// Tokens de entrada que informa el motor.
+    pub tokens_entrada: Option<u64>,
+
+    /// Tokens de salida que informa el motor.
+    pub tokens_salida: Option<u64>,
+
+    /// Tokens de razonamiento que informa el motor, si los desglosa.
+    pub tokens_razonamiento: Option<u64>,
+
+    /// Tokens de entrada reutilizados desde caché, si los desglosa.
+    pub tokens_cache: Option<u64>,
 }
 
 /// La respuesta de un test: lo que dijo el modelo y lo que se midió.
@@ -103,6 +115,22 @@ impl Metrica {
             ),
             ("tokens".to_string(), tokens),
             ("tokens_aproximados".to_string(), Json::Bool(aproximados)),
+            (
+                "tokens_entrada".to_string(),
+                numero_opcional(self.tokens_entrada),
+            ),
+            (
+                "tokens_salida".to_string(),
+                numero_opcional(self.tokens_salida),
+            ),
+            (
+                "tokens_razonamiento".to_string(),
+                numero_opcional(self.tokens_razonamiento),
+            ),
+            (
+                "tokens_cache".to_string(),
+                numero_opcional(self.tokens_cache),
+            ),
         ])
     }
 
@@ -111,15 +139,28 @@ impl Metrica {
     /// `None` cuando no hay tokens o no hay tiempo: sin una de las dos
     /// cosas **no hay velocidad**, y no se inventa.
     pub fn tokens_por_segundo(&self) -> Option<f64> {
-        let n = match self.tokens {
-            Tokens::Uso(n) | Tokens::Aproximado(n) => n,
-            Tokens::NoDisponible => return None,
+        let n = match (self.tokens_salida, self.tokens) {
+            (Some(n), _) => n,
+            (None, Tokens::Aproximado(n)) => n,
+            (None, Tokens::Uso(_) | Tokens::NoDisponible) => return None,
         };
-        if self.latencia_total_ms == 0 {
+        let decode_ms = self.latencia_total_ms.checked_sub(self.primer_token_ms?)?;
+        if decode_ms == 0 {
             return None;
         }
-        Some(n as f64 / (self.latencia_total_ms as f64 / 1000.0))
+        Some(n as f64 / (decode_ms as f64 / 1000.0))
     }
+
+    /// La velocidad de prefill, si el motor da tokens de entrada y TTFT.
+    pub fn entrada_por_segundo(&self) -> Option<f64> {
+        let tokens = self.tokens_entrada?;
+        let ms = self.primer_token_ms?;
+        (ms > 0).then_some(tokens as f64 / (ms as f64 / 1000.0))
+    }
+}
+
+fn numero_opcional(value: Option<u64>) -> Json {
+    value.map_or(Json::Null, |n| Json::Num(n as f64))
 }
 
 impl Puntuacion {
@@ -141,6 +182,10 @@ impl Puntuacion {
             ]),
             Puntuacion::PendienteDeJuez { motivo } => Json::objeto(vec![
                 ("tipo".to_string(), Json::Str("pendiente".to_string())),
+                ("motivo".to_string(), Json::Str(motivo.clone())),
+            ]),
+            Puntuacion::ErrorEjecucion { motivo } => Json::objeto(vec![
+                ("tipo".to_string(), Json::Str("error_ejecucion".to_string())),
                 ("motivo".to_string(), Json::Str(motivo.clone())),
             ]),
         }
@@ -371,6 +416,7 @@ fn linea_test(informe: &Informe, respuesta: &RespuestaTest) -> String {
         Puntuacion::Mecanica { score, .. } => format!("{score:.2}"),
         Puntuacion::Contada { total, .. } => format!("recuento: {total}"),
         Puntuacion::PendienteDeJuez { .. } => "pendiente de juez".to_string(),
+        Puntuacion::ErrorEjecucion { motivo } => format!("error de ejecución: {motivo}"),
     };
     let mut partes = vec![nota];
     partes.push(format!(
@@ -386,15 +432,29 @@ fn linea_test(informe: &Informe, respuesta: &RespuestaTest) -> String {
         Tokens::Aproximado(n) => partes.push(format!("≈{n} palabras (aproximado)")),
         Tokens::NoDisponible => partes.push("tokens: no disponible".to_string()),
     }
+    for (label, value) in [
+        ("entrada", respuesta.metrica.tokens_entrada),
+        ("salida", respuesta.metrica.tokens_salida),
+        ("razonamiento", respuesta.metrica.tokens_razonamiento),
+        ("caché", respuesta.metrica.tokens_cache),
+    ] {
+        if let Some(value) = value {
+            partes.push(format!("tokens {label}: {value}"));
+        }
+    }
     if let Some(velocidad) = respuesta.metrica.tokens_por_segundo() {
-        let unidad = match respuesta.metrica.tokens {
-            Tokens::Uso(_) => "tokens/s",
-            _ => "palabras/s",
+        let unidad = if matches!(respuesta.metrica.tokens, Tokens::Aproximado(_)) {
+            "palabras/s"
+        } else {
+            "tokens salida/s"
         };
         partes.push(format!("{velocidad:.1} {unidad}"));
     } else {
         // Sin tokens o sin tiempo no hay velocidad: se dice, no se calla.
         partes.push("tokens/s: no disponible".to_string());
+    }
+    if let Some(velocidad) = respuesta.metrica.entrada_por_segundo() {
+        partes.push(format!("entrada/TTFT: ≈{velocidad:.1} tokens/s"));
     }
     format!("{} · {} · {}", respuesta.id, titulo, partes.join(" · "))
 }

@@ -1,6 +1,6 @@
 //! El índice de la batería: se parsea entero o dice **qué línea** está mal.
 //!
-//! El índice (`docs/tests/indice.md`) es la rúbrica: declara 16 tests en 6
+//! El índice (`docs/tests/indice.md`) es la rúbrica: declara 20 tests en 7
 //! grupos, el peso de cada test, el total por grupo y el perfil de
 //! dimensiones. Un índice que no cuadra **no** se interpreta: se dice la
 //! línea y qué falta. Aquí no se inventa ningún peso.
@@ -60,12 +60,12 @@ fn indice_real() -> String {
 #[test]
 fn el_indice_real_se_parsea_entero() {
     let bateria = parse_indice(&indice_real()).expect("el índice real se parsea");
-    assert_eq!(bateria.tests.len(), 16, "la batería tiene 16 tests");
-    assert_eq!(bateria.grupos.len(), 6, "la batería tiene 6 grupos");
+    assert_eq!(bateria.tests.len(), 20, "la batería tiene 20 tests");
+    assert_eq!(bateria.grupos.len(), 7, "la batería tiene 7 grupos");
     assert_eq!(
         bateria.dimensiones.len(),
-        12,
-        "la batería tiene 12 dimensiones"
+        13,
+        "la batería tiene 13 dimensiones"
     );
     assert!(
         bateria.avisos.is_empty(),
@@ -87,7 +87,7 @@ fn cada_test_declara_su_id_su_grupo_su_fichero_su_titulo_y_su_objetivo() {
 #[test]
 fn los_pesos_de_cada_test_son_los_del_indice() {
     let bateria = parse_indice(&indice_real()).expect("el índice real se parsea");
-    let esperado: [(&str, u32); 16] = [
+    let esperado: [(&str, u32); 20] = [
         ("A1", 5),
         ("A2", 4),
         ("A3", 5),
@@ -104,6 +104,10 @@ fn los_pesos_de_cada_test_son_los_del_indice() {
         ("E2", 4),
         ("F1", 5),
         ("F2", 3),
+        ("G1", 3),
+        ("G2", 3),
+        ("G3", 3),
+        ("G4", 3),
     ];
     for (id, peso) in esperado {
         assert_eq!(
@@ -117,13 +121,14 @@ fn los_pesos_de_cada_test_son_los_del_indice() {
 #[test]
 fn los_totales_de_grupo_cuadran_con_la_tabla() {
     let bateria = parse_indice(&indice_real()).expect("el índice real se parsea");
-    let esperado: [(char, usize, u32); 6] = [
+    let esperado: [(char, usize, u32); 7] = [
         ('A', 5, 22),
         ('B', 2, 10),
         ('C', 2, 8),
         ('D', 3, 15),
         ('E', 2, 8),
         ('F', 2, 8),
+        ('G', 4, 12),
     ];
     let mut total = 0u32;
     for (letra, tests, peso) in esperado {
@@ -145,7 +150,7 @@ fn los_totales_de_grupo_cuadran_con_la_tabla() {
         );
         total += peso;
     }
-    assert_eq!(total, 71, "la batería pesa 71");
+    assert_eq!(total, 83, "la batería pesa 83");
 }
 
 #[test]

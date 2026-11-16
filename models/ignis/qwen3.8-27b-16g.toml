@@ -1,0 +1,53 @@
+[model]
+name = "qwen3.8-27b-16g"
+engine = "ignis"
+format = "ninfer"
+# El perfil RTX de 16 GB adapta el límite efectivo a 131072 tokens; mantener
+# ese límite también en OpenCode evita que el cliente prometa más contexto.
+context = 131072
+
+[files]
+
+[download]
+# Identificador del catálogo interno de Ignis; `ropero install models` lo
+# pasa a `ignis-server model download`, que también obtiene los companions.
+repo = "qwen3.8-27b"
+size = "según perfil de GPU"
+
+[args]
+base = [
+  "--model-id", "qwen3.8-27b-16g",
+  "--profile", "rtx-16gb",
+  "--download-path", "${artifacts_dir}",
+  "--download-enabled", "false",
+  "--model-max-context", "${ctx}",
+  "--spec-backend", "dflash2",
+  "--spec-draft-tokens", "7",
+]
+
+# Ignis acepta estos dos valores en cada petición y los niveles del modelo
+# también fijan los valores por defecto del servidor para peticiones sin ellos.
+[levels]
+list = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+default = "medium"
+
+[args.level.none]
+base = ["--model-enable-thinking", "false", "--model-thinking-budget", "off"]
+
+[args.level.minimal]
+base = ["--model-enable-thinking", "false", "--model-thinking-budget", "1024"]
+
+[args.level.low]
+base = ["--model-enable-thinking", "false", "--model-thinking-budget", "2048"]
+
+[args.level.medium]
+base = ["--model-enable-thinking", "true", "--model-reasoning-effort", "medium", "--model-thinking-budget", "8192"]
+
+[args.level.high]
+base = ["--model-enable-thinking", "true", "--model-reasoning-effort", "high", "--model-thinking-budget", "16384"]
+
+[args.level.xhigh]
+base = ["--model-enable-thinking", "true", "--model-reasoning-effort", "xhigh", "--model-thinking-budget", "16384"]
+
+[args.level.max]
+base = ["--model-enable-thinking", "true", "--model-reasoning-effort", "max", "--model-thinking-budget", "off"]

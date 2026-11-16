@@ -149,6 +149,9 @@ fn bin(estado: &Path, path: &Path, gguf: &Path) -> Command {
     // El estado en disco va a un temporal: los tests no tocan el estado
     // real de la máquina.
     cmd.env("ROPERO_STATE_DIR", estado);
+    // Evita que un binario real de ~/.local/bin invalide los tests que
+    // necesitan simular un motor no instalado.
+    cmd.env("ROPERO_BIN_DIR", estado.join("bin"));
     cmd.env("PATH", path);
     cmd
 }
@@ -355,9 +358,10 @@ fn el_arranque_dice_el_puerto() {
     );
 
     // El puerto sale del rango del motor del fixture (turbo-llama:
-    // 8200-8299).
+    // 9990-9999). Se acepta cualquiera del rango porque otro test o
+    // proceso local puede tener ocupado el primero.
     assert!(
-        (8200..=8299).contains(&puerto),
+        (9990..=9999).contains(&puerto),
         "el puerto {puerto} tiene que estar en el rango del motor"
     );
     // Y la línea `ROPERO_PORT=` es la última de stdout.
@@ -409,7 +413,7 @@ fn el_arranque_con_cpu_tambien_arranca() {
         &["modelo-alpha", "--cpu"],
     );
 
-    assert!((8200..=8299).contains(&puerto), "puerto={puerto}");
+    assert!((9990..=9999).contains(&puerto), "puerto={puerto}");
 }
 
 #[test]

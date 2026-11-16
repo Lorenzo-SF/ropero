@@ -2,7 +2,7 @@
 //!
 //! El doc CLI v2 §13 dice que el comando ofrece lanzar **por tipo, por
 //! grupo, uno solo, o todos**. El índice tiene dos taxonomías: los **grupos**
-//! (A–F) y las **dimensiones** (las doce del perfil de salida). El índice no
+//! (A–G) y las **dimensiones** (las doce del perfil de salida). El índice no
 //! declara ningún «tipo», así que `--tipo` es el **alias** de `--dimension`:
 //! es la misma taxonomía con otro nombre, y por eso no pueden ir los dos a
 //! la vez.
@@ -53,7 +53,7 @@ impl std::error::Error for ErrorUso {}
 /// hace al resolver, contra la batería, y no antes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Opciones {
-    /// `--grupo`: la letra del grupo (A–F).
+    /// `--grupo`: la letra del grupo (A–G).
     pub grupo: Option<String>,
 
     /// `--test`: el id (`F2`) o el fichero (`test-calibracion.md`).
@@ -189,8 +189,7 @@ pub fn selecciona(bateria: &Bateria, seleccion: &Seleccion) -> Result<Vec<String
         Seleccion::Test(valor) => match test_de(bateria, valor) {
             Some(id) => Ok(vec![id]),
             None => Err(ErrorUso::nuevo(format!(
-                "el test '{valor}' no existe en la batería: los ids van de A1 a \
-                 F2 (ropero test --help)"
+                "el test '{valor}' no existe en la batería (ropero test --help)"
             ))),
         },
         Seleccion::Dimension(nombre) => match dimension_de(bateria, nombre) {

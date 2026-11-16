@@ -178,7 +178,7 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
         errors.push(error(
             ValidationRule::NameKebabCase,
             "model.name",
-            "[model].name debe estar en kebab-case; usa sólo minúsculas, números, guiones y guiones bajos",
+            "[model].name debe usar minúsculas, números, puntos, guiones o guiones bajos",
             ctx,
             "model.name",
         ));
@@ -444,9 +444,9 @@ fn is_kebab_case(name: &str) -> bool {
     !name.is_empty()
         && name.split('-').all(|part| {
             !part.is_empty()
-                && part
-                    .chars()
-                    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+                && part.chars().all(|ch| {
+                    ch.is_ascii_lowercase() || ch.is_ascii_digit() || matches!(ch, '_' | '.')
+                })
         })
 }
 

@@ -48,6 +48,7 @@ maturity = "proven"
 formats = ["gguf", "safetensors"]
 port_min = 8200
 port_max = 8299
+deps = ["git", "cmake"]
 
 [detect]
 binaries = ["llama-server"]
@@ -1089,7 +1090,7 @@ fn install_engines_acepta_el_alias_legacy_de_un_motor() {
     );
     assert_eq!(
         fake.entradas(&fake.bin),
-        vec!["llama-server".to_string()],
+        vec!["turbo-llama-server".to_string()],
         "no se ha creado el enlace"
     );
 }
@@ -1098,16 +1099,16 @@ fn install_engines_acepta_el_alias_legacy_de_un_motor() {
 // Los motores: sólo el enlace (R-INST-1, R-INST-25)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `ropero install engines <id>` crea el **enlace** en el `$BIN_DIR`, con
-/// el nombre del **basename** del binario, y **no** copia ni descarga nada.
+/// `ropero install engines <id>` enlaza el binario bajo el nombre canónico
+/// de Turbo-Llama, sin pisar el `llama-server` oficial.
 #[test]
 fn install_engines_crea_el_enlace_y_no_copia_ni_descarga() {
     let fake = Fake::nuevo("engines-enlace").con_binario("llama-server");
     let (code, _stdout, stderr) = fake.corre(&["install", "engines", "turbo-llama"]);
     assert_eq!(code, 0, "stderr={stderr}");
 
-    // El enlace se llama como el basename del binario resuelto.
-    let destino = fake.bin.join("llama-server");
+    // Turbo-Llama añade su prefijo al basename para coexistir con llama-server.
+    let destino = fake.bin.join("turbo-llama-server");
     let meta = std::fs::symlink_metadata(&destino).expect("metadatos del enlace");
     assert!(
         meta.file_type().is_symlink(),
@@ -1123,7 +1124,7 @@ fn install_engines_crea_el_enlace_y_no_copia_ni_descarga() {
     assert!(origen.is_file(), "el binario ha desaparecido: {origen:?}");
     assert_eq!(
         fake.entradas(&fake.bin),
-        vec!["llama-server".to_string()],
+        vec!["turbo-llama-server".to_string()],
         "no debe haber nada más en el BIN_DIR"
     );
     // Y no se ha descargado nada.

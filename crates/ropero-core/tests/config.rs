@@ -31,7 +31,7 @@ fn parse_config_roundtrip_rutas_especiales() {
     assert_eq!(parseado.models_dir.valor, ruta);
     assert_eq!(parseado.gguf_dir.valor, ruta.join("gguf"));
     assert_eq!(parseado.models_dir.origen, Origen::Archivo);
-    assert_eq!(parseado.engines.len(), 8);
+    assert_eq!(parseado.engines.len(), 9);
     for id in [
         "llama-server",
         "turbo-llama",
@@ -41,6 +41,7 @@ fn parse_config_roundtrip_rutas_especiales() {
         "vllm",
         "airllm",
         "strata",
+        "ignis",
     ] {
         assert!(
             texto.contains(&format!("[engines.{id}]")),

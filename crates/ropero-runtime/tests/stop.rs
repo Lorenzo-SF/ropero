@@ -73,6 +73,9 @@ struct FakeStopper {
 
     /// Si el proceso estaba vivo **antes** de la parada.
     vivo: bool,
+
+    /// Si SIGKILL logra terminar el grupo en este doble.
+    kill_efectivo: bool,
 }
 
 impl FakeStopper {
@@ -84,6 +87,7 @@ impl FakeStopper {
             start_time: Some(100),
             vivo_despues: false,
             vivo: true,
+            kill_efectivo: true,
         }
     }
 
@@ -96,6 +100,7 @@ impl FakeStopper {
             start_time: Some(999),
             vivo_despues: false,
             vivo: true,
+            kill_efectivo: true,
         }
     }
 
@@ -107,6 +112,7 @@ impl FakeStopper {
             start_time: None,
             vivo_despues: false,
             vivo: true,
+            kill_efectivo: true,
         }
     }
 
@@ -118,12 +124,23 @@ impl FakeStopper {
             start_time: Some(100),
             vivo_despues: true,
             vivo: true,
+            kill_efectivo: true,
+        }
+    }
+
+    fn que_no_muere() -> Self {
+        Self {
+            kill_efectivo: false,
+            ..Self::que_sigue_vivo()
         }
     }
 }
 
 impl Stopper for FakeStopper {
     fn alive(&self, pid: u32) -> bool {
+        if self.kill_efectivo && self.matados.lock().expect("candado").contains(&pid) {
+            return false;
+        }
         let terminados = self.terminados.lock().expect("candado");
         if terminados.contains(&pid) {
             // Recibe el TERM y muere: salvo que siga vivo tras el TERM.
@@ -327,6 +344,24 @@ fn un_proceso_que_ignora_el_term_muere_con_el_kill() {
     );
 }
 
+#[test]
+fn si_el_grupo_sigue_vivo_no_afirma_que_se_paro_y_conserva_estado() {
+    let dir = TempDir::nuevo();
+    write_state(
+        dir.path(),
+        9999,
+        &estado("groot", "llama-server", 4242, 100, 9999),
+    )
+    .unwrap();
+    let stopper = FakeStopper::que_no_muere();
+
+    let resultado = SysStopper::parar_puerto(dir.path(), 9999, &stopper, Duration::from_millis(1));
+
+    assert_eq!(resultado, StopOutcome::NoParado);
+    assert!(dir.path().join("ports").join("9999").exists());
+    assert!(stopper.matados.lock().unwrap().contains(&4242));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Parar en conjunto
 // ─────────────────────────────────────────────────────────────────────────────
@@ -452,6 +487,7 @@ fn el_informe_dice_que_se_ha_parado() {
         parados: vec![8100, 8200],
         ajenos: vec![],
         sin_estado: vec![],
+        no_parados: vec![],
     };
     let texto = informe.texto();
     assert!(texto.contains("8100"), "texto={texto}");
@@ -464,9 +500,20 @@ fn el_informe_dice_que_no_se_ha_matado_un_ajeno() {
         parados: vec![],
         ajenos: vec![8100],
         sin_estado: vec![],
+        no_parados: vec![],
     };
     let texto = informe.texto();
     assert!(texto.contains("reciclado"), "texto={texto}");
     // Y dice qué hacer.
     assert!(texto.contains("páralo tú"), "texto={texto}");
+}
+
+#[test]
+fn el_informe_explica_que_el_grupo_sigue_activo() {
+    let informe = StopReport {
+        no_parados: vec![9999],
+        ..StopReport::default()
+    };
+    assert!(!informe.vacio());
+    assert!(informe.texto().contains("sigue activo"));
 }
