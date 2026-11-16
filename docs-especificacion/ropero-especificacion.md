@@ -8,11 +8,177 @@ lang: es
 
 # ropero — Especificación y requerimientos
 
-> **El contrato que implementa el código, escrito como si se construyera desde cero.**
+> **Contrato funcional objetivo de ropero Rust.** Este documento incorpora la
+> revisión del propietario recibida el 2026-11-16. Cuando un requisito previo
+> contradiga esa revisión, prevalece esta sección hasta que se integre
+> formalmente en las secciones existentes.
+
+---
+
+## 0.4 Especificación posterior del CLI y configuración (2026-11-16)
+
+Esta sección registra la especificación posterior entregada por el propietario.
+Es normativa para la implementación Rust. Los puntos aquí marcados como
+pendientes no se consideran implementados por estar presentes en documentos,
+manifiestos o tests solamente.
+
+### CLI
+
+**R-CLI-18 · Resumen sin argumentos.** `ropero` presenta nombre, versión,
+fecha de compilación y autor; disponibilidad/instalación de engines y modelos;
+y una invitación a consultar `ropero --help`.
+
+**R-CLI-19 · Ayuda navegable.** `ropero --help` incluye el resumen, comandos
+disponibles con descripción breve, e indica `ropero <comando> --help` para el
+detalle. Cada subcomando ofrece ayuda propia. La identidad visual debe ser
+nueva, clara y coherente; no se copia literalmente la presentación de la v1.
+
+**R-CLI-20 · Arranque del modelo.** `ropero <modelo>` exige engine instalado,
+modelo instalado y recursos suficientes en el dispositivo elegido. `--cpu`
+solicita CPU/RAM sólo para engines que lo soportan; actualmente el contrato
+esperado es llama-server. `--force` puede liberar recursos terminando procesos
+de ropero que ocupen el dispositivo, nunca procesos ajenos. `--port`,
+`--api-key`/`--no-api-key` y `--ctx` fuerzan puerto, autenticación y contexto.
+
+**R-CLI-21 · Instalación interactiva y desatendida.** `ropero install` ejecuta
+engines y después models. `install engines [ids...]` e `install models
+[ids...]` ofrecen selección interactiva sin lista y aceptan listas separadas
+por espacios/comas para automatización. Los ids y alias se validan antes de
+modificar el sistema.
+
+**R-CLI-22 · Parada.** `ropero stop` detiene todos los engines lanzados por
+ropero; `ropero stop <modelo>` detiene sólo la instancia de ese modelo y
+preserva otros modelos, incluso si usan el mismo engine.
+
+**R-CLI-23 · GGUF.** `ropero gguffer` admite origen HF (`--repo`) o local
+(`--path`), lista de quants, imatrix local o de HF en pareja repo/fichero,
+salida, precisión intermedia, retención de fuentes/intermedio, exclusión de
+cabeceras MTP/DFlash, `--force`, listado de quants y diagnóstico. Debe aceptar
+entradas safetensors o GGUF, incluidos pesos ya cuantizados o F16/BF16 que no
+requieran cuantización. El motor oficial llama-server compilado es requisito.
+La preparación específica de Strata sigue scripts/modelos de referencia
+declarados para ese motor y no se presume cubierta por el pipeline genérico.
+
+**R-CLI-24 · Status.** Presenta CPU, memoria RAM/swap y telemetría de GPU
+disponible: dGPU y, en Linux, iGPU cuando existan; en macOS la GPU unificada
+se muestra como GPU. Valores no disponibles se identifican como tales.
+
+**R-CLI-25 · Test.** Ejecuta baterías sobre modelos instalados y ofrece
+selección por prueba individual, grupo/tipo o todas, según
+`docs/tests/indice.md`; explica qué mide cada selección y conserva resultados.
+
+**R-CLI-26 · Doctor.** Comprueba la instalación y dependencias de ropero,
+incluida su presencia en PATH, y revisa dependencias por cada engine, esté o
+no instalado, mostrando cuáles faltan y cómo resolverlas.
+
+**R-CLI-27 · List/template.** `list` muestra sólo modelos descargados cuyo
+engine está instalado, agrupados por engine y con la leyenda visual.
+`template` imprime el TOML completo con comentarios de uso.
+
+### Configuración y propiedad de artefactos
+
+**R-CFG-1 · Configuración por engine.** `~/.config/ropero/config.toml` (o la
+ruta XDG equivalente) permite configurar por engine: directorio de modelos,
+directorio de TOML de modelos y rango de puertos. La precedencia, valores por
+defecto, validación de rangos, solapamientos y migración desde configuración
+actual deben quedar explícitos. El esquema global existente no satisface por
+sí solo este requisito.
+
+**R-CFG-2 · Instalación declarativa.** Los manifiestos pueden describir cómo
+instalar/compilar cada engine, sus dependencias y gestores soportados. Los
+comandos o scripts pre/post instalación sólo se incorporarán con contrato de
+seguridad, consentimiento, salida reproducible y cobertura por plataforma.
+La lista de engines y sus recetas de instalación es fija y mantenida por el
+proyecto; **no es configurable por el usuario**. La configuración del usuario
+sí puede cambiar presentación (color), rutas por engine y rangos de puertos.
+El color no determina compatibilidad ni estado.
+
+**R-MOD-32 · Rutas compartidas.** Varios engines pueden compartir raíz de
+almacenamiento. Un mismo directorio no implica propiedad exclusiva: modelos,
+auxiliares (MTP, plantillas, mmproj, DFlash, imatrix) y derivados deben
+identificarse para no interferir al instalar o borrar.
+
+**R-MOD-33 · Reutilización de artefacto idéntico.** Si dos modelos requieren
+el mismo GGUF, identificado por origen/repo, revisión o identidad de contenido,
+fichero final y transformación/build, ropero reutiliza los mismos bytes y no
+los descarga/fabrica dos veces. La identidad no puede basarse sólo en basename.
+Si sólo comparten raíz pero no artefacto, deben quedar aislados, por ejemplo
+en subdirectorios por modelo.
+
+**R-MOD-34 · Borrado referencial.** Eliminar un modelo quita sus referencias y
+artefactos exclusivamente propios; no elimina bytes compartidos mientras otra
+referencia válida los necesite. Debe recuperarse de referencias rotas o
+huérfanas sin seguir symlinks fuera de la raíz permitida.
+
+**R-MOD-35 · Confirmación de pesos compartidos.** `remove` informa qué otros
+modelos registrados usan los pesos/artefactos compartidos. Si hay otros
+usuarios, preserva los bytes y elimina sólo la asociación del modelo pedido.
+Si ese modelo es el último usuario, pide confirmación antes de borrar los
+pesos; el rechazo o la falta de TTY no produce efectos.
+
+**R-ENG-1 · Integraciones mantenidas en el proyecto.** Los engines soportados
+forman una lista fija controlada por código y manifiestos del proyecto. Cada
+integración debe documentar plataformas, requisitos, instalación,
+descarga/almacén, argv de servicio, readiness, parada y formatos/API. El
+usuario puede ajustar color, rutas y puertos, pero no repositorios, comandos,
+dependencias ni hooks de instalación.
+
+**R-ENG-2 · Diagnóstico de instalación.** `install engines` informa errores
+accionables por defecto y ofrece un modo detallado que incluye contexto o
+backtrace Rust y el fallo del subproceso sin filtrar secretos. Debe poder
+activarse con `RUST_BACKTRACE=1` o un flag explícito.
+
+**R-ENG-3 · Colibri.** Añadir Colibri como engine soportado. Implementar su
+instalación y ciclo de vida según capacidades documentadas upstream, su
+selección de modelos y su API OpenAI compatible. No duplicar su almacén ni su
+descarga sin necesidad. Las capacidades CUDA, Vulkan y Metal varían por
+modelo/backend y deben expresarse con precisión.
+
+**R-ENG-4 · AirLLM (decisión aplazable).** Antes de declarar terminado el
+proyecto, decidir y documentar el puente mínimo para AirLLM: proceso Python
+aislado con API HTTP compatible u otra integración. Evaluar empaquetado,
+dependencias CUDA, gestión del modelo y ciclo de vida. Esta decisión no bloquea
+el cierre del resto de engines y funcionalidades.
+
+**R-ENG-5 · Turbo-llama.** `turbo-llama` es un engine soportado y se integra
+como fork de `llama-server`, con las mismas capacidades, plataformas y
+argumentos de compilación en Linux y macOS. Su disponibilidad para el usuario
+no depende de que el repositorio sea públicamente descargable. El código debe
+referenciar el origen/repositorio configurado para el fork, sin reemplazarlo
+por un fallback distinto. Si no se puede clonar por permisos o acceso, el
+error debe identificar esa causa; la receta y el soporte del engine siguen
+siendo parte del producto.
+
+### Verificación inicial del árbol Rust (2026-11-16)
+
+| Requisito | Evidencia observada | Estado inicial |
+|---|---|---|
+| R-CLI-18/19 | dispatcher/parser implementados; summary en transición | Parcial |
+| R-CLI-20/22 | módulos de runtime presentes y con cambios activos | Parcial; confirmar gates de recursos y propiedad |
+| R-CLI-21 | menú/lista presentes; instalación por manifiesto en progreso | Parcial; se encontró un fallo CMake, corregido en runtime |
+| R-CLI-23 | `ropero-forge` y CLI gguffer existen | Parcial; casos GGUF cuantizado/Strata requieren matriz de aceptación |
+| R-CLI-24/25/26/27 | crates de batería, system info, doctor, list y template presentes | Parcial; validar semántica frente al contrato nuevo |
+| R-CFG-1 | config global existente, pero no por engine ni puertos | Pendiente |
+| R-CFG-2/R-ENG-1 | manifiestos e instalación en progreso; recetas de todos los engines sin auditar | Parcial |
+| R-MOD-32/33/34 | rutas por modelo y eliminación segura en trabajo activo; deduplicación/refs no encontradas | Pendiente |
+| R-MOD-35 | remove está en trabajo activo; falta validar aviso de modelos que comparten pesos y confirmación para último usuario | Pendiente |
+| R-ENG-2 | instalación no muestra modo detallado/backtrace de forma explícita | Pendiente |
+| R-ENG-3 | no existe `EngineId` ni manifiesto de Colibri | Pendiente |
+| R-ENG-4 | AirLLM usa API de librería Python; integración diferida, análisis requerido para cierre | Pendiente diferible |
+| R-ENG-5 | `EngineId` y manifiesto existen; revisar que el origen configurado sea el fork correcto y compilarlo cuando haya acceso | Parcial (repo inaccesible desde este entorno) |
+
+Esta tabla es una fotografía de inspección estática, no una declaración de
+pruebas de aceptación. Debe actualizarse al cerrar cada requisito con evidencia
+de código y pruebas.
 
 ---
 
 ## 0. Cómo se ha construido este documento
+
+> **Nota de estado (2026-11-16):** el texto histórico de esta sección describe
+> la extracción original desde la v1. La especificación posterior del CLI y
+> los criterios de aceptación se registran en §4.14; los requisitos marcados
+> allí son objetivo, no afirmaciones de que el código ya los cumpla.
 
 Este documento **no es un plan**: es la especificación que la implementación ya
 cumple. Se ha extraído leyendo el código y sus comentarios, y cada requisito
@@ -345,21 +511,29 @@ toca: cada fase posterior sólo añade `cmd-*.sh` y su función `rp_cmd_<comando
 con **2**; un comando cuyo módulo no define la función sale con **1**.
 Evidencia: `ropero-code/bin/ropero:252-263`.
 
-**R-ARQ-4** · `ROPERO_ROOT` se resuelve siguiendo la cadena de symlinks de `$0`
-con un bucle de `readlink` + `cd/pwd`, **sin `readlink -f`** (no existe en el
-bash 3.2 de macOS). El bucle tiene un tope de **40 saltos** para que un ciclo
-de symlinks no cuelgue el arranque. Evidencia: `ropero-code/bin/ropero:66-99`.
+**R-ARQ-4 (v2, working tree)** · La resolución del catálogo y la configuración
+**no** usa por defecto una cadena de directorios `cwd`/`exe` como raíz de
+autodescubrimiento del repositorio. En uso normal, la raíz del catálogo es la
+derivada de la configuración externa: `<directorio_config>/models/<motor>/` con
+manifiestos en `<directorio_config>/engines/`. Los overrides `ROPERO_MODELS_DIR`
+y `ROPERO_ROOT` se preservan; si apuntan al directorio `models/` de una raíz de
+catálogo/repositorio, se conserva la semántica de búsqueda de manifiestos en la
+raíz hermana `<raíz>/engines/`. Los TOML del repositorio son para desarrollo y
+pruebas y **no se auto-descubren** en uso normal. Ver
+[ADR-008](../docs/adr/ADR-008-configuracion-externa-y-bootstrap.md).
+(Evidencia histórica v1: `ropero-code/bin/ropero:66-99`.)
 
 **R-ARQ-5** · Los módulos son: `00-utils` (utilidades y presentación),
 `01-env` (entorno), `02-modelconf` (wrapper del catálogo), `03-engines`
 (cargador de motores), `04-launch` (runtime), `05-download` (descargas),
 `06-styles` (color de la salida en vivo), y un `cmd-<comando>.sh` por comando.
 
-**R-ARQ-6** · El **catálogo tiene una única fuente de verdad**: el parser en
-Python (`bin/python/modelconf.py`). El shell no re-implementa el parser: lee su
-*dump* (formato v1, separador `0x1F`, **31 campos por registro`) y lo deja en
-arrays paralelas. Un consumidor nuevo ante un dump de otra versión **se niega
-a leer a ciegas**. Evidencia: `ropero-code/bin/lib/02-modelconf.sh:5-7`, `176-184`.
+**R-ARQ-6 (v2, working tree)** · El catálogo y los manifiestos de motor son
+datos TOML parseados y validados por el dominio/runtime de la v2 (Rust). La
+fuente de verdad operativa en uso normal es el catálogo externo de usuario
+(`<config>/models/<motor>/` y `<config>/engines/`), sujeto a overrides de
+entorno. (Evidencia histórica v1: parser Python en
+`ropero-code/bin/python/modelconf.py`.)
 
 **R-ARQ-7** · El parser es **autocontenido**: trae su propio lector de TOML
 (`parse_toml`, `ropero-code/bin/python/modelconf.py:478`) y sólo usa `tomllib` si está
@@ -1133,8 +1307,9 @@ JSON y la petición cae al fallback sin mensaje. Evidencia:
 
 #### 4.9.1 La tesis: symlink-only
 
-**R-INST-1** · El instalador **sólo crea symlinks**: no copia, no descarga, no
-compila, no genera *farms* de entradas, no borra el repo.
+**R-INST-1 (actualizado en v2)** · `install engines` compila el motor cuando
+su manifiesto declara una receta `[install]`; luego crea el symlink. Sin receta
+declarada requiere un binario ya instalado. No borra árboles fuente existentes.
 
 > «R1 — sólo symlinks: no copia, no descarga, no compila, no farms de
 > entradas, no borra el repo» — `ropero-code/install.sh:23-24`
@@ -1168,10 +1343,31 @@ explica por qué. Evidencia: `ropero-code/install.sh:35-36` (R6), `:556-557`.
 falta, pero no edita ficheros de shell. Evidencia: `ropero-code/install.sh:408-415`
 (R13).
 
-**R-INST-7** · El instalador **sólo crea** `$BIN_DIR` y `dirname "$DIR"`. Los
-demás directorios (`~/models/gguf`, `~/.local/state/ropero`, `~/.logs/ropero`)
-los crea el runtime, no el instalador. Evidencia: `ropero-code/install.sh:363-364`,
-`ropero-code/bin/lib/01-env.sh:75-78`.
+**R-INST-7 (v2, working tree)** · El instalador v1 **sólo crea** `$BIN_DIR` y
+`dirname "$DIR"`; el resto lo crea el runtime/configuración. En la v2, el
+bootstrap de configuración crea de forma idempotente el directorio de
+configuración y `config.toml` por defecto **sin sobrescribir** cuando faltan.
+En uso normal, el catálogo externo vive en `<directorio_config>/models/<motor>/`
+con manifiestos en `<directorio_config>/engines/`, y `logs_dir` por defecto es
+`<directorio_config>/logs`.
+
+**Variables y precedencia (configuración):** `variable de entorno > archivo
+config.toml > valor por defecto` para `models_dir` (`ROPERO_MODELS_DIR`),
+`gguf_dir` (`GGUF_DIR`), `safetensors_dir` (`SAFETENSORS_DIR`), `bin_dir`
+(`ROPERO_BIN_DIR`) y `logs_dir` (`LOG_DIR`). `<directorio_config>` es
+`$XDG_CONFIG_HOME/ropero` o `~/.config/ropero`.
+
+**Manifiestos de motor (usuario):** no se embuten como fallback. Se leen del
+directorio `engines/` asociado a la raíz del catálogo (p. ej.
+`<directorio_config>/engines/` o `<raíz>/engines/` cuando el escaneo parte de
+`models/` por override).
+
+**Migración (TOML heredados):** copiar/mover los TOML de modelos a
+`~/.config/ropero/models/<engine>/` (o al `models_dir` configurado) y los
+manifiestos de motor a `~/.config/ropero/engines/` (o al `engines/` de la raíz
+del catálogo). Los TOML del repositorio pueden usarse en desarrollo/pruebas
+mediante `ROPERO_MODELS_DIR`/`ROPERO_ROOT`, sin autodiscovery en uso normal.
+Ver [ADR-008](../docs/adr/ADR-008-configuracion-externa-y-bootstrap.md).
 
 #### 4.9.2 Los flags y sus códigos
 
@@ -2667,6 +2863,79 @@ el primero (el canónico). Evidencia:
 `bin/quant/quant-tipos.sh`.
 
 ---
+
+### 4.12 Contrato operativo vigente (working tree)
+
+Esta sección fija el comportamiento operativo implementado en el árbol de trabajo
+y complementa a [ADR-008](../docs/adr/ADR-008-configuracion-externa-y-bootstrap.md)
+y [ADR-010](../docs/adr/ADR-010-comportamiento-operativo-flm-logs-y-remove.md).
+
+#### 4.12.1 Configuración, catálogo y manifiestos
+
+- **Catálogo por defecto (uso normal):** externo en
+  `<directorio_config>/models/<motor>/`, con manifiestos en
+  `<directorio_config>/engines/`. `<directorio_config>` es
+  `$XDG_CONFIG_HOME/ropero` o `~/.config/ropero`.
+- **Sin autodiscovery de repo:** los TOML/manifiestos del repositorio son para
+  desarrollo y pruebas y no se auto-descubren en uso normal.
+- **Overrides preservados:** `ROPERO_MODELS_DIR` y `ROPERO_ROOT`. Si apuntan al
+  directorio `models/` de una raíz de catálogo/repositorio, se mantiene la
+  resolución de manifiestos en la raíz hermana `<raíz>/engines/`.
+- **Bootstrap:** en el primer uso se crea el directorio de configuración y
+  `config.toml` por defecto de forma idempotente y **sin sobrescribir**.
+- **Precedencia:** `variable de entorno > config.toml > valor por defecto` para
+  `models_dir` (`ROPERO_MODELS_DIR`), `gguf_dir` (`GGUF_DIR`), `safetensors_dir`
+  (`SAFETENSORS_DIR`), `bin_dir` (`ROPERO_BIN_DIR`) y `logs_dir` (`LOG_DIR`).
+  Por defecto, `logs_dir` es `<directorio_config>/logs`.
+- **Manifiestos de usuario:** no embutidos; se leen desde el directorio
+  `engines/` asociado a la raíz del catálogo en uso.
+- **Comandos:** `ropero config` muestra rutas/origen; `ropero doctor` incluye
+  estado de configuración y dependencias; `ropero template` sugiere plantilla sin
+  escribirla. No modifican artefactos de modelos, aunque el bootstrap
+  idempotente de configuración puede ejecutarse si falta.
+- **Migración:** copiar TOML heredados a `~/.config/ropero/models/<motor>/` y
+  manifiestos a `~/.config/ropero/engines/` (o a las rutas configuradas).
+
+#### 4.12.2 FLM delegado (operativo)
+
+- **Schema/identidad:** el tag primario es `[model].path` si no está vacío; en
+  su defecto, el valor de `--decision` en `[args].base`. Los tags relevantes se
+  derivan del modelo (primario y auxiliares declarados).
+- **Verbos delegados:** instalación (`pull`), eliminación (`remove`) y listado
+  (`list`) según lo declare el manifiesto del motor; el arranque puede servirse
+  como `flm serve <tag> ...` con defaults del manifiesto y `--ctx-len` si falta.
+- **Estado:** la consulta `flm list --json` es de **mejor esfuerzo**; una
+  respuesta no concluyente no debe interpretarse como verificación fuerte. No se
+  afirma verificación extremo a extremo de FLM en este contrato.
+
+#### 4.12.3 Logs, colorizado y uso
+
+- **Foreground:** salida en vivo del motor en terminal (colorizada cuando
+  procede) y escritura del log del modelo para diagnóstico/estado.
+- **`--background`:** proceso desacoplado, sin salida en terminal ni emisión de
+  `ROPERO_PORT`; los logs se conservan bajo `logs_dir`.
+- **Colorizado:** tratamiento **común y semántico/heurístico**; no se afirma
+  colorizador específico por motor.
+- **`usage.log`:** registro local append-only en `logs_dir/usage.log` con datos
+  mínimos (instante, modelo, motor, puerto si se conoce, resultado y modo), sin
+  claves de API ni flags/argumentos.
+
+#### 4.12.4 Eliminación de modelos (`ropero <alias> remove`)
+
+- **Plan:** sólo artefactos derivables del TOML y rutas resueltas (ficheros
+  declarados/auxiliares de runtime) y, si aplica, operación delegada FLM.
+- **Confirmación:** interactiva en TTY antes de borrar; sin TTY o sin respuesta
+  afirmativa, no se elimina nada.
+- **Límites:** no se borran directorios compartidos ni datos no declarados; el
+  directorio concreto del modelo en `GGUF_DIR` sólo se retira si queda vacío tras
+  borrar ficheros concretos.
+- **Safetensors:** si `[model].path` identifica checkpoint/directorio
+  safetensors, la eliminación automática se **bloquea** por seguridad (retirada
+  manual si procede).
+- **FLM:** elimina el **tag primario** mediante `flm remove <tag>` y muestra los
+  tags declarados; no elimina automáticamente otros tags declarados por esta
+  operación.
+
 
 ## 5. Matriz de trazabilidad
 

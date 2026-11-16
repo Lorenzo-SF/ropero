@@ -63,21 +63,40 @@ impl Default for SysEngine {
 impl Engine for SysEngine {
     fn spawn(&self, spec: &LaunchSpec, port: u16) -> Result<Spawned, String> {
         let mut command = Command::new(&spec.program);
-        command.args(&spec.argv);
-        command.arg("--port").arg(port.to_string());
-        command.stdin(Stdio::null());
-        // La salida del motor va al **log**: es lo que el usuario mira
-        // cuando el arranque falla («mira su log para ver qué pasó»). Sin
-        // esto, un motor que aborta se queda sin explicar por qué.
-        if let Some(log) = abrir_log(&spec.log) {
-            if let Ok(clon) = log.try_clone() {
-                command.stdout(clon);
+        if spec.engine == ropero_core::EngineId::Ignis {
+            // Ignis takes its listener as HOST:PORT, whereas the other
+            // engines managed here take a separate --port argument.
+            let mut skip_value = false;
+            for arg in &spec.argv {
+                if skip_value {
+                    skip_value = false;
+                    continue;
+                }
+                if arg == "--server-bind" {
+                    skip_value = true;
+                    continue;
+                }
+                if arg.starts_with("--server-bind=") {
+                    continue;
+                }
+                command.arg(arg);
             }
-            command.stderr(log);
+            command
+                .arg("--server-bind")
+                .arg(format!("127.0.0.1:{port}"));
         } else {
-            command.stdout(Stdio::null());
-            command.stderr(Stdio::null());
+            command.args(&spec.argv);
+            command.arg("--port").arg(port.to_string());
         }
+        command.stdin(Stdio::null());
+        // La salida del motor va al **log**: es lo que el usuario mira cuando
+        // el arranque falla. El flujo normal debe generar fichero de log.
+        let log = abrir_log(&spec.log)?;
+        let clon = log
+            .try_clone()
+            .map_err(|e| format!("{}: {e}", spec.log.display()))?;
+        command.stdout(clon);
+        command.stderr(log);
         // Su propio grupo: las señales van al grupo entero.
         #[cfg(unix)]
         {
@@ -136,6 +155,17 @@ impl Engine for SysEngine {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
+    }
+
+    fn detach(&self, pid: u32) -> Result<(), String> {
+        let Ok(mut guard) = self.ultimo.lock() else {
+            return Err("no se pudo bloquear el estado del proceso".to_string());
+        };
+        if guard.as_ref().is_some_and(|c| c.id() == pid) {
+            // Soltar el handle sin esperar: el proceso queda desacoplado.
+            let _ = guard.take();
+        }
+        Ok(())
     }
 }
 
@@ -216,18 +246,16 @@ fn libc_killpg(pgrp: i32, sig: i32) -> i32 {
 
 /// Abre el log del motor para anexar la salida.
 ///
-/// Si no se puede abrir (el directorio no existe, no hay permisos), se
-/// devuelve `None` y el motor arranca sin log: es mejor un arranque sin
-/// log que un arranque que no arranca.
-fn abrir_log(ruta: &std::path::Path) -> Option<std::fs::File> {
+/// El error se propaga: no se tragan fallos de escritura/log.
+fn abrir_log(ruta: &std::path::Path) -> Result<std::fs::File, String> {
     if let Some(dir) = ruta.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(ruta)
-        .ok()
+        .map_err(|e| format!("{}: {e}", ruta.display()))
 }
 
 /// El stopper real: el que manda las señales del sistema operativo.
@@ -281,19 +309,37 @@ pub fn port_range_of(engine: &ropero_core::EngineManifest) -> PortRange {
 ///
 /// Es la misma pregunta que `engine_installed` (que mira *algún* binario),
 /// pero con el **concreto**: el motor que se lanza es un binario
-/// concreto, no "uno de los que可能会".
-pub fn binary_of(engine: &ropero_core::EngineManifest) -> Option<std::path::PathBuf> {
+/// concreto, no "uno de los que pueda ser".
+pub fn binary_of(
+    engine: &ropero_core::EngineManifest,
+    env: &ropero_core::Environment,
+) -> Option<std::path::PathBuf> {
+    let in_path = |binary: &str| {
+        env.get("PATH")
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten()
+            .map(|dir| dir.join(binary))
+            .find(|path| crate::catalog_scan::es_ejecutable(path))
+    };
     engine
         .detect
         .binaries
         .iter()
-        .find_map(|binario| crate::catalog_scan::which(binario))
+        .find_map(|binary| in_path(binary))
         .or_else(|| {
+            let bin_dir = env.env_path("ROPERO_BIN_DIR", ".local/bin");
             engine
                 .detect
-                .paths
+                .binaries
                 .iter()
-                .map(std::path::PathBuf::from)
-                .find(|ruta| ruta.is_file())
+                .map(|binary| bin_dir.join(binary))
+                .find(|path| crate::catalog_scan::es_ejecutable(path))
+        })
+        .or_else(|| {
+            engine.detect.paths.iter().find_map(|path| {
+                let path = env.expand_path(path);
+                crate::catalog_scan::es_ejecutable(&path).then_some(path)
+            })
         })
 }

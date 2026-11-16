@@ -214,13 +214,21 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
                 ));
             }
         }
+        ModelFormat::Ninfer if spec.model.engine == crate::EngineId::Ignis => {}
+        ModelFormat::Ninfer => errors.push(error(
+            ValidationRule::NonSafetensorsForbidsPath,
+            "model.format",
+            "el formato ninfer sólo es válido con engine = \"ignis\"",
+            ctx,
+            "model.format",
+        )),
         _ if spec.model.path.is_empty() => {}
         _ if matches!(spec.model.format, ModelFormat::Q4nx | ModelFormat::Strata) => {}
         _ => {
             errors.push(error(
                 ValidationRule::NonSafetensorsForbidsPath,
                 "model.path",
-                "[model].path sólo se permite con [model].format = \"safetensors\", \"q4nx\" o \"strata\"; quita el campo",
+        "[model].path sólo se permite con [model].format = \"safetensors\", \"q4nx\" o \"strata\"; quita el campo",
                 ctx,
                 "model.path",
             ));

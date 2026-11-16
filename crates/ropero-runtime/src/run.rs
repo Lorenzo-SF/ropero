@@ -28,8 +28,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use ropero_core::{
-    Catalog, EngineManifest, Environment, LaunchRequest, ModelSpec, Preflight, build_argv,
-    resolve_context, resolve_paths,
+    Catalog, EngineId, EngineManifest, Environment, LaunchRequest, ModelSpec, Preflight,
+    build_argv, resolve_context, resolve_paths,
 };
 
 use crate::launch::{LaunchContext, LaunchOptions, LaunchSpec, ProbePlan};
@@ -61,6 +61,12 @@ pub struct RunRequest {
 
     /// El nivel de razonamiento pedido.
     pub level: Option<String>,
+
+    /// Nivel común de logs solicitado por el usuario.
+    pub log_level: Option<String>,
+
+    /// `--background`: arranca desacoplado y sin salida a la terminal.
+    pub background: bool,
 }
 
 impl RunRequest {
@@ -153,6 +159,9 @@ pub struct RunPlan {
 
     /// El contexto que se sirve.
     pub context: u32,
+
+    /// Nivel común de logs pedido (si el motor ofrece control nativo).
+    pub log_level: Option<String>,
 }
 
 /// Prepara el arranque: busca el modelo, su motor y monta el argv.
@@ -182,6 +191,11 @@ pub fn preparar(
             peticion.model
         )));
     };
+    if engine.id == EngineId::Ignis && peticion.cpu {
+        return Err(RunOutcome::error(
+            "Ignis requiere una GPU NVIDIA compatible y no admite '--cpu'",
+        ));
+    }
 
     // 3. El argv del modelo. El `--ctx` sobrescribe el contexto del TOML.
     let mut ctx = resolve_context(spec, env);
@@ -193,8 +207,51 @@ pub fn preparar(
         flags: Vec::new(),
         options: Vec::new(),
     };
-    let argv = build_argv(spec, &peticion_argv, &ctx)
+    let model_argv = build_argv(spec, &peticion_argv, &ctx)
         .map_err(|e| RunOutcome::error(ropero_core::surface::argv_error_message(&e.to_string())))?;
+    let mut argv = if ropero_core::flm::is_flm_model(spec)
+        && (engine.serve.is_some() || engine.install.is_some())
+    {
+        crate::flm::serve_argv(&engine, spec, &model_argv, Some(ctx.context))
+            .map_err(RunOutcome::error)?
+    } else {
+        model_argv
+    };
+    if let Some(level) = peticion.log_level.as_deref() {
+        match engine.id {
+            EngineId::LlamaServer | EngineId::TurboLlama => {
+                let verbosity = match level {
+                    "error" => "1",
+                    "warn" => "2",
+                    "info" => "3",
+                    "trace" => "4",
+                    "debug" => "5",
+                    _ => unreachable!("log level validated in peticion_de"),
+                };
+                argv.extend(["-lv".into(), verbosity.into()]);
+            }
+            EngineId::Vllm => {
+                let level = match level {
+                    "error" => "ERROR",
+                    "warn" => "WARNING",
+                    "info" => "INFO",
+                    "debug" | "trace" => "DEBUG",
+                    _ => unreachable!("log level validated in peticion_de"),
+                };
+                argv.extend(["--log-level".into(), level.into()]);
+            }
+            EngineId::MlxServe => {
+                let level = if level == "warn" { "warn" } else { level };
+                argv.extend(["--log-level".into(), level.into()]);
+            }
+            other => {
+                return Err(RunOutcome::error(format!(
+                    "el motor '{}' no ofrece un nivel de log configurable por CLI",
+                    other.as_str()
+                )));
+            }
+        }
+    }
 
     // El nivel con el que arranca: el pedido, o el defecto del TOML.
     let level = peticion
@@ -209,6 +266,7 @@ pub fn preparar(
         argv,
         level,
         context: ctx.context,
+        log_level: peticion.log_level.clone(),
     })
 }
 
@@ -226,12 +284,18 @@ pub fn preflight_de(
         model_installed,
         // La VRAM y la RAM: lo que se pudo leer. Lo que no se pudo leer se
         // queda `None` y no bloquea (doc B §3.2.3).
-        vram_available_bytes: vram_libre(),
+        vram_available_bytes: (plan.engine.id != EngineId::Ignis)
+            .then(vram_libre)
+            .flatten(),
         ram_available_bytes: ram_libre(),
         context_requested: plan.context,
         // El modelo no declara cuánta VRAM necesita: se usa el tamaño del
         // artefacto, que es lo que hay.
-        vram_required_bytes: tamano_modelo(plan, env),
+        // Ignis has its own load-time VRAM/host plan (Flash-Next streams
+        // weights from host RAM); artifact size is not a VRAM estimate.
+        vram_required_bytes: (plan.engine.id != EngineId::Ignis)
+            .then(|| tamano_modelo(plan, env))
+            .flatten(),
         ram_required_bytes: tamano_modelo(plan, env),
         cpu,
     }
@@ -252,12 +316,20 @@ pub fn tamano_modelo(plan: &RunPlan, env: &Environment) -> Option<u64> {
         .collect();
     let numero: f64 = numero.parse().ok()?;
     let superior = texto.to_uppercase();
-    let bytes = if superior.contains("TB") {
+    let bytes = if superior.contains("TIB") {
         numero * 1024.0 * 1024.0 * 1024.0 * 1024.0
+    } else if superior.contains("TB") {
+        numero * 1024.0 * 1024.0 * 1024.0 * 1024.0
+    } else if superior.contains("GIB") {
+        numero * 1024.0 * 1024.0 * 1024.0
     } else if superior.contains("GB") {
         numero * 1024.0 * 1024.0 * 1024.0
+    } else if superior.contains("MIB") {
+        numero * 1024.0 * 1024.0
     } else if superior.contains("MB") {
         numero * 1024.0 * 1024.0
+    } else if superior.contains("KIB") {
+        numero * 1024.0
     } else if superior.contains("KB") {
         numero * 1024.0
     } else if superior.contains('B') {
@@ -309,6 +381,26 @@ pub fn estado_de(state_dir: &std::path::Path, port: u16) -> Option<PortState> {
     crate::state::read_state(state_dir, port)
 }
 
+/// Estados de procesos de Ropero cuya identidad sigue viva. Nunca se usa
+/// sólo el PID: también debe coincidir `start_time` para evitar PIDs reciclados.
+fn procesos_gestionados(
+    state_dir: &std::path::Path,
+) -> Vec<(crate::process::ProcIdentity, PortState)> {
+    use crate::launch::Device;
+    let vivos = crate::device::StateDevice::new(state_dir).ropero_processes();
+    let mut resultado = Vec::new();
+    for puerto in crate::state::managed_ports(state_dir) {
+        let Some(estado) = crate::state::read_state(state_dir, puerto) else {
+            continue;
+        };
+        let Some(pid) = estado.pid else { continue };
+        if let Some(identidad) = vivos.iter().find(|p| p.pid == pid) {
+            resultado.push((*identidad, estado));
+        }
+    }
+    resultado
+}
+
 /// Los puertos del rango que **están ocupados** (alguien escucha en ellos).
 ///
 /// La pregunta se hace al disco: se intenta **conectar** a cada puerto
@@ -325,6 +417,10 @@ pub fn puertos_ocupados(rango: &ropero_core::PortRange) -> Vec<u16> {
         }
     }
     ocupados
+}
+
+fn puerto_ocupado(puerto: u16) -> bool {
+    crate::probe::tcp_ready(puerto, Duration::from_millis(200))
 }
 
 /// El plan de sonda por defecto: dos minutos de margen.
@@ -350,6 +446,7 @@ pub fn opciones_de(peticion: &RunRequest, foreground: bool) -> LaunchOptions {
 ///
 /// Los valores mal formados (`--port 0`, `--ctx no-es-un-número`) son
 /// **errores de uso** (código 2): el uso es incorrecto, no el arranque.
+#[allow(clippy::too_many_arguments)]
 pub fn peticion_de(
     modelo: &str,
     force: bool,
@@ -358,7 +455,18 @@ pub fn peticion_de(
     api_key: Option<&str>,
     no_api_key: bool,
     ctx: Option<&str>,
+    background: bool,
+    log_level: Option<&str>,
 ) -> Result<RunRequest, RunOutcome> {
+    let log_level = log_level.map(str::to_ascii_lowercase);
+    if log_level
+        .as_deref()
+        .is_some_and(|level| !["error", "warn", "info", "debug", "trace"].contains(&level))
+    {
+        return Err(RunOutcome::uso(
+            "'--log-level' debe ser error, warn, info, debug o trace",
+        ));
+    }
     let mut peticion = RunRequest {
         model: modelo.to_string(),
         force,
@@ -368,6 +476,8 @@ pub fn peticion_de(
         no_api_key,
         context: None,
         level: None,
+        log_level,
+        background,
     };
     if let Some(valor) = port {
         match valor.parse::<u16>() {
@@ -398,9 +508,8 @@ pub fn peticion_de(
 /// CLI sólo despacha (R-ARQ-1) y el umbral de líneas del CLI (ADR-005)
 /// obliga a que la orquestación viva aquí.
 ///
-/// Devuelve el código de salida y **escribe** en stdout el
-/// `ROPERO_PORT=<n>` (el contrato R-OC): es la última línea de stdout, y
-/// sale en cuanto el motor está listo, aunque el proceso siga vivo.
+/// En primer plano escribe `ROPERO_PORT=<n>` en stdout cuando el motor está
+/// listo; en background no escribe nada en la terminal.
 pub fn arranca_todo(
     peticion: &RunRequest,
     catalogo: &Catalog,
@@ -412,9 +521,13 @@ pub fn arranca_todo(
         Err(outcome) => return informa(outcome),
     };
     let state_dir = crate::state::state_dir(&env.home, env.get("ROPERO_STATE_DIR"));
-    let outcome = arranca(&plan, peticion, env, &state_dir, true, |puerto, _| {
-        ropero_core::out_line(&format!("ROPERO_PORT={puerto}"));
-    });
+    let foreground = !peticion.background;
+    let mut callback = |puerto: u16, _pid: u32| {
+        if foreground {
+            ropero_core::out_line(&format!("ROPERO_PORT={puerto}"));
+        }
+    };
+    let outcome = arranca(&plan, peticion, env, &state_dir, foreground, &mut callback);
     if outcome.code == 0 {
         return 0;
     }
@@ -444,6 +557,35 @@ pub fn para_todo(modelo: &str, env: &Environment) -> i32 {
     0
 }
 
+/// Registra el uso de un arranque. No guarda secretos.
+fn registra_uso(env: &Environment, plan: &RunPlan, peticion: &RunRequest, outcome: &RunOutcome) {
+    let resultado = if outcome.interrupted {
+        "interrupted"
+    } else if outcome.code == 0 {
+        "ok"
+    } else if outcome.code == 2 {
+        "uso"
+    } else {
+        "error"
+    };
+    let modo = if peticion.background {
+        "background"
+    } else {
+        "foreground"
+    };
+    let record = crate::usage::UsageRecord {
+        timestamp: crate::usage::now_ts(),
+        model: plan.spec.model.name.clone(),
+        engine: plan.engine.id.as_str().to_string(),
+        port: outcome.port,
+        result: resultado.to_string(),
+        mode: modo.to_string(),
+    };
+    if let Err(e) = crate::usage::append_usage(&crate::usage::logs_dir(env), &record) {
+        ropero_core::err_line(&format!("error: no se pudo escribir el log de uso: {e}"));
+    }
+}
+
 /// Imprime el error de un arranque fallido y devuelve su código.
 fn informa(outcome: RunOutcome) -> i32 {
     if let Some(mensaje) = &outcome.error {
@@ -454,12 +596,9 @@ fn informa(outcome: RunOutcome) -> i32 {
 
 /// El arranque completo, con las piezas de producción.
 ///
-/// Es lo que llama la CLI. Todo lo que sale de aquí es **dato**: el
-/// código de salida, el puerto y el PID. La CLI los imprime.
-///
 /// `al_arrancar` se llama en cuanto el motor está listo, **antes** de
-/// esperar: es el momento en el que el puerto ya se sabe y hay que
-/// comunicarlo (`ROPERO_PORT=<n>`), aunque el proceso siga vivo.
+/// esperar. En foreground el puerto se comunica al terminal; en background
+/// no hay salida a la terminal.
 pub fn arranca(
     plan: &RunPlan,
     peticion: &RunRequest,
@@ -470,33 +609,158 @@ pub fn arranca(
 ) -> RunOutcome {
     // El motor tiene que estar instalado: sin binario no hay nada que
     // lanzar.
-    let binario = crate::sys_engine::binary_of(&plan.engine);
+    let binario = crate::sys_engine::binary_of(&plan.engine, env);
     if binario.is_none() {
-        return RunOutcome::error(format!(
+        let outcome = RunOutcome::error(format!(
             "el motor '{}' no está instalado: instálalo con 'ropero install engines'",
             plan.engine.id.as_str()
         ));
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
     }
     let binario = binario.expect("el binario existe");
 
-    // El modelo tiene que estar descargado.
-    if !crate::catalog_scan::model_downloaded(&plan.spec, env) {
-        return RunOutcome::error(format!(
+    // El modelo tiene que estar disponible. Para FLM delegado, el tag declarado
+    // es suficiente para intentar servir (el almacén es de FLM).
+    let model_ok = if ropero_core::flm::is_flm_model(&plan.spec)
+        && ropero_core::flm::primary_tag(&plan.spec).is_some()
+        && crate::flm::delegated(&plan.engine)
+    {
+        true
+    } else {
+        crate::catalog_scan::model_downloaded(&plan.spec, env)
+    };
+    if !model_ok {
+        let outcome = RunOutcome::error(format!(
             "el modelo '{}' no está descargado: instálalo con 'ropero install models'",
             peticion.model
         ));
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
+
+    // Detecta primero los bloqueos que `--force` no puede resolver. Así no
+    // se detienen modelos gestionados cuando el puerto explícito pertenece a
+    // un proceso externo, o cuando todos los puertos sólo los ocupa software
+    // que Ropero no gestiona.
+    let managed_before_force = procesos_gestionados(state_dir);
+    let occupied_before_force = peticion.port.map_or_else(
+        || puertos_ocupados(&plan.engine.port_range),
+        |p| {
+            if puerto_ocupado(p) {
+                vec![p]
+            } else {
+                Vec::new()
+            }
+        },
+    );
+    let requested_port_external = peticion.port.is_some_and(|p| {
+        occupied_before_force.contains(&p)
+            && !managed_before_force.iter().any(|(_, s)| s.port == Some(p))
+    });
+    let range_full_external = peticion.port.is_none()
+        && occupied_before_force.len()
+            == (plan.engine.port_range.max - plan.engine.port_range.min + 1) as usize
+        && !occupied_before_force
+            .iter()
+            .any(|p| managed_before_force.iter().any(|(_, s)| s.port == Some(*p)));
+    if requested_port_external || range_full_external {
+        let ports = occupied_before_force
+            .iter()
+            .map(u16::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let outcome = RunOutcome::error(format!(
+            "puerto(s) {ports} ocupado(s) por procesos externos o no gestionados por Ropero; no se detuvo ningún proceso. Libera el puerto o elige otro con '--port'"
+        ));
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
+
+    // `--force` sólo actúa después de comprobar que el nuevo modelo puede
+    // intentarse. Se enumeran procesos vivos del estado de Ropero, se pide
+    // confirmación y luego se vuelve a medir memoria en el preflight.
+    if peticion.force {
+        let afectados = procesos_gestionados(state_dir);
+        if !afectados.is_empty() {
+            if !crate::install::hay_tty() {
+                let nombres = afectados
+                    .iter()
+                    .map(|(_, s)| {
+                        format!(
+                            "{} ({}, puerto {})",
+                            s.model,
+                            s.engine,
+                            s.port.unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let outcome = RunOutcome::error(format!(
+                    "--force necesita confirmación interactiva para detener: {nombres}; vuelve a ejecutarlo desde un terminal"
+                ));
+                registra_uso(env, plan, peticion, &outcome);
+                return outcome;
+            }
+            ropero_core::out_line("Procesos de Ropero que se detendrán:");
+            for (_, estado) in &afectados {
+                ropero_core::out_line(&format!(
+                    "  - {} ({}, puerto {})",
+                    estado.model,
+                    estado.engine,
+                    estado.port.unwrap_or_default()
+                ));
+            }
+            let respuesta = crate::install::pregunta("¿Detenerlos y continuar? [s/N]: ");
+            if !respuesta.is_some_and(|r| {
+                matches!(r.trim().to_ascii_lowercase().as_str(), "s" | "si" | "sí")
+            }) {
+                let outcome =
+                    RunOutcome::error("arranque cancelado; no se detuvo ningún modelo".to_string());
+                registra_uso(env, plan, peticion, &outcome);
+                return outcome;
+            }
+            crate::stop::SysStopper::parar_todo(
+                state_dir,
+                &crate::sys_engine::OsStopper,
+                Duration::from_secs(10),
+            );
+        }
     }
 
     // El preflight: los recursos.
     let preflight = preflight_de(
         plan,
         env,
-        crate::catalog_scan::engine_installed(&plan.engine),
-        crate::catalog_scan::model_downloaded(&plan.spec, env),
+        crate::catalog_scan::engine_installed_with_env(&plan.engine, env),
+        model_ok,
         peticion.cpu,
     );
     if let Err(e) = preflight.check() {
-        return RunOutcome::error(e.to_string());
+        let detalle = if !peticion.force {
+            let gestionados = procesos_gestionados(state_dir);
+            if gestionados.is_empty() {
+                format!(
+                    "{e}; no hay modelos activos gestionados por Ropero que pueda detener. Libera VRAM/RAM de otros procesos o reduce el modelo/contexto"
+                )
+            } else {
+                let modelos = gestionados
+                    .iter()
+                    .map(|(_, s)| format!("{} ({})", s.model, s.engine))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "{e}; hay modelos gestionados por Ropero que podrían liberar recursos: {modelos}. Si quieres detenerlos, vuelve a ejecutar con '--force' y confirma"
+                )
+            }
+        } else {
+            format!(
+                "{e}; Ropero ya detuvo los modelos confirmados. Puede faltar capacidad propia del modelo o estar ocupada por procesos externos que Ropero no gestiona"
+            )
+        };
+        let outcome = RunOutcome::error(detalle);
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
     }
 
     // La sonda: con clave de API si el usuario la pidió.
@@ -510,15 +774,45 @@ pub fn arranca(
     };
 
     // 2. Los puertos ocupados del rango del motor.
-    //
-    //    "Libre" quiere decir que nadie escucha en él: si no, el motor
-    //    muere con «address already in use» y el arranque falla con un
-    //    error que no explica nada.
     let ports = if peticion.port.is_some() {
         Vec::new()
     } else {
         puertos_ocupados(&plan.engine.port_range)
     };
+    let ocupados_requeridos = peticion.port.map_or_else(
+        || ports.len() == (plan.engine.port_range.max - plan.engine.port_range.min + 1) as usize,
+        puerto_ocupado,
+    );
+    if ocupados_requeridos {
+        let ocupados = peticion.port.map_or_else(|| ports.clone(), |p| vec![p]);
+        let gestionados = procesos_gestionados(state_dir);
+        let detalle = ocupados
+            .iter()
+            .map(|p| {
+                gestionados
+                    .iter()
+                    .find(|(_, s)| s.port == Some(*p))
+                    .map(|(_, s)| format!("{p} ({} / {})", s.model, s.engine))
+                    .unwrap_or_else(|| format!("{p} (proceso externo o no gestionado por Ropero)"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let outcome = RunOutcome::error(format!(
+            "puerto(s) ocupado(s): {detalle}. Libera un puerto o elige otro con '--port'; Ropero sólo puede detener procesos que gestiona y confirma antes de hacerlo"
+        ));
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
+
+    let log = log_de(&plan.spec, env);
+    // El flujo normal siempre genera fichero de log para fallos/status.
+    if let Some(dir) = log.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        let outcome = RunOutcome::error(format!("no se pudo preparar el directorio de logs: {e}"));
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
 
     let spec = LaunchSpec {
         model: plan.spec.model.name.clone(),
@@ -528,7 +822,7 @@ pub fn arranca(
         argv: plan.argv.clone(),
         level: plan.level.clone(),
         context: plan.context,
-        log: log_de(&plan.spec, env),
+        log: log.clone(),
         port_range: plan.engine.port_range,
     };
 
@@ -542,56 +836,107 @@ pub fn arranca(
         port: peticion.port,
         occupied_ports: ports,
         state_dir,
-        options: opciones_de(peticion, foreground),
+        // `--force` ya se confirmó y se ejecutó antes de medir recursos.
+        options: LaunchOptions {
+            force: false,
+            ..opciones_de(peticion, foreground)
+        },
+    };
+
+    // En primer plano se muestra en vivo la salida del motor (colorizada) y
+    // el motor escribe además en su log. En background no hay salida a la
+    // terminal.
+    let follower = if foreground {
+        let desde = crate::colorize::line_count(&log);
+        let engine_color = ropero_core::palette::engine_ansi(plan.engine.color);
+        crate::colorize::LogFollower::start(
+            log.clone(),
+            desde,
+            plan.spec.model.engine,
+            engine_color,
+        )
+    } else {
+        crate::colorize::LogFollower::none()
     };
 
     let resultado = match crate::launch::launch(&spec, &ctx) {
         Ok(r) => r,
-        Err(e) => return RunOutcome::error(e.to_string()),
+        Err(e) => {
+            follower.stop();
+            let outcome = RunOutcome::error(e.to_string());
+            registra_uso(env, plan, peticion, &outcome);
+            return outcome;
+        }
     };
 
-    // El motor está listo: se comunica el puerto. Es lo que leen los
-    // scripts (`ROPERO_PORT=<n>`), y tiene que salir **antes** de que
-    // ropero se quede esperando al proceso.
+    // El motor está listo: se comunica el puerto (sólo en foreground).
     al_arrancar(resultado.port, resultado.pid);
 
-    // En primer plano: se espera al proceso, y el Ctrl-C lo interrumpe.
     if foreground {
         let interruptor = crate::foreground::Interruptor::new();
         if let Err(e) = interruptor.install() {
-            // Sin manejador de SIGINT el Ctrl-C mataría a ropero y dejaría
-            // al motor sirviendo: es mejor avisar y no esperar.
-            return RunOutcome::error(format!(
-                "no se pudo preparar el Ctrl-C: {e}\n  \
-                 (el motor queda parado; páralo con 'ropero stop')"
+            use crate::launch::Engine as _;
+            engine.terminate(&resultado.identity);
+            let _ = engine.wait(resultado.pid, Duration::from_secs(5));
+            if engine.alive(resultado.pid) {
+                engine.kill(&resultado.identity);
+                let _ = engine.wait(resultado.pid, Duration::from_secs(2));
+            }
+            crate::state::clear_state(state_dir, resultado.port);
+            follower.stop();
+            let outcome = RunOutcome::error(format!(
+                "no se pudo preparar el Ctrl-C: {e}; se intentó detener el motor y limpiar su estado"
             ));
+            registra_uso(env, plan, peticion, &outcome);
+            return outcome;
         }
-        match crate::foreground::esperar(&engine, resultado.pid, &interruptor, None) {
+        let outcome = match crate::foreground::esperar(&engine, resultado.pid, &interruptor, None) {
             Ok(Some(codigo)) => {
-                // El motor terminó solo: se limpia el estado y se devuelve
-                // su código de salida.
                 crate::state::clear_state(state_dir, resultado.port);
                 if codigo == 0 {
-                    return RunOutcome::ok(resultado.port, resultado.pid);
+                    RunOutcome::ok(resultado.port, resultado.pid)
+                } else {
+                    RunOutcome::error(format!(
+                        "el motor de '{}' terminó con el código {codigo}",
+                        peticion.model
+                    ))
                 }
-                return RunOutcome::error(format!(
-                    "el motor de '{}' terminó con el código {codigo}",
-                    peticion.model
-                ));
             }
             Ok(None) => {
                 crate::state::clear_state(state_dir, resultado.port);
-                return RunOutcome::ok(resultado.port, resultado.pid);
+                RunOutcome::ok(resultado.port, resultado.pid)
             }
             Err(_) => {
-                // El Ctrl-C: se para el motor y se sale con 130.
                 use crate::launch::Engine as _;
                 engine.terminate(&resultado.identity);
                 crate::state::clear_state(state_dir, resultado.port);
-                return RunOutcome::interrumpido();
+                RunOutcome::interrumpido()
             }
-        }
+        };
+        follower.stop();
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
     }
 
-    RunOutcome::ok(resultado.port, resultado.pid)
+    // Background: desacoplado, sin espera ni salida a la terminal.
+    use crate::launch::Engine as _;
+    if let Err(e) = engine.detach(resultado.pid) {
+        engine.terminate(&resultado.identity);
+        let _ = engine.wait(resultado.pid, Duration::from_secs(5));
+        if engine.alive(resultado.pid) {
+            engine.kill(&resultado.identity);
+            let _ = engine.wait(resultado.pid, Duration::from_secs(2));
+        }
+        crate::state::clear_state(state_dir, resultado.port);
+        follower.stop();
+        let outcome = RunOutcome::error(format!(
+            "no se pudo desacoplar el proceso en background: {e}"
+        ));
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
+    follower.stop();
+    let outcome = RunOutcome::ok(resultado.port, resultado.pid);
+    registra_uso(env, plan, peticion, &outcome);
+    outcome
 }

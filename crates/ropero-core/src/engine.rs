@@ -14,7 +14,7 @@
 //!
 //! ## La nomenclatura de [ADR-004]
 //!
-//! `llama-server` es el repo **oficial** de llama.cpp y el fork privado se
+//! `llama-server` es el repo **oficial** de llama.cpp y el fork del dueño se
 //! llama `turbo-llama`. Antes `llama-server` era el fork y el oficial se
 //! llamaba `llama-server-official`; ese id es ahora un alias.
 
@@ -26,7 +26,7 @@ pub enum EngineId {
     /// El repo **oficial** de llama.cpp (ADR-004).
     #[serde(rename = "llama-server")]
     LlamaServer,
-    /// El fork privado del dueño (turboquant), antes `llama-server`.
+    /// El fork público del dueño (turboquant), antes `llama-server`.
     #[serde(rename = "turbo-llama")]
     TurboLlama,
     #[serde(rename = "mlx-serve")]
@@ -41,6 +41,8 @@ pub enum EngineId {
     AirLlm,
     #[serde(rename = "strata")]
     Strata,
+    #[serde(rename = "ignis")]
+    Ignis,
 }
 
 /// Deserializa el motor acepta **los ids canónicos y los alias legacy**.
@@ -72,7 +74,7 @@ impl std::fmt::Display for UnknownEngine {
         write!(
             f,
             "motor desconocido: '{}'; usa uno de: llama-server, turbo-llama, \
-             mlx-serve, fastflowlm, tensorrt-llm, vllm, airllm, strata",
+             mlx-serve, fastflowlm, tensorrt-llm, vllm, airllm, strata, ignis",
             self.0
         )
     }
@@ -89,7 +91,7 @@ impl UnknownEngine {
     }
 }
 
-/// Los ocho ids canónicos (ADR-004), en el orden de la leyenda de motores.
+/// Los ids canónicos, en el orden de la leyenda de motores.
 pub const CANONICAL_IDS: &[&str] = &[
     "llama-server",
     "turbo-llama",
@@ -99,6 +101,7 @@ pub const CANONICAL_IDS: &[&str] = &[
     "vllm",
     "airllm",
     "strata",
+    "ignis",
 ];
 
 impl EngineId {
@@ -113,6 +116,7 @@ impl EngineId {
             Self::Vllm => "vllm",
             Self::AirLlm => "airllm",
             Self::Strata => "strata",
+            Self::Ignis => "ignis",
         }
     }
 
@@ -132,6 +136,7 @@ impl EngineId {
             "vllm" => Self::Vllm,
             "airllm" => Self::AirLlm,
             "strata" => Self::Strata,
+            "ignis" => Self::Ignis,
             // Alias legacy (ADR-004): se canonicalizan CON aviso.
             //
             // `llama-server-official` y `llama-official` apuntaban al repo
@@ -178,6 +183,7 @@ impl EngineId {
             "vllm" => Some(Self::Vllm),
             "airllm" => Some(Self::AirLlm),
             "strata" => Some(Self::Strata),
+            "ignis" => Some(Self::Ignis),
             // Directorios legacy (ADR-004): el fork era `llama/` y el
             // oficial `llama-official/`.
             "llama" => Some(Self::TurboLlama),

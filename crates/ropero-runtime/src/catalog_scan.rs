@@ -37,13 +37,16 @@ pub struct Scan {
     pub texts: BTreeMap<PathBuf, String>,
     /// Los manifiestos de motor leídos de `engines/`.
     pub engines: Vec<EngineManifest>,
+    /// Error de configuración que sólo se detecta al aplicar overrides a los
+    /// manifests (por ejemplo, rangos efectivos solapados).
+    pub config_error: Option<ropero_core::config::ErrorConfig>,
 }
 
 /// Escanea la raíz del catálogo.
 ///
 /// `env` es el entorno ya capturado: el runtime no consulta el entorno del
 /// proceso (el core tampoco puede).
-pub fn scan(root: &Path) -> Result<Scan, String> {
+pub fn scan(root: &Path, env: &Environment) -> Result<Scan, String> {
     let base = ropero_core::models_base(root, root.join("models").is_dir());
     let mut active: Vec<ModelSpec> = Vec::new();
     let mut fired: Vec<ModelSpec> = Vec::new();
@@ -58,31 +61,90 @@ pub fn scan(root: &Path) -> Result<Scan, String> {
         .filter(|p| p.is_dir())
         .collect::<Vec<PathBuf>>();
     dirs.sort();
+    let config = env.config_resuelta();
+    let external_catalog_override =
+        env.get("ROPERO_MODELS_DIR").is_some() || env.get("ROPERO_ROOT").is_some();
+    let custom_dirs: BTreeMap<EngineId, PathBuf> = if external_catalog_override {
+        BTreeMap::new()
+    } else {
+        config
+            .engines
+            .iter()
+            .filter_map(|(id, engine)| {
+                engine
+                    .models_toml_dir
+                    .as_ref()
+                    .map(|ruta| (*id, ruta.valor.clone()))
+            })
+            .collect()
+    };
+    let mut scanned = Vec::new();
+    let mut scanned_paths = BTreeMap::<PathBuf, EngineId>::new();
     for dir in dirs {
         let folder = dir.file_name().unwrap_or_default().to_string_lossy();
         // Una carpeta que no corresponde a ningún motor es un **problema** del
         // catálogo (R-DATA-12), no el fin del escaneo: se acumula y se sigue.
-        if EngineId::from_dir_name(&folder).is_none() {
+        let Some(engine) = EngineId::from_dir_name(&folder) else {
             let msg = format!("motor desconocido '{folder}' en {}", dir.display());
             problems.push(msg);
             continue;
+        };
+        if custom_dirs
+            .get(&engine)
+            .is_some_and(|custom| custom != &dir)
+        {
+            continue;
         }
-        files += collect(&dir, &mut active, &mut problems, &mut notices, &mut texts)?;
-        let retired = dir.join("fired");
-        if retired.is_dir() {
-            files += collect(
-                &retired,
-                &mut fired,
-                &mut problems,
-                &mut notices,
-                &mut texts,
-            )?;
+        let identity = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        scanned_paths.insert(identity, engine);
+        scanned.push((engine, dir));
+    }
+    for (engine, dir) in scanned {
+        files += collect_engine(
+            engine,
+            &dir,
+            &mut active,
+            &mut fired,
+            &mut problems,
+            &mut notices,
+            &mut texts,
+        )?;
+    }
+    for (engine, dir) in &custom_dirs {
+        let identity = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+        if let Some(previous) = scanned_paths.get(&identity) {
+            if previous != engine {
+                problems.push(format!(
+                    "la ruta de TOML {} está asignada a los motores '{}' y '{}'; se ignora para '{}'",
+                    dir.display(), previous.as_str(), engine.as_str(), engine.as_str()
+                ));
+            }
+            continue;
         }
+        scanned_paths.insert(identity, *engine);
+        files += collect_engine(
+            *engine,
+            dir,
+            &mut active,
+            &mut fired,
+            &mut problems,
+            &mut notices,
+            &mut texts,
+        )?;
     }
     let catalog = ropero_core::build_catalog(active, fired).map_err(|e| e.to_string())?;
     // Los manifiestos de motor viven en `engines/`, junto al catálogo. Un
     // manifiesto roto es un **problema** que se acumula (R-ENG-5).
-    let engines = scan_engines(&root.join(ropero_core::ENGINES_DIR_NAME), &mut problems);
+    // Si el catálogo apunta al directorio `models/` (p. ej. override
+    // ROPERO_MODELS_DIR=<raíz>/models), los motores pueden estar en la raíz
+    // hermana `<raíz>/engines`.
+    let engines_dir = if root.join(ropero_core::ENGINES_DIR_NAME).is_dir() {
+        root.join(ropero_core::ENGINES_DIR_NAME)
+    } else {
+        ropero_core::config::raiz_del_catalogo(&base).join(ropero_core::ENGINES_DIR_NAME)
+    };
+    let mut engines = scan_engines(&engines_dir, &mut problems);
+    let config_error = config.overlay_engines(&mut engines).err();
     Ok(Scan {
         catalog,
         problems,
@@ -92,7 +154,51 @@ pub fn scan(root: &Path) -> Result<Scan, String> {
         base,
         root: root.to_path_buf(),
         engines,
+        config_error,
     })
+}
+
+fn collect_engine(
+    engine: EngineId,
+    dir: &Path,
+    active: &mut Vec<ModelSpec>,
+    fired: &mut Vec<ModelSpec>,
+    problems: &mut Vec<String>,
+    notices: &mut Vec<String>,
+    texts: &mut BTreeMap<PathBuf, String>,
+) -> Result<usize, String> {
+    let mut found = Vec::new();
+    let mut count = collect(dir, &mut found, problems, notices, texts)?;
+    append_for_engine(engine, dir, found, active, problems);
+    let retired = dir.join("fired");
+    if retired.is_dir() {
+        let mut found = Vec::new();
+        count += collect(&retired, &mut found, problems, notices, texts)?;
+        append_for_engine(engine, &retired, found, fired, problems);
+    }
+    Ok(count)
+}
+
+fn append_for_engine(
+    engine: EngineId,
+    dir: &Path,
+    models: Vec<ModelSpec>,
+    destination: &mut Vec<ModelSpec>,
+    problems: &mut Vec<String>,
+) {
+    for model in models {
+        if model.model.engine != engine {
+            problems.push(format!(
+                "el modelo '{}' declara engine '{}' pero está en el directorio de '{}' ({})",
+                ropero_core::real_name(&model),
+                model.model.engine.as_str(),
+                engine.as_str(),
+                dir.display()
+            ));
+        } else {
+            destination.push(model);
+        }
+    }
 }
 
 /// Los ficheros `.toml` de un directorio, ordenados.
@@ -111,7 +217,42 @@ fn tomls(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 /// Lee y parsea los manifiestos de motor de `dir`.
 fn scan_engines(dir: &Path, problems: &mut Vec<String>) -> Vec<EngineManifest> {
+    // Los manifiestos de los motores soportados son parte fija de Ropero y
+    // deben estar disponibles aunque el usuario aún no tenga `engines/`.
+    // El directorio del usuario puede sustituirlos por id, pero nunca es la
+    // única fuente: de lo contrario un directorio vacío ocultaba todos los
+    // motores instalables.
+    const BUILTIN: &[(&str, &str)] = &[
+        ("airllm", include_str!("../../../engines/airllm.toml")),
+        ("ignis", include_str!("../../../engines/ignis.toml")),
+        (
+            "fastflowlm",
+            include_str!("../../../engines/fastflowlm.toml"),
+        ),
+        (
+            "llama-server",
+            include_str!("../../../engines/llama-server.toml"),
+        ),
+        ("mlx-serve", include_str!("../../../engines/mlx-serve.toml")),
+        ("strata", include_str!("../../../engines/strata.toml")),
+        (
+            "tensorrt-llm",
+            include_str!("../../../engines/tensorrt-llm.toml"),
+        ),
+        (
+            "turbo-llama",
+            include_str!("../../../engines/turbo-llama.toml"),
+        ),
+        ("vllm", include_str!("../../../engines/vllm.toml")),
+    ];
     let mut manifests = Vec::new();
+    for (id, text) in BUILTIN {
+        let path = PathBuf::from(format!("<ropero>/engines/{id}.toml"));
+        match parse_engine_manifest(text, &path) {
+            Ok(manifest) => manifests.push(manifest),
+            Err(e) => problems.push(e.to_string()),
+        }
+    }
     let Ok(files) = tomls(dir) else {
         return manifests;
     };
@@ -124,7 +265,13 @@ fn scan_engines(dir: &Path, problems: &mut Vec<String>) -> Vec<EngineManifest> {
             }
         };
         match parse_engine_manifest(&text, &path) {
-            Ok(manifiesto) => manifests.push(manifiesto),
+            Ok(manifiesto) => {
+                if let Some(existing) = manifests.iter_mut().find(|m| m.id == manifiesto.id) {
+                    *existing = manifiesto;
+                } else {
+                    manifests.push(manifiesto);
+                }
+            }
             Err(e) => problems.push(e.to_string()),
         }
     }
@@ -210,6 +357,15 @@ pub fn es_ejecutable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn expand_home(ruta: &str) -> PathBuf {
+    if let Some(rest) = ruta.strip_prefix("~/")
+        && let Ok(home) = std::env::var("HOME")
+    {
+        return Path::new(&home).join(rest);
+    }
+    PathBuf::from(ruta)
+}
+
 /// Si un motor está instalado: su `detect` lo encuentra.
 ///
 /// El `detect` del manifiesto dice **cómo** se sabe: un binario en el
@@ -224,7 +380,32 @@ pub fn engine_installed(manifest: &EngineManifest) -> bool {
             .detect
             .paths
             .iter()
-            .any(|ruta| Path::new(ruta).exists())
+            .any(|ruta| expand_home(ruta).exists())
+}
+
+/// Detecta un engine usando el entorno capturado y el `bin_dir` configurado.
+pub fn engine_installed_with_env(manifest: &EngineManifest, env: &Environment) -> bool {
+    let on_path = |binary: &str| {
+        env.get("PATH")
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten()
+            .map(|dir| dir.join(binary))
+            .any(|candidate| es_ejecutable(&candidate))
+    };
+    manifest
+        .detect
+        .binaries
+        .iter()
+        .any(|binary| on_path(binary))
+        || manifest.detect.binaries.iter().any(|binary| {
+            let candidate = env.env_path("ROPERO_BIN_DIR", ".local/bin").join(binary);
+            es_ejecutable(&candidate)
+        })
+        || manifest.detect.paths.iter().any(|raw| {
+            let candidate = env.expand_path(raw);
+            es_ejecutable(&candidate)
+        })
 }
 
 /// Si el modelo está descargado: sus ficheros `[files]` existen.
@@ -232,6 +413,15 @@ pub fn engine_installed(manifest: &EngineManifest) -> bool {
 /// Se resuelven con `resolve_paths` (el dominio): el core decide **qué**
 /// ruta mirar, y aquí sólo se pregunta al disco.
 pub fn model_downloaded(spec: &ModelSpec, env: &Environment) -> bool {
+    if spec.model.format == ropero_core::ModelFormat::Ninfer && spec.model.engine == EngineId::Ignis
+    {
+        return crate::ignis::model_installed(spec, env);
+    }
+    // Modelos FLM (tag en almacén delegado): sin manifiesto no podemos consultar
+    // `flm list`; tratamos como no confirmado.
+    if ropero_core::flm::is_flm_model(spec) {
+        return false;
+    }
     let paths = ropero_core::resolve_paths(spec, env);
     let existe = |ruta: Option<&str>| ruta.is_some_and(|r| Path::new(r).exists());
     let principal = existe(paths.gguf.as_deref()) || existe(paths.model_path.as_deref());
@@ -241,6 +431,28 @@ pub fn model_downloaded(spec: &ModelSpec, env: &Environment) -> bool {
     // Un modelo sin artefactos (p. ej. sólo `[build]`) se considera
     // descargado si no tiene nada que descargar.
     principal || auxiliares || sin_artefactos(spec)
+}
+
+/// Como [`model_downloaded`], pero con contexto de motor para almacenes delegados.
+pub fn model_downloaded_with_engine(
+    spec: &ModelSpec,
+    env: &Environment,
+    engine: Option<&EngineManifest>,
+) -> bool {
+    if spec.model.format == ropero_core::ModelFormat::Ninfer && spec.model.engine == EngineId::Ignis
+    {
+        return crate::ignis::model_installed(spec, env);
+    }
+    if ropero_core::flm::is_flm_model(spec) {
+        let Some(engine) = engine else {
+            return false;
+        };
+        if crate::flm::delegated(engine) {
+            return crate::flm::installed_status(engine, spec).unwrap_or(false);
+        }
+        return false;
+    }
+    model_downloaded(spec, env)
 }
 
 /// Si el modelo no declara ningún artefacto que pueda faltar.
@@ -278,14 +490,17 @@ pub fn existe(path: &Path) -> bool {
 pub struct Detector<'a> {
     /// El entorno ya capturado (para resolver las rutas de los modelos).
     pub env: &'a Environment,
+    /// Manifiestos de motor, para consultar almacenes delegados (FLM).
+    pub engines: &'a [EngineManifest],
 }
 
 impl ropero_core::snapshot::Detect for Detector<'_> {
     fn engine_installed(&self, manifest: &EngineManifest) -> bool {
-        engine_installed(manifest)
+        engine_installed_with_env(manifest, self.env)
     }
 
     fn model_downloaded(&self, spec: &ModelSpec) -> bool {
-        model_downloaded(spec, self.env)
+        let engine = self.engines.iter().find(|e| e.id == spec.model.engine);
+        model_downloaded_with_engine(spec, self.env, engine)
     }
 }

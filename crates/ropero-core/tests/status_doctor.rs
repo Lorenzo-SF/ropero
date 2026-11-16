@@ -196,6 +196,8 @@ fn motor(id: EngineId) -> EngineManifest {
         port_range: ropero_core::PortRange::new(8100, 8199),
         deps: vec!["git".to_string()],
         detect: ropero_core::DetectSpec::default(),
+        serve: None,
+        install: None,
         compat: Vec::new(),
     }
 }

@@ -211,6 +211,12 @@ pub fn artefacto_de(spec: &ModelSpec) -> String {
         ArtifactLocation::StrataCatalog => {
             primero(&[no_vacia(&spec.model.path)]).unwrap_or_else(|| "strata".to_string())
         }
+        ArtifactLocation::NinferDir => primero(&[
+            spec.download.as_ref().map(|d| d.repo.clone()),
+            no_vacia(&spec.model.path),
+            spec.download.as_ref().map(|d| d.file.clone()),
+        ])
+        .unwrap_or_else(|| "ninfer".to_string()),
     }
 }
 

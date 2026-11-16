@@ -24,10 +24,8 @@ pub fn run() -> i32 {
 
 /// `ropero <modelo>`: el arranque de un modelo.
 ///
-/// El doc CLI v2 §8 lo define con seis flags: `--force`, `--cpu`,
-/// `--port`, `--api-key`, `--no-api-key` y `--ctx`. Aquí sólo se traducen
-/// a la petición del runtime; la lógica del arranque vive en
-/// `ropero-runtime` (R-ARQ-1).
+/// Traduce los flags del contrato a la petición del runtime; la lógica del
+/// arranque vive en `ropero-runtime` (R-ARQ-1).
 pub fn run_modelo(argumentos: &[String]) -> i32 {
     let matches = crate::parser::arranque().get_matches_from(
         std::iter::once("ropero <modelo>".to_string()).chain(argumentos.iter().cloned()),
@@ -40,6 +38,8 @@ pub fn run_modelo(argumentos: &[String]) -> i32 {
         matches.get_one::<String>("api-key").map(|s| s.as_str()),
         matches.get_flag("no-api-key"),
         matches.get_one::<String>("ctx").map(|s| s.as_str()),
+        matches.get_flag("background"),
+        matches.get_one::<String>("log-level").map(|s| s.as_str()),
     );
     match peticion {
         Ok(peticion) => crate::commands::arranca(&peticion),

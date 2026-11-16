@@ -19,8 +19,8 @@ maturity = "proven"
 formats = ["q4nx", "gguf"]
 
 # El rango de puertos propio (doc CLI v2 §5.1).
-port_min = 8400
-port_max = 8499
+port_min = 9970
+port_max = 9979
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["git", "cmake", "ninja"]
@@ -41,4 +41,15 @@ compat = [
 # Cómo se sabe que está instalado.
 [detect]
 binaries = ["flm"]
-paths = ["/usr/local/bin/flm", "/opt/ropero/bin/flm"]
+paths = ["~/.local/bin/flm", "/usr/local/bin/flm", "/opt/ropero/bin/flm"]
+
+# El arranque delega en la CLI de FLM: `flm serve <tag> <defaults...> <args...>`.
+# Ropero sólo aporta el puerto/contexto que ya gestiona; FLM es dueño del almacén.
+[serve]
+defaults = ["--host", "127.0.0.1", "--q-len", "20", "--socket", "20", "--pmode", "turbo"]
+
+# Operaciones de almacén delegadas a FLM. `<tag>` lo aporta el modelo.
+[install]
+pull = ["flm", "pull"]
+remove = ["flm", "remove"]
+list = ["flm", "list", "--json"]

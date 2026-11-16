@@ -5,6 +5,13 @@ mejor rinda en cada máquina. Lee modelos declarados en TOML, arranca el motor
 adecuado, comprueba que está listo y expone una puerta compatible con la API de
 OpenAI.
 
+> **Especificación vigente:** el resumen posterior del CLI y de configuración
+> recibido el 2026-11-16 prevalece sobre los contratos históricos donde haya
+> diferencias. Está consolidado en
+> [`R-CLI-18…27`, `R-CFG-1…2` y `R-MOD-32…34`](docs-especificacion/ropero-especificacion.md#414-especificación-posterior-del-cli-y-configuración-2026-11-16).
+> La tabla de estado en esa sección es una evaluación inicial; los elementos
+> parciales o pendientes no deben leerse como funcionalidades terminadas.
+
 ## Dos capas, una transición
 
 El repositorio contiene la v1 funcional y el workspace Rust de la v2 en
@@ -19,11 +26,12 @@ La v1 y la v2 conviven hasta F9, como decide
 [`ADR-002`](docs/adr/ADR-002-extraccion-vs-reescritura.md). El plan construye la
 v2 por capas para conservar los contratos y el estado en disco de la v1.
 
-El **catálogo de modelos de la v2 es propio**: vive en [`models/`](models/) en
-la raíz del workspace, **no** en `ropero-code/models`. Es un catálogo nuevo e
-independiente, generado desde los TOML de la v1 como fuente de referencia, y
-**no se integra en el ejecutable**. Contiene 45 modelos: 17 activos y 28
-retirados en `fired/`.
+Los TOML de [`models/`](models/) se conservan en el repositorio como copia de
+referencia y respaldo. **La aplicación no los usa como catálogo**: en uso
+normal, `install models`, `list` y `ropero <alias>` leen el catálogo del
+usuario en `$XDG_CONFIG_HOME/ropero/models/` (o `~/.config/ropero/models/`).
+El usuario debe colocar allí sus TOML. Los overrides `ROPERO_MODELS_DIR` y
+`ROPERO_ROOT` se reservan para desarrollo y pruebas.
 
 ### Qué tiene ya la v2
 
@@ -74,20 +82,48 @@ cargo test --locked --workspace
 cargo build --locked --workspace --release
 ```
 
-El catálogo de la v2 se descubre por ancestrales, así que la CLI funciona desde
-cualquier subdirectorio:
+La CLI funciona desde cualquier directorio porque, en uso normal, resuelve el
+catálogo desde la configuración del usuario (no buscando el catálogo del
+workspace por directorios ancestrales):
 
 ```bash
-cargo run --locked -p ropero-cli -- validate   # OK: 45 modelo(s) validados (exit 0)
-cargo run --locked -p ropero-cli -- list --all  # 45 líneas
+cargo run --locked -p ropero-cli -- config
+cargo run --locked -p ropero-cli -- list --all  # catálogo del usuario
 ```
 
-La CLI v2 se puede apuntar a otro catálogo con `ROPERO_MODELS_DIR` (debe
-apuntar a la raíz que contiene `models/`):
+### Catálogo, configuración y overrides (v2, working tree)
+
+En uso normal, el catálogo es externo en
+`$XDG_CONFIG_HOME/ropero/models/<motor>/` (o `~/.config/ropero/models/<motor>/`)
+con manifiestos de motor en `<directorio_config>/engines/`. En el primer uso se
+crea el directorio de configuración y `config.toml` por defecto de forma
+idempotente y **sin sobrescribir**. `logs_dir` por defecto es
+`<directorio_config>/logs`.
+
+Precedencia de rutas: `variable de entorno > config.toml > valor por defecto`
+(`ROPERO_MODELS_DIR`/`models_dir`, `GGUF_DIR`/`gguf_dir`,
+`SAFETENSORS_DIR`/`safetensors_dir`, `ROPERO_BIN_DIR`/`bin_dir`,
+`LOG_DIR`/`logs_dir`).
+
+`ROPERO_MODELS_DIR` y `ROPERO_ROOT` se conservan como overrides para desarrollo
+y pruebas (incluida la resolución de `<raíz>/engines/` cuando apuntan a
+`<raíz>/models/`). Los TOML del repositorio **no se auto-descubren** en uso
+normal.
+
+**Migración desde TOML/manifiestos heredados:**
 
 ```bash
-ROPERO_MODELS_DIR=/ruta/al/models cargo run --locked -p ropero-cli -- list
+mkdir -p ~/.config/ropero/models ~/.config/ropero/engines
+# copiar o mover modelos por motor
+cp /ruta/antigua/models/<motor>/*.toml ~/.config/ropero/models/<motor>/
+# copiar manifiestos de motor de usuario
+cp /ruta/antigua/engines/*.toml ~/.config/ropero/engines/
 ```
+
+Comandos de diagnóstico/configuración: `ropero config` (rutas y origen),
+`ropero doctor` (estado de configuración y dependencias) y `ropero template`
+(plantilla sugerida, sin escribirla). Estos comandos no modifican artefactos de
+modelos; el bootstrap idempotente de configuración puede ejecutarse si falta.
 
 ## La documentación
 

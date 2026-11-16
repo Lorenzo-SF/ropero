@@ -87,26 +87,61 @@ pub fn path(modelo: &str) -> i32 {
     0
 }
 
-/// `ropero template`: vuelca la plantilla del catálogo.
+/// `ropero config`: muestra la configuración resuelta y su origen.
+///
+/// Tolera configuración ilegible para poder mostrar el error y su remedio.
+pub fn config() -> i32 {
+    let Ok(s) = crate::discovery::scan_tolerant() else {
+        return 1;
+    };
+    for linea in ropero_core::config::lineas_config(
+        &s.estado_config,
+        &s.config,
+        &ropero_core::Palette::color(),
+    ) {
+        ropero_core::out_line(&linea);
+    }
+    if s.estado_config.error.is_some() {
+        1
+    } else {
+        0
+    }
+}
+
+/// `ropero template`: muestra la plantilla de modelo y sugiere destino.
 pub fn template() -> i32 {
     let Ok(s) = crate::discovery::scan() else {
         return 1;
     };
-    let candidates = ropero_core::template_candidates(&s.root, &s.base);
-    let Some(path) = candidates.into_iter().find(|p| ropero_runtime::existe(p)) else {
-        ropero_core::err_line("error: no encuentro la plantilla");
-        return 1;
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(c) => {
-            ropero_core::out(&c, false);
-            0
+    // Bootstrap mantiene una sola plantilla completa en el catálogo del
+    // usuario. No concatenamos candidatos ni mostramos además la copia del
+    // repositorio.
+    let path = s.base.join("template.toml");
+    if path.is_file() {
+        match std::fs::read_to_string(&path) {
+            Ok(c) => {
+                ropero_core::out(&c, false);
+            }
+            Err(e) => {
+                ropero_core::err_line(&format!("error: {}", e));
+                return 1;
+            }
         }
-        Err(e) => {
-            ropero_core::err_line(&format!("error: {}", e));
-            1
-        }
+    } else {
+        ropero_core::out(ropero_core::config::PLANTILLA_MODELO, false);
     }
+    let destino = s
+        .config
+        .models_dir
+        .valor
+        .join("<motor>")
+        .join("<modelo>.toml");
+    ropero_core::err_line("");
+    ropero_core::err_line(&format!(
+        "sugerencia: guarda la plantilla en {} (no se ha escrito nada)",
+        destino.display()
+    ));
+    0
 }
 
 /// `ropero validate`: valida los TOML del catálogo y de los motores.
@@ -202,17 +237,21 @@ pub fn stop(modelo: &str) -> i32 {
 ///
 /// El orden es el del doc CLI v2 §14: primero las del propio ropero, luego
 /// las de cada motor (disponible o no). Sale con **0** si todo está bien, y
-/// con **1** si falta algo.
+/// con **1** si falta algo. Tolera configuración ilegible para reportarla.
 pub fn doctor() -> i32 {
-    let Ok(s) = crate::discovery::scan() else {
+    let Ok(s) = crate::discovery::scan_tolerant() else {
         return 1;
     };
+    for linea in ropero_core::config::lineas_doctor_config(&s.estado_config, &s.config) {
+        ropero_core::out_line(&linea);
+    }
+    ropero_core::out_line("");
     let informe = ropero_core::doctor::DoctorReport {
         ropero: comprueba_ropero(),
         engines: ropero_core::sorted_by_canonical_id(&s.engines)
             .iter()
             .map(|m| ropero_core::doctor::EngineDeps {
-                installed: ropero_runtime::engine_installed(m),
+                installed: ropero_runtime::engine_installed_with_env(m, &s.env),
                 manifest: m.clone(),
                 checks: comprueba_deps(&m.deps),
             })
@@ -222,7 +261,7 @@ pub fn doctor() -> i32 {
         ropero_core::out_line(&linea);
     }
     let resumen = informe.summary();
-    if informe.todo_ok() {
+    if informe.todo_ok() && s.estado_config.error.is_none() {
         ropero_core::out_line(&resumen);
         0
     } else {

@@ -1,0 +1,23 @@
+[model]
+name = "qwen38-flash-next"
+engine = "ignis"
+format = "ninfer"
+context = 131072
+
+[files]
+
+[download]
+repo = "qwen3.8-flash-next"
+size = "~68.2 GiB"
+manual = true
+
+[args]
+base = [
+  "--model-id", "qwen3.8-flash-next",
+  "--download-path", "${artifacts_dir}",
+  "--download-enabled", "false",
+  "--profile", "rtx-16gb",
+  "--model-thinking-budget", "8192",
+  "--spec-backend", "dflash2",
+  "--spec-draft-tokens", "7"
+]

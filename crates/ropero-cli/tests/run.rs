@@ -185,6 +185,7 @@ fn prepara_modelo_descargado() -> TempDir {
 struct Arranque {
     hijo: Child,
     lineas: std::sync::Arc<Mutex<Vec<String>>>,
+    stderr: std::sync::Arc<Mutex<Vec<String>>>,
     /// El directorio de estado: de aquí sale el PID del motor.
     estado: PathBuf,
     /// El puerto en el que sirve el motor.
@@ -254,6 +255,7 @@ impl Arranque {
         let arranque = Self {
             hijo,
             lineas,
+            stderr: errores,
             estado: estado.to_path_buf(),
             puerto,
         };
@@ -264,10 +266,44 @@ impl Arranque {
     fn lineas(&self) -> Vec<String> {
         self.lineas.lock().expect("candado").clone()
     }
+
+    /// Las líneas de stderr que ha escrito hasta ahora.
+    fn stderr_lineas(&self) -> Vec<String> {
+        self.stderr.lock().expect("candado").clone()
+    }
+
+    /// Interrumpe ropero para que haga limpieza (uso, estado, motor).
+    fn interrumpir(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = Command::new("kill")
+                .args(["-INT", &self.hijo.id().to_string()])
+                .status();
+        }
+        for _ in 0..40 {
+            if let Ok(Some(_)) = self.hijo.try_wait() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
 }
 
 impl Drop for Arranque {
     fn drop(&mut self) {
+        // Intenta parada limpia primero (permite registrar uso/limpieza).
+        #[cfg(unix)]
+        {
+            let _ = Command::new("kill")
+                .args(["-INT", &self.hijo.id().to_string()])
+                .status();
+        }
+        for _ in 0..20 {
+            if let Ok(Some(_)) = self.hijo.try_wait() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         let _ = self.hijo.kill();
         let _ = self.hijo.wait();
         // El motor es un **nieto** del test: su padre es el `ropero`, y
@@ -602,4 +638,219 @@ fn espera_estado(ruta: &Path) -> String {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     panic!("el estado no apareció: {}", ruta.display());
+}
+
+/// Motor falso que emite una línea identificable en su salida.
+const MOTOR_FALSO_CON_SALIDA: &str = r#"#!/bin/sh
+# Motor falso que escribe salida visible antes de servir.
+echo "MOTOR_SALIDA_VISIBLE" >&2
+puerto=""
+previo=""
+for arg in "$@"; do
+    if [ "$previo" = "--port" ]; then
+        puerto="$arg"
+    fi
+    previo="$arg"
+done
+
+if [ -z "$puerto" ]; then
+    echo "no me han pasado --port" >&2
+    exit 1
+fi
+
+if [ -x /usr/bin/python3 ]; then
+    exec /usr/bin/python3 -c '
+import http.server, socketserver, sys
+
+puerto = int(sys.argv[1])
+
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        cuerpo = b"{\"data\":[{\"id\":\"modelo-alpha\"}]}"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(cuerpo)))
+        self.end_headers()
+        self.wfile.write(cuerpo)
+    def log_message(self, *a):
+        pass
+
+socketserver.TCPServer.allow_reuse_address = True
+with socketserver.TCPServer(("127.0.0.1", puerto), H) as s:
+    s.serve_forever()
+' "$puerto"
+fi
+
+while true; do
+    sleep 1
+done
+"#;
+
+struct MotorFalsoConSalida {
+    dir: TempDir,
+}
+
+impl MotorFalsoConSalida {
+    fn nuevo() -> Self {
+        let dir = TempDir::nuevo("motor-salida");
+        let ruta = dir.path().join("llama-server");
+        std::fs::write(&ruta, MOTOR_FALSO_CON_SALIDA).expect("escribir el motor falso");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&ruta).expect("metadatos").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&ruta, perms).expect("permisos");
+        }
+        Self { dir }
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+/// Lee el fichero de log del modelo, si existe.
+fn lee_log_modelo(estado: &Path, modelo: &str) -> String {
+    let ruta = estado.join("logs").join(format!("{modelo}.log"));
+    std::fs::read_to_string(ruta).unwrap_or_default()
+}
+
+/// Lee el log de uso.
+fn lee_usage(estado: &Path) -> String {
+    std::fs::read_to_string(estado.join("logs").join("usage.log")).unwrap_or_default()
+}
+
+/// Puerto del estado del primer modelo servido (polling).
+fn puerto_en_estado(estado: &Path) -> Option<u16> {
+    let dir = estado.join("ports");
+    for _ in 0..200 {
+        if let Ok(entradas) = std::fs::read_dir(&dir) {
+            for e in entradas.flatten() {
+                if let Ok(p) = e.file_name().to_string_lossy().parse::<u16>() {
+                    return Some(p);
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    None
+}
+
+#[test]
+fn foreground_muestra_salida_del_motor_y_genera_log_y_uso() {
+    let motor = MotorFalsoConSalida::nuevo();
+    let modelo = prepara_modelo_descargado();
+    let estado = TempDir::nuevo("fg-stream");
+
+    let (arranque, _puerto) = Arranque::nuevo(
+        estado.path(),
+        motor.path(),
+        modelo.path(),
+        &["modelo-alpha"],
+    );
+
+    // La salida en vivo del motor se muestra en la terminal (stderr).
+    for _ in 0..40 {
+        let visto = arranque
+            .stderr_lineas()
+            .iter()
+            .any(|l| l.contains("MOTOR_SALIDA_VISIBLE"));
+        let log = lee_log_modelo(estado.path(), "modelo-alpha");
+        if visto && log.contains("MOTOR_SALIDA_VISIBLE") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let log = lee_log_modelo(estado.path(), "modelo-alpha");
+    assert!(log.contains("MOTOR_SALIDA_VISIBLE"), "log={log}");
+    assert!(
+        arranque
+            .stderr_lineas()
+            .iter()
+            .any(|l| l.contains("MOTOR_SALIDA_VISIBLE")),
+        "stderr={:?}",
+        arranque.stderr_lineas()
+    );
+
+    // Detenemos con interrupción limpia y comprobamos el registro de uso.
+    let mut arranque = arranque;
+    arranque.interrumpir();
+    drop(arranque);
+    for _ in 0..40 {
+        let uso = lee_usage(estado.path());
+        if uso.contains("model=modelo-alpha") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let uso = lee_usage(estado.path());
+    assert!(uso.contains("model=modelo-alpha"), "usage={uso}");
+    assert!(uso.contains("engine=turbo-llama"), "usage={uso}");
+    assert!(uso.contains("mode=foreground"), "usage={uso}");
+    assert!(
+        uso.contains("result=ok") || uso.contains("result=interrupted"),
+        "usage={uso}"
+    );
+    assert!(
+        !uso.contains("SECRET"),
+        "usage no debe contener secretos: {uso}"
+    );
+}
+
+#[test]
+fn background_es_silencioso_guarda_logs_y_uso_redactado() {
+    let motor = MotorFalsoConSalida::nuevo();
+    let modelo = prepara_modelo_descargado();
+    let estado = TempDir::nuevo("bg");
+
+    let out = bin(estado.path(), motor.path(), modelo.path())
+        .args(["modelo-alpha", "--background", "--api-key", "SECRET123"])
+        .output()
+        .expect("ejecutar");
+
+    let code = out.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(code, 0, "stdout={stdout}\nstderr={stderr}");
+    assert!(
+        !stdout.contains("ROPERO_PORT"),
+        "background no debe imprimir puerto: stdout={stdout:?}"
+    );
+    assert!(stdout.trim().is_empty(), "stdout={stdout:?}");
+    assert!(
+        !stderr.contains("MOTOR_SALIDA_VISIBLE"),
+        "background no debe mostrar salida del motor: stderr={stderr:?}"
+    );
+
+    let puerto = puerto_en_estado(estado.path()).expect("debe haber estado de puerto");
+    assert!(puerto_escuchando(puerto), "el motor debe seguir escuchando");
+
+    // Log del motor bajo logs_dir.
+    for _ in 0..40 {
+        let log = lee_log_modelo(estado.path(), "modelo-alpha");
+        if !log.is_empty() || estado.path().join("logs").join("modelo-alpha.log").exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        estado.path().join("logs").join("modelo-alpha.log").exists(),
+        "debe existir el log del modelo en logs_dir"
+    );
+
+    let uso = lee_usage(estado.path());
+    assert!(uso.contains("model=modelo-alpha"), "usage={uso}");
+    assert!(uso.contains("mode=background"), "usage={uso}");
+    assert!(uso.contains("result=ok"), "usage={uso}");
+    assert!(
+        !uso.contains("SECRET123"),
+        "api-key no debe quedar en usage: {uso}"
+    );
+    assert!(
+        !uso.contains("--api-key"),
+        "flags sensibles no deben quedar: {uso}"
+    );
+
+    para_el_motor(estado.path(), puerto);
 }

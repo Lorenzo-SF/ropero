@@ -32,6 +32,8 @@ fn motor(id: EngineId, color: ropero_core::EngineColor, instalado: bool) -> Engi
             port_range: ropero_core::PortRange::new(8100, 8199),
             deps: Vec::new(),
             detect: ropero_core::DetectSpec::default(),
+            serve: None,
+            install: None,
             compat: Vec::new(),
         },
     }

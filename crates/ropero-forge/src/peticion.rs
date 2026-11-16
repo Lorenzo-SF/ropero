@@ -118,6 +118,8 @@ pub struct Peticion {
 /// en la CLI (R-ARQ-1: la lógica no vive allí).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Flags {
+    /// Fuerza las herramientas compiladas del fork Turbo-Llama.
+    pub turbo_llama: bool,
     /// `--repo OWNER/NAME`.
     pub repo: Option<String>,
     /// `--path DIR`.
@@ -228,6 +230,7 @@ impl Peticion {
     /// - el intermedio: sólo `f16` o `bf16`.
     pub fn de_flags(flags: Flags) -> Result<Peticion, Error> {
         let Flags {
+            turbo_llama: _,
             repo,
             path,
             gguf,

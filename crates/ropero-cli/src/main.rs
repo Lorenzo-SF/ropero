@@ -27,6 +27,7 @@ mod discovery;
 mod gguffer;
 mod install;
 mod parser;
+mod remove;
 mod summary;
 mod test;
 
@@ -56,6 +57,9 @@ fn dispatch(argumentos: &[String]) -> i32 {
             );
             comando(&matches)
         }
+        Some(alias) if argumentos.get(1).map(String::as_str) == Some("remove") => {
+            remove::run(alias, &argumentos[2..])
+        }
         Some(_) => summary::run_modelo(argumentos),
     }
 }
@@ -71,6 +75,7 @@ fn comando(matches: &ArgMatches) -> i32 {
         "gguffer" => gguffer::run(sub),
         "status" => commands::status(),
         "doctor" => commands::doctor(),
+        "config" => commands::config(),
         "list" => commands::list(tiene_all(sub)),
         "engines" => commands::engines(tiene_all(sub)),
         "template" => commands::template(),

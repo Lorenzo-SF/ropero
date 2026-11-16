@@ -129,14 +129,14 @@ fn los_colores_son_los_de_la_leyenda() {
 #[test]
 fn los_rangos_de_puertos_son_los_del_doc() {
     let esperado = [
-        ("llama-server", 8100, 8199),
-        ("turbo-llama", 8200, 8299),
-        ("mlx-serve", 8300, 8399),
-        ("fastflowlm", 8400, 8499),
-        ("tensorrt-llm", 8500, 8599),
-        ("vllm", 8600, 8699),
-        ("airllm", 8700, 8799),
-        ("strata", 9900, 9999),
+        ("llama-server", 9980, 9989),
+        ("turbo-llama", 9990, 9999),
+        ("mlx-serve", 9960, 9969),
+        ("fastflowlm", 9970, 9979),
+        ("tensorrt-llm", 9950, 9959),
+        ("vllm", 9940, 9949),
+        ("airllm", 9930, 9939),
+        ("strata", 9920, 9929),
     ];
     for (id, min, max) in esperado {
         let m = carga(id);
@@ -144,11 +144,10 @@ fn los_rangos_de_puertos_son_los_del_doc() {
     }
 }
 
-/// `strata` incluye el 9999 que usan por defecto los scripts de referencia
-/// (`groot.sh`, `qwen-abliterated.sh`, `qwen36.sh`).
+/// Turbo-Llama conserva el puerto base 9999 del ropero viejo.
 #[test]
-fn el_rango_de_strata_incluye_el_9999() {
-    let rango = carga("strata").port_range;
+fn el_rango_de_turbo_llama_incluye_el_9999() {
+    let rango = carga("turbo-llama").port_range;
     assert!(rango.contains(9999), "rango={rango:?}");
 }
 

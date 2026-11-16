@@ -2,17 +2,18 @@
 # PLANTILLA DE UN MODELO DE ROPERO 1.0 — esquema TOML completo (spec §7)
 # =============================================================================
 #
-# Copia este fichero a `models/<engine>/<nombre>.toml` y ajústalo. Un modelo
-# retirado va en `models/<engine>/fired/<nombre>.toml` con EXACTAMENTE el
-# mismo formato: la diferencia es la carpeta, no el esquema.
+# Copia este fichero a `~/.config/ropero/models/<engine>/<nombre>.toml` y
+# ajústalo (o usa `$XDG_CONFIG_HOME/ropero/models/` si configuras XDG). Un
+# modelo retirado va en `<catálogo>/<engine>/fired/<nombre>.toml` con
+# EXACTAMENTE el mismo formato: la diferencia es la carpeta, no el esquema.
 #
 # Un modelo es DATO. Nada de lo que hay aquí se ejecuta. La fuente de verdad
 # del esquema es el validador:
-#   python3 bin/python/modelconf.py validate --root models
+#   ropero validate
 #
-# Al final del fichero hay un EJEMPLO MÍNIMO REAL (las secciones activas de
-# abajo) y un EJEMPLO COMENTADO con [build]+[download], niveles, flags y
-# opciones. Borra lo que no aplique.
+# Este fichero es solo una plantilla: `ropero template` la muestra pero no
+# escribe ni instala modelos. El catálogo del proyecto es solo para desarrollo
+# y pruebas; el Ropero instalado lee el catálogo externo del usuario.
 #
 # -----------------------------------------------------------------------------
 # [model] — obligatoria
@@ -30,8 +31,9 @@
 #             usa el slot (--port > pineado > slot :9999).
 #   format    "gguf" (default), "safetensors" (checkpoint), "q4nx" (el
 #             almacén de FLM: [model].path es un TAG) o "strata" (el catálogo
-#             de Strata: [model].path es "<familia>/<paquete>" y los ficheros
-#             los baja Strata, no ropero).
+#             de Strata: [model].path es "<familia>/<paquete>"), o "ninfer"
+#             (artefacto del catálogo de Ignis; el motor elige la variante
+#             de artefacto por perfil y descarga en [engines.ignis].artifacts_dir).
 #   path      OBLIGATORIO si format=safetensors, PROHIBIDO si gguf. Ruta del
 #             checkpoint relativa a $SAFETENSORS_DIR.
 #
@@ -139,7 +141,8 @@
 #   ${chat_template}  $GGUF_DIR/<name>/<files.chat_template>
 #   ${ctx}            Contexto efectivo ([model].context o su override)
 #   ${value}          El valor pedido a una opción (sólo [args.option])
-#   ${gguf_dir} ${safetensors_dir} ${model_path}     $SAFETENSORS_DIR/<[model].path> (sólo safetensors)
+#   ${gguf_dir} ${safetensors_dir} ${artifacts_dir}   Directorios configurados por engine.
+#   ${model_path}     $SAFETENSORS_DIR/<[model].path> (sólo safetensors)
 #   ${env:VAR}        Valor de la variable de entorno VAR
 #   ${env:VAR:-def}   Ídem con default si VAR no está fijada
 #

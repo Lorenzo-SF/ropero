@@ -10,8 +10,8 @@
 //! MOTORES
 //!   motor          color        madurez     puertos     formatos
 //!   ────────────────────────────────────────────────────────────
-//!   llama-server   naranja      proven      8100-8199   GGUF
-//!   fastflowlm     rojo         proven      8400-8499   Q4NX
+//!   llama-server   naranja      proven      9980-9989   GGUF
+//!   fastflowlm     rojo         proven      9970-9979   Q4NX
 //!     no: sólo funciona en Linux; necesita una NPU AMD XDNA
 //! ```
 //!

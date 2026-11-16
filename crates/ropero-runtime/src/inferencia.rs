@@ -406,7 +406,10 @@ pub fn elegir_modelo(
              'ropero test --modelo <id>' (ropero list → los modelos disponibles)",
         ));
     }
-    let detector = crate::Detector { env };
+    let detector = crate::Detector {
+        env,
+        engines: motores,
+    };
     let modelos: Vec<ropero_core::ModelSpec> = catalogo
         .models
         .iter()

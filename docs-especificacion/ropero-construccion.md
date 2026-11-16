@@ -303,9 +303,21 @@ ropero/
 **`ropero-code/` (la v1) no aparece en ese árbol a propósito**: es **referencia,
 no dependencia** ([ADR-003](../docs/adr/ADR-003-ropero-code-es-referencia.md)).
 Todo el desarrollo de la v2 se hace **como si esa carpeta no existiera**; se
-consulta para aprender, contrastar y comparar, nunca como fuente de verdad. El
-catálogo de la v2 es **nuevo e independiente** y vive en `models/`: **no se
-integra en el ejecutable**.
+consulta para aprender, contrastar y comparar, nunca como fuente de verdad.
+
+**Contrato vigente (working tree, catálogo/configuración):** en uso normal el
+catálogo es **externo** en `<directorio_config>/models/<motor>/` con manifiestos
+en `<directorio_config>/engines/` (`$XDG_CONFIG_HOME/ropero` o
+`~/.config/ropero`). El bootstrap crea el directorio y `config.toml` por defecto
+de forma idempotente y **sin sobrescribir**. Precedencia:
+`variable de entorno > config.toml > defecto` para `models_dir`, `gguf_dir`,
+`safetensors_dir`, `bin_dir`, `logs_dir`. Los overrides `ROPERO_MODELS_DIR` y
+`ROPERO_ROOT` se preservan (incluida la búsqueda de `<raíz>/engines/` cuando
+apuntan a `<raíz>/models/`). Los TOML/manifiestos del repositorio son para
+desarrollo/pruebas y **no se auto-descubren** en uso normal; el workspace
+mantiene además un catálogo propio en `models/` como referencia de desarrollo
+(no integrado en el ejecutable). Ver
+[ADR-008](../docs/adr/ADR-008-configuracion-externa-y-bootstrap.md).
 
 **Regla de dependencia** (verificada por test, § 9 T-01):
 
@@ -1904,7 +1916,7 @@ Las 317 filas, ordenadas por la sección del doc A de la que proceden.
 
 | Requisito | Qué exige | Dónde se comprueba | Puerta de aceptación |
 |---|---|---|---|
-| **R-INST-1** | El instalador sólo crea symlinks: no copia, no descarga, no compila, no genera *farms* de entradas, no borra el repo. | `crates/ropero-cli/src/install.rs`<br>*Cambio de arquitectura*: El cambio de bash a binario único no obliga a cambiar la tesis de la instalación. | El instalador sigue siendo symlink-only (S-4): crea enlaces, no copia; y `ropero` pasa a ser un binario único, así que el enlace apunta al binario. |
+| **R-INST-1 (v2)** | `install engines` compila motores con receta `[install]` declarada y crea el symlink; sin receta requiere binario existente. Nunca borra árboles fuente ajenos. | `crates/ropero-runtime/src/install.rs`; recetas en `engines/*.toml`. | La compilación queda declarada por manifiesto. El binario instalado se enlaza en `$BIN_DIR`; procesos `git`/`cmake` se ejecutan sin shell. |
 | **R-INST-2** | La instalación deja exactamente dos symlinks: | `test/install_test.sh` <br>*Semilla v1*: install.sh:5-20, :367-392; idéntico contrato en bin/lib/cmd-install.sh:530-537. | Test `r-inst_02_instalacion_deja_exactamente_dos_symlinks` en `test/install_test.sh` (prueba e2e): comprueba que escribe lo que el requisito afirma, contra la implementación de `crates/ropero-cli/src/install.rs`. El test se pone rojo si el comportamiento se altera. |
 | **R-INST-3** | El repo es la fuente de verdad: `git pull` actualiza el código instalado de inmediato, sin reinstalar. | `test/install_test.sh` <br>*Semilla v1*: install.sh:25-28 (regla R3). | Test `r-inst_03_repo_fuente_verdad_git_pull_actualiza` en `test/install_test.sh` (prueba e2e): comprueba que se cumple lo que el requisito afirma, contra la implementación de `crates/ropero-cli/src/install.rs`. El test se pone rojo si el comportamiento se altera. |
 | **R-INST-4** | El instalador nunca escribe dentro de `<repo>/`. | `test/install_test.sh` <br>*Semilla v1*: install.sh:45-47 (R11), bin/lib/cmd-install.sh:538-549. | Test `r-inst_04_instalador_nunca_escribe_dentro_repo` en `test/install_test.sh` (prueba e2e): comprueba que no debe ocurrir nunca lo que el requisito afirma, contra la implementación de `crates/ropero-cli/src/install.rs`. El test se pone rojo si el comportamiento se altera. |

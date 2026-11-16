@@ -129,21 +129,21 @@ impl Preflight {
         // Los recursos: sólo se comprueban los que se **saben**. Un dato
         // que no se pudo leer (`None`) no bloquea: lo que no se puede leer
         // no se inventa (doc B §3.2.3).
-        if self.cpu {
-            self.comprueba_recurso(
-                &mut reasons,
-                "RAM",
-                self.ram_available_bytes,
-                self.ram_required_bytes,
-            );
-        } else {
-            self.comprueba_recurso(
-                &mut reasons,
-                "VRAM",
-                self.vram_available_bytes,
-                self.vram_required_bytes,
-            );
-        }
+        // CPU-only loads declare only RAM. GPU loads may also declare a
+        // minimum host-RAM requirement for weights/offload, so check both
+        // dimensions when the model supplies both estimates.
+        self.comprueba_recurso(
+            &mut reasons,
+            "VRAM",
+            self.vram_available_bytes,
+            self.vram_required_bytes,
+        );
+        self.comprueba_recurso(
+            &mut reasons,
+            "RAM",
+            self.ram_available_bytes,
+            self.ram_required_bytes,
+        );
 
         if reasons.is_empty() {
             Ok(())

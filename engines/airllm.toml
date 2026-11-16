@@ -17,8 +17,8 @@ maturity = "proven"
 formats = ["safetensors", "pytorch-bin"]
 
 # El rango de puertos propio (doc CLI v2 §5.1).
-port_min = 8700
-port_max = 8799
+port_min = 9930
+port_max = 9939
 
 # Los comandos externos de los que depende: es lo que chequea `ropero doctor`.
 deps = ["uv"]

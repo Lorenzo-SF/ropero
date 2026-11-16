@@ -25,6 +25,10 @@ fn run(args: &[&str]) -> (i32, String, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_ropero"))
         .args(args)
         .env("ROPERO_MODELS_DIR", fixture_root())
+        .env(
+            "XDG_CONFIG_HOME",
+            std::env::temp_dir().join("ropero-cli-engines-config"),
+        )
         .env("GGUF_DIR", fixture_root().join("gguf"))
         .env("SAFETENSORS_DIR", fixture_root().join("safetensors"))
         .env("LOG_DIR", fixture_root().join("logs"))
@@ -60,7 +64,7 @@ fn la_linea_del_motor_muestra_color_madurez_y_puertos() {
         .expect("debe salir la línea de llama-server");
     assert!(linea.contains("naranja"), "linea={linea}");
     assert!(linea.contains("proven"), "linea={linea}");
-    assert!(linea.contains("8100-8199"), "linea={linea}");
+    assert!(linea.contains("9980-9989"), "linea={linea}");
 }
 
 /// Los motores que no encajan con la máquina salen con `--all` y **dicen
