@@ -121,21 +121,65 @@ fn ropero_a_secas_sale_con_cero() {
     assert!(stdout.contains("ropero --help"), "stdout={stdout}");
 }
 
-/// Un modelo desconocido en el **arranque** es un error de ejecución:
-/// sale con 1.
+/// El resumen se compone con el **sistema de formato**: los títulos de las
+/// secciones van en el margen y en mayúsculas, y los rótulos se alinean.
 ///
-/// El doc CLI v2 §8.1 dice que si una precondición no se cumple es
-/// «error de ejecución (código 1)». Y la precondición del arranque
-/// incluye que el modelo exista: sin modelo no hay nada que arrancar.
-///
-/// Ojo: esto **no** contradice el §5.2, que dice que un comando
-/// desconocido sale con 2. `ropero inventado` no es un comando
-/// desconocido: es el nombre de un modelo que no está en el catálogo, y
-/// el arranque lo trata como lo que es.
+/// Antes los rótulos se escribían a mano: `build:  ` con dos espacios y
+/// `  disponibles: ` con uno: el resumen hablaba otro idioma que el resto.
 #[test]
-fn un_modelo_desconocido_en_el_arranque_sale_con_uno() {
+fn el_resumen_se_compone_con_el_sistema_de_formato() {
+    let (code, stdout, stderr) = run(&[]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    let lineas: Vec<&str> = stdout.lines().collect();
+
+    // Los títulos de sección: en el margen y en mayúsculas.
+    for titulo in ["MOTORES", "MODELOS"] {
+        let linea = lineas
+            .iter()
+            .find(|l| l.trim() == titulo)
+            .unwrap_or_else(|| panic!("no está la sección '{titulo}': stdout={stdout}"));
+        assert!(
+            !linea.starts_with(' '),
+            "el título '{titulo}' no va en el margen: {linea:?}"
+        );
+        assert_eq!(
+            linea.to_uppercase(),
+            linea.to_string(),
+            "el título '{titulo}' no va en mayúsculas: {linea:?}"
+        );
+    }
+
+    // Los rótulos: el valor de cada par empieza en la misma columna.
+    let mut columnas: Vec<usize> = Vec::new();
+    for linea in lineas.iter().filter(|l| l.starts_with("  ")) {
+        let Some((clave, valor)) = linea.split_once(':') else {
+            continue;
+        };
+        if clave.trim().is_empty() || valor.trim().is_empty() {
+            continue;
+        }
+        let valor = valor.trim_start();
+        columnas.push(linea.len() - valor.len());
+    }
+    assert!(
+        columnas.len() >= 4,
+        "el resumen no tiene rótulos suficientes: stdout={stdout}"
+    );
+    let primera = columnas[0];
+    for columna in &columnas {
+        assert_eq!(
+            *columna, primera,
+            "los rótulos no se alinean en la misma columna: stdout={stdout}"
+        );
+    }
+}
+
+/// Un modelo desconocido en el **arranque** es un error de uso:
+/// sale con 2.
+#[test]
+fn un_modelo_desconocido_en_el_arranque_sale_con_dos() {
     let (code, _stdout, stderr) = run(&["inventado"]);
-    assert_eq!(code, CODIGO_ERROR_EJECUCION, "stderr={stderr}");
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
     assert!(stderr.contains("modelo desconocido"), "stderr={stderr}");
 }
 

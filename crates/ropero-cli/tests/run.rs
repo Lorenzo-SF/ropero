@@ -397,14 +397,14 @@ fn el_arranque_con_un_puerto_pedido_usa_ese_puerto() {
 }
 
 #[test]
-fn un_modelo_inexistente_sale_con_uno() {
+fn un_modelo_inexistente_sale_con_dos() {
     let motor = MotorFalso::nuevo();
     let modelo = prepara_modelo_descargado();
     let estado = TempDir::nuevo("inexistente");
 
     let (code, _stdout, stderr) = run(estado.path(), motor.path(), modelo.path(), &["no-existe"]);
 
-    assert_eq!(code, 1, "stderr={stderr}");
+    assert_eq!(code, 2, "stderr={stderr}");
     assert!(stderr.contains("no-existe"), "stderr={stderr}");
 }
 
