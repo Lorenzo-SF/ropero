@@ -269,50 +269,126 @@ fn ayuda_de_comando(cmd: &str) -> String {
     let Some(comando) = surface::COMMANDS.iter().find(|c| c.name == cmd) else {
         return surface::help_text();
     };
-    let mut out = format!("{}\n\nUSO:  ropero {}\n", comando.summary, comando.usage);
+    let english = idioma() == "EN";
+    let mut out = format!(
+        "{}\n\n{}:  ropero {}\n",
+        if english {
+            resumen_ingles(cmd)
+        } else {
+            comando.summary
+        },
+        if english { "USAGE" } else { "USO" },
+        if english {
+            uso_ingles(comando.usage)
+        } else {
+            comando.usage.to_string()
+        }
+    );
     let flags = surface::flags_de(cmd);
     if !flags.is_empty() {
-        out.push_str("\nOPCIONES\n");
+        out.push_str(if english {
+            "\nOPTIONS\n"
+        } else {
+            "\nOPCIONES\n"
+        });
         for flag in flags {
             let nombre = match flag.kind {
                 surface::FlagKind::Switch => format!("--{}", flag.name),
                 surface::FlagKind::Value | surface::FlagKind::Many => {
-                    let valor = flag.value_name.unwrap_or("VALOR");
+                    let valor = if english {
+                        valor_ingles(flag.value_name.unwrap_or("VALOR"))
+                    } else {
+                        flag.value_name.unwrap_or("VALOR")
+                    };
                     format!("--{} <{}>", flag.name, valor)
                 }
             };
-            out.push_str(&format!("  {nombre}:  {}\n", flag.help));
+            out.push_str(&format!(
+                "  {nombre}:  {}\n",
+                if english {
+                    ayuda_flag_ingles(cmd, flag.name)
+                } else {
+                    flag.help
+                }
+            ));
         }
-        out.push_str("  -h, --help:  esta ayuda\n");
+        out.push_str(if english {
+            "  -h, --help:  show this help\n"
+        } else {
+            "  -h, --help:  esta ayuda\n"
+        });
     }
-    out.push_str(&format!("\n  más: ropero {cmd} --help\n"));
+    if cmd == "run" {
+        out.push_str(if english {
+            "\nModel-specific levels, flags, and options come from the model TOML.\nUse `ropero info <model>` to inspect them; undeclared options are ignored.\n"
+        } else {
+            "\nLos niveles, flags y opciones propios del modelo salen de su TOML.\nUsa `ropero info <modelo>` para consultarlos; los no declarados se ignoran.\n"
+        });
+    }
+    if cmd == "models" {
+        out.push_str(if english {
+            "\nAdd a model with an interactive wizard, flags, `--path FILE`, or `--stdin`.\nExamples:\n  ropero models add\n  ropero models add --path model.toml\n  cat model.toml | ropero models add --stdin\n"
+        } else {
+            "\nAñade un modelo con el asistente, flags, `--path FICHERO` o `--stdin`.\nEjemplos:\n  ropero models add\n  ropero models add --path modelo.toml\n  cat modelo.toml | ropero models add --stdin\n"
+        });
+    }
+    out.push_str(&format!(
+        "\n  {}: ropero {cmd} --help\n",
+        if english { "more" } else { "más" }
+    ));
     out
 }
 
 /// La ayuda del arranque de un modelo.
 fn ayuda_de_arranque() -> String {
+    let english = idioma() == "EN";
     let mut out = format!(
-        "{}\n\nUSO:  ropero {}\n\nOPCIONES\n",
-        surface::help::RUN,
-        surface::RUN_USAGE
+        "{}\n\n{}:  ropero {}\n\n{}\n",
+        if english {
+            "Start a model using its configured engine"
+        } else {
+            surface::help::RUN
+        },
+        if english { "USAGE" } else { "USO" },
+        if english {
+            uso_ingles(surface::RUN_USAGE)
+        } else {
+            surface::RUN_USAGE.to_string()
+        },
+        if english { "OPTIONS" } else { "OPCIONES" },
     );
     for flag in surface::flags_de("run") {
         let nombre = match flag.kind {
             surface::FlagKind::Switch => format!("--{}", flag.name),
             surface::FlagKind::Value | surface::FlagKind::Many => {
-                let valor = flag.value_name.unwrap_or("VALOR");
+                let valor = if english {
+                    valor_ingles(flag.value_name.unwrap_or("VALOR"))
+                } else {
+                    flag.value_name.unwrap_or("VALOR")
+                };
                 format!("--{} <{}>", flag.name, valor)
             }
         };
-        out.push_str(&format!("  {nombre}:  {}\n", flag.help));
+        out.push_str(&format!(
+            "  {nombre}:  {}\n",
+            if english {
+                ayuda_flag_ingles("run", flag.name)
+            } else {
+                flag.help
+            }
+        ));
     }
-    out.push_str("  -h, --help:  esta ayuda\n");
-    out.push_str("\n  más: ropero <modelo> --help\n");
+    out.push_str(if english {
+        "  -h, --help:  show this help\n\nModel-specific levels, flags, and options are read from the model TOML.\nUse `ropero info <model>` to inspect them; undeclared options are ignored.\n\n  more: ropero <model> --help\n"
+    } else {
+        "  -h, --help:  esta ayuda\n\nLos niveles, flags y opciones propios del modelo salen de su TOML.\nUsa `ropero info <modelo>` para consultarlos; los no declarados se ignoran.\n\n  más: ropero <modelo> --help\n"
+    });
     out
 }
 
 /// La ayuda completa del binario.
 fn ayuda_del_binario() -> String {
+    let english = idioma() == "EN";
     let mut entradas: Vec<(String, String)> = surface::COMMANDS
         .iter()
         .map(|c| (c.usage.to_string(), c.summary.to_string()))
@@ -322,14 +398,160 @@ fn ayuda_del_binario() -> String {
         surface::RUN_SUMMARY.to_string(),
     ));
     entradas.push(("--help".to_string(), "esta ayuda".to_string()));
-    let mut out = String::from(
-        "motores y modelos de inferencia, en una sola herramienta\n\nUSO: ropero <comando> [opciones]\n\nCOMANDOS:\n",
-    );
+    let mut out = if english {
+        String::from(
+            "local inference engines and models in one tool\n\nUSAGE: ropero <command> [options]\n\nCOMMANDS:\n",
+        )
+    } else {
+        String::from(
+            "motores y modelos de inferencia, en una sola herramienta\n\nUSO: ropero <comando> [opciones]\n\nCOMANDOS:\n",
+        )
+    };
     for (uso, resumen) in &entradas {
-        out.push_str(&format!("  {uso}\n    {resumen}\n"));
+        let name = uso.split_whitespace().next().unwrap_or_default();
+        out.push_str(&format!(
+            "  {}\n    {}\n",
+            if english {
+                uso_ingles(uso)
+            } else {
+                uso.clone()
+            },
+            if english {
+                resumen_ingles(name)
+            } else {
+                resumen
+            }
+        ));
     }
-    out.push_str("\n  ropero <comando> --help\n");
+    out.push_str(if english {
+        "\n  ropero <command> --help\n"
+    } else {
+        "\n  ropero <comando> --help\n"
+    });
     out
+}
+
+fn idioma() -> String {
+    let env = crate::discovery::capture_environment();
+    ropero_runtime::carga_config(&env)
+        .map(|(_, config, _)| config.lang)
+        .unwrap_or_else(|_| "EN".into())
+}
+
+fn valor_ingles(value: &str) -> &'static str {
+    match value {
+        "VALOR" => "VALUE",
+        "MODELO" => "MODEL",
+        "MODELOS" => "MODELS",
+        "AGENTE" => "AGENT",
+        "FICHERO" => "FILE",
+        "FORMATO" => "FORMAT",
+        "NOMBRE" => "NAME",
+        "SEGUNDOS" => "SECONDS",
+        "NIVEL" => "LEVEL",
+        "VIA" => "METHOD",
+        "ID|FICHERO" => "ID|FILE",
+        _ => "VALUE",
+    }
+}
+
+fn uso_ingles(usage: &str) -> String {
+    usage
+        .replace("<MODELOS>", "<MODELS>")
+        .replace("<MODELO>", "<MODEL>")
+        .replace("<AGENTE>", "<AGENT>")
+        .replace("<FICHERO>", "<FILE>")
+        .replace("<FORMATO>", "<FORMAT>")
+        .replace("<NOMBRE>", "<NAME>")
+        .replace("MODELOS", "MODELS")
+        .replace("AGENTE", "AGENT")
+        .replace("CLAVE", "KEY")
+        .replace("NIVEL", "LEVEL")
+        .replace("<modelo>", "<model>")
+        .replace("[modelo]", "[model]")
+        .replace("<comando>", "<command>")
+        .replace("[modelo... ]", "[model...]")
+        .replace("[modelo...]", "[model...]")
+}
+
+fn resumen_ingles(command: &str) -> &'static str {
+    match command {
+        "install" => "installs engines and models",
+        "stop" => "stops engines launched by ropero",
+        "gguffer" => "builds a GGUF from weights or a repository",
+        "status" => "machine status: CPU, GPU, RAM, swap, and zram",
+        "doctor" => "checks ropero and engine dependencies",
+        "config" => "shows configuration, paths, and their source",
+        "connect" => "connects or removes models from coding agents",
+        "models" => "lists models grouped by engine",
+        "template" => "prints the model template and suggested location",
+        "engines" => "lists engines and their compatibility",
+        "validate" => "validates catalog TOML files",
+        "command" => "prints model serving arguments for copying",
+        "info" => "shows model configuration, artifacts, and arguments",
+        "test" => "runs the evaluation suite against a model",
+        "<modelo>" => "starts the model using its configured engine",
+        _ => "shows help",
+    }
+}
+
+fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
+    match (command, name) {
+        ("status", "live") => "refreshes the terminal view; interval in seconds (default: 1)",
+        ("config", "lang") => "interface language: ES or EN",
+        ("connect", "list") => "lists supported integrations",
+        ("connect", "model") => "model names separated by commas or semicolons",
+        ("connect", "agent") => "target agent",
+        ("connect", "remove") => "removes the selected connections",
+        ("models", "all") | ("engines", "all") => "also shows unavailable engines and models",
+        ("models", "path") => "reads a model TOML file",
+        ("models", "stdin") => "reads the complete TOML from standard input",
+        ("models", "name") => "internal model name and filename",
+        ("models", "engine") => "model engine",
+        ("models", "format") => "artifact format",
+        ("models", "artifact") => "model artifact path or filename",
+        ("models", "repo") => "download or build repository",
+        ("models", "context") => "context window in tokens",
+        ("models", "alias") => "public engine-facing model id",
+        ("models", "set") => "extra TOML value, repeatable; use block paths such as args.base",
+        ("run", "force") => "stops Ropero-managed processes occupying the device",
+        ("run", "cpu") => "forces all offload to CPU and RAM",
+        ("run", "port") => "sets the listener port",
+        ("run", "api-key") => "sets the API gateway key",
+        ("run", "no-api-key") => "starts without an API key",
+        ("run", "ctx") => "overrides the context window",
+        ("run", "log-level") => "log level: error, warn, info, debug, or trace",
+        ("run", "background") => "detaches and saves engine logs",
+        ("install", "prio") => "installation method: download or build (repeatable)",
+        ("install", "force") => "removes and reinstalls the selected engine sources",
+        ("gguffer", "repo") => "Hugging Face source repository",
+        ("gguffer", "path") => "local source weights directory",
+        ("gguffer", "out") => "output GGUF name or path",
+        ("gguffer", "quant") => "quantization type(s)",
+        ("gguffer", "force") => "overwrites the output and forces conversion",
+        ("gguffer", "turbo-llama") => "uses the compiled Turbo-Llama tools",
+        ("gguffer", "gguf") => "existing GGUF source file or repository",
+        ("gguffer", "imatrix") => "local importance matrix file",
+        ("gguffer", "imatrix-repo") => {
+            "remote importance-matrix repository; requires --imatrix-file"
+        }
+        ("gguffer", "imatrix-file") => "remote importance-matrix filename; requires --imatrix-repo",
+        ("gguffer", "out-principal") => "exact output path for the first quantization",
+        ("gguffer", "intermedio") => "intermediate format: F16 or BF16",
+        ("gguffer", "keep-source") => "keeps the source weights",
+        ("gguffer", "keep-intermedio") => "keeps the intermediate file",
+        ("gguffer", "no-mtp") => "builds without MTP headers",
+        ("gguffer", "no-dflash") => "builds without DFlash headers",
+        ("gguffer", "list-quants") => "lists available quantization types",
+        ("gguffer", "diagnostico") => "shows planned actions without writing files",
+        ("test", "model") => "model to evaluate; prompts when omitted",
+        ("test", "group") => "run one test group",
+        ("test", "test") => "run one test by id or filename",
+        ("test", "dimension") => "run tests for one named dimension",
+        ("test", "all") => "run the complete test suite",
+        ("test", "json") => "prints the JSON report to stdout",
+        _ => "see the command documentation",
+    }
 }
 
 /// El flag `--help`, en español.
@@ -365,7 +587,18 @@ fn comandos() -> Vec<ClapCommand> {
             .disable_help_flag(true)
             .arg(flag_help());
         for flag in surface::flags_de(comando.name) {
-            clap = clap.arg(flag_de(flag));
+            if comando.name == "status" && flag.name == "live" {
+                clap = clap.arg(
+                    Arg::new("live")
+                        .long("live")
+                        .num_args(0..=1)
+                        .default_missing_value("1")
+                        .value_parser(clap::value_parser!(f64))
+                        .help(flag.help),
+                );
+            } else {
+                clap = clap.arg(flag_de(flag));
+            }
         }
         clap = clap.args(posicionales(comando.name));
         todos.push(clap);
@@ -400,10 +633,10 @@ pub fn arranque() -> Parser {
 /// Los argumentos posicionales de un comando.
 ///
 /// Los del contrato: `install` recibe qué instalar y la lista;
-/// `stop` y `levels` y `path` reciben un modelo; `args` recibe el modelo y
-/// los tokens sueltos.
+/// `stop`, `info` y `command` reciben un modelo.
 fn posicionales(cmd: &str) -> Vec<Arg> {
     match cmd {
+        "models" => vec![Arg::new("action").value_name("ACCIÓN").num_args(0..=1)],
         "install" => vec![
             Arg::new("que")
                 .value_name("QUE")
@@ -418,22 +651,11 @@ fn posicionales(cmd: &str) -> Vec<Arg> {
                 .value_name("MODELO")
                 .help("el modelo cuyo motor se detiene"),
         ],
-        "levels" | "path" => vec![
+        "info" | "command" => vec![
             Arg::new("modelo")
                 .value_name("MODELO")
                 .required(true)
                 .help("el modelo del catálogo"),
-        ],
-        "args" => vec![
-            Arg::new("modelo")
-                .value_name("MODELO")
-                .required(true)
-                .help("el modelo del catálogo"),
-            Arg::new("tokens")
-                .value_name("ARGUMENTOS")
-                .num_args(0..)
-                .allow_hyphen_values(true)
-                .help("los tokens del modelo: niveles, flags y opciones"),
         ],
         _ => Vec::new(),
     }
@@ -464,18 +686,6 @@ pub fn modelo(matches: &ArgMatches) -> String {
     matches
         .get_one::<String>("modelo")
         .cloned()
-        .unwrap_or_default()
-}
-
-/// Los tokens sueltos de `ropero args`.
-///
-/// Los niveles, flags y opciones del modelo son **dinámicos**: los declara
-/// su TOML, así que no pueden estar en el parser. Se capturan como
-/// tokens sueltos y los valida el dominio.
-pub fn tokens(matches: &ArgMatches) -> Vec<String> {
-    matches
-        .get_many::<String>("tokens")
-        .map(|v| v.cloned().collect())
         .unwrap_or_default()
 }
 

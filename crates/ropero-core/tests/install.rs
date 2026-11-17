@@ -522,13 +522,14 @@ fn el_menu_de_modelos_da_una_sola_forma_al_tamano() {
 /// línea del menú es la cabecera de la tabla, y no lleva ninguno de ellos
 /// (doc CLI v2 §2).
 #[test]
-fn el_menu_de_motores_numera_y_colorea() {
+fn el_menu_de_motores_muestra_modelos_catalogados_sin_columna_color() {
     let llama = motor("llama-server", "naranja");
+    let cat = build_catalog(vec![spec_en(CON_TAMANO, "groot.toml")], vec![]).expect("catálogo");
     let motores = [MotorDelMenu {
         manifest: &llama,
         instalado: true,
     }];
-    let menu = menu_engines(&motores, &Palette::plain());
+    let menu = menu_engines(&cat, &motores, &Palette::plain());
     assert_eq!(menu.nombres, vec!["llama-server".to_string()]);
     let fila = menu
         .lineas
@@ -536,7 +537,13 @@ fn el_menu_de_motores_numera_y_colorea() {
         .find(|l| l.contains("llama-server"))
         .expect("debe salir la fila del motor");
     assert!(fila.contains("  1"), "fila={fila}");
-    assert!(fila.contains("naranja"), "fila={fila}");
+    assert!(fila.contains("groot"), "fila={fila}");
+    assert!(menu.lineas[1].contains("modelos soportados"));
+    assert!(
+        !menu.lineas[1].contains("color"),
+        "cabecera={:?}",
+        menu.lineas[1]
+    );
     assert!(fila.contains("ya instalado"), "fila={fila}");
 }
 
@@ -558,7 +565,8 @@ fn el_menu_de_motores_pone_una_sola_cabecera() {
             instalado: false,
         },
     ];
-    let menu = menu_engines(&motores, &Palette::plain());
+    let cat = build_catalog(vec![], vec![]).expect("catálogo vacío");
+    let menu = menu_engines(&cat, &motores, &Palette::plain());
     assert_eq!(
         menu.nombres,
         vec!["llama-server".to_string(), "vllm".to_string()]
@@ -598,7 +606,8 @@ fn el_menu_de_motores_lleva_el_titulo_de_su_seccion() {
         manifest: &llama,
         instalado: true,
     }];
-    let menu = menu_engines(&motores, &Palette::plain());
+    let cat = build_catalog(vec![], vec![]).expect("catálogo vacío");
+    let menu = menu_engines(&cat, &motores, &Palette::plain());
     assert_eq!(menu.lineas[0], "MOTORES");
     // Y la tabla va un nivel más dentro, como el cuerpo de una sección.
     assert!(
@@ -629,7 +638,8 @@ fn el_menu_de_modelos_lleva_el_titulo_de_su_seccion() {
 /// Sin motores no hay menú: tampoco hay título que sacar.
 #[test]
 fn el_menu_sin_motores_no_sale() {
-    let menu = menu_engines(&[], &Palette::plain());
+    let cat = build_catalog(vec![], vec![]).expect("catálogo vacío");
+    let menu = menu_engines(&cat, &[], &Palette::plain());
     assert!(menu.lineas.is_empty(), "{:?}", menu.lineas);
     assert!(menu.nombres.is_empty(), "{:?}", menu.nombres);
 }

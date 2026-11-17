@@ -24,6 +24,7 @@ pub enum ValidationRule {
     LevelDefaultMissing,
     AliasLevelMissing,
     OptionDefaultMissing,
+    LaunchMappingMissing,
     FlagRequiresMissingFile,
     MinRamMustBePositive,
     UnknownKey,
@@ -300,17 +301,55 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
             ));
         }
     }
-    if let Some(default) = &spec.options.default
-        && !spec.options.list.iter().any(|option| option == default)
-    {
-        errors.push(error(
-            ValidationRule::OptionDefaultMissing,
-            "options.default",
-            "[options.default] debe tener su clave en [options].list; añade la opción o cambia el valor por defecto",
-            ctx,
-            "options.default",
-        ));
+    for (option, default) in &spec.options.default {
+        if !spec.options.list.contains(option) {
+            errors.push(error(
+                ValidationRule::OptionDefaultMissing,
+                &format!("options.default.{option}"),
+                &format!("[options.default].{option} debe nombrar una opción de [options].list"),
+                ctx,
+                "options.default",
+            ));
+            continue;
+        }
+        if let Some(args) = spec.args.option.get(option)
+            && !args.values.is_empty()
+            && !args.values.contains_key(default)
+        {
+            errors.push(error(
+                ValidationRule::OptionDefaultMissing,
+                &format!("options.default.{option}"),
+                &format!(
+                    "[options.default].{option} no es un valor admitido; elige uno de {}",
+                    args.values.keys().cloned().collect::<Vec<_>>().join(", ")
+                ),
+                ctx,
+                "options.default",
+            ));
+        }
     }
+    macro_rules! check_launch_mappings {
+        ($kind:literal, $declared:expr, $mapped:expr) => {
+            for name in $declared {
+                if !$mapped.contains_key(name) {
+                    let key = format!("{}s.list.{name}", $kind);
+                    errors.push(error(
+                        ValidationRule::LaunchMappingMissing,
+                        &key,
+                        &format!(
+                            "{} '{name}' is advertised but has no [args.{}.{}] mapping",
+                            $kind, $kind, name
+                        ),
+                        ctx,
+                        &format!("{}s.list", $kind),
+                    ));
+                }
+            }
+        };
+    }
+    check_launch_mappings!("level", &spec.levels.list, &spec.args.level);
+    check_launch_mappings!("flag", &spec.flags.list, &spec.args.flag);
+    check_launch_mappings!("option", &spec.options.list, &spec.args.option);
     for (flag, args) in &spec.args.flag {
         for required in &args.requires {
             if !crate::files::has_file(&spec.files, required) {

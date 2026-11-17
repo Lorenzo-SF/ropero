@@ -17,21 +17,17 @@ const COMANDOS: &[(&str, &str)] = &[
     ("config", "config"),
     (
         "connect",
-        "connect (--list | --model MODELOS --agent AGENTE [--uninstall])",
+        "connect (--list | --model MODELOS --agent AGENTE [--remove])",
     ),
-    ("list", "list [--all]"),
+    ("models", "models [--all] [add]"),
     ("template", "template"),
     ("engines", "engines [--all]"),
     ("validate", "validate"),
-    (
-        "args",
-        "args <modelo> [--<nivel>] [--<flag>] [--<opcion>=<valor>]",
-    ),
-    ("levels", "levels <modelo>"),
-    ("path", "path <modelo>"),
+    ("command", "command <modelo>"),
+    ("info", "info <modelo>"),
     (
         "test",
-        "test [--modelo <id>] [--grupo A..G] [--test <id>] [--dimension <nombre>] [--todos]",
+        "test [--model <id>] [--group A..G] [--test <id>] [--dimension <name>] [--all]",
     ),
 ];
 
@@ -159,8 +155,8 @@ fn stop_esta_listo() {
 #[test]
 fn los_comandos_listos_estan_marcados() {
     for nombre in [
-        "install", "status", "doctor", "config", "list", "template", "engines", "validate", "args",
-        "levels", "path",
+        "install", "status", "doctor", "config", "models", "template", "engines", "validate",
+        "command", "info",
     ] {
         let cmd: &Command = COMMANDS
             .iter()

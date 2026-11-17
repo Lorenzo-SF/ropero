@@ -317,6 +317,45 @@ impl Informe {
         out
     }
 
+    /// Human-readable English report. Test and dimension titles remain as
+    /// authored data; only report labels are translated.
+    pub fn a_texto_en(&self) -> String {
+        let mut out = self.a_texto();
+        for (spanish, english) in [
+            ("batería de pruebas ·", "evaluation suite ·"),
+            (" · nivel ", " · level "),
+            (" · puerto ", " · port "),
+            (
+                "ropero lanzó el motor y **queda en pie**: páralo con",
+                "Ropero started the engine and left it running; stop it with",
+            ),
+            (
+                "el motor ya estaba en pie (no hizo falta ponerlo en marcha): se",
+                "the engine was already running (Ropero did not start it); it can be stopped with",
+            ),
+            ("recuento:", "count:"),
+            ("pendiente de juez", "pending judge"),
+            ("error de ejecución:", "execution error:"),
+            ("primer token:", "first token:"),
+            ("no disponible", "unavailable"),
+            ("palabras/s", "words/s"),
+            ("tokens salida/s", "output tokens/s"),
+            ("tokens entrada:", "input tokens:"),
+            ("tokens salida:", "output tokens:"),
+            ("tokens razonamiento:", "reasoning tokens:"),
+            ("tokens caché:", "cache tokens:"),
+            ("entrada/TTFT", "input/TTFT"),
+            ("perfil por dimensiones", "profile by dimensions"),
+            ("sin nota", "unscored"),
+            ("parcial", "partial"),
+            ("plan de la tirada:", "run plan:"),
+        ] {
+            out = out.replace(spanish, english);
+        }
+        out = out.replace("\nGrupo ", "\nGroup ");
+        out
+    }
+
     /// El plan de la tirada: los tests, en orden, con su peso.
     pub fn plan(&self) -> String {
         self.respuestas

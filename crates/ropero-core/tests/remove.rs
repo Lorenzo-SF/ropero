@@ -18,7 +18,7 @@ fn env_con_rutas_engine(config_toml: &str) -> Environment {
 }
 
 #[test]
-fn elimina_usa_rutas_gguf_por_engine_y_canoniza_alias_del_modelo() {
+fn elimina_usa_ruta_gguf_global_y_canoniza_alias_del_modelo() {
     let spec = parse_model(
         r#"
 [model]
@@ -41,7 +41,7 @@ use = "run"
         Path::new("demo.toml"),
     )
     .unwrap();
-    let env = env_con_rutas_engine("[engines.llama-server]\ngguf_dir = \"/engines/gguf\"\n");
+    let env = env_con_rutas_engine("[models.paths]\ngguf_dir = \"/engines/gguf\"\n");
 
     let plan = removal_plan(&spec, &env);
     assert_eq!(
@@ -58,7 +58,7 @@ use = "run"
 }
 
 #[test]
-fn safetensors_por_engine_retiene_ruta_padre_hijo_compartida() {
+fn safetensors_con_ruta_global_retiene_ruta_padre_hijo_compartida() {
     let principal = parse_model(
         r#"
 [model]
@@ -87,7 +87,7 @@ path = "family/checkpoint/variant"
     .unwrap();
     let catalog = build_catalog(vec![principal.clone(), hijo], vec![]).unwrap();
     let env =
-        env_con_rutas_engine("[engines.vllm]\nsafetensors_dir = \"/engines/vllm/checkpoints\"\n");
+        env_con_rutas_engine("[models.paths]\nsafetensors_dir = \"/engines/vllm/checkpoints\"\n");
 
     let plan = removal_plan_in_catalog(&principal, &catalog, &env);
     assert!(plan.directories.is_empty());
@@ -408,7 +408,7 @@ path = "familia/checkpoint-otra"
 }
 
 #[test]
-fn conserva_tag_flm_compartido_y_no_cuenta_aliases_como_duenos_extra() {
+fn alias_flm_publico_separa_el_tag_del_modelo_del_path_de_otro() {
     let principal = parse_model(
         r#"
 [model]
@@ -439,7 +439,7 @@ path = "tag:shared"
     let catalog = build_catalog(vec![principal.clone(), otro], vec![]).unwrap();
 
     let plan = removal_plan_in_catalog(&principal, &catalog, &env());
-    assert!(plan.flm.is_none());
-    assert!(plan.notes.iter().any(|note| note.contains("flm-b")));
-    assert!(plan.is_empty(), "no debe borrar el tag compartido");
+    let flm = plan.flm.expect("el tag primario puede retirarse");
+    assert_eq!(flm.primary_tag, "tag:shared");
+    assert!(!plan.notes.iter().any(|note| note.contains("flm-b")));
 }

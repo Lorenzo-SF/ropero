@@ -148,6 +148,47 @@ fn replace_de_un_token_ausente_del_base_no_es_error() {
     );
 }
 
+#[test]
+fn el_default_de_opcion_se_parsea_y_env_y_cli_tienen_prioridad() {
+    let model = spec(
+        r#"
+[model]
+name = "modelo"
+engine = "llama-server"
+context = 4096
+
+[files]
+gguf = "modelo.gguf"
+
+[options]
+list = ["temperature"]
+
+[options.default]
+temperature = "0.7"
+
+[args.option.temperature]
+base = ["--temp", "${value}"]
+"#,
+    );
+    let default = build_argv(&model, &request(None, &[], &[]), &ctx()).expect("default TOML");
+    assert_eq!(default, ["--temp", "0.7"]);
+
+    let explicit = build_argv(
+        &model,
+        &request(None, &[], &[("temperature", "0.4")]),
+        &ctx(),
+    )
+    .expect("valor explícito");
+    assert_eq!(explicit, ["--temp", "0.4"]);
+
+    let mut context = ctx();
+    context
+        .env
+        .insert("ROPERO_MODEL_OPT_TEMPERATURE".into(), "0.2".into());
+    let overridden = build_argv(&model, &request(None, &[], &[]), &context).expect("override env");
+    assert_eq!(overridden, ["--temp", "0.2"]);
+}
+
 /// `replace` sustituye la pareja **en el sitio que ocupaba** en el base: el
 /// orden del argv es normativo (§3.2.3), así que el valor nuevo ocupa la
 /// posición de la pareja vieja.

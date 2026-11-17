@@ -1,17 +1,15 @@
 # Manifiesto del motor `airllm` (doc B §4.3).
 #
-# AirLLM es el **único** motor sin gateway: es ropero quien integra uno.
-#
-# El modelo vive en el proceso del proxy, no en un subproceso: el flujo de
-# datos es radicalmente distinto del de los demás motores.
+# El servidor y la integración con el runtime de Ropero aún no están
+# implementados. No debe anunciarse como probado o disponible.
 
 id = "airllm"
 label = "AirLLM"
 color = "blanco"
 description = "AirLLM (compresión propia 4-bit y 8-bit)"
 
-# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
-maturity = "proven"
+# R-CTX-3: la integración está incompleta.
+maturity = "partial"
 
 # Los formatos que el motor acepta (doc CLI v2 §4).
 formats = ["safetensors", "pytorch-bin"]

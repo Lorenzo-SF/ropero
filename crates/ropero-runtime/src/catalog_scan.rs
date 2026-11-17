@@ -459,6 +459,9 @@ pub fn model_downloaded_with_engine(
     env: &Environment,
     engine: Option<&EngineManifest>,
 ) -> bool {
+    if spec.model.engine == EngineId::Strata {
+        return engine.is_some_and(|engine| crate::strata::model_installed(spec, engine, env));
+    }
     if spec.model.format == ropero_core::ModelFormat::Ninfer && spec.model.engine == EngineId::Ignis
     {
         return crate::ignis::model_installed(spec, env);

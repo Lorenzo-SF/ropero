@@ -267,6 +267,18 @@ fn prepara_docs_tests(config_dir: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Resuelve la raíz del catálogo según overrides o configuración externa.
+pub fn resolve_catalog_root(
+    env: &Environment,
+    config: &Config,
+) -> Result<std::path::PathBuf, String> {
+    let tiene_override = env.get("ROPERO_MODELS_DIR").is_some() || env.get("ROPERO_ROOT").is_some();
+    if tiene_override {
+        return crate::find_root(env, &crate::exe_ancestors());
+    }
+    Ok(config::raiz_del_catalogo(&config.models_dir.valor))
+}
+
 #[cfg(test)]
 mod tests {
     use super::TESTS;
@@ -289,14 +301,61 @@ mod tests {
     }
 }
 
-/// Resuelve la raíz del catálogo según overrides o configuración externa.
-pub fn resolve_catalog_root(
-    env: &Environment,
-    config: &Config,
-) -> Result<std::path::PathBuf, String> {
-    let tiene_override = env.get("ROPERO_MODELS_DIR").is_some() || env.get("ROPERO_ROOT").is_some();
-    if tiene_override {
-        return crate::find_root(env, &crate::exe_ancestors());
+pub fn guardar_idioma(path: &std::path::Path, lang: &str) -> Result<(), String> {
+    let permissions = std::fs::metadata(path).ok().map(|meta| meta.permissions());
+    let mut document = match std::fs::read_to_string(path) {
+        Ok(text) => text.parse::<toml_edit::DocumentMut>().map_err(|error| {
+            format!("el config.toml no es TOML válido ({error}); no se ha alterado")
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => toml_edit::DocumentMut::new(),
+        Err(error) => return Err(format!("no se pudo leer {}: {error}", path.display())),
+    };
+    document
+        .as_table_mut()
+        .insert("lang", toml_edit::value(lang));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    Ok(config::raiz_del_catalogo(&config.models_dir.valor))
+    let temp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+    let write = std::fs::write(&temp, document.to_string()).and_then(|()| {
+        if let Some(permissions) = permissions {
+            std::fs::set_permissions(&temp, permissions)?;
+        }
+        std::fs::rename(&temp, path)
+    });
+    if let Err(error) = write {
+        let _ = std::fs::remove_file(&temp);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod language_tests {
+    use super::guardar_idioma;
+
+    #[test]
+    fn cambiar_idioma_preserva_comentarios_y_toml_valido() {
+        let path =
+            std::env::temp_dir().join(format!("ropero-config-lang-{}.toml", std::process::id()));
+        std::fs::write(&path, "# conservar\n[paths]\nmodels_dir = \"models\"\n").unwrap();
+        guardar_idioma(&path, "ES").unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let parsed = saved.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(parsed["lang"].as_str(), Some("ES"));
+        assert_eq!(parsed["paths"]["models_dir"].as_str(), Some("models"));
+        assert!(saved.contains("# conservar"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn config_toml_invalido_no_se_sobrescribe_al_cambiar_idioma() {
+        let path =
+            std::env::temp_dir().join(format!("ropero-config-bad-{}.toml", std::process::id()));
+        let original = "[broken\n";
+        std::fs::write(&path, original).unwrap();
+        assert!(guardar_idioma(&path, "EN").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let _ = std::fs::remove_file(path);
+    }
 }

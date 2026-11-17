@@ -9,6 +9,31 @@ especificación del CLI tal como la dio el dueño. Donde la especificación fue
 ambigua, la ambigüedad queda registrada en [§19](#19-pendientes-de-decisión) y
 **no** se ha resuelto aquí por decisión propia.
 
+## Contrato vigente (2026-11-17)
+
+Esta actualización prevalece sobre los nombres y ejemplos antiguos que siguen
+en las secciones históricas de este documento:
+
+| Comando | Contrato vigente |
+|---|---|
+| `ropero models [--all]` | Sustituye `list`; no existe alias `list`. Sin `--all` muestra engines instalados y modelos disponibles; con `--all` añade el catálogo instalable y distingue su estado. `models add` admite asistente, flags, `--path` y `--stdin`. |
+| `ropero command <modelo>` | Imprime el comando completo de serving, con cada opción y valor en una línea, continuaciones `\` sin espacios finales y listo para copiar. |
+| `ropero info <modelo>` | Sustituye `args`, `levels` y `path`; muestra la ruta efectiva, download/build, alias, niveles, flags, opciones, valores y argumentos. |
+| `ropero connect --agent <agent> --model <id> [--remove]` | Usa `--remove`; `--uninstall` no forma parte de la interfaz vigente. |
+| `ropero config [--lang ES|EN]` | Persiste idioma en `config.toml`; el valor inicial es `EN`. |
+| `ropero status [--live [segundos]]` | Muestra CPU, GPU, RAM, SWAP y zram; si hay procesos lanzados por Ropero, añade engine, puerto, PID y modelo. `--live` refresca la pantalla. |
+| `ropero test [--model] [--group] [--test] [--dimension] [--all]` | Los flags se escriben en inglés. Guarda un Markdown con estadísticas, log del engine y transcripción, incluidos los subagentes y enlaces a sus secciones. |
+
+En un TOML, `[model].name` es el identificador interno de Ropero y debe coincidir
+con el nombre del fichero. `[model].alias` es el id público del engine cuando
+el engine lo admite. `levels.list`, `flags.list` y `options.list` requieren su
+bloque `[args.*]`; `ropero validate` rechaza entradas sin mapeo.
+
+La superficie en inglés está en
+[`ropero-cli.en.md`](ropero-cli.en.md). La evidencia y los límites por engine
+están en [`docs/engine-support.es.md`](../docs/engine-support.es.md) y su
+versión inglesa.
+
 ---
 
 ## 1. Alcance

@@ -94,6 +94,18 @@ pub struct Respuesta {
     pub metrica: Metrica,
     /// Eventos de herramientas ejecutadas por el agente interno.
     pub traza: Vec<String>,
+    /// Resultados de los subagentes solicitados por el modelo principal.
+    pub subagentes: Vec<SubagentTrace>,
+}
+
+/// Transcripción de un subagente ejecutado por la herramienta de delegación.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentTrace {
+    pub nombre: String,
+    pub prompt: String,
+    pub respuesta: String,
+    pub traza: Vec<String>,
+    pub metrica: Metrica,
 }
 
 /// El motor que sirve el modelo.
@@ -190,6 +202,7 @@ pub fn pregunta(
         },
         texto: contenido,
         traza: Vec::new(),
+        subagentes: Vec::new(),
     })
 }
 
@@ -198,17 +211,39 @@ pub fn pregunta(
 fn pregunta_agente(
     puerto: u16,
     modelo: &str,
+    contexto_id: &str,
     prompt: &str,
     api_key: Option<&str>,
+    permitir_subagentes: bool,
 ) -> Result<Respuesta, ErrorInferencia> {
     use serde_json::{Value, json};
     const MAX_RONDAS: usize = 5;
     let mut mensajes = vec![json!({"role":"user", "content":prompt})];
-    let definiciones = json!([
-        {"type":"function","function":{"name":"calculator","description":"Calcula una operación aritmética elemental con dos operandos.","parameters":{"type":"object","properties":{"a":{"type":"number"},"op":{"type":"string","enum":["+","-","*","/"]},"b":{"type":"number"}},"required":["a","op","b"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"fact_lookup","description":"Busca un dato en el pequeño corpus factual determinista de esta batería.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}}}
-    ]);
+    let mut definiciones = vec![
+        json!({"type":"function","function":{"name":"calculator","description":"Calcula una operación aritmética elemental con dos operandos.","parameters":{"type":"object","properties":{"a":{"type":"number"},"op":{"type":"string","enum":["+","-","*","/"]},"b":{"type":"number"}},"required":["a","op","b"],"additionalProperties":false}}}),
+        json!({"type":"function","function":{"name":"fact_lookup","description":"Busca un dato en el pequeño corpus factual determinista de esta batería.","parameters":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}}}),
+    ];
+    if permitir_subagentes {
+        definiciones.push(json!({
+            "type":"function",
+            "function":{
+                "name":"delegate_agent",
+                "description":"Pide a un subagente una revisión independiente y devuelve su respuesta. El subagente no puede delegar a su vez.",
+                "parameters":{
+                    "type":"object",
+                    "properties":{
+                        "agent":{"type":"string","description":"Nombre breve del especialista"},
+                        "task":{"type":"string","description":"Instrucciones concretas para el subagente"}
+                    },
+                    "required":["agent","task"],
+                    "additionalProperties":false
+                }
+            }
+        }));
+    }
+    let definiciones = serde_json::Value::Array(definiciones);
     let mut traza = Vec::new();
+    let mut subagentes = Vec::new();
     let mut texto_final = String::new();
     let mut total_ms = 0u64;
     let mut uso_total = 0u64;
@@ -277,6 +312,18 @@ fn pregunta_agente(
             usage.and_then(|u| u["prompt_tokens_details"]["cached_tokens"].as_u64()),
         );
         let message = response["choices"][0]["message"].clone();
+        if let Some(reasoning) = message
+            .get("reasoning_content")
+            .or_else(|| message.get("reasoning"))
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        {
+            traza.push(format!(
+                "ronda {} · razonamiento:\n{}",
+                ronda + 1,
+                reasoning
+            ));
+        }
         let calls = message["tool_calls"]
             .as_array()
             .cloned()
@@ -305,7 +352,41 @@ fn pregunta_agente(
             let name = call["function"]["name"].as_str().unwrap_or("");
             let args_text = call["function"]["arguments"].as_str().unwrap_or("{}");
             let args: Value = serde_json::from_str(args_text).unwrap_or(Value::Null);
-            let (result, display) = ejecutar_herramienta(name, &args);
+            let (result, display) = if name == "delegate_agent" && permitir_subagentes {
+                let agent = args["agent"].as_str().unwrap_or("subagente").trim();
+                let task = args["task"].as_str().unwrap_or("").trim();
+                if task.is_empty() {
+                    let result = json!({"error":"la tarea del subagente no puede estar vacía"});
+                    (result.to_string(), result.to_string())
+                } else {
+                    match pregunta_agente(puerto, modelo, contexto_id, task, api_key, false) {
+                        Ok(child) => {
+                            let index = subagentes.len() + 1;
+                            let entry = SubagentTrace {
+                                nombre: if agent.is_empty() {
+                                    format!("subagente-{index}")
+                                } else {
+                                    agent.to_string()
+                                },
+                                prompt: task.to_string(),
+                                respuesta: child.texto,
+                                traza: child.traza,
+                                metrica: child.metrica,
+                            };
+                            let output = json!({"agent":entry.nombre,"response":entry.respuesta,"trace":entry.traza});
+                            let display = output.to_string();
+                            subagentes.push(entry);
+                            (display.clone(), display)
+                        }
+                        Err(error) => {
+                            let result = json!({"error":error.mensaje});
+                            (result.to_string(), result.to_string())
+                        }
+                    }
+                }
+            } else {
+                ejecutar_herramienta(name, &args)
+            };
             traza.push(format!(
                 "ronda {} · {}({}) → {}",
                 ronda + 1,
@@ -329,6 +410,7 @@ fn pregunta_agente(
     Ok(Respuesta {
         texto: texto_final,
         traza,
+        subagentes,
         metrica: Metrica {
             latencia_total_ms: total_ms,
             primer_token_ms: None,
@@ -587,7 +669,7 @@ fn resumen(texto: &str) -> String {
 
 /// El modelo que se prueba: el pedido, o el que se elige del menú.
 ///
-/// Sin `--modelo` se muestran los **disponibles** (motor instalado y
+/// Sin `--model` se muestran los **disponibles** (motor instalado y
 /// modelo descargado) y se espera selección; sin terminal eso es un **error
 /// de uso** (código 2) que dice qué hacer.
 pub fn modelo_de(
@@ -601,7 +683,7 @@ pub fn modelo_de(
     };
     if ropero_core::find_spec(catalogo, &modelo).is_none() {
         return Err(ErrorInferencia::uso(format!(
-            "modelo desconocido: '{modelo}' (ropero list → los del catálogo)"
+            "modelo desconocido: '{modelo}' (ropero models → los del catálogo)"
         )));
     }
     Ok(modelo)
@@ -620,7 +702,7 @@ pub fn elegir_modelo(
     if !crate::install::hay_tty() {
         return Err(ErrorInferencia::uso(
             "sin terminal no se puede elegir el modelo: usa \
-             'ropero test --modelo <id>' (ropero list → los modelos disponibles)",
+             'ropero test --model <id>' (ropero models → los modelos disponibles)",
         ));
     }
     let detector = crate::Detector {
@@ -638,7 +720,7 @@ pub fn elegir_modelo(
     if disponibles.is_empty() {
         return Err(ErrorInferencia::uso(
             "no hay modelos disponibles (motor instalado y modelo descargado): \
-             'ropero list' → los que hay, 'ropero install' → los que faltan",
+             'ropero models' → los que hay, 'ropero install' → los que faltan",
         ));
     }
     let nombres: Vec<String> = disponibles
@@ -673,6 +755,7 @@ pub fn tira(
     modelo: Option<String>,
     seleccion: &Seleccion,
     json: bool,
+    lang: &str,
 ) -> i32 {
     let bateria = match lee_indice(root) {
         Ok(bateria) => bateria,
@@ -686,7 +769,7 @@ pub fn tira(
         Ok(modelo) => modelo,
         Err(e) => return e.informa(),
     };
-    match tira_la_bateria(catalogo, motores, env, root, &bateria, &ids, &modelo) {
+    match tira_la_bateria(catalogo, motores, env, root, &bateria, &ids, &modelo, lang) {
         Ok(informe) => {
             let hubo_error = informe.respuestas.iter().any(|r| {
                 matches!(
@@ -694,7 +777,7 @@ pub fn tira(
                     ropero_bateria::puntuadores::Puntuacion::ErrorEjecucion { .. }
                 )
             });
-            imprime(&informe, json);
+            imprime(&informe, json, lang);
             if hubo_error { 1 } else { 0 }
         }
         Err(e) => e.informa(),
@@ -714,6 +797,7 @@ pub fn tira_la_bateria(
     bateria: &Bateria,
     ids: &[String],
     modelo: &str,
+    lang: &str,
 ) -> Result<Informe, ErrorInferencia> {
     if let Some(spec) = ropero_core::find_spec(catalogo, modelo)
         && ropero_core::flm::is_flm_model(spec)
@@ -749,59 +833,67 @@ pub fn tira_la_bateria(
         .or(engine_key)
         .or_else(|| env.get("ROPERO_API_KEY"));
     let marca = now_epoch().to_string();
+    let served_model = ropero_core::find_spec(catalogo, modelo)
+        .and_then(|spec| spec.model.alias.as_deref())
+        .unwrap_or(modelo);
     let mut respuestas = Vec::with_capacity(ids.len());
-    let mut transcript = Vec::with_capacity(ids.len());
+    let mut transcript: Vec<(String, String, String, Vec<String>, Vec<SubagentTrace>)> =
+        Vec::with_capacity(ids.len());
     for id in ids {
         let test = bateria
             .test(id.as_str())
             .ok_or_else(|| ErrorInferencia::uso(format!("el test '{id}' no está en la batería")))?;
         let prompt = lee_test(root, &test.fichero)?;
-        let respuesta = match pregunta_agente(motor.puerto, modelo, &prompt, api_key) {
-            Ok(respuesta) => respuesta,
-            // Algunos OpenAI-compatible servers no implementan tools. Si
-            // rechazan explícitamente ese campo, repetir en modo chat básico.
-            Err(e) if rechaza_tools(&e.mensaje) => {
-                match pregunta(motor.puerto, modelo, &prompt, api_key) {
-                    Ok(mut respuesta) => {
-                        respuesta
-                            .traza
-                            .push("fallback a chat básico: el engine rechazó tools".to_string());
-                        respuesta
-                    }
-                    Err(e) => {
-                        let vacia = respuesta_fallida(id, &e.mensaje);
-                        guarda(&state_dir, &marca, &vacia);
-                        transcript.push((
-                            id.clone(),
-                            prompt,
-                            format!("[Error] {}", e.mensaje),
-                            Vec::new(),
-                        ));
-                        respuestas.push(vacia);
-                        continue;
+        let respuesta =
+            match pregunta_agente(motor.puerto, served_model, id, &prompt, api_key, true) {
+                Ok(respuesta) => respuesta,
+                // Algunos OpenAI-compatible servers no implementan tools. Si
+                // rechazan explícitamente ese campo, repetir en modo chat básico.
+                Err(e) if rechaza_tools(&e.mensaje) => {
+                    match pregunta(motor.puerto, served_model, &prompt, api_key) {
+                        Ok(mut respuesta) => {
+                            respuesta.traza.push(
+                                "fallback a chat básico: el engine rechazó tools".to_string(),
+                            );
+                            respuesta
+                        }
+                        Err(e) => {
+                            let vacia = respuesta_fallida(id, &e.mensaje);
+                            guarda(&state_dir, &marca, &vacia);
+                            transcript.push((
+                                id.clone(),
+                                prompt,
+                                format!("[Error] {}", e.mensaje),
+                                Vec::new(),
+                                Vec::new(),
+                            ));
+                            respuestas.push(vacia);
+                            continue;
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                // Un test que falla no puede dejar la tirada a medias: se
-                // guarda igual, con la salida vacía y el motivo.
-                let vacia = respuesta_fallida(id, &e.mensaje);
-                guarda(&state_dir, &marca, &vacia);
-                transcript.push((
-                    id.clone(),
-                    prompt,
-                    format!("[Error] {}", e.mensaje),
-                    Vec::new(),
-                ));
-                respuestas.push(vacia);
-                continue;
-            }
-        };
+                Err(e) => {
+                    // Un test que falla no puede dejar la tirada a medias: se
+                    // guarda igual, con la salida vacía y el motivo.
+                    let vacia = respuesta_fallida(id, &e.mensaje);
+                    guarda(&state_dir, &marca, &vacia);
+                    transcript.push((
+                        id.clone(),
+                        prompt,
+                        format!("[Error] {}", e.mensaje),
+                        Vec::new(),
+                        Vec::new(),
+                    ));
+                    respuestas.push(vacia);
+                    continue;
+                }
+            };
         transcript.push((
             id.clone(),
             prompt,
             respuesta.texto.clone(),
             respuesta.traza.clone(),
+            respuesta.subagentes.clone(),
         ));
         let puntuacion = puntua_con_traza(id.as_str(), &respuesta.texto, &respuesta.traza);
         let metrica = respuesta.metrica;
@@ -825,6 +917,9 @@ pub fn tira_la_bateria(
         respuestas,
     );
     let memoria_fin = crate::machine::capture_machine_state();
+    let engine_log = ropero_core::find_spec(catalogo, modelo)
+        .map(|spec| crate::run::log_de(spec, env))
+        .and_then(|path| std::fs::read_to_string(path).ok());
     if let Some(path) = guarda_transcripcion(
         &state_dir,
         &marca,
@@ -832,6 +927,8 @@ pub fn tira_la_bateria(
         &transcript,
         &memoria_inicio,
         &memoria_fin,
+        engine_log.as_deref(),
+        lang,
     ) {
         ropero_core::err_line(&format!("transcripción Markdown: {}", path.display()));
     }
@@ -873,48 +970,95 @@ fn guarda_transcripcion(
     state_dir: &Path,
     marca: &str,
     informe: &Informe,
-    transcript: &[(String, String, String, Vec<String>)],
+    transcript: &[(String, String, String, Vec<String>, Vec<SubagentTrace>)],
     memoria_inicio: &ropero_core::status::MachineState,
     memoria_fin: &ropero_core::status::MachineState,
+    engine_log: Option<&str>,
+    lang: &str,
 ) -> Option<std::path::PathBuf> {
     use std::fmt::Write as _;
 
     let dir = state_dir.join("tests").join(marca);
     std::fs::create_dir_all(&dir).ok()?;
     let mut md = String::new();
-    let _ = writeln!(md, "# Ejecución de ropero test\n");
-    let _ = writeln!(md, "- Modelo: `{}`", informe.modelo);
-    let _ = writeln!(md, "- Engine: `{}`", informe.motor);
-    let _ = writeln!(md, "- Nivel: `{}`", informe.nivel);
-    let _ = writeln!(md, "- Puerto: `{}`", informe.puerto);
+    let en = lang.eq_ignore_ascii_case("EN");
     let _ = writeln!(
         md,
-        "- Modo: agente interno (sesión limpia e independiente por test)\n"
+        "# {}\n",
+        if en {
+            "Ropero test run"
+        } else {
+            "Ejecución de ropero test"
+        }
     );
-    md.push_str("> La transcripción recoge mensajes y herramientas locales ejecutadas por Ropero. No incluye razonamiento privado ni subagentes: este runner no los crea.\n\n");
-    md.push_str("## Resumen\n\n");
-    md.push_str(&informe.a_texto());
-    md.push_str("\n\n## Memoria del sistema\n\n");
-    md.push_str("Muestras puntuales al inicio y al final; no son el pico de la ejecución ni el uso exclusivo del proceso.\n\n");
-    md.push_str("| Recurso | Inicio (MB) | Fin (MB) |\n|---|---:|---:|\n");
+    let _ = writeln!(
+        md,
+        "- {}: `{}`",
+        if en { "Model" } else { "Modelo" },
+        informe.modelo
+    );
+    let _ = writeln!(md, "- Engine: `{}`", informe.motor);
+    let _ = writeln!(
+        md,
+        "- {}: `{}`",
+        if en { "Level" } else { "Nivel" },
+        informe.nivel
+    );
+    let _ = writeln!(
+        md,
+        "- {}: `{}`",
+        if en { "Port" } else { "Puerto" },
+        informe.puerto
+    );
+    let _ = writeln!(
+        md,
+        "- {}\n",
+        if en {
+            "Mode: internal agent (fresh independent session per test)"
+        } else {
+            "Modo: agente interno (sesión limpia e independiente por test)"
+        }
+    );
+    md.push_str(if en { "> The transcript includes engine-returned reasoning, local tools, and subagents called by the main model. Subagents cannot delegate further.\n\n" } else { "> La transcripción incluye el razonamiento devuelto por el engine, las herramientas locales y los subagentes invocados por el modelo principal. Los subagentes no pueden delegar a su vez.\n\n" });
+    md.push_str(if en {
+        "## 1. Statistics calculated by Ropero\n\n"
+    } else {
+        "## 1. Estadísticas calculadas por Ropero\n\n"
+    });
+    md.push_str(&if en {
+        informe.a_texto_en()
+    } else {
+        informe.a_texto()
+    });
+    md.push_str(if en {
+        "\n\n### System memory\n\n"
+    } else {
+        "\n\n### Memoria del sistema\n\n"
+    });
+    md.push_str(if en { "Point samples at the start and end; these are not peak or process-exclusive usage.\n\n" } else { "Muestras puntuales al inicio y al final; no son el pico de la ejecución ni el uso exclusivo del proceso.\n\n" });
+    md.push_str(if en {
+        "| Resource | Start (MB) | End (MB) |\n|---|---:|---:|\n"
+    } else {
+        "| Recurso | Inicio (MB) | Fin (MB) |\n|---|---:|---:|\n"
+    });
     for (nombre, inicio, fin) in [
         (
-            "RAM usada",
+            if en { "RAM used" } else { "RAM usada" },
             memoria_inicio.memory.ram_used_mb.as_ref(),
             memoria_fin.memory.ram_used_mb.as_ref(),
         ),
         (
-            "RAM total",
+            if en { "RAM total" } else { "RAM total" },
             memoria_inicio.memory.ram_total_mb.as_ref(),
             memoria_fin.memory.ram_total_mb.as_ref(),
         ),
         (
-            "Swap usada",
+            if en { "Swap used" } else { "Swap usada" },
             memoria_inicio.memory.swap_used_mb.as_ref(),
             memoria_fin.memory.swap_used_mb.as_ref(),
         ),
         (
-            "Swap total",
+            if en { "Swap total" } else { "Swap total" },
             memoria_inicio.memory.swap_total_mb.as_ref(),
             memoria_fin.memory.swap_total_mb.as_ref(),
         ),
@@ -929,22 +1073,149 @@ fn guarda_transcripcion(
         );
         let _ = writeln!(md, "| {nombre} | {inicio} | {fin} |");
     }
-    md.push_str("\n\n## Transcripción\n");
-    for (id, prompt, respuesta, traza) in transcript {
-        let _ = writeln!(md, "\n### {id} · entrada\n");
+    let agents: Vec<(&str, &SubagentTrace)> = transcript
+        .iter()
+        .flat_map(|(id, _, _, _, subagents)| {
+            subagents.iter().map(move |agent| (id.as_str(), agent))
+        })
+        .collect();
+    if !agents.is_empty() {
+        md.push_str(if en {
+            "\n\n### Delegated agent statistics\n\n| Test | Agent | Latency (ms) | Tokens | Input | Output |\n|---|---|---:|---:|---:|---:|\n"
+        } else {
+            "\n\n### Estadísticas de subagentes\n\n| Test | Agente | Latencia (ms) | Tokens | Entrada | Salida |\n|---|---|---:|---:|---:|---:|\n"
+        });
+        for (test, agent) in agents {
+            let _ = writeln!(
+                md,
+                "| {test} | {} | {} | {} | {} | {} |",
+                agent.nombre,
+                agent.metrica.latencia_total_ms,
+                tokens_text(agent.metrica.tokens),
+                metric_value(agent.metrica.tokens_entrada),
+                metric_value(agent.metrica.tokens_salida),
+            );
+        }
+    }
+    md.push_str(if en {
+        "\n\n## 2. Engine log\n\n"
+    } else {
+        "\n\n## 2. Log del engine\n\n"
+    });
+    if let Some(log) = engine_log {
+        bloque_indentado(&mut md, log);
+    } else {
+        md.push_str(if en {
+            "> Could not read the engine log for this model.\n"
+        } else {
+            "> No se pudo leer el log del engine para este modelo.\n"
+        });
+    }
+    md.push_str(if en {
+        "\n\n## 3. Model and tool transcript\n\n"
+    } else {
+        "\n\n## 3. Transcripción del modelo y herramientas\n\n"
+    });
+    for (id, prompt, respuesta, traza, subagentes) in transcript {
+        let _ = writeln!(
+            md,
+            "\n### {id} · {}\n",
+            if en { "prompt" } else { "entrada" }
+        );
         bloque_indentado(&mut md, prompt);
-        let _ = writeln!(md, "\n### {id} · respuesta\n");
+        let _ = writeln!(
+            md,
+            "\n### {id} · {}\n",
+            if en { "response" } else { "respuesta" }
+        );
         bloque_indentado(&mut md, respuesta);
         if !traza.is_empty() {
-            let _ = writeln!(md, "\n### {id} · herramientas\n");
+            let _ = writeln!(
+                md,
+                "\n### {id} · {}\n",
+                if en { "tools" } else { "herramientas" }
+            );
             for evento in traza {
-                let _ = writeln!(md, "- `{evento}`");
+                bloque_indentado(&mut md, evento);
+                md.push('\n');
+            }
+        }
+        if !subagentes.is_empty() {
+            let _ = writeln!(
+                md,
+                "\n### {id} · {}\n",
+                if en {
+                    "delegated subagents"
+                } else {
+                    "subagentes convocados"
+                }
+            );
+            for (index, agent) in subagentes.iter().enumerate() {
+                let anchor = subagent_anchor(id, index + 1, &agent.nombre);
+                let _ = writeln!(md, "- [{}](#{anchor})", agent.nombre);
+            }
+            for (index, agent) in subagentes.iter().enumerate() {
+                let anchor = subagent_anchor(id, index + 1, &agent.nombre);
+                let _ = writeln!(
+                    md,
+                    "\n<a id=\"{anchor}\"></a>\n#### {id} · {}: {}\n",
+                    if en { "agent" } else { "agente" },
+                    agent.nombre
+                );
+                let _ = writeln!(md, "{}:\n", if en { "Task" } else { "Tarea" });
+                bloque_indentado(&mut md, &agent.prompt);
+                let _ = writeln!(md, "\n{}:\n", if en { "Response" } else { "Respuesta" });
+                bloque_indentado(&mut md, &agent.respuesta);
+                if !agent.traza.is_empty() {
+                    let _ = writeln!(
+                        md,
+                        "\n{}:\n",
+                        if en {
+                            "Reasoning and tools"
+                        } else {
+                            "Razonamiento y herramientas"
+                        }
+                    );
+                    for event in &agent.traza {
+                        bloque_indentado(&mut md, event);
+                    }
+                }
             }
         }
     }
     let path = dir.join("informe.md");
     std::fs::write(&path, md).ok()?;
     Some(path)
+}
+
+fn subagent_anchor(test_id: &str, index: usize, name: &str) -> String {
+    let slug = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    format!("agent-{test_id}-{index}-{slug}")
+}
+
+fn tokens_text(tokens: Tokens) -> String {
+    match tokens {
+        Tokens::Uso(value) => value.to_string(),
+        Tokens::Aproximado(value) => format!("~{value}"),
+        Tokens::NoDisponible => "n/a".to_string(),
+    }
+}
+
+fn metric_value(value: Option<u64>) -> String {
+    value.map_or_else(|| "n/a".to_string(), |number| number.to_string())
 }
 
 /// Añade texto como bloque Markdown indentado para preservar literalmente
@@ -993,12 +1264,17 @@ fn guarda(state_dir: &Path, marca: &str, respuesta: &RespuestaTest) {
 
 /// Imprime el informe: el JSON son los **datos** (stdout) y el texto es lo
 /// humano (stderr).
-pub fn imprime(informe: &Informe, json: bool) {
+pub fn imprime(informe: &Informe, json: bool, lang: &str) {
+    let texto = if lang.eq_ignore_ascii_case("EN") {
+        informe.a_texto_en()
+    } else {
+        informe.a_texto()
+    };
     if json {
         ropero_core::out_line(&informe.a_json());
-        ropero_core::err_line(informe.a_texto().trim_end());
+        ropero_core::err_line(texto.trim_end());
     } else {
-        ropero_core::out_line(informe.a_texto().trim_end());
+        ropero_core::out_line(texto.trim_end());
     }
 }
 

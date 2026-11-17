@@ -26,35 +26,25 @@ path    = "gyro/Gyro-S"
 [files]
 
 [options]
-list = ["tune", "vision", "mtp", "kv", "parallel", "drafting", "vram-reserve"]
+list = ["parallel", "batch-groups", "max-queue", "queue-timeout"]
 
-# La base: sólo esta máquina. El TUNING no va aquí porque es opt-in
-# ("--tune quick") y pondría un "--tune skip" duplicado.
-# [args]
-# base = [
-#     "--access", "local",
-# ]
+[flags]
+list = ["batch-telemetry", "offline"]
 
-# [args.option.tune]
-# base = ["--tune", "${value}"]
+[args.option.parallel]
+base = ["--parallel", "${value}"]
 
-# [args.option.vision]
-# base = ["--vision", "${value}"]
+[args.option.batch-groups]
+base = ["--batch-groups", "${value}"]
 
-# [args.option.mtp]
-# base = ["--mtp", "${value}"]
+[args.option.max-queue]
+base = ["--max-queue", "${value}"]
 
-# [args.option.kv]
-# base = ["--kv", "${value}"]
+[args.option.queue-timeout]
+base = ["--queue-timeout", "${value}"]
 
-# [args.option.parallel]
-# base = ["--parallel", "${value}"]
+[args.flag.batch-telemetry]
+base = ["--batch-telemetry"]
 
-# [args.option.drafting]
-# base = ["--drafting", "${value}"]
-
-# # La reserva de VRAM: con menos de 512 MiB libres el driver de NVIDIA pagina
-# # y la petición no vuelve nunca. 1344 MiB es el valor medido en esta máquina
-# # (RTX 5080 Laptop). El motor lo llama --vram-reserve-mib.
-# [args.option.vram-reserve]
-# base = ["--set", "vram_reserve_mib=${value}"]
+[args.flag.offline]
+base = ["--offline"]

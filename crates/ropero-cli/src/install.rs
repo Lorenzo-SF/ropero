@@ -79,7 +79,7 @@ fn engines(s: &crate::discovery::Scan, tokens: &[Token], force: bool) -> i32 {
         }
     }
     let eleccion = if lista.is_empty() {
-        match elegir_motores(&filas, &s.env) {
+        match elegir_motores(&filas, &s.catalog, &s.env) {
             Ok(elegidos) => elegidos,
             Err(codigo) => return codigo,
         }
@@ -126,7 +126,11 @@ fn enlaza_motor(
 }
 
 /// El menú de motores: sin terminal es un **error de uso** (R-INST-26).
-fn elegir_motores(filas: &[EngineRow], env: &ropero_core::Environment) -> Result<Vec<String>, i32> {
+fn elegir_motores(
+    filas: &[EngineRow],
+    cat: &ropero_core::Catalog,
+    env: &ropero_core::Environment,
+) -> Result<Vec<String>, i32> {
     if !ropero_runtime::install::hay_tty() {
         return Err(uso(&install::falta_tty_engines()));
     }
@@ -144,7 +148,7 @@ fn elegir_motores(filas: &[EngineRow], env: &ropero_core::Environment) -> Result
             instalado: ropero_runtime::engine_installed_with_env(&f.manifest, env),
         })
         .collect();
-    let menu = install::menu_engines(&compatibles, &Palette::color());
+    let menu = install::menu_engines(cat, &compatibles, &Palette::color());
     if menu.lineas.is_empty() {
         ropero_core::err_line("aviso: no hay motores compatibles con esta máquina");
         return Err(0);
@@ -317,13 +321,15 @@ fn fabrica_modelo(
     if !build.out_principal.is_empty() {
         flags.out_principal = Some(build.out_principal.clone());
     }
-    if flags.out.is_none() && flags.out_principal.is_none() && spec.files.gguf.is_some() {
-        if let Some(gguf) = &spec.files.gguf {
-            let target = env
-                .engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf")
-                .join(gguf);
-            flags.out_principal = Some(target.to_string_lossy().into_owned());
-        }
+    if flags.out.is_none()
+        && flags.out_principal.is_none()
+        && spec.files.gguf.is_some()
+        && let Some(gguf) = &spec.files.gguf
+    {
+        let target = env
+            .engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf")
+            .join(gguf);
+        flags.out_principal = Some(target.to_string_lossy().into_owned());
     }
     let reporte = ropero_forge::gguffer(flags, env);
     for linea in reporte.lineas {

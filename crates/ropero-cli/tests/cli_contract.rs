@@ -93,11 +93,11 @@ const CODIGO_SIGINT: i32 = 130;
 fn un_comando_que_va_bien_sale_con_cero() {
     for args in [
         vec!["validate"],
-        vec!["list"],
+        vec!["models"],
         vec!["template"],
-        vec!["args", "modelo-alpha"],
-        vec!["levels", "modelo-alpha"],
-        vec!["path", "modelo-alpha"],
+        vec!["command", "modelo-alpha"],
+        vec!["info", "modelo-alpha"],
+        vec!["info", "modelo-alpha"],
         vec!["engines"],
         vec!["status"],
         vec!["--help"],
@@ -106,6 +106,55 @@ fn un_comando_que_va_bien_sale_con_cero() {
         let (code, _stdout, stderr) = run(&args);
         assert_eq!(code, CODIGO_OK, "{args:?} salió con {code}: {stderr}");
     }
+}
+
+#[test]
+fn connect_lista_integraciones_y_da_instrucciones_de_trae_sin_editar_archivos_privados() {
+    let (code, stdout, stderr) = run(&["connect", "--list"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    assert!(stdout.contains("opencode"), "stdout={stdout}");
+    assert!(stdout.contains("trae-cn"), "stdout={stdout}");
+    for unsupported in ["gemini", "cursor", "kiro", "antigravity", "devin"] {
+        assert!(
+            !stdout.contains(unsupported),
+            "no debe anunciar {unsupported}: {stdout}"
+        );
+    }
+
+    let (code, stdout, stderr) = run(&["connect", "--agent", "trae", "--model", "modelo-alpha"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    assert!(
+        stdout.contains("OpenAI Chat Completions"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("http://127.0.0.1:9990/v1"),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("model ID modelo-alpha"), "stdout={stdout}");
+    assert!(
+        stdout.contains("does not edit TRAE's private UI-managed settings"),
+        "stdout={stdout}"
+    );
+}
+
+#[test]
+fn connect_claude_emite_variables_para_endpoint_anthropic_messages_del_engine() {
+    let (code, stdout, stderr) = run(&["connect", "--agent", "claude", "--model", "modelo-alpha"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    for expected in [
+        "ANTHROPIC_BASE_URL=http://127.0.0.1:9990",
+        "ANTHROPIC_AUTH_TOKEN=dummy",
+        "API_TIMEOUT_MS=600000",
+        "DISABLE_TELEMETRY=1",
+        "ANTHROPIC_MODEL=modelo-alpha",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL=modelo-alpha",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL=modelo-alpha",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL=modelo-alpha",
+    ] {
+        assert!(stdout.contains(expected), "falta {expected}: {stdout}");
+    }
+    assert!(!stdout.contains("9990/v1"), "stdout={stdout}");
 }
 
 /// `ropero` a secas es una ayuda breve, no un error: sale con 0 (doc CLI v2
@@ -187,7 +236,7 @@ fn un_modelo_desconocido_en_el_arranque_sale_con_dos() {
 /// Un modelo desconocido es un error de uso: sale con 2.
 #[test]
 fn un_modelo_desconocido_sale_con_dos() {
-    for cmd in ["args", "levels", "path"] {
+    for cmd in ["command", "info", "info"] {
         let (code, _stdout, stderr) = run(&[cmd, "no-existe"]);
         assert_eq!(code, CODIGO_ERROR_USO, "{cmd} salió con {code}: {stderr}");
         assert!(stderr.contains("modelo desconocido"), "stderr={stderr}");
@@ -197,7 +246,7 @@ fn un_modelo_desconocido_sale_con_dos() {
 /// Un argumento de más es un error de uso: sale con 2.
 #[test]
 fn un_argumento_de_mas_sale_con_dos() {
-    let (code, _stdout, stderr) = run(&["list", "--bogus"]);
+    let (code, _stdout, stderr) = run(&["models", "--bogus"]);
     assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
 }
 
@@ -211,8 +260,8 @@ fn un_argumento_de_mas_sale_con_dos() {
 #[test]
 fn ningun_comando_dice_que_todavia_no_esta_implementado() {
     for cmd in [
-        "install", "stop", "gguffer", "status", "doctor", "list", "template", "engines",
-        "validate", "args", "levels", "path",
+        "install", "stop", "gguffer", "status", "doctor", "models", "template", "engines",
+        "validate", "command", "info",
     ] {
         let (code, _stdout, stderr) = run(&[cmd]);
         assert!(
@@ -285,11 +334,12 @@ fn el_arranque_de_un_modelo_sale_con_uno_y_lo_dice() {
     );
 }
 
-/// Un flag del arranque que no existe es un error de uso: sale con 2.
+/// Los tokens que el TOML del modelo no declara se ignoran.
 #[test]
-fn un_flag_del_arranque_que_no_existe_sale_con_dos() {
+fn un_flag_del_arranque_que_no_existe_se_ignora() {
     let (code, _stdout, stderr) = run(&["modelo-alpha", "--inventado"]);
-    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+    assert_ne!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+    assert!(!stderr.contains("flag no declarado"), "stderr={stderr}");
 }
 
 /// Los flags del arranque del doc CLI v2 §8.2 se **aceptan**.
@@ -498,48 +548,242 @@ fn template_vuelca_la_plantilla() {
     assert!(stdout.contains("[model]"), "stdout={stdout}");
 }
 
-/// `ropero args` imprime un argumento por línea.
+/// `ropero command` imprime un argumento por línea.
 #[test]
-fn args_imprime_un_argumento_por_linea() {
-    let (code, stdout, stderr) = run(&["args", "modelo-alpha"]);
+fn command_imprime_opcion_y_valor_en_la_misma_linea() {
+    let (code, stdout, stderr) = run(&["command", "modelo-alpha"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     let rows: Vec<&str> = stdout.lines().collect();
-    assert!(!rows.is_empty(), "stdout={stdout}");
-    assert!(rows.contains(&"--n-gpu-layers"), "stdout={stdout}");
-}
-
-/// `ropero levels` imprime un nivel por línea.
-#[test]
-fn levels_imprime_un_nivel_por_linea() {
-    let (code, stdout, stderr) = run(&["levels", "modelo-alpha"]);
-    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    let mut rows: Vec<&str> = stdout.lines().collect();
-    rows.sort();
-    assert_eq!(rows, vec!["high", "low", "medium"], "stdout={stdout}");
-}
-
-/// `ropero path` imprime una ruta por línea.
-#[test]
-fn path_imprime_una_ruta_por_linea() {
-    let (code, stdout, stderr) = run(&["path", "modelo-alpha"]);
-    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    let rows: Vec<&str> = stdout.lines().collect();
+    assert!(rows.contains(&"--n-gpu-layers 99 \\"), "stdout={stdout}");
     assert!(
-        rows.iter().any(|l| l.starts_with("GGUF=")),
-        "stdout={stdout}"
+        rows.iter().all(|line| !line.ends_with(" \\ ")),
+        "espacio tras barra: {stdout}"
     );
     assert!(
-        rows.iter().any(|l| l.starts_with("LOG=")),
-        "stdout={stdout}"
+        rows.last().is_some_and(|line| !line.ends_with('\\')),
+        "última línea con continuación: {stdout}"
     );
 }
 
-/// `ropero --help` imprime la ayuda en stdout.
+#[test]
+fn info_muestra_rutas_y_configuracion() {
+    let (code, stdout, stderr) = run(&["info", "modelo-alpha"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    for needle in [
+        "MODEL modelo-alpha",
+        "low",
+        "medium",
+        "high",
+        "GGUF=",
+        "LOG=",
+    ] {
+        assert!(stdout.contains(needle), "falta {needle:?}: {stdout}");
+    }
+}
+
+#[test]
+fn models_add_valida_normaliza_y_descarta_campos_desconocidos() {
+    let root = std::env::temp_dir().join(format!("ropero-model-add-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let input = root.join("input.toml");
+    std::fs::write(
+        &input,
+        r#"[model]
+name = "new-model"
+engine = "turbo-llama"
+format = "gguf"
+context = 32768
+
+[files]
+gguf = "new-model.gguf"
+
+[args]
+base = ["--ctx-size", "${ctx}"]
+
+[unrelated]
+private_note = "discard me"
+"#,
+    )
+    .unwrap();
+    let output = bin()
+        .args(["models", "add", "--path", input.to_str().unwrap()])
+        .env("ROPERO_MODELS_DIR", &root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(
+        stdout.contains("se descartaron 1 campo(s)"),
+        "stdout={stdout}"
+    );
+    let stored = root.join("turbo-llama/new-model.toml");
+    let text = std::fs::read_to_string(stored).unwrap();
+    assert!(text.contains("name = \"new-model\""), "{text}");
+    assert!(!text.contains("private_note"), "{text}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn models_add_permite_configuracion_completa_con_asignaciones_toml() {
+    let root = std::env::temp_dir().join(format!("ropero-model-set-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let output = bin()
+        .args([
+            "models",
+            "add",
+            "--name",
+            "advanced-model",
+            "--engine",
+            "turbo-llama",
+            "--format",
+            "gguf",
+            "--artifact",
+            "advanced.gguf",
+            "--set",
+            "levels.list=[\"low\",\"high\"]",
+            "--set",
+            "args.level.low.base=[\"--reasoning-budget\",\"4096\"]",
+            "--set",
+            "args.level.high.base=[\"--reasoning-budget\",\"16384\"]",
+            "--set",
+            "args.base=[\"--ctx-size\",\"${ctx}\"]",
+        ])
+        .env("ROPERO_MODELS_DIR", &root)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(root.join("turbo-llama/advanced-model.toml")).unwrap();
+    let value: toml::Value = toml::from_str(&text).unwrap();
+    assert_eq!(value["levels"]["list"][1].as_str(), Some("high"));
+    assert_eq!(value["args"]["base"][0].as_str(), Some("--ctx-size"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn config_lang_se_persiste_y_rechaza_otro_valor() {
+    let home = std::env::temp_dir().join(format!("ropero-lang-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let output = bin()
+        .args(["config", "--lang", "ES"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = std::fs::read_to_string(home.join(".config/ropero/config.toml")).unwrap();
+    assert!(config.contains("lang = \"ES\""), "{config}");
+    let invalid = bin()
+        .args(["config", "--lang", "FR"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[test]
+fn status_live_rechaza_intervalo_cero() {
+    let output = bin().args(["status", "--live", "0"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("mayor que cero"));
+}
+
 #[test]
 fn help_imprime_la_ayuda_en_stdout() {
     let (code, stdout, stderr) = run(&["--help"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    assert!(stdout.contains("USO: ropero"), "stdout={stdout}");
+    assert!(
+        stdout.contains("USAGE: ropero") || stdout.contains("USO: ropero"),
+        "stdout={stdout}"
+    );
+}
+
+#[test]
+fn help_usa_el_idioma_guardado_en_config() {
+    let root = std::env::temp_dir().join(format!("ropero-help-lang-{}", std::process::id()));
+    let config_dir = root.join("ropero");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("config.toml");
+    let english = bin()
+        .args(["--help"])
+        .env("XDG_CONFIG_HOME", &root)
+        .output()
+        .unwrap();
+    let english_help = String::from_utf8_lossy(&english.stdout);
+    assert!(english_help.contains("USAGE: ropero"));
+    assert!(english_help.contains("--model MODELS"));
+    assert!(english_help.contains("--agent AGENT"));
+    assert!(english_help.contains("<model> [--force]"));
+
+    std::fs::write(&config, "lang = \"ES\"\n").unwrap();
+    let spanish = bin()
+        .args(["--help"])
+        .env("XDG_CONFIG_HOME", &root)
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&spanish.stdout).contains("USO: ropero"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn info_respeta_el_idioma_guardado() {
+    let root = std::env::temp_dir().join(format!("ropero-info-lang-{}", std::process::id()));
+    let config_dir = root.join("ropero");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("config.toml"), "lang = \"ES\"\n").unwrap();
+    let output = bin()
+        .args(["info", "modelo-alpha"])
+        .env("XDG_CONFIG_HOME", &root)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("MODELO modelo-alpha"), "{stdout}");
+    assert!(stdout.contains("nivel por defecto"), "{stdout}");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn config_respeta_el_idioma_guardado() {
+    let root = std::env::temp_dir().join(format!("ropero-config-lang-{}", std::process::id()));
+    let config_dir = root.join("ropero");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let config = config_dir.join("config.toml");
+    let english = bin()
+        .args(["config"])
+        .env("XDG_CONFIG_HOME", &root)
+        .output()
+        .unwrap();
+    assert_eq!(english.status.code(), Some(0));
+    assert!(String::from_utf8_lossy(&english.stdout).contains("CONFIGURATION"));
+
+    std::fs::write(&config, "lang = \"ES\"\n").unwrap();
+    let spanish = bin()
+        .args(["config"])
+        .env("XDG_CONFIG_HOME", &root)
+        .output()
+        .unwrap();
+    assert_eq!(spanish.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&spanish.stdout);
+    assert!(stdout.contains("CONFIGURACIÓN"), "{stdout}");
+    assert!(stdout.contains("idioma"), "{stdout}");
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// `ropero --version` dice la versión, la fecha de compilación y el autor.
@@ -586,20 +830,20 @@ fn doctor_sale_con_cero_o_uno() {
 /// Canalizar la salida a `head` **no** revienta el programa.
 ///
 /// `println!` panica cuando el lector cierra el pipe antes de que termine
-/// la salida: `ropero args groot | head -1` era un crash (exit 134 en
+/// la salida: `ropero command groot | head -1` era un crash (exit 134 en
 /// release, 101 en debug) en un idiom de shell muy común. Ahora el pipe
 /// roto es el **fin normal** de la salida: el comando sale con 0 y no
 /// imprime ningún error.
 #[test]
 fn canalizar_a_head_no_revienta_el_programa() {
     for args in [
-        vec!["args", "modelo-alpha"],
-        vec!["list"],
+        vec!["command", "modelo-alpha"],
+        vec!["models"],
         vec!["validate"],
-        vec!["list"],
+        vec!["models"],
         vec!["template"],
-        vec!["levels", "modelo-alpha"],
-        vec!["path", "modelo-alpha"],
+        vec!["info", "modelo-alpha"],
+        vec!["info", "modelo-alpha"],
         vec!["--help"],
         vec!["status"],
     ] {
@@ -638,13 +882,13 @@ fn canalizar_a_head_no_revienta_el_programa() {
 #[test]
 fn canalizar_a_head_termina_con_cero() {
     for args in [
-        vec!["args", "modelo-alpha"],
-        vec!["list"],
+        vec!["command", "modelo-alpha"],
+        vec!["models"],
         vec!["validate"],
-        vec!["list"],
+        vec!["models"],
         vec!["template"],
-        vec!["levels", "modelo-alpha"],
-        vec!["path", "modelo-alpha"],
+        vec!["info", "modelo-alpha"],
+        vec!["info", "modelo-alpha"],
         vec!["--help"],
         vec!["status"],
     ] {

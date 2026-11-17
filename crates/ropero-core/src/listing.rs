@@ -1,4 +1,4 @@
-//! La salida de `ropero list`: los modelos **disponibles**, agrupados por
+//! La salida de `ropero models`: los modelos **disponibles**, agrupados por
 //! motor, con la leyenda de colores.
 //!
 //! ## La forma
@@ -75,7 +75,7 @@ const NO_DISPONIBLE: &str = "no disponible";
 /// El título de la sección de los modelos.
 const TITULO: &str = "MODELOS";
 
-/// Las líneas de `ropero list`.
+/// Las líneas de `ropero models`.
 ///
 /// `todos` es el `--all`: añade los modelos que **no** están disponibles
 /// (marcados) y despliega los grupos plegados.
@@ -104,7 +104,12 @@ pub fn list_lines(
             grupo.manifest.color,
         ));
         for modelo in &grupo.models {
-            tabla.fila(celdas_de_modelo(modelo, todos));
+            tabla.fila(celdas_de_modelo(
+                modelo,
+                todos,
+                grupo.installed,
+                grupo.manifest.maturity == crate::Maturity::Partial,
+            ));
         }
     }
     // Los grupos plegados van al final: no interrumpen la lista de lo que
@@ -128,7 +133,12 @@ pub fn list_lines(
 }
 
 /// Las celdas de un modelo: nombre, tamaño, artefacto y estado.
-fn celdas_de_modelo(modelo: &ModelState, con_estado: bool) -> Vec<Celda> {
+fn celdas_de_modelo(
+    modelo: &ModelState,
+    con_estado: bool,
+    engine_instalado: bool,
+    engine_parcial: bool,
+) -> Vec<Celda> {
     let spec = &modelo.spec;
     let mut celdas = vec![
         Celda::plana(nombre_de_modelo(spec)),
@@ -136,9 +146,12 @@ fn celdas_de_modelo(modelo: &ModelState, con_estado: bool) -> Vec<Celda> {
         Celda::plana(artefacto_de(spec)),
     ];
     if con_estado {
-        let disponible = modelo.presence == ModelPresence::Downloaded;
+        let disponible =
+            engine_instalado && !engine_parcial && modelo.presence == ModelPresence::Downloaded;
         let estado = if disponible {
             String::new()
+        } else if engine_parcial {
+            "integración parcial".to_string()
         } else {
             NO_DISPONIBLE.to_string()
         };
@@ -173,7 +186,7 @@ pub fn tamano_de(spec: &ModelSpec) -> String {
 /// El artefacto del modelo: el fichero local o el que se descarga.
 ///
 /// Es el **nombre** del artefacto, no su ruta: la ruta se enseña en
-/// `ropero path`, que es donde las rutas están.
+/// `ropero info`, que es donde las rutas están.
 ///
 /// El artefacto es el que dice el **formato** (R-MOD-6), y cada formato tiene
 /// el suyo:
@@ -284,7 +297,7 @@ fn motivo_de(grupo: &EngineGroup) -> String {
     }
 }
 
-/// El resumen de una línea de `ropero list` cuando no hay nada que listar.
+/// El resumen de una línea de `ropero models` cuando no hay nada que listar.
 pub fn empty_notice() -> String {
     "aviso: no hay modelos disponibles (instala motores y descarga modelos)".to_string()
 }

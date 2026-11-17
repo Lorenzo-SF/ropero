@@ -31,9 +31,8 @@ pub fn model_installed(spec: &ModelSpec, env: &Environment) -> bool {
         "qwen3.8-flash-next" => &["qwen3_8_flash_next_trellis_a25-v2.ninfer"],
         _ => return false,
     };
-    names
-        .iter()
-        .any(|name| models_dir(env).join(name).is_file())
+    let model_dir = models_dir(env).join(ropero_core::real_name(spec));
+    names.iter().any(|name| model_dir.join(name).is_file())
 }
 
 /// Descarga un modelo .ninfer y los ficheros companion con el descargador
@@ -55,7 +54,7 @@ pub fn pull_model(
             "el modelo Ignis debe declarar [download].repo como id del catálogo Ignis".to_string()
         })?;
     let catalog_id = id_de_descarga(catalog_id, env);
-    let out_dir = models_dir(env);
+    let out_dir = models_dir(env).join(ropero_core::real_name(spec));
     std::fs::create_dir_all(&out_dir)
         .map_err(|e| format!("no se pudo crear {}: {e}", out_dir.display()))?;
     let binary = crate::sys_engine::binary_of(manifest, env).ok_or_else(|| {

@@ -27,6 +27,7 @@ mod connect;
 mod discovery;
 mod gguffer;
 mod install;
+mod models;
 mod parser;
 mod remove;
 mod summary;
@@ -74,17 +75,23 @@ fn comando(matches: &ArgMatches) -> i32 {
         "install" => install::run(sub),
         "stop" => commands::stop(&parser::modelo(sub)),
         "gguffer" => gguffer::run(sub),
-        "status" => commands::status(),
+        "status" => commands::status(sub.get_one::<f64>("live").copied()),
         "doctor" => commands::doctor(),
-        "config" => commands::config(),
+        "config" => commands::config(sub.get_one::<String>("lang").map(String::as_str)),
         "connect" => connect::run(sub),
-        "list" => commands::list(tiene_all(sub)),
+        "models"
+            if sub
+                .get_one::<String>("action")
+                .is_some_and(|action| action == "add") =>
+        {
+            models::add(sub)
+        }
+        "models" => commands::list(tiene_all(sub)),
         "engines" => commands::engines(tiene_all(sub)),
         "template" => commands::template(),
         "validate" => commands::validate(),
-        "args" => commands::args(&parser::modelo(sub), &parser::tokens(sub)),
-        "levels" => commands::levels(&parser::modelo(sub)),
-        "path" => commands::path(&parser::modelo(sub)),
+        "command" => commands::args(&parser::modelo(sub)),
+        "info" => commands::info(&parser::modelo(sub)),
         "test" => test::run(sub),
         _ => 2,
     }

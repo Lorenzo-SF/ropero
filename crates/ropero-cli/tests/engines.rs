@@ -96,7 +96,10 @@ fn los_motores_incompatibles_dicen_por_que() {
 fn engines_help_sale_con_cero() {
     let (code, stdout, stderr) = run(&["engines", "--help"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    assert!(stdout.contains("USO:"), "stdout={stdout}");
+    assert!(
+        stdout.contains("USAGE:") || stdout.contains("USO:"),
+        "stdout={stdout}"
+    );
 }
 
 /// Un flag que el comando no conoce es un error de uso (exit 2).

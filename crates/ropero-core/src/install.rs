@@ -550,12 +550,12 @@ pub struct Menu {
 ///
 /// Y lleva el **título de su sección**, como el resto de las salidas: sin
 /// título, el menú se leía como un trozo suelto de la salida.
-pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
+pub fn menu_engines(cat: &Catalog, motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     let mut menu = Menu::default();
     let mut tabla = Tabla::nivel(1)
         .columna(Columna::numero("nº"))
         .columna(Columna::texto("motor").maximo(ANCHO_MAXIMO))
-        .columna(Columna::texto("color"))
+        .columna(Columna::texto("modelos soportados").maximo(ANCHO_MAXIMO))
         .columna(Columna::numero("puertos"))
         .columna(Columna::texto("estado"));
     for (indice, motor) in motores.iter().enumerate() {
@@ -564,7 +564,7 @@ pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
         tabla.fila(vec![
             Celda::plana((indice + 1).to_string()),
             Celda::motor(manifest.id.as_str(), manifest.color),
-            Celda::plana(manifest.color.as_str()),
+            Celda::plana(modelos_del_motor(cat, manifest.id)),
             Celda::plana(manifest.port_range.to_string()),
             Celda::plana(estado),
         ]);
@@ -572,6 +572,30 @@ pub fn menu_engines(motores: &[MotorDelMenu<'_>], paleta: &Palette) -> Menu {
     }
     menu.lineas.extend(lineas_de_menu(tabla, "MOTORES", paleta));
     menu
+}
+
+fn modelos_del_motor(cat: &Catalog, engine: EngineId) -> String {
+    let mut names = cat
+        .models
+        .iter()
+        .chain(cat.fired.iter())
+        .filter(|model| model.model.engine == engine)
+        .map(|model| {
+            model
+                .model
+                .alias
+                .as_deref()
+                .unwrap_or(&model.model.name)
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    if names.is_empty() {
+        "sin modelos registrados".into()
+    } else {
+        names.join(", ")
+    }
 }
 
 /// El menú de los modelos.
@@ -820,22 +844,6 @@ pub fn motor_ocupado(motor: &str, destino: &str) -> String {
     format!("{motor}: hay un fichero real en {destino}: no lo toco (quítalo o renómbralo)")
 }
 
-/// El mensaje de la vía `build`: todavía **no** se fabrica.
-///
-/// No dice "instalado" porque no lo está: la fabricación de un GGUF es
-/// `ropero-forge`, que aún no existe (doc B §4.10.4). La vía `download`,
-/// en cambio, **sí** baja el modelo de verdad.
-pub fn via_build_pendiente(modelo: &str) -> String {
-    format!("{modelo}: vía build · error: fabricar el GGUF todavía no está implementado")
-}
-
-/// La pista de la vía `build`: **qué hacer** (P-13).
-pub fn pista_build_pendiente() -> String {
-    "  (la fabricación de GGUFs es `ropero-forge`, que aún no existe: \
-     usa la vía download, o fabrica el GGUF a mano con `ropero gguffer`)"
-        .to_string()
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Los errores
 // ─────────────────────────────────────────────────────────────────────────────
@@ -909,7 +917,7 @@ impl fmt::Display for Error {
                  no hay forma de instalarlo (su artefacto se consigue a mano)"
             ),
             Error::ModeloDesconocido { nombre } => {
-                write!(f, "modelo desconocido: '{nombre}' (ropero list)")
+                write!(f, "modelo desconocido: '{nombre}' (ropero models)")
             }
             Error::MotorDesconocido { nombre } => {
                 write!(f, "motor desconocido: '{nombre}' (ropero engines)")
