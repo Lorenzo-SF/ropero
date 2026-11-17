@@ -63,6 +63,15 @@ impl Palette {
         }
     }
 
+    /// Pinta una lectura con un color ANSI de 256 colores elegido por umbral.
+    pub fn paint_code(&self, codigo: u8, texto: &str) -> String {
+        if self.enabled {
+            format!("{INICIO}{codigo}{FIN}{texto}{CIERRE}")
+        } else {
+            texto.to_string()
+        }
+    }
+
     /// El código ANSI de 256 colores de un color de la leyenda.
     ///
     /// `None` para el color "sin-color" y para el que no tiene equivalente.

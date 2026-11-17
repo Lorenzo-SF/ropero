@@ -118,6 +118,7 @@ fn files_golden(model: &str, gguf: &str) -> ResolvedFiles {
         mmproj: None,
         chat_template: None,
         gguf_dir: "/golden/gguf".to_string(),
+        artifacts_dir: "/golden/artifacts".to_string(),
         safetensors_dir: "/golden/safetensors".to_string(),
         model_path: String::new(),
     }
@@ -349,6 +350,7 @@ fn golden_argv_gyro_m() {
             mmproj: None,
             chat_template: None,
             gguf_dir: "/golden/gguf".to_string(),
+            artifacts_dir: "/golden/artifacts".to_string(),
             safetensors_dir: "/golden/safetensors".to_string(),
             model_path: "gyro/Gyro-M".to_string(),
         },

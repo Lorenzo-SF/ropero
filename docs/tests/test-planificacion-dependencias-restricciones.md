@@ -13,5 +13,7 @@ una tarea a la vez.
    en cada día).
 2. ¿Es único el makespan mínimo? Si no, da otro calendario con el mismo
    makespan.
-3. Si añades la restricción "el trabajador 2 no puede empezar antes del día
-   3", ¿cambia el makespan? Justifica.
+3. Si añades la restricción "el trabajador 2 no puede empezar antes de que
+   hayan transcurrido 3 días desde el inicio del plan", ¿cambia el makespan?
+   Justifica. Los días son unidades de tiempo y las tareas ocupan intervalos
+   semiabiertos `[inicio, fin)`.

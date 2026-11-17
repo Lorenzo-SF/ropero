@@ -79,11 +79,11 @@ fn un_test_se_elige_por_su_fichero_con_o_sin_ruta() {
 }
 
 #[test]
-fn todos_son_los_dieciseis_en_el_orden_del_indice() {
+fn todos_son_los_veinte_en_el_orden_del_indice() {
     let ids = selecciona(&bateria(), &Seleccion::Todos).expect("todos");
-    assert_eq!(ids.len(), 16);
+    assert_eq!(ids.len(), 20);
     assert_eq!(ids.first().map(String::as_str), Some("A1"));
-    assert_eq!(ids.last().map(String::as_str), Some("F2"));
+    assert_eq!(ids.last().map(String::as_str), Some("G4"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,13 +94,13 @@ fn todos_son_los_dieciseis_en_el_orden_del_indice() {
 fn el_brier_de_la_escala_va_de_cero_a_uno() {
     // B = 0 (confianza perfecta) → 1.0; B = 1 (confianza máxima en todo lo
     // errado) → 0.0.
-    let perfecto = "1. Canberra, 100\n2. 476, 100\n3. 206, 100\n4. 74, 100\n5. Enum.reject/2, 100\n6. Guadalupe Victoria, 100";
+    let perfecto = "1. Canberra, 100\n2. 476, 100\n3. 206, 100\n4. 74, 100\n5. Enum.reject/2, 100\n6. Yuri Gagarin, 100";
     let Puntuacion::Mecanica { score, detalle } = puntua("D2", perfecto) else {
         panic!("D2 con seis respuestas es mecánica");
     };
     assert_eq!(score, 1.0, "B=0: {detalle}");
 
-    let errado = "1. Sídney, 100\n2. 1453, 100\n3. 204, 100\n4. 76, 100\n5. Enum.filter/2, 100\n6. Antonio de Santa Anna, 100";
+    let errado = "1. Sídney, 100\n2. 1453, 100\n3. 204, 100\n4. 76, 100\n5. Enum.filter/2, 100\n6. Neil Armstrong, 100";
     let Puntuacion::Mecanica { score, detalle } = puntua("D2", errado) else {
         panic!("D2 con seis respuestas es mecánica");
     };
@@ -140,15 +140,18 @@ fn la_sexta_pregunta_no_acepta_la_negada_con_confianza_alta() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn solo_seis_tests_tienen_puntuador_mecanico() {
+fn los_diez_tests_mecanicos_incluyen_el_grupo_g() {
     let mecanicos: Vec<&str> = [
         "A1", "A2", "A3", "A4", "A5", "B1", "B2", "C1", "C2", "D1", "D2", "D3", "E1", "E2", "F1",
-        "F2",
+        "F2", "G1", "G2", "G3", "G4",
     ]
     .into_iter()
     .filter(|id| es_mecanico(id))
     .collect();
-    assert_eq!(mecanicos, ["D1", "D2", "D3", "E1", "F1", "F2"]);
+    assert_eq!(
+        mecanicos,
+        ["D1", "D2", "D3", "E1", "F1", "F2", "G1", "G2", "G3", "G4"]
+    );
 }
 
 #[test]
@@ -207,6 +210,10 @@ fn respuesta(id: &str, salida: &str) -> RespuestaTest {
             latencia_total_ms: 1000,
             primer_token_ms: None,
             tokens: Tokens::NoDisponible,
+            tokens_entrada: None,
+            tokens_salida: None,
+            tokens_razonamiento: None,
+            tokens_cache: None,
         },
         puntuacion: puntua(id, salida),
     }

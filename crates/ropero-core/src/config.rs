@@ -151,7 +151,7 @@ pub struct Ruta {
 }
 
 /// Overrides admitidos para un único engine.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct ConfigEngine {
     pub models_toml_dir: Option<Ruta>,
     pub artifacts_dir: Option<Ruta>,
@@ -160,6 +160,24 @@ pub struct ConfigEngine {
     pub port_min: Option<u16>,
     pub port_max: Option<u16>,
     pub color: Option<EngineColor>,
+    /// Clave Bearer opcional que exigen los endpoints de este motor.
+    /// Se redacta en todas las vistas de configuración.
+    pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for ConfigEngine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigEngine")
+            .field("models_toml_dir", &self.models_toml_dir)
+            .field("artifacts_dir", &self.artifacts_dir)
+            .field("gguf_dir", &self.gguf_dir)
+            .field("safetensors_dir", &self.safetensors_dir)
+            .field("port_min", &self.port_min)
+            .field("port_max", &self.port_max)
+            .field("color", &self.color)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 impl Ruta {
@@ -623,11 +641,24 @@ fn parse_engine_config(
                     )
                 })?);
             }
+            "api_key" => {
+                let Some(raw) = value.as_str() else {
+                    return Err(ErrorConfig::de_campo(&name, "", "debe ser una cadena"));
+                };
+                if raw.is_empty() || raw.contains(['\n', '\r']) {
+                    return Err(ErrorConfig::de_campo(
+                        &name,
+                        "[REDACTADO]",
+                        "la clave no puede estar vacía ni contener saltos de línea",
+                    ));
+                }
+                result.api_key = Some(raw.to_string());
+            }
             _ => {
                 return Err(ErrorConfig::de_campo(
                     &name,
                     value.to_string().as_str(),
-                    "campo desconocido (models_toml_dir, artifacts_dir, gguf_dir, safetensors_dir, port_min, port_max, color)",
+                    "campo desconocido (models_toml_dir, artifacts_dir, gguf_dir, safetensors_dir, port_min, port_max, color, api_key)",
                 ));
             }
         }
@@ -770,7 +801,7 @@ pub fn ejemplo_config(config: &Config) -> String {
         let gguf = config.gguf_dir_de(id);
         let safetensors = config.safetensors_dir_de(id);
         out.push_str(&format!(
-            "\n[engines.{}]\nmodels_toml_dir = \"{}\"\n{}gguf_dir = \"{}\"\nsafetensors_dir = \"{}\"\nport_min = {}\nport_max = {}\ncolor = \"{}\"\n",
+            "\n[engines.{}]\nmodels_toml_dir = \"{}\"\n{}gguf_dir = \"{}\"\nsafetensors_dir = \"{}\"\nport_min = {}\nport_max = {}\ncolor = \"{}\"\n# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n",
             id.as_str(),
             escapa_toml(&models.valor.to_string_lossy()),
             if id == EngineId::Ignis {

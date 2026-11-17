@@ -75,7 +75,7 @@ fn parse(engine: &str) -> Result<ModelSpec, ropero_core::ModelError> {
 
 /// Cada id canónico se acepta y se queda como es, sin aviso.
 #[test]
-fn los_ocho_ids_canonicos_se_aceptan_sin_aviso() {
+fn los_nueve_ids_canonicos_se_aceptan_sin_aviso() {
     for (id, esperado) in CANONICOS {
         let spec =
             parse(id).unwrap_or_else(|e| panic!("el id canónico '{id}' debe aceptarse: {e}"));
@@ -268,7 +268,7 @@ fn los_directorios_legacy_siguen_mapeando_a_su_motor() {
     }
 }
 
-/// Los ids canónicos son los de ADR-004, en el orden de la leyenda.
+/// Los ids canónicos son los del catálogo, en el orden de la leyenda.
 #[test]
 fn los_ids_canonicos_son_los_de_adr_004() {
     assert_eq!(
@@ -282,6 +282,7 @@ fn los_ids_canonicos_son_los_de_adr_004() {
             "vllm",
             "airllm",
             "strata",
+            "ignis",
         ]
     );
 }

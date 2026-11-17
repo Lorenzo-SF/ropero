@@ -15,6 +15,10 @@ const COMANDOS: &[(&str, &str)] = &[
     ("status", "status"),
     ("doctor", "doctor"),
     ("config", "config"),
+    (
+        "connect",
+        "connect (--list | --model MODELOS --agent AGENTE [--uninstall])",
+    ),
     ("list", "list [--all]"),
     ("template", "template"),
     ("engines", "engines [--all]"),
@@ -27,13 +31,13 @@ const COMANDOS: &[(&str, &str)] = &[
     ("path", "path <modelo>"),
     (
         "test",
-        "test [--modelo <id>] [--grupo A..F] [--test <id>] [--dimension <nombre>] [--todos]",
+        "test [--modelo <id>] [--grupo A..G] [--test <id>] [--dimension <nombre>] [--todos]",
     ),
 ];
 
 /// Los comandos están en la tabla, con su forma de invocación.
 #[test]
-fn los_once_comandos_estan_declarados() {
+fn los_comandos_estan_declarados() {
     for (nombre, uso) in COMANDOS {
         let cmd = COMMANDS
             .iter()

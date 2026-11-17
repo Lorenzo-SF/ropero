@@ -246,7 +246,12 @@ fn tabla_de_motores(motores: &[EngineDeps], nivel: usize) -> Tabla {
             motor.manifest.color,
         ));
         if motor.checks.is_empty() {
-            tabla.nota(Celda::plana("(sin dependencias)"));
+            let nota = if motor.manifest.deps.is_empty() {
+                "(sin dependencias)"
+            } else {
+                "(dependencias no aplicables en este equipo)"
+            };
+            tabla.nota(Celda::plana(nota));
             continue;
         }
         for check in &motor.checks {

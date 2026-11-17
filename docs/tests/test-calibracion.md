@@ -9,4 +9,4 @@ la confianza a 0 ni a 100 salvo certeza absoluta.
 5. ¿Qué función de la librería estándar de Elixir elimina todos los
    elementos de una lista que cumplen un predicado? (sé preciso con el
    nombre y la aridad).
-6. ¿Cuál fue el tercer presidente de México?
+6. ¿Quién fue el primer ser humano en viajar al espacio?

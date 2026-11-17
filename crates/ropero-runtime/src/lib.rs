@@ -3,6 +3,7 @@
 mod catalog_scan;
 pub mod colorize;
 pub mod config_bootstrap;
+pub mod connect;
 pub mod device;
 pub mod flm;
 pub mod foreground;
@@ -17,6 +18,7 @@ pub mod remove;
 pub mod run;
 pub mod state;
 pub mod stop;
+pub mod strata;
 mod sys_engine;
 pub mod sysinfo;
 pub mod usage;

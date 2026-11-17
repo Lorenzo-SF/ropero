@@ -63,6 +63,9 @@ pub enum StopOutcome {
     /// El PID del estado no es nuestro: no se tocó nada.
     Ajeno,
 
+    /// El grupo siguió activo incluso después de SIGKILL.
+    NoParado,
+
     /// No había estado para ese puerto.
     SinEstado,
 }
@@ -78,6 +81,9 @@ pub struct StopReport {
 
     /// Los puertos que no tenían estado.
     pub sin_estado: Vec<u16>,
+
+    /// Los puertos cuyo grupo de procesos siguió vivo tras SIGKILL.
+    pub no_parados: Vec<u16>,
 }
 
 impl StopReport {
@@ -88,7 +94,10 @@ impl StopReport {
 
     /// Si no se paró nada.
     pub fn vacio(&self) -> bool {
-        self.parados.is_empty() && self.ajenos.is_empty() && self.sin_estado.is_empty()
+        self.parados.is_empty()
+            && self.ajenos.is_empty()
+            && self.sin_estado.is_empty()
+            && self.no_parados.is_empty()
     }
 
     /// El texto para el usuario, en español.
@@ -113,6 +122,13 @@ impl StopReport {
             let puertos: Vec<String> = self.sin_estado.iter().map(|p| p.to_string()).collect();
             out.push_str(&format!(
                 "no hay ningún motor de ropero en {}\n",
+                puertos.join(", ")
+            ));
+        }
+        if !self.no_parados.is_empty() {
+            let puertos: Vec<String> = self.no_parados.iter().map(|p| p.to_string()).collect();
+            out.push_str(&format!(
+                "el grupo de procesos de {} sigue activo tras SIGKILL; se conserva el estado para poder reintentar\n",
                 puertos.join(", ")
             ));
         }
@@ -184,6 +200,13 @@ impl SysStopper {
             // 7. Red de seguridad: lo que ignore el TERM se lleva por
             // delante el KILL.
             stopper.kill(&esperada);
+            if !stopper.wait_exit(pid, Duration::from_secs(2)) && stopper.alive(pid) {
+                return StopOutcome::NoParado;
+            }
+        }
+
+        if stopper.alive(pid) {
+            return StopOutcome::NoParado;
         }
 
         clear_state(state_dir, port);
@@ -204,6 +227,7 @@ impl SysStopper {
                 StopOutcome::Parado => informe.parados.push(port),
                 StopOutcome::Ajeno => informe.ajenos.push(port),
                 StopOutcome::SinEstado => informe.sin_estado.push(port),
+                StopOutcome::NoParado => informe.no_parados.push(port),
             }
         }
         informe
@@ -232,6 +256,7 @@ impl SysStopper {
                 StopOutcome::Parado => informe.parados.push(port),
                 StopOutcome::Ajeno => informe.ajenos.push(port),
                 StopOutcome::SinEstado => informe.sin_estado.push(port),
+                StopOutcome::NoParado => informe.no_parados.push(port),
             }
         }
         informe

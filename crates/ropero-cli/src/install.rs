@@ -19,9 +19,9 @@
 
 use clap::ArgMatches;
 
-use ropero_core::EngineRow;
 use ropero_core::Palette;
 use ropero_core::install::{self, Decision, Token, Via};
+use ropero_core::{EngineId, EngineRow};
 
 /// `ropero install [<nada>|engines|models]`.
 pub fn run(sub: &ArgMatches) -> i32 {
@@ -62,6 +62,22 @@ fn engines(s: &crate::discovery::Scan, tokens: &[Token], force: bool) -> i32 {
     let sistema = ropero_runtime::capture_system_info();
     let filas = ropero_core::engine_rows(&s.engines, &sistema, true);
     let lista = install::nombres_de(tokens);
+    let fastflow_manual = filas.iter().find(|fila| {
+        fila.manifest.id == EngineId::FastFlowLm
+            && fila.compatible
+            && fila.manifest.install.as_ref().is_some_and(|spec| {
+                ropero_runtime::install::gestor_paquetes_disponible(spec, &s.env).is_none()
+            })
+    });
+    if fastflow_manual.is_some() {
+        aviso_fastflow_manual();
+        if lista
+            .iter()
+            .any(|nombre| matches!(nombre.as_str(), "fastflowlm" | "flm"))
+        {
+            return 1;
+        }
+    }
     let eleccion = if lista.is_empty() {
         match elegir_motores(&filas, &s.env) {
             Ok(elegidos) => elegidos,
@@ -116,7 +132,13 @@ fn elegir_motores(filas: &[EngineRow], env: &ropero_core::Environment) -> Result
     }
     let compatibles: Vec<install::MotorDelMenu<'_>> = filas
         .iter()
-        .filter(|f| f.compatible)
+        .filter(|f| {
+            f.compatible
+                && !(f.manifest.id == EngineId::FastFlowLm
+                    && f.manifest.install.as_ref().is_some_and(|spec| {
+                        ropero_runtime::install::gestor_paquetes_disponible(spec, env).is_none()
+                    }))
+        })
         .map(|f| install::MotorDelMenu {
             manifest: &f.manifest,
             instalado: ropero_runtime::engine_installed_with_env(&f.manifest, env),
@@ -128,6 +150,12 @@ fn elegir_motores(filas: &[EngineRow], env: &ropero_core::Environment) -> Result
         return Err(0);
     }
     ropero_runtime::install::pregunta_menu(&menu.lineas, &menu.nombres).map_err(|e| uso(&e))
+}
+
+fn aviso_fastflow_manual() {
+    ropero_core::err_line(
+        "fastflowlm: hay una NPU compatible, pero no encuentro apt-get ni pacman; instala FLM y sus dependencias manualmente según la guía oficial de Linux",
+    );
 }
 
 /// `ropero install models [<lista>]`.
@@ -216,13 +244,106 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
                 }
             }
             Via::Build => {
-                ropero_core::out_line(&install::via_build_pendiente(&elegido.nombre));
-                ropero_core::err_line(&install::pista_build_pendiente());
-                codigo = 1;
+                if fabrica_modelo(&elegido.nombre, elegido.spec, &s.env) != 0 {
+                    codigo = 1;
+                }
             }
         }
     }
     codigo
+}
+
+/// Fabrica el artefacto de catálogo delegando toda la lógica a ropero-forge.
+fn fabrica_modelo(
+    nombre: &str,
+    spec: &ropero_core::ModelSpec,
+    env: &ropero_core::Environment,
+) -> i32 {
+    ropero_core::out_line(&format!("{nombre}: vía build"));
+    let Some(build) = spec.build.as_ref() else {
+        ropero_core::err_line(&format!("error: {nombre} no declara una receta build"));
+        return 1;
+    };
+    let mut flags = ropero_forge::peticion::Flags {
+        turbo_llama: spec.model.engine == ropero_core::EngineId::TurboLlama,
+        keep_source: build.keep_source,
+        keep_intermedio: build.keep_intermedio,
+        no_mtp: build.no_mtp,
+        force: build.force,
+        ..Default::default()
+    };
+    if !build.repo.is_empty() {
+        if build.gguf {
+            let file = if build.gguf_file.is_empty() {
+                spec.files
+                    .gguf
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            } else {
+                build.gguf_file.clone()
+            };
+            flags.gguf = Some(if file.is_empty() {
+                build.repo.clone()
+            } else {
+                format!("{}/{}", build.repo, file)
+            });
+        } else {
+            flags.repo = Some(build.repo.clone());
+        }
+    }
+    flags.quants = build
+        .quant
+        .split([',', ';'])
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(str::to_string)
+        .collect();
+    if !build.imatrix.is_empty() {
+        flags.imatrix = Some(build.imatrix.clone());
+    }
+    if !build.imatrix_repo.is_empty() {
+        flags.imatrix_repo = Some(build.imatrix_repo.clone());
+    }
+    if !build.imatrix_file.is_empty() {
+        flags.imatrix_file = Some(build.imatrix_file.clone());
+    }
+    if !build.intermedio.is_empty() {
+        flags.intermedio = Some(build.intermedio.clone());
+    }
+    if !build.out.is_empty() {
+        flags.out = Some(build.out.clone());
+    }
+    if !build.out_principal.is_empty() {
+        flags.out_principal = Some(build.out_principal.clone());
+    }
+    if flags.out.is_none() && flags.out_principal.is_none() && spec.files.gguf.is_some() {
+        if let Some(gguf) = &spec.files.gguf {
+            let target = env
+                .engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf")
+                .join(gguf);
+            flags.out_principal = Some(target.to_string_lossy().into_owned());
+        }
+    }
+    let reporte = ropero_forge::gguffer(flags, env);
+    for linea in reporte.lineas {
+        ropero_core::out_line(&linea);
+    }
+    if let Some(error) = reporte.error {
+        ropero_core::err_line(&format!("error: {error}"));
+        if let ropero_forge::Error::Conversion { cola, .. } = &error {
+            for linea in cola.iter().rev().take(12).rev() {
+                ropero_core::err_line(&format!("  {linea}"));
+            }
+        }
+        if let Some(pista) = error.pista() {
+            ropero_core::err_line(&pista);
+        }
+        1
+    } else {
+        ropero_core::out_line(&format!("{nombre}: construido"));
+        0
+    }
 }
 
 /// Baja un modelo de verdad: la vía `download` llama a `hf`.

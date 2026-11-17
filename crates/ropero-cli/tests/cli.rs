@@ -250,31 +250,29 @@ fn la_ayuda_esta_en_espanol_y_sugiere_el_uso() {
 fn la_ayuda_alinea_las_descripciones_en_una_columna() {
     let (code, stdout, stderr) = run(&["--help"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    let mut columnas: Vec<usize> = Vec::new();
-    for linea in stdout.lines() {
-        let Some((clave, valor)) = linea.split_once(": ") else {
-            continue;
-        };
-        if clave.is_empty() || valor.is_empty() {
-            continue;
-        }
-        // Las entradas de la ayuda van un nivel dentro.
-        if !linea.starts_with("  ") || linea.starts_with("   ") {
-            continue;
-        }
-        columnas.push(linea.len() - valor.len());
-    }
+    let lineas: Vec<&str> = stdout.lines().collect();
+    let entradas: Vec<usize> = lineas
+        .iter()
+        .enumerate()
+        .filter_map(|(i, linea)| {
+            (linea.starts_with("  ")
+                && !linea.starts_with("   ")
+                && !linea.starts_with("  ropero <comando>")
+                && !linea.ends_with(':'))
+            .then_some(i)
+        })
+        .collect();
     assert!(
-        columnas.len() >= 10,
+        entradas.len() >= 10,
         "la ayuda no tiene entradas suficientes: stdout={}",
         stdout
     );
-    let primera = columnas[0];
-    for columna in &columnas {
-        assert_eq!(
-            *columna, primera,
-            "las descripciones no se alinean en la misma columna: stdout={}",
-            stdout
+    for i in entradas {
+        assert!(
+            lineas
+                .get(i + 1)
+                .is_some_and(|linea| linea.starts_with("    ")),
+            "cada comando debe llevar su descripción debajo, con sangría: stdout={stdout}"
         );
     }
 }

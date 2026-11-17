@@ -31,6 +31,10 @@ fn f2() -> RespuestaTest {
             latencia_total_ms: 1200,
             primer_token_ms: Some(300),
             tokens: Tokens::Uso(120),
+            tokens_entrada: Some(100),
+            tokens_salida: Some(20),
+            tokens_razonamiento: None,
+            tokens_cache: None,
         },
         puntuacion: puntua("F2", salida),
     }
@@ -46,6 +50,10 @@ fn f1() -> RespuestaTest {
             latencia_total_ms: 2000,
             primer_token_ms: None,
             tokens: Tokens::Aproximado(20),
+            tokens_entrada: None,
+            tokens_salida: None,
+            tokens_razonamiento: None,
+            tokens_cache: None,
         },
         puntuacion: puntua("F1", salida),
     }
@@ -60,6 +68,10 @@ fn a1() -> RespuestaTest {
             latencia_total_ms: 900,
             primer_token_ms: Some(120),
             tokens: Tokens::NoDisponible,
+            tokens_entrada: None,
+            tokens_salida: None,
+            tokens_razonamiento: None,
+            tokens_cache: None,
         },
         puntuacion: puntua("A1", "El vecino del verde vive en la casa 3\""),
     }
@@ -106,9 +118,10 @@ fn cada_test_sale_con_su_puntuacion_y_su_rendimiento() {
         "los tokens del motor: {linea_f2}"
     );
     assert!(
-        linea_f2.contains("100.0 tokens/s"),
+        linea_f2.contains("22.2 tokens salida/s"),
         "la velocidad: {linea_f2}"
     );
+    assert!(linea_f2.contains("333.3 tokens/s"), "prefill: {linea_f2}");
 }
 
 #[test]
@@ -372,7 +385,7 @@ fn el_informe_json_marca_el_test_pendiente_de_juez() {
 fn el_informe_json_lleva_el_grupo_y_el_perfil() {
     let json = ropero_bateria::json::parse(&informe().a_json()).expect("JSON");
     let grupos = json.get("grupos").expect("grupos").arr().expect("array");
-    assert_eq!(grupos.len(), 6, "los seis grupos de la batería");
+    assert_eq!(grupos.len(), 7, "los siete grupos de la batería");
     let f = grupos
         .iter()
         .find(|g| g.get("grupo").and_then(|g| g.as_str()) == Some("F"))
@@ -389,7 +402,7 @@ fn el_informe_json_lleva_el_grupo_y_el_perfil() {
         "el grupo A no tiene nota"
     );
     let perfil = json.get("perfil").expect("perfil").arr().expect("array");
-    assert_eq!(perfil.len(), 12, "las doce dimensiones");
+    assert_eq!(perfil.len(), 13, "las trece dimensiones");
 }
 
 #[test]

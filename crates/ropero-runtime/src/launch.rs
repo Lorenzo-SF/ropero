@@ -43,6 +43,10 @@ pub struct LaunchSpec {
     /// El nombre del motor, tal y como se escribe en el estado.
     pub engine_name: String,
 
+    /// Credencial opcional del endpoint del servidor. Se pasa por entorno,
+    /// nunca como argumento visible en la lista de procesos.
+    pub server_api_key: Option<String>,
+
     /// El binario del motor (o el comando con sus argumentos).
     pub program: PathBuf,
 

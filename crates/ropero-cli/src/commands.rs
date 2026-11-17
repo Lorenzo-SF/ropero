@@ -34,7 +34,7 @@ pub fn list(all: bool) -> i32 {
 /// `ropero status`: el estado de la máquina, tipo `nvidia-smi`.
 pub fn status() -> i32 {
     let maquina = ropero_runtime::capture_machine_state();
-    let texto = ropero_core::status::status_text(&maquina);
+    let texto = ropero_core::status::status_text_color(&maquina, &ropero_core::Palette::color());
     ropero_core::out(&texto, false);
     0
 }
@@ -246,6 +246,14 @@ pub fn doctor() -> i32 {
         ropero_core::out_line(&linea);
     }
     ropero_core::out_line("");
+    let sistema = ropero_runtime::capture_system_info();
+    let incompatibles: Vec<(String, Vec<String>)> = ropero_core::sorted_by_canonical_id(&s.engines)
+        .iter()
+        .filter_map(|m| {
+            let razones = ropero_core::evaluate_compat(m, &sistema).reasons_text();
+            (!razones.is_empty()).then(|| (m.label.clone(), razones))
+        })
+        .collect();
     let informe = ropero_core::doctor::DoctorReport {
         ropero: comprueba_ropero(),
         engines: ropero_core::sorted_by_canonical_id(&s.engines)
@@ -253,10 +261,20 @@ pub fn doctor() -> i32 {
             .map(|m| ropero_core::doctor::EngineDeps {
                 installed: ropero_runtime::engine_installed_with_env(m, &s.env),
                 manifest: m.clone(),
-                checks: comprueba_deps(&m.deps),
+                checks: if ropero_core::evaluate_compat(m, &sistema).es_compatible() {
+                    comprueba_deps(&m.deps)
+                } else {
+                    Vec::new()
+                },
             })
             .collect(),
     };
+    for (engine, razones) in incompatibles {
+        ropero_core::out_line(&format!(
+            "  {engine}: no disponible en este equipo ({})",
+            razones.join("; ")
+        ));
+    }
     for linea in informe.lines(&ropero_core::Palette::color()) {
         ropero_core::out_line(&linea);
     }

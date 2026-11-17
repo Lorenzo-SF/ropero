@@ -44,11 +44,11 @@ fn maquina() -> MachineState {
 fn el_status_muestra_cpu_gpu_ram_y_swap() {
     let texto = status_text(&maquina());
     assert!(texto.contains("CPU"), "texto={texto}");
-    assert!(texto.contains("dGPU"), "texto={texto}");
+    assert!(texto.contains("GPU"), "texto={texto}");
     assert!(texto.contains("RAM"), "texto={texto}");
     assert!(texto.contains("SWAP"), "texto={texto}");
     assert!(texto.contains("3.40 GHz"), "texto={texto}");
-    assert!(texto.contains("58.00 °C"), "texto={texto}");
+    assert!(texto.contains("58.0 °C"), "texto={texto}");
     assert!(texto.contains("NVIDIA GeForce RTX 5080"), "texto={texto}");
 }
 
@@ -63,11 +63,9 @@ fn la_ram_sale_en_uso_de_total() {
         .lines()
         .find(|l| l.contains("RAM"))
         .expect("debe salir la línea de la RAM");
-    let usado = linea
-        .find("8192.00 MB")
-        .expect("debe salir el uso de la RAM");
+    let usado = linea.find("8192.0").expect("debe salir el uso de la RAM");
     let total = linea
-        .find("32768.00 MB")
+        .find("32768.0")
         .expect("debe salir el total de la RAM");
     assert!(usado < total, "la RAM no sale en uso de total: {linea}");
 }
@@ -83,12 +81,8 @@ fn el_swap_sale_en_uso_de_total() {
         .lines()
         .find(|l| l.contains("SWAP"))
         .expect("debe salir la línea del swap");
-    let usado = linea
-        .find("1024.00 MB")
-        .expect("debe salir el uso del swap");
-    let total = linea
-        .find("8192.00 MB")
-        .expect("debe salir el total del swap");
+    let usado = linea.find("1024.0").expect("debe salir el uso del swap");
+    let total = linea.find("8192.0").expect("debe salir el total del swap");
     assert!(usado < total, "el swap no sale en uso de total: {linea}");
 }
 
@@ -97,8 +91,7 @@ fn el_swap_sale_en_uso_de_total() {
 fn lo_que_no_existe_dice_no_disponible() {
     let texto = status_text(&MachineState::default());
     assert!(texto.contains("no disponible"), "texto={texto}");
-    // La iGPU no está en Linux si no la hay: sale igual, diciendo que no.
-    assert!(texto.contains("iGPU"), "texto={texto}");
+    assert!(texto.contains("GPU  no disponible"), "texto={texto}");
 }
 
 /// El zram se enseña **aparte**: el swap lo incluye, pero no se confunde con
@@ -110,9 +103,9 @@ fn el_zram_se_enseña_aparte_del_swap() {
     m.memory.swap_used_mb = medida(31698.0, "MB");
     let texto = status_text(&m);
     assert!(texto.contains("zram"), "texto={texto}");
-    assert!(texto.contains("31698.00 MB"), "texto={texto}");
+    assert!(texto.contains("31698.0/8192.0 MB"), "texto={texto}");
     // Y el zram se nombra con su tamaño, para que no se confunda.
-    assert!(texto.contains("31186.00 MB de zram"), "texto={texto}");
+    assert!(texto.contains("zram 31186.00 MB"), "texto={texto}");
 }
 
 /// Sin zram, el swap es el del kernel y no se habla de zram.
@@ -122,7 +115,7 @@ fn sin_zram_no_se_mentiona_el_zram() {
     m.memory.zram_mb = None;
     let texto = status_text(&m);
     assert!(!texto.contains("zram"), "texto={texto}");
-    assert!(texto.contains("512.00 MB"), "texto={texto}");
+    assert!(texto.contains("512.0/8192.0 MB"), "texto={texto}");
 }
 
 /// La iGPU sale cuando la hay (sólo Linux).
@@ -146,37 +139,22 @@ fn los_kb_se_convierten_en_mb() {
     assert_eq!(ropero_core::status::bytes_a_mb(1024.0 * 1024.0), 1.0);
 }
 
-/// Los números del `status` van **a la derecha**: el reloj y la temperatura
-/// son números, como el uso y el total de la memoria.
-///
-/// La sección usaba dos criterios para el mismo tipo de dato: el reloj y la
-/// temperatura a la izquierda, el uso y el total a la derecha.
+/// El formato compacto conserva recursos y lecturas sin una cabecera ancha.
 #[test]
-fn los_numeros_del_status_van_a_la_derecha() {
+fn el_status_es_compacto_y_muestra_las_lecturas() {
     let texto = status_text(&maquina());
-    let lineas: Vec<&str> = texto.lines().collect();
-    let cabecera = lineas
-        .iter()
-        .find(|l| l.contains("reloj"))
-        .expect("la cabecera de los procesadores");
-    let fila = lineas
-        .iter()
-        .find(|l| l.contains("CPU"))
-        .expect("la fila de la CPU");
-    // El fin de la columna del reloj: el del título y el del dato, el mismo.
-    let fin = |linea: &str, texto: &str| {
-        let byte = linea.find(texto).expect("debe salir el texto");
-        ropero_core::ancho_visible(&linea[..byte]) + ropero_core::ancho_visible(texto)
-    };
-    assert_eq!(
-        fin(cabecera, "reloj"),
-        fin(fila, "3.40 GHz"),
-        "el reloj no va a la derecha: {cabecera} / {fila}"
+    assert!(
+        texto.lines().count() <= 7,
+        "status demasiado ancho: {texto}"
     );
-    assert_eq!(
-        fin(cabecera, "temperatura"),
-        fin(fila, "58.00 °C"),
-        "la temperatura no va a la derecha: {cabecera} / {fila}"
+    assert!(texto.contains("CPU  3.40 GHz · 58.0 °C"), "texto={texto}");
+    assert!(
+        texto.contains("RAM  8192.0/32768.0 MB (25%)"),
+        "texto={texto}"
+    );
+    assert!(
+        !texto.contains("recurso"),
+        "no debe imprimir tabla: {texto}"
     );
 }
 
@@ -321,10 +299,12 @@ fn el_doctor_empieza_por_las_dependencias_de_ropero() {
 /// Un motor sin dependencias lo dice.
 #[test]
 fn un_motor_sin_dependencias_lo_dice() {
+    let mut manifiesto = motor(EngineId::LlamaServer);
+    manifiesto.deps.clear();
     let informe = DoctorReport {
         ropero: vec![ok("git")],
         engines: vec![EngineDeps {
-            manifest: motor(EngineId::LlamaServer),
+            manifest: manifiesto,
             installed: true,
             checks: vec![],
         }],

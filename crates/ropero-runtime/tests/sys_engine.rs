@@ -138,6 +138,7 @@ fn un_motor_muerto_se_recoge_y_no_deja_zombi() {
         model: "groot".to_string(),
         engine: EngineId::LlamaServer,
         engine_name: "llama-server".to_string(),
+        server_api_key: None,
         program: PathBuf::from("/bin/sh"),
         argv: vec!["-c".to_string(), "exit 1".to_string()],
         level: "think".to_string(),

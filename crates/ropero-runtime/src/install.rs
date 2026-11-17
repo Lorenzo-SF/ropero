@@ -196,7 +196,8 @@ pub use ropero_core::install::EstadoMotor;
 
 /// Instala un motor: **sólo crea el enlace** (R-INST-1).
 ///
-/// El nombre del enlace es el `basename` del binario resuelto (R-INST-25).
+/// El nombre del enlace usa el basename del binario resuelto; Turbo-Llama
+/// lo prefija para no pisar el `llama-server` oficial (R-INST-25).
 pub fn instala_motor(
     manifest: &EngineManifest,
     env: &Environment,
@@ -512,12 +513,16 @@ fn ejecutables_compilados(source_dir: &Path, principal: &Path) -> Result<Vec<Pat
     let build_dir = source_dir.join("build-ropero");
     let mut por_nombre = std::collections::BTreeMap::new();
     for bin_dir in [build_dir.join("bin"), build_dir.join("install/bin")] {
-        let entries = std::fs::read_dir(&bin_dir).map_err(|e| {
-            format!(
-                "no puedo leer los ejecutables de {}: {e}",
-                bin_dir.display()
-            )
-        })?;
+        let entries = match std::fs::read_dir(&bin_dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                return Err(format!(
+                    "no puedo leer los ejecutables de {}: {e}",
+                    bin_dir.display()
+                ));
+            }
+        };
         for entry in entries {
             let entry = entry
                 .map_err(|e| format!("no puedo leer una entrada de {}: {e}", bin_dir.display()))?;
@@ -611,6 +616,10 @@ fn compila_motor(
     env: &Environment,
     force: bool,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
+    prepara_dependencias_sistema(install, env)?;
+    if manifest.id == ropero_core::EngineId::FastFlowLm {
+        valida_runtime_flm(env)?;
+    }
     let source = install
         .source
         .as_deref()
@@ -655,7 +664,20 @@ fn compila_motor(
             )
         })?;
     }
-    let mut source_exists = source_dir.join("CMakeLists.txt").is_file();
+    let cmake_source = if let Some(subdir) = install.source_subdir.as_deref() {
+        let relative = Path::new(subdir);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err("install.source_subdir debe ser una ruta relativa segura".to_string());
+        }
+        source_dir.join(relative)
+    } else {
+        source_dir.clone()
+    };
+    let mut source_exists = cmake_source.join("CMakeLists.txt").is_file();
     if source_exists && !force {
         if !hay_tty() {
             return Err(format!(
@@ -697,8 +719,16 @@ fn compila_motor(
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
         }
-        let output = Command::new(git)
-            .args(["clone", "--depth", "1", source])
+        let mut clone = Command::new(git);
+        clone.args(["clone", "--depth", "1"]);
+        if install.recursive {
+            clone.args(["--recurse-submodules", "--shallow-submodules"]);
+        }
+        if let Some(source_ref) = &install.source_ref {
+            clone.args(["--branch", source_ref]);
+        }
+        let output = clone
+            .arg(source)
             .arg(&source_dir)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -712,11 +742,17 @@ fn compila_motor(
     let mut configure = Command::new(&cmake);
     configure
         .arg("-S")
-        .arg(&source_dir)
+        .arg(&cmake_source)
         .arg("-B")
         .arg(&build_dir);
     configure.args(["-G", "Ninja"]);
     configure.args(&args);
+    if matches!(manifest.id, ropero_core::EngineId::FastFlowLm) {
+        configure.arg(format!(
+            "-DCMAKE_XCLBIN_PREFIX={}",
+            source_dir.join("build-ropero/install/share/flm").display()
+        ));
+    }
     let status = configure
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -767,6 +803,194 @@ fn compila_motor(
         ));
     }
     Ok((executable, Some(source_dir)))
+}
+
+/// Instala dependencias declaradas por el manifiesto usando el gestor del
+/// sistema. El propio gestor solicita privilegios y confirma los cambios.
+fn prepara_dependencias_sistema(
+    install: &ropero_core::EngineInstallSpec,
+    env: &Environment,
+) -> Result<(), String> {
+    if install.system_packages.is_empty() {
+        return Ok(());
+    }
+    let gestor = gestor_paquetes_disponible(install, env).ok_or_else(|| {
+            let instrucciones = install
+                .system_packages
+                .iter()
+                .map(|(manager, pkgs)| format!("{manager}: {}", pkgs.join(" ")))
+                .collect::<Vec<_>>()
+                .join("; ");
+            format!(
+                "no encuentro un gestor de paquetes compatible (pacman o apt-get); dependencias declaradas: {instrucciones}"
+            )
+        })?;
+    let paquetes = install.system_packages.get(gestor)
+        .or_else(|| if gestor == "apt" { install.system_packages.get("apt-get") } else { None })
+        .ok_or_else(|| {
+        format!(
+            "el manifiesto no declara paquetes de sistema para {gestor}; no puedo completar la instalación de FLM"
+        )
+    })?;
+    let faltantes: Vec<_> = paquetes
+        .iter()
+        .filter(|paquete| !paquete_instalado(gestor, paquete, env))
+        .collect();
+    if faltantes.is_empty() {
+        return Ok(());
+    }
+
+    let es_root = Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0");
+    if !es_root && !hay_tty() {
+        return Err(format!(
+            "faltan dependencias de sistema: {}. Ejecuta `ropero install engines fastflowlm` desde una terminal para instalarlas con sudo",
+            faltantes
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
+    let sudo = if es_root {
+        None
+    } else {
+        Some(which_en(env, "sudo").ok_or_else(|| {
+            format!(
+                "faltan dependencias de sistema: {}. Instálalas como administrador",
+                faltantes
+                    .iter()
+                    .map(|p| p.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        })?)
+    };
+    let ejecutable_gestor = if gestor == "apt" && which_en(env, "apt-get").is_some() {
+        "apt-get"
+    } else {
+        gestor
+    };
+    let mut command = sudo
+        .as_ref()
+        .map(Command::new)
+        .unwrap_or_else(|| Command::new(ejecutable_gestor));
+    if sudo.is_some() {
+        command.arg(ejecutable_gestor);
+    }
+    match gestor {
+        "pacman" => {
+            command.args(["-S", "--needed"]);
+        }
+        "apt-get" | "apt" => {
+            command.arg("install");
+        }
+        _ => unreachable!(),
+    }
+    command.args(faltantes.iter().map(|p| p.as_str()));
+    let status = command
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|e| format!("no se pudo ejecutar el gestor {gestor}: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "el gestor {gestor} no pudo instalar las dependencias de FastFlowLM (salida {status})"
+        ));
+    }
+    let que_siguen_faltando: Vec<_> = faltantes
+        .into_iter()
+        .filter(|paquete| !paquete_instalado(gestor, paquete, env))
+        .collect();
+    if !que_siguen_faltando.is_empty() {
+        return Err(format!(
+            "el gestor {gestor} terminó sin instalar estos paquetes: {}",
+            que_siguen_faltando
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(" ")
+        ));
+    }
+    Ok(())
+}
+
+/// Gestor declarado por el motor que está disponible en el `PATH` capturado.
+/// Devuelve sólo métodos cuya invocación conoce Ropero; no infiere gestores
+/// por el sistema operativo ni intenta instalar con una receta ajena.
+pub fn gestor_paquetes_disponible(
+    install: &ropero_core::EngineInstallSpec,
+    env: &Environment,
+) -> Option<&'static str> {
+    if install.system_packages.contains_key("pacman") && which_en(env, "pacman").is_some() {
+        return Some("pacman");
+    }
+    let declara_apt = install.system_packages.contains_key("apt-get")
+        || install.system_packages.contains_key("apt");
+    if declara_apt {
+        if which_en(env, "apt-get").is_some() {
+            return Some("apt-get");
+        }
+        if which_en(env, "apt").is_some() {
+            return Some("apt");
+        }
+    }
+    None
+}
+
+fn paquete_instalado(gestor: &str, paquete: &str, env: &Environment) -> bool {
+    let (program, args): (&str, Vec<&str>) = match gestor {
+        "pacman" => ("pacman", vec!["-Qq", paquete]),
+        "apt-get" | "apt" => ("dpkg-query", vec!["-W", "-f=${db:Status-Status}", paquete]),
+        _ => return false,
+    };
+    let Some(program) = which_en(env, program) else {
+        return false;
+    };
+    Command::new(program)
+        .args(args)
+        .output()
+        .ok()
+        .is_some_and(|output| {
+            output.status.success()
+                && (gestor == "pacman"
+                    || String::from_utf8_lossy(&output.stdout).trim() == "installed")
+        })
+}
+
+/// `flm validate` ve el nodo DRM, pero el motor abre la NPU a través de XRT.
+/// Exige que el plugin esté cargable y que XRT enumere al menos una NPU antes
+/// de gastar tiempo compilando el servidor.
+fn valida_runtime_flm(env: &Environment) -> Result<(), String> {
+    let xrt_smi = which_en(env, "xrt-smi")
+        .ok_or_else(|| "falta xrt-smi; instala XRT y xrt-plugin-amdxdna".to_string())?;
+    let output = Command::new(xrt_smi)
+        .arg("examine")
+        .output()
+        .map_err(|e| format!("no se pudo ejecutar xrt-smi examine: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let salida = format!("{stdout}\n{stderr}");
+    let tabla = salida
+        .split_once("Device(s) Present")
+        .map(|(_, dispositivos)| dispositivos)
+        .unwrap_or_default();
+    if !output.status.success()
+        || tabla.contains("0 devices found")
+        || !tabla.contains("NPU")
+        || salida.contains("Failed to open library")
+    {
+        return Err(format!(
+            "XRT no puede usar la NPU: `xrt-smi examine` no enumera un dispositivo. Comprueba que `xrt` y `xrt-plugin-amdxdna` sean compatibles entre sí y vuelve a ejecutar `xrt-smi examine`. FLM no puede quedar listo hasta que XRT detecte la NPU.\n{}",
+            salida.trim()
+        ));
+    }
+    Ok(())
 }
 
 fn valida_ruta_fuente_segura(home: &Path, source_dir: &Path) -> Result<(), String> {
@@ -887,7 +1111,10 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{compila_motor, enlaza_ejecutables};
+    use super::{
+        compila_motor, enlaza_ejecutables, gestor_paquetes_disponible,
+        prepara_dependencias_sistema, valida_runtime_flm,
+    };
     use ropero_core::{
         DetectSpec, EngineColor, EngineId, EngineInstallSpec, EngineManifest, Environment,
         Maturity, PortRange,
@@ -903,6 +1130,85 @@ mod tests {
             permissions.set_mode(0o755);
             std::fs::set_permissions(path, permissions).unwrap();
         }
+    }
+
+    #[test]
+    fn flm_preflight_exige_que_xrt_enumere_una_npu() {
+        let base = std::env::temp_dir().join(format!("ropero-flm-xrt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), base.display().to_string());
+        let env = Environment::new(vars, &base, &base);
+        executable(
+            &base.join("xrt-smi"),
+            "#!/bin/sh\necho 'Device(s) Present'\necho '|[0000:66:00.1]|NPU Strix|'\n",
+        );
+        assert!(valida_runtime_flm(&env).is_ok());
+
+        executable(
+            &base.join("xrt-smi"),
+            "#!/bin/sh\necho 'Device(s) Present'\necho '0 devices found'\n",
+        );
+        let error = valida_runtime_flm(&env).unwrap_err();
+        assert!(error.contains("XRT no puede usar la NPU"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn dependencias_sistema_no_piden_privilegios_si_ya_estan_instaladas() {
+        let base = std::env::temp_dir().join(format!("ropero-pkg-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        executable(&base.join("pacman"), "#!/bin/sh\nexit 0\n");
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), base.display().to_string());
+        let env = Environment::new(vars, &base, &base);
+        let install = EngineInstallSpec {
+            system_packages: BTreeMap::from([(
+                "pacman".to_string(),
+                vec!["xrt".to_string(), "boost".to_string()],
+            )]),
+            ..EngineInstallSpec::default()
+        };
+        assert!(prepara_dependencias_sistema(&install, &env).is_ok());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn apt_sin_apt_get_cuenta_como_gestor_debian() {
+        let base = std::env::temp_dir().join(format!("ropero-apt-only-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        executable(&base.join("apt"), "#!/bin/sh\nexit 0\n");
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), base.display().to_string());
+        let env = Environment::new(vars, &base, &base);
+        let install = EngineInstallSpec {
+            system_packages: BTreeMap::from([("apt-get".to_string(), vec!["cmake".to_string()])]),
+            ..EngineInstallSpec::default()
+        };
+        assert_eq!(gestor_paquetes_disponible(&install, &env), Some("apt"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn dependencias_sistema_informa_si_hacen_falta_privilegios_y_terminal() {
+        let base = std::env::temp_dir().join(format!("ropero-pkg-missing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        executable(&base.join("pacman"), "#!/bin/sh\nexit 1\n");
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), base.display().to_string());
+        let env = Environment::new(vars, &base, &base);
+        let install = EngineInstallSpec {
+            system_packages: BTreeMap::from([("pacman".to_string(), vec!["xrt".to_string()])]),
+            ..EngineInstallSpec::default()
+        };
+        let error = prepara_dependencias_sistema(&install, &env).unwrap_err();
+        assert!(error.contains("xrt"));
+        assert!(error.contains("terminal"));
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

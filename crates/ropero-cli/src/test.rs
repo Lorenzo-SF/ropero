@@ -10,7 +10,7 @@ use clap::ArgMatches;
 use ropero_bateria::seleccion::{Opciones, seleccion_de};
 use ropero_runtime::inferencia::{ErrorInferencia, tira};
 
-/// `ropero test [--modelo <id>] [--grupo A..F] [--test <id>] [--dimension <n>]`.
+/// `ropero test [--modelo <id>] [--grupo A..G] [--test <id>] [--dimension <n>]`.
 pub fn run(sub: &ArgMatches) -> i32 {
     let opciones = Opciones {
         grupo: valor(sub, "grupo"),

@@ -1,5 +1,7 @@
 # ropero
 
+[English](README.en.md) · **Español**
+
 **ropero** es una CLI que sirve modelos de lenguaje locales con el motor que
 mejor rinda en cada máquina. Lee modelos declarados en TOML, arranca el motor
 adecuado, comprueba que está listo y expone una puerta compatible con la API de
@@ -33,22 +35,15 @@ usuario en `$XDG_CONFIG_HOME/ropero/models/` (o `~/.config/ropero/models/`).
 El usuario debe colocar allí sus TOML. Los overrides `ROPERO_MODELS_DIR` y
 `ROPERO_ROOT` se reservan para desarrollo y pruebas.
 
-### Qué tiene ya la v2
+### Estado de la v2
 
-- Workspace de seis crates: `ropero-core`, `ropero-runtime`, `ropero-download`,
-  `ropero-forge`, `ropero-server` y `ropero-cli`.
-- Toolchain fijado a Rust 1.100.0 y edition 2024.
-- CI, los tres ADR y el test de arquitectura.
-- Modelo de datos, validador del TOML y catálogo, con errores `ruta:línea`.
-- Montaje del argv, incluidos `replace`, `requires`, placeholders y alias.
-- Comandos `validate`, `list`, `template`, `args`, `levels` y `path`.
-- Golden master del argv contra la v1 y dominio puro verificado por test.
-- Batería actual: 156 tests pasados y 2 ignorados; `ropero-cli` tiene 394
-  líneas y `ropero-core` no usa E/S.
-
-La siguiente fase es F2 (motores): los identificadores de motor ya existen,
-pero todavía no hay manifiestos de motor. Después siguen runtime, estado y
-puertos, descargas, forja GGUF, endpoint, instalación v2 y convivencia final.
+La v2 es un workspace Rust activo y todavía está en desarrollo; no se presenta
+como reemplazo publicado de la v1. Incluye CLI, catálogo TOML y manifiestos de
+motores, configuración externa, arranque y parada, instalación, generación de
+GGUF, conexiones con agentes y una batería interna de evaluación. La cobertura y
+el grado de soporte dependen del comando, el motor y el agente; consulta
+`ropero --help`, el changelog y la especificación antes de asumir que un flujo
+está completo.
 
 ## Usar la v1
 
@@ -91,7 +86,7 @@ cargo run --locked -p ropero-cli -- config
 cargo run --locked -p ropero-cli -- list --all  # catálogo del usuario
 ```
 
-### Catálogo, configuración y overrides (v2, working tree)
+### Catálogo, configuración y overrides (v2)
 
 En uso normal, el catálogo es externo en
 `$XDG_CONFIG_HOME/ropero/models/<motor>/` (o `~/.config/ropero/models/<motor>/`)
@@ -124,6 +119,18 @@ Comandos de diagnóstico/configuración: `ropero config` (rutas y origen),
 `ropero doctor` (estado de configuración y dependencias) y `ropero template`
 (plantilla sugerida, sin escribirla). Estos comandos no modifican artefactos de
 modelos; el bootstrap idempotente de configuración puede ejecutarse si falta.
+
+`ropero connect --list` muestra las integraciones disponibles. Por ejemplo,
+`ropero connect --model qwen --agent opencode` registra el modelo; separa varios
+modelos con comas o punto y coma y usa `--uninstall` para retirarlos. Los
+providers OpenCode, Pi, OpenClaw (`claw` es alias), Codex, Hermes y Kilo se
+agrupan por engine; VS Code y Copilot usan Custom Endpoint; CodeBuddy y Droid
+guardan el endpoint en cada entrada custom. Aider registra endpoint y clave
+por modelo en sus archivos oficiales de model settings/metadata. MCode usa su
+CLI oficial; como ésta elimina providers completos, `--uninstall` requiere
+seleccionar todos los modelos Ropero de ese engine. Claude Code requiere la API
+Anthropic Messages, que los engines OpenAI-compatible de Ropero no exponen
+directamente.
 
 ## La documentación
 

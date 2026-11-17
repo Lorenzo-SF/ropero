@@ -63,6 +63,13 @@ impl Default for SysEngine {
 impl Engine for SysEngine {
     fn spawn(&self, spec: &LaunchSpec, port: u16) -> Result<Spawned, String> {
         let mut command = Command::new(&spec.program);
+        if let Some(key) = &spec.server_api_key {
+            if spec.engine == ropero_core::EngineId::Ignis {
+                command.env("IGNIS_SERVER_API_KEY", key);
+            } else {
+                command.env("ROPERO_API_KEY", key);
+            }
+        }
         if spec.engine == ropero_core::EngineId::Ignis {
             // Ignis takes its listener as HOST:PORT, whereas the other
             // engines managed here take a separate --port argument.
@@ -268,7 +275,7 @@ pub struct OsStopper;
 
 impl crate::stop::Stopper for OsStopper {
     fn alive(&self, pid: u32) -> bool {
-        vivo_de_verdad(pid)
+        grupo_vivo(pid)
     }
 
     fn identidad(&self, pid: u32) -> Option<crate::process::ProcIdentity> {
@@ -296,6 +303,73 @@ impl crate::stop::Stopper for OsStopper {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+    }
+}
+
+/// Comprueba el grupo privado que se asigna al arrancar cada engine.
+/// Mirar sólo al líder falla cuando el wrapper sale y deja un servidor hijo.
+fn grupo_vivo(pgid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            if entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+                .is_none()
+            {
+                continue;
+            }
+            let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
+                continue;
+            };
+            let Some(end) = stat.rfind(')') else { continue };
+            let fields: Vec<&str> = stat[end + 1..].split_whitespace().collect();
+            // Tras comm: state (0), ppid (1), pgrp (2).
+            if fields.first().is_some_and(|state| *state != "Z")
+                && fields.get(2).and_then(|s| s.parse::<u32>().ok()) == Some(pgid)
+            {
+                return true;
+            }
+        }
+        // Compatibilidad con procesos de estados antiguos que no crearon
+        // un grupo privado: al menos vigilar el PID que identifica el estado.
+        vivo_de_verdad(pgid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let result = libc_killpg(pgid as i32, 0);
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(1)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod stop_group_tests {
+    use super::{Signal, grupo_vivo, signal_group};
+    use std::os::unix::process::CommandExt;
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn detecta_el_servidor_hijo_aunque_su_wrapper_haya_salido() {
+        let mut wrapper = Command::new("sh")
+            .args(["-c", "sleep 30 &"])
+            .process_group(0)
+            .spawn()
+            .expect("crear wrapper de prueba");
+        let pgid = wrapper.id();
+        wrapper.wait().expect("esperar al wrapper");
+        let seguia_activo = grupo_vivo(pgid);
+        signal_group(pgid, Signal::KILL);
+        let limite = Instant::now() + Duration::from_secs(2);
+        while grupo_vivo(pgid) && Instant::now() < limite {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(seguia_activo, "el grupo debe detectar el hijo del wrapper");
+        assert!(!grupo_vivo(pgid), "SIGKILL debe vaciar el grupo");
     }
 }
 

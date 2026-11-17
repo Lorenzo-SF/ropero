@@ -23,14 +23,14 @@ fn nadie() -> Opciones {
 }
 
 #[test]
-fn sin_seleccion_es_todos_y_devuelve_los_16_en_orden_del_indice() {
+fn sin_seleccion_es_todos_y_devuelve_los_20_en_orden_del_indice() {
     let bateria = bateria_real();
     let seleccion = seleccion_de(nadie()).expect("sin opciones es todos");
     assert_eq!(seleccion, Seleccion::Todos);
     let ids = selecciona(&bateria, &seleccion).expect("todos existe");
-    assert_eq!(ids.len(), 16);
+    assert_eq!(ids.len(), 20);
     assert_eq!(ids.first().expect("el primer test"), "A1");
-    assert_eq!(ids.last().expect("el último test"), "F2");
+    assert_eq!(ids.last().expect("el último test"), "G4");
     assert_eq!(ids[3], "A4", "el orden es el del índice, no el alfabético");
 }
 

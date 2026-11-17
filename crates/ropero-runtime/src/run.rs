@@ -217,6 +217,22 @@ pub fn preparar(
     } else {
         model_argv
     };
+    if engine.id == EngineId::Strata {
+        let profile = crate::strata::profile_for(&engine, spec, env).map_err(RunOutcome::error)?;
+        argv = crate::strata::serve_argv(&profile);
+    }
+    // llama-server y turbo-llama no reciben el GGUF como argv implícito:
+    // sin `-m`, versiones recientes arrancan un router vacío y el servidor
+    // rechaza `model=<alias>` aunque Ropero haya encontrado el artefacto.
+    if matches!(engine.id, EngineId::LlamaServer | EngineId::TurboLlama)
+        && spec.model.format == ropero_core::ModelFormat::Gguf
+        && !argv
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-m" | "--model"))
+        && let Some(gguf) = ctx.files.gguf.as_deref()
+    {
+        argv.extend(["-m".into(), gguf.into()]);
+    }
     if let Some(level) = peticion.log_level.as_deref() {
         match engine.id {
             EngineId::LlamaServer | EngineId::TurboLlama => {
@@ -554,7 +570,7 @@ pub fn para_todo(modelo: &str, env: &Environment) -> i32 {
     } else {
         ropero_core::out_line(texto);
     }
-    0
+    if informe.no_parados.is_empty() { 0 } else { 1 }
 }
 
 /// Registra el uso de un arranque. No guarda secretos.
@@ -622,7 +638,12 @@ pub fn arranca(
 
     // El modelo tiene que estar disponible. Para FLM delegado, el tag declarado
     // es suficiente para intentar servir (el almacén es de FLM).
-    let model_ok = if ropero_core::flm::is_flm_model(&plan.spec)
+    let model_ok = if plan.engine.id == EngineId::Strata {
+        plan.argv
+            .windows(2)
+            .find(|pair| pair[0] == "--profile")
+            .is_some_and(|pair| std::path::Path::new(&pair[1]).is_file())
+    } else if ropero_core::flm::is_flm_model(&plan.spec)
         && ropero_core::flm::primary_tag(&plan.spec).is_some()
         && crate::flm::delegated(&plan.engine)
     {
@@ -767,10 +788,23 @@ pub fn arranca(
     let clave = peticion
         .api_key
         .clone()
-        .filter(|_| peticion.quiere_api_key());
+        .filter(|_| peticion.quiere_api_key())
+        .or_else(|| {
+            (!peticion.no_api_key)
+                .then(|| {
+                    env.config_resuelta()
+                        .engines
+                        .get(&plan.engine.id)
+                        .and_then(|e| e.api_key.clone())
+                })
+                .flatten()
+        });
+    let server_api_key = (plan.engine.id == EngineId::Ignis)
+        .then(|| clave.clone())
+        .flatten();
     let probe = crate::probe::NetProbe {
         timeout: Duration::from_secs(3),
-        api_key: clave,
+        api_key: clave.clone(),
     };
 
     // 2. Los puertos ocupados del rango del motor.
@@ -818,6 +852,7 @@ pub fn arranca(
         model: plan.spec.model.name.clone(),
         engine: plan.engine.id,
         engine_name: plan.engine.id.as_str().to_string(),
+        server_api_key,
         program: binario,
         argv: plan.argv.clone(),
         level: plan.level.clone(),

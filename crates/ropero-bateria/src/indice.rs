@@ -1,7 +1,7 @@
 //! La rúbrica de la batería: el índice, parseado y **validado**.
 //!
-//! `docs/tests/indice.md` declara 16 tests en 6 grupos, el peso de cada test,
-//! el recuento y el peso de cada grupo, y el perfil de 12 dimensiones. Un
+//! `docs/tests/indice.md` declara 20 tests en 7 grupos, el peso de cada test,
+//! el recuento y el peso de cada grupo, y el perfil de 13 dimensiones. Un
 //! índice que no cuadra **no se interpreta**: se dice la línea y el valor
 //! recibido. Aquí no se inventa ningún peso, ningún total ni ninguna
 //! dimensión.
@@ -11,7 +11,7 @@
 //! - `## Grupo A — Razonamiento lógico-deductivo`
 //! - `### A1 · `test-logico-deductivo.md` — Puzle de casas (tipo Einstein)`
 //! - `**Peso sugerido:** 5.`
-//! - `| A · Lógico-deductivo | 5 | 22 |` y `| **Total** | **16** | **71** |`
+//! - `| A · Lógico-deductivo | 5 | 22 |` y `| **Total** | **20** | **83** |`
 //! - `| Dimensión | Tests que la miden |` (dos columnas)
 
 use std::fmt;
@@ -329,7 +329,7 @@ fn encabezado_grupo(resto: &str) -> Option<(char, String)> {
     Some((letra, nombre.trim().to_string()))
 }
 
-/// Una fila de la tabla de grupos: `| A · Corto | 5 | 22 |` o `| **Total** | **16** | **71** |`.
+/// Una fila de la tabla de grupos: `| A · Corto | 5 | 22 |` o `| **Total** | **20** | **83** |`.
 fn lee_fila_tabla(
     l: &str,
     linea: usize,

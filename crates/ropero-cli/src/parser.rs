@@ -322,12 +322,11 @@ fn ayuda_del_binario() -> String {
         surface::RUN_SUMMARY.to_string(),
     ));
     entradas.push(("--help".to_string(), "esta ayuda".to_string()));
-    let ancho = entradas.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
     let mut out = String::from(
         "motores y modelos de inferencia, en una sola herramienta\n\nUSO: ropero <comando> [opciones]\n\nCOMANDOS:\n",
     );
     for (uso, resumen) in &entradas {
-        out.push_str(&format!("  {uso:<ancho$}:  {resumen}\n"));
+        out.push_str(&format!("  {uso}\n    {resumen}\n"));
     }
     out.push_str("\n  ropero <comando> --help\n");
     out

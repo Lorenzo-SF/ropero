@@ -38,6 +38,14 @@ fn informa(e: &ropero_forge::Error) -> i32 {
         _ => format!("error: {e}"),
     };
     ropero_core::err_line(&mensaje);
+    if let ropero_forge::Error::Conversion { cola, .. } = e {
+        if !cola.is_empty() {
+            ropero_core::err_line("detalle del conversor:");
+            for linea in cola.iter().rev().take(12).rev() {
+                ropero_core::err_line(&format!("  {linea}"));
+            }
+        }
+    }
     if let Some(pista) = e.pista() {
         ropero_core::err_line(&pista);
     }

@@ -99,7 +99,7 @@ fn el_listado_pone_una_sola_cabecera() {
     };
     let (code, stdout, stderr) = run(&["list", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    // En el fixture hay dos motores: la cabecera no se repite por motor.
+    // En el fixture hay tres motores con modelos y la cabecera no se repite.
     let cabeceras: Vec<&str> = stdout.lines().filter(|l| es_cabecera(l)).collect();
     assert_eq!(cabeceras.len(), 1, "stdout={stdout}");
     // La regla va sangrada: se cuenta la línea de guiones, no sus espacios.
@@ -111,7 +111,7 @@ fn el_listado_pone_una_sola_cabecera() {
         })
         .count();
     assert_eq!(
-        regla, 2,
+        regla, 3,
         "una sola regla por grupo de motor, stdout={stdout}"
     );
     assert!(
@@ -152,7 +152,11 @@ fn el_listado_da_una_sola_forma_al_tamano() {
     assert_eq!(code, 0, "stderr={stderr}");
     let tamaños: Vec<String> = stdout
         .lines()
-        .filter_map(|l| l.find(" GB").map(|i| l[..i + 3].to_string()))
+        .filter_map(|l| {
+            let i = l.find(" GB")?;
+            let size = &l[..i + 3];
+            size.contains('~').then(|| size.to_string())
+        })
         .collect();
     assert!(tamaños.len() >= 3, "stdout={stdout}");
     for tamano in &tamaños {
@@ -163,7 +167,13 @@ fn el_listado_da_una_sola_forma_al_tamano() {
         assert_eq!(decimales.len(), 2, "tamano={tamano}");
     }
     // Y la columna del tamaño cae en la misma posición para todos.
-    let posiciones: Vec<usize> = stdout.lines().filter_map(|l| l.find(" GB")).collect();
+    let posiciones: Vec<usize> = stdout
+        .lines()
+        .filter_map(|l| {
+            let i = l.find(" GB")?;
+            l[..i].contains('~').then_some(i)
+        })
+        .collect();
     assert!(
         posiciones.windows(2).all(|w| w[0] == w[1]),
         "posiciones={posiciones:?}"

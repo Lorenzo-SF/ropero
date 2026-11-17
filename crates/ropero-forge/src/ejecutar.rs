@@ -574,18 +574,14 @@ fn clase_de_fuente(peticion: &Peticion, env: &Environment) -> Result<Clase, Erro
             let work_root = env.env_path("GGUF_WORK_DIR", ".cache/ropero/gguffer");
             let work = work_root.join(repo.replace('/', "__"));
             let mut clase = Clase::Ninguno;
-            for fichero in ["config.json", "hf_quant_config.json"] {
-                let ruta = work.join(fichero);
-                if !ruta.is_file() {
-                    // La metadata puede no estar (los repos GGUF de
-                    // fábrica no la llevan): si no baja, se sigue con la
-                    // clase vacía — unos KB, no los pesos (R-GGUF-8).
-                    let _ = baja_fichero(env, repo, fichero, &work);
-                }
-                if ruta.is_file() {
-                    clase = clase.de(&lee(&ruta), &lee(&work.join("hf_quant_config.json")));
-                }
+            let config = work.join("config.json");
+            if !config.is_file() {
+                // hf_quant_config.json es opcional: pedirlo con `hf` cuando
+                // falta produce un 404 ruidoso aunque la fuente sea válida.
+                // config.json basta para los formatos compatibles conocidos.
+                let _ = baja_fichero(env, repo, "config.json", &work);
             }
+            clase = clase.de(&lee(&config), &lee(&work.join("hf_quant_config.json")));
             Ok(clase)
         }
         Fuente::Path(path) => Ok(Clase::Ninguno.de(
