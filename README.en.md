@@ -152,6 +152,6 @@ limits.
 
 If they conflict, the requirements specification governs system behavior; the
 build specification governs implementation. Architecture decisions are in
-[`docs/adr/`](docs/adr/). The [changelog](CHANGELOG.en.md) records this
+[`docs/adr/`](docs/adr/). The [changelog](CHANGELOG.md) records this
 workspace's changes; the historical v1 changelog is not included in this
 checkout.
