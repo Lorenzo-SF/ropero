@@ -14,19 +14,18 @@ OpenAI.
 > La tabla de estado en esa sección es una evaluación inicial; los elementos
 > parciales o pendientes no deben leerse como funcionalidades terminadas.
 
-## Dos capas, una transición
+## Estado del proyecto
 
-El repositorio contiene la v1 funcional y el workspace Rust de la v2 en
-construcción:
+El repositorio contiene el workspace Rust de Ropero. La implementación v1
+anterior no forma parte de este checkout:
 
 | Capa | Dónde vive | Estado |
 |---|---|---|
-| **v1** | [`ropero-code/`](ropero-code/) | Funcional. Bash + Python. Es la versión que se instala y se usa hoy. **Es sólo referencia** para la v2 (ver [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md)): la v2 se desarrolla como si esa carpeta no existiera. |
+| **v1** | No incluida en este checkout | La implementación anterior no forma parte de este árbol de trabajo. Sus contratos históricos se conservan como referencia documental. |
 | **v2** | [`crates/`](crates/) | En construcción. Workspace Rust de seis crates; F0 y F1 terminadas. |
 
-La v1 y la v2 conviven hasta F9, como decide
-[`ADR-002`](docs/adr/ADR-002-extraccion-vs-reescritura.md). El plan construye la
-v2 por capas para conservar los contratos y el estado en disco de la v1.
+El workspace Rust de la v2 conserva los contratos y el estado en disco
+documentados para la versión anterior.
 
 Los TOML de [`models/`](models/) se conservan en el repositorio como copia de
 referencia y respaldo. **La aplicación no los usa como catálogo**: en uso
@@ -45,27 +44,7 @@ el grado de soporte dependen del comando, el motor y el agente; consulta
 `ropero --help`, el changelog y la especificación antes de asumir que un flujo
 está completo.
 
-## Usar la v1
-
-```bash
-git clone https://github.com/Lorenzo-SF/ropero.git
-cd ropero/ropero-code
-bash install.sh --local
-```
-
-Eso deja `~/.local/bin/ropero → <repo>/ropero-code/bin/ropero` (lo único en el
-PATH) y `~/.local/share/ropero → <repo>/ropero-code/bin`.
-
-```bash
-ropero install setup      # dependencias base (python3, git, uv, hf, jq, cmake…)
-ropero install engines    # elige motores e instala SUS dependencias
-ropero install models     # elige modelos (descarga o fabrica el GGUF)
-```
-
-`ropero install` sin argumentos hace las tres cosas en orden. El resto de la
-guía de uso está en [`ropero-code/README.md`](ropero-code/README.md).
-
-## Compilar y probar la v2
+## Compilar y probar
 
 Desde la raíz del repositorio:
 
@@ -74,8 +53,11 @@ cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
-cargo build --locked --workspace --release
+cargo build --locked --release -p ropero-cli
 ```
+
+El ejecutable queda en `target/release/ropero`; consulta `--help` para ver los
+comandos disponibles.
 
 La CLI funciona desde cualquier directorio porque, en uso normal, resuelve el
 catálogo desde la configuración del usuario (no buscando el catálogo del
@@ -163,9 +145,15 @@ Los dos documentos normativos se leen **juntos**:
 | [Especificación y requerimientos](docs-especificacion/ropero-especificacion.md) | ¿Qué hace ropero y con qué semántica exacta? |
 | [Especificación de construcción](docs-especificacion/ropero-construccion.md) | ¿Cómo se construye, en qué fases y con qué puertas? |
 
-La [referencia actual del CLI en inglés](docs-especificacion/ropero-cli.en.md)
-y las guías de compatibilidad de [engines en español](docs/engine-support.es.md)
-y [en inglés](docs/engine-support.en.md) documentan los comandos y sus límites.
+La especificación de requisitos también está disponible en
+[inglés](docs-especificacion/ropero-especificacion.en.md).
+La [especificación de construcción en inglés](docs-especificacion/ropero-construccion.en.md)
+complementa el documento en español.
+
+Las referencias del CLI en [español](docs-especificacion/ropero-cli.md) y
+[inglés](docs-especificacion/ropero-cli.en.md), junto con las guías de
+compatibilidad de [engines en español](docs/engine-support.es.md) y
+[en inglés](docs/engine-support.en.md), documentan los comandos y sus límites.
 
 **Regla de conflicto**: si discrepan sobre *qué debe hacer el sistema*, manda
 la especificación; si discrepan sobre *cómo construirlo*, manda el documento de
@@ -177,6 +165,6 @@ Las decisiones de arquitectura están en:
 - [`ADR-002: Extracción vs reescritura`](docs/adr/ADR-002-extraccion-vs-reescritura.md).
 - [`ADR-003: `ropero-code` es referencia, no dependencia`](docs/adr/ADR-003-ropero-code-es-referencia.md).
 
-El [CHANGELOG de la v2](CHANGELOG.md) registra los cambios de esta
-construcción. El [CHANGELOG de la v1](ropero-code/CHANGELOG.md) sigue vigente
-para la versión funcional.
+El [CHANGELOG en español](CHANGELOG.md) y su
+[versión inglesa](CHANGELOG.en.md) registran los cambios de este workspace. El
+historial de cambios de la v1 no está incluido en este checkout.

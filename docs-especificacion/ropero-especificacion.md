@@ -8,6 +8,8 @@ lang: es
 
 # ropero — Especificación y requerimientos
 
+[English](ropero-especificacion.en.md) · [Español](ropero-especificacion.md)
+
 > **Contrato funcional objetivo de ropero Rust.** Este documento incorpora la
 > revisión del propietario recibida el 2026-11-16. Cuando un requisito previo
 > contradiga esa revisión, prevalece esta sección hasta que se integre

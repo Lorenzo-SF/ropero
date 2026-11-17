@@ -1,5 +1,7 @@
 # Changelog
 
+[English](CHANGELOG.en.md) · **Español**
+
 ## Unreleased — 2026-11-17
 
 ### Español
@@ -24,8 +26,8 @@
 - `info`, `config`, la ayuda y el informe Markdown de `test` respetan el idioma
   guardado. El informe enlaza las trazas y métricas de los subagentes.
 - Los alias públicos se aplican donde el engine lo admite, incluidos perfiles
-  Strata mediante una copia privada; los motores parciales no aparecen como
-  utilizables en `models`.
+  Strata mediante una copia privada y MLX-Serve en sus ajustes globales por
+  ruta; los motores parciales se identifican como tales en `models --all`.
 - `connect --agent codex` ya no entra en pánico si `config.toml` no contiene
   `[model_providers]`; crea la tabla con accesos validados.
 
@@ -51,7 +53,8 @@
 - `info`, `config`, help, and the `test` Markdown report follow the saved
   language. The report links each subagent's trace and includes its metrics.
 - Public aliases are applied where supported, including Strata through a
-  private profile copy; partial engines are not shown as usable in `models`.
+  private profile copy and MLX-Serve's global per-path settings; partial
+  engines are marked as such in `models --all`.
 - `connect --agent codex` no longer panics when `config.toml` lacks
   `[model_providers]`; it creates the table and validates its structure.
 
@@ -61,10 +64,8 @@
   el enlace. La receta turbo no aplica los parches privados turboquant; otros
   motores sin receta siguen requiriendo su runtime/binario.
 
-Este fichero registra los cambios de **ropero v2**, la reimplementación en Rust
-que se está construyendo en `crates/`. Los cambios de la v1 funcional que vive
-en `ropero-code/` siguen en su propio
-[`CHANGELOG.md`](ropero-code/CHANGELOG.md).
+Este fichero registra los cambios del workspace Rust de **ropero**. El
+historial de cambios de la v1 no está incluido en este checkout.
 
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el
 versionado sigue [SemVer](https://semver.org/lang/es/).

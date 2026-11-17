@@ -211,7 +211,6 @@ pub fn pregunta(
 fn pregunta_agente(
     puerto: u16,
     modelo: &str,
-    contexto_id: &str,
     prompt: &str,
     api_key: Option<&str>,
     permitir_subagentes: bool,
@@ -359,7 +358,7 @@ fn pregunta_agente(
                     let result = json!({"error":"la tarea del subagente no puede estar vacía"});
                     (result.to_string(), result.to_string())
                 } else {
-                    match pregunta_agente(puerto, modelo, contexto_id, task, api_key, false) {
+                    match pregunta_agente(puerto, modelo, task, api_key, false) {
                         Ok(child) => {
                             let index = subagentes.len() + 1;
                             let entry = SubagentTrace {
@@ -747,6 +746,7 @@ pub fn elegir_modelo(
 /// elige el modelo y sólo entonces se tira.
 ///
 /// Devuelve el código de salida.
+#[allow(clippy::too_many_arguments)] // Entradas explícitas del comando y su entorno resuelto.
 pub fn tira(
     catalogo: &Catalog,
     motores: &[EngineManifest],
@@ -789,6 +789,7 @@ pub fn tira(
 /// `ids` son los tests que se lanzan, **en el orden del índice**. Cada test
 /// va en una pregunta independiente: el contenido íntegro del fichero del
 /// test, sin contexto previo.
+#[allow(clippy::too_many_arguments)] // La ejecución recibe recursos y selección ya resueltos.
 pub fn tira_la_bateria(
     catalogo: &Catalog,
     motores: &[EngineManifest],
@@ -837,57 +838,55 @@ pub fn tira_la_bateria(
         .and_then(|spec| spec.model.alias.as_deref())
         .unwrap_or(modelo);
     let mut respuestas = Vec::with_capacity(ids.len());
-    let mut transcript: Vec<(String, String, String, Vec<String>, Vec<SubagentTrace>)> =
-        Vec::with_capacity(ids.len());
+    let mut transcript: Vec<TestTranscriptEntry> = Vec::with_capacity(ids.len());
     for id in ids {
         let test = bateria
             .test(id.as_str())
             .ok_or_else(|| ErrorInferencia::uso(format!("el test '{id}' no está en la batería")))?;
         let prompt = lee_test(root, &test.fichero)?;
-        let respuesta =
-            match pregunta_agente(motor.puerto, served_model, id, &prompt, api_key, true) {
-                Ok(respuesta) => respuesta,
-                // Algunos OpenAI-compatible servers no implementan tools. Si
-                // rechazan explícitamente ese campo, repetir en modo chat básico.
-                Err(e) if rechaza_tools(&e.mensaje) => {
-                    match pregunta(motor.puerto, served_model, &prompt, api_key) {
-                        Ok(mut respuesta) => {
-                            respuesta.traza.push(
-                                "fallback a chat básico: el engine rechazó tools".to_string(),
-                            );
-                            respuesta
-                        }
-                        Err(e) => {
-                            let vacia = respuesta_fallida(id, &e.mensaje);
-                            guarda(&state_dir, &marca, &vacia);
-                            transcript.push((
-                                id.clone(),
-                                prompt,
-                                format!("[Error] {}", e.mensaje),
-                                Vec::new(),
-                                Vec::new(),
-                            ));
-                            respuestas.push(vacia);
-                            continue;
-                        }
+        let respuesta = match pregunta_agente(motor.puerto, served_model, &prompt, api_key, true) {
+            Ok(respuesta) => respuesta,
+            // Algunos OpenAI-compatible servers no implementan tools. Si
+            // rechazan explícitamente ese campo, repetir en modo chat básico.
+            Err(e) if rechaza_tools(&e.mensaje) => {
+                match pregunta(motor.puerto, served_model, &prompt, api_key) {
+                    Ok(mut respuesta) => {
+                        respuesta
+                            .traza
+                            .push("fallback a chat básico: el engine rechazó tools".to_string());
+                        respuesta
+                    }
+                    Err(e) => {
+                        let vacia = respuesta_fallida(id, &e.mensaje);
+                        guarda(&state_dir, &marca, &vacia);
+                        transcript.push((
+                            id.clone(),
+                            prompt,
+                            format!("[Error] {}", e.mensaje),
+                            Vec::new(),
+                            Vec::new(),
+                        ));
+                        respuestas.push(vacia);
+                        continue;
                     }
                 }
-                Err(e) => {
-                    // Un test que falla no puede dejar la tirada a medias: se
-                    // guarda igual, con la salida vacía y el motivo.
-                    let vacia = respuesta_fallida(id, &e.mensaje);
-                    guarda(&state_dir, &marca, &vacia);
-                    transcript.push((
-                        id.clone(),
-                        prompt,
-                        format!("[Error] {}", e.mensaje),
-                        Vec::new(),
-                        Vec::new(),
-                    ));
-                    respuestas.push(vacia);
-                    continue;
-                }
-            };
+            }
+            Err(e) => {
+                // Un test que falla no puede dejar la tirada a medias: se
+                // guarda igual, con la salida vacía y el motivo.
+                let vacia = respuesta_fallida(id, &e.mensaje);
+                guarda(&state_dir, &marca, &vacia);
+                transcript.push((
+                    id.clone(),
+                    prompt,
+                    format!("[Error] {}", e.mensaje),
+                    Vec::new(),
+                    Vec::new(),
+                ));
+                respuestas.push(vacia);
+                continue;
+            }
+        };
         transcript.push((
             id.clone(),
             prompt,
@@ -966,11 +965,14 @@ fn rechaza_tools(mensaje: &str) -> bool {
 
 /// Escribe la transcripción íntegra de la ejecución junto al JSON por test.
 /// Registra prompt, respuesta y llamadas/resultados de herramientas.
+type TestTranscriptEntry = (String, String, String, Vec<String>, Vec<SubagentTrace>);
+
+#[allow(clippy::too_many_arguments)] // Mantiene juntas las entradas de informe, recursos y localización.
 fn guarda_transcripcion(
     state_dir: &Path,
     marca: &str,
     informe: &Informe,
-    transcript: &[(String, String, String, Vec<String>, Vec<SubagentTrace>)],
+    transcript: &[TestTranscriptEntry],
     memoria_inicio: &ropero_core::status::MachineState,
     memoria_fin: &ropero_core::status::MachineState,
     engine_log: Option<&str>,
@@ -1048,7 +1050,7 @@ fn guarda_transcripcion(
             memoria_fin.memory.ram_used_mb.as_ref(),
         ),
         (
-            if en { "RAM total" } else { "RAM total" },
+            if en { "Total RAM" } else { "RAM total" },
             memoria_inicio.memory.ram_total_mb.as_ref(),
             memoria_fin.memory.ram_total_mb.as_ref(),
         ),
@@ -1058,7 +1060,7 @@ fn guarda_transcripcion(
             memoria_fin.memory.swap_used_mb.as_ref(),
         ),
         (
-            if en { "Swap total" } else { "Swap total" },
+            if en { "Total swap" } else { "Swap total" },
             memoria_inicio.memory.swap_total_mb.as_ref(),
             memoria_fin.memory.swap_total_mb.as_ref(),
         ),
