@@ -197,7 +197,11 @@ pub fn limpiar_dir_vacio(dir: &Path) {
 }
 
 /// Ejecuta `flm remove` para cada tag instalado que declara el TOML.
-pub fn elimina_flm(manifest: &EngineManifest, tags: &[String]) -> i32 {
+pub fn elimina_flm(
+    manifest: &EngineManifest,
+    tags: &[String],
+    env: &ropero_core::Environment,
+) -> i32 {
     if !crate::flm::delegated(manifest) {
         ropero_core::err_line(&format!(
             "error: el motor '{}' no declara delegación de eliminación FLM",
@@ -208,7 +212,7 @@ pub fn elimina_flm(manifest: &EngineManifest, tags: &[String]) -> i32 {
     let mut ok = true;
     for tag in tags {
         ropero_core::out_line(&format!("ejecutando: flm remove {tag}"));
-        match crate::flm::remove(manifest, tag) {
+        match crate::flm::remove(manifest, tag, env) {
             Ok(res) => {
                 if !res.stdout.trim().is_empty() {
                     ropero_core::out(res.stdout.trim_end(), true);
@@ -236,7 +240,12 @@ pub fn elimina_flm(manifest: &EngineManifest, tags: &[String]) -> i32 {
 }
 
 /// Ejecuta el plan ya confirmado.
-pub fn ejecutar(engines: &[EngineManifest], spec: &ModelSpec, plan: &RemovalPlan) -> i32 {
+pub fn ejecutar(
+    engines: &[EngineManifest],
+    spec: &ModelSpec,
+    plan: &RemovalPlan,
+    env: &ropero_core::Environment,
+) -> i32 {
     let mut ok = true;
     if let Some(flm) = &plan.flm {
         let Some(manifest) = engines.iter().find(|m| m.id == spec.model.engine) else {
@@ -246,7 +255,7 @@ pub fn ejecutar(engines: &[EngineManifest], spec: &ModelSpec, plan: &RemovalPlan
             ));
             return 1;
         };
-        if elimina_flm(manifest, &flm.all_tags) != 0 {
+        if elimina_flm(manifest, &flm.all_tags, env) != 0 {
             ok = false;
         }
     }

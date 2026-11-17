@@ -21,7 +21,7 @@ pub fn capture_system_info() -> SystemInfo {
 
 /// Si hay una NPU AMD XDNA.
 ///
-/// Las señales son las de la v1 (`ropero-code/bin/lib/engines/fastflowlm.sh`):
+/// Las señales son las de la v1 (`ropero-code/bin/lib/engines/fastflowllm.sh`):
 /// el device DRM (`/dev/accel/accel0`), el XRT (`xrt-smi`) y el silicon que
 /// anuncia `lscpu`.
 fn detect_npu_amd() -> bool {

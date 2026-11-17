@@ -457,6 +457,13 @@ fn enlaza_ejecutables(
                 }
                 regenerar.push(destino.clone());
             }
+            Ok(meta)
+                if manifest.id == ropero_core::EngineId::FastFlowLm
+                    && meta.is_file()
+                    && wrapper_flm_propio(destino, origen) =>
+            {
+                regenerar.push(destino.clone());
+            }
             Ok(_) => {
                 return Err(format!(
                     "destino ocupado por un fichero ajeno: {}",
@@ -474,8 +481,12 @@ fn enlaza_ejecutables(
     }
     let mut principal_estado = None;
     for (origen, destino) in &enlaces {
-        std::os::unix::fs::symlink(origen, destino)
-            .map_err(|e| format!("no puedo enlazar {}: {e}", destino.display()))?;
+        if manifest.id == ropero_core::EngineId::FastFlowLm {
+            escribe_wrapper_flm(destino, origen)?;
+        } else {
+            std::os::unix::fs::symlink(origen, destino)
+                .map_err(|e| format!("no puedo enlazar {}: {e}", destino.display()))?;
+        }
         if origen == principal {
             principal_estado = Some(if regenerar.contains(destino) {
                 EstadoMotor::YaEnlazado(destino.clone())
@@ -507,6 +518,47 @@ fn enlaza_ejecutables(
     }
     principal_estado
         .ok_or_else(|| format!("no se pudo crear el enlace de {}", manifest.id.as_str()))
+}
+
+fn wrapper_flm_propio(wrapper: &Path, binary: &Path) -> bool {
+    std::fs::read_to_string(wrapper).ok().is_some_and(|text| {
+        text.lines()
+            .any(|line| line == "# ROPERO_MANAGED_FASTFLOWLLM")
+            && text.contains(&format!("exec {} \"$@\"", shell_quote(binary)))
+    })
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+}
+
+fn escribe_wrapper_flm(wrapper: &Path, binary: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let contenido = format!(
+        "#!/bin/sh\n# ROPERO_MANAGED_FASTFLOWLLM\nXILINX_XRT=\"${{XILINX_XRT:-/opt/xilinx/xrt}}\"\nexport XILINX_XRT\nif [ -d \"$XILINX_XRT/lib\" ]; then\n  LD_LIBRARY_PATH=\"$XILINX_XRT/lib${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}}\"\n  export LD_LIBRARY_PATH\nfi\nif [ -d \"$XILINX_XRT/bin\" ]; then\n  PATH=\"$XILINX_XRT/bin:$PATH\"\n  export PATH\nfi\nexec {} \"$@\"\n",
+        shell_quote(binary)
+    );
+    let temporary = wrapper.with_extension(format!("flm-wrapper-{}.tmp", std::process::id()));
+    std::fs::write(&temporary, contenido).map_err(|error| {
+        format!(
+            "no se pudo escribir el lanzador {}: {error}",
+            temporary.display()
+        )
+    })?;
+    std::fs::set_permissions(&temporary, std::fs::Permissions::from_mode(0o755)).map_err(
+        |error| {
+            format!(
+                "no se pudo hacer ejecutable {}: {error}",
+                temporary.display()
+            )
+        },
+    )?;
+    std::fs::rename(&temporary, wrapper).map_err(|error| {
+        format!(
+            "no se pudo instalar el lanzador {}: {error}",
+            wrapper.display()
+        )
+    })
 }
 
 fn ejecutables_compilados(source_dir: &Path, principal: &Path) -> Result<Vec<PathBuf>, String> {
@@ -617,6 +669,7 @@ fn compila_motor(
     force: bool,
 ) -> Result<(PathBuf, Option<PathBuf>), String> {
     prepara_dependencias_sistema(install, env)?;
+    prepara_dependencias_aur(install, env)?;
     if manifest.id == ropero_core::EngineId::FastFlowLm {
         valida_runtime_flm(env)?;
     }
@@ -630,8 +683,20 @@ fn compila_motor(
         .source_dir
         .as_deref()
         .map(|raw| env.expand_path(raw))
-        .unwrap_or_else(|| expected_source.clone());
-    if source_dir != expected_source {
+        .unwrap_or_else(|| {
+            let legacy = source_root.join("fastflowlm");
+            if manifest.id == ropero_core::EngineId::FastFlowLm
+                && !expected_source.exists()
+                && legacy.exists()
+            {
+                legacy
+            } else {
+                expected_source.clone()
+            }
+        });
+    let is_legacy_fastflow_path = manifest.id == ropero_core::EngineId::FastFlowLm
+        && source_dir == source_root.join("fastflowlm");
+    if source_dir != expected_source && !is_legacy_fastflow_path {
         return Err(format!(
             "ruta fuente no permitida para '{}': debe ser {} (manifest indicó {})",
             manifest.id.as_str(),
@@ -747,6 +812,9 @@ fn compila_motor(
         .arg(&build_dir);
     configure.args(["-G", "Ninja"]);
     configure.args(&args);
+    if manifest.id == ropero_core::EngineId::FastFlowLm {
+        crate::flm::configure_xrt_command(&mut configure, &env.vars);
+    }
     if matches!(manifest.id, ropero_core::EngineId::FastFlowLm) {
         configure.arg(format!(
             "-DCMAKE_XCLBIN_PREFIX={}",
@@ -764,6 +832,9 @@ fn compila_motor(
     }
     let mut build = Command::new(&cmake);
     build.arg("--build").arg(&build_dir);
+    if manifest.id == ropero_core::EngineId::FastFlowLm {
+        crate::flm::configure_xrt_command(&mut build, &env.vars);
+    }
     if !matches!(
         manifest.id,
         ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama
@@ -781,14 +852,19 @@ fn compila_motor(
         return Err(format!("cmake --build terminó con {status}"));
     }
     let install_dir = build_dir.join("install");
-    let status = Command::new(&cmake)
+    let mut install_command = Command::new(&cmake);
+    install_command
         .arg("--install")
         .arg(&build_dir)
         .arg("--prefix")
         .arg(&install_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if manifest.id == ropero_core::EngineId::FastFlowLm {
+        crate::flm::configure_xrt_command(&mut install_command, &env.vars);
+    }
+    let status = install_command
         .status()
         .map_err(|e| format!("no se pudo ejecutar cmake --install: {e}"))?;
     if !status.success() {
@@ -811,7 +887,7 @@ fn prepara_dependencias_sistema(
     install: &ropero_core::EngineInstallSpec,
     env: &Environment,
 ) -> Result<(), String> {
-    if install.system_packages.is_empty() {
+    if install.system_packages.is_empty() && install.apt_repositories.is_empty() {
         return Ok(());
     }
     let gestor = gestor_paquetes_disponible(install, env).ok_or_else(|| {
@@ -825,6 +901,7 @@ fn prepara_dependencias_sistema(
                 "no encuentro un gestor de paquetes compatible (pacman o apt-get); dependencias declaradas: {instrucciones}"
             )
         })?;
+    prepara_repositorios_apt(install, gestor, env)?;
     let paquetes = install.system_packages.get(gestor)
         .or_else(|| if gestor == "apt" { install.system_packages.get("apt-get") } else { None })
         .ok_or_else(|| {
@@ -848,7 +925,7 @@ fn prepara_dependencias_sistema(
         .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0");
     if !es_root && !hay_tty() {
         return Err(format!(
-            "faltan dependencias de sistema: {}. Ejecuta `ropero install engines fastflowlm` desde una terminal para instalarlas con sudo",
+            "faltan dependencias de sistema: {}. Ejecuta `ropero install engines fastflowllm` desde una terminal para instalarlas con sudo",
             faltantes
                 .iter()
                 .map(|p| p.as_str())
@@ -920,6 +997,233 @@ fn prepara_dependencias_sistema(
     Ok(())
 }
 
+fn prepara_repositorios_apt(
+    install: &ropero_core::EngineInstallSpec,
+    gestor: &str,
+    env: &Environment,
+) -> Result<(), String> {
+    if !matches!(gestor, "apt" | "apt-get") {
+        return Ok(());
+    }
+    let distro = id_distribucion_linux().unwrap_or_default();
+    let repos = install.apt_repositories.get(&distro);
+    let packages = install
+        .system_packages
+        .get(gestor)
+        .or_else(|| install.system_packages.get("apt-get"));
+
+    if repos.is_none() {
+        if let Some(paquetes_xrt) = packages.filter(|pkgs| pkgs.iter().any(|p| p == "libxrt-npu2"))
+        {
+            for paquete in paquetes_xrt
+                .iter()
+                .filter(|p| p.contains("xrt") || p.contains("amdxdna"))
+            {
+                if !paquete_instalado("apt-get", paquete, env) && !apt_tiene_candidato(paquete, env)
+                {
+                    return Err(format!(
+                        "no hay paquete apt disponible para `{paquete}` en `{distro}`. FastFlowLM necesita XRT y el plugin XDNA compatibles; la guía oficial configura `ppa:lemonade-team/stable` en Ubuntu. En esta distribución configura el repositorio AMD adecuado y vuelve a ejecutar la instalación"
+                    ));
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    for repo in repos.expect("se comprobó arriba") {
+        if repositorio_apt_configurado(repo) {
+            continue;
+        }
+        if !hay_tty() {
+            return Err(format!(
+                "falta configurar el repositorio apt `{repo}`. Ejecuta `ropero install engines fastflowllm` desde una terminal para añadirlo con confirmación"
+            ));
+        }
+        let paquetes_instalados = packages.is_some_and(|pkgs| {
+            pkgs.iter()
+                .any(|p| p == "software-properties-common" && paquete_instalado("apt-get", p, env))
+        });
+        if !paquetes_instalados {
+            ejecuta_apt_privilegiado(env, "install", &["software-properties-common"])?;
+        }
+        ejecuta_admin(
+            env,
+            "add-apt-repository",
+            &["-y", repo],
+            "no se pudo añadir el repositorio XRT",
+        )?;
+        ejecuta_apt_privilegiado(env, "update", &[])?;
+    }
+    Ok(())
+}
+
+fn id_distribucion_linux() -> Option<String> {
+    let os_release = std::fs::read_to_string("/etc/os-release").ok()?;
+    os_release
+        .lines()
+        .find_map(|line| line.strip_prefix("ID="))
+        .map(|value| value.trim_matches(['"', '\'']).to_ascii_lowercase())
+}
+
+fn repositorio_apt_configurado(repo: &str) -> bool {
+    let needle = repo
+        .strip_prefix("ppa:")
+        .unwrap_or(repo)
+        .to_ascii_lowercase();
+    let mut files = vec![PathBuf::from("/etc/apt/sources.list")];
+    if let Ok(entries) = std::fs::read_dir("/etc/apt/sources.list.d") {
+        files.extend(entries.flatten().map(|entry| entry.path()));
+    }
+    files.into_iter().any(|path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .is_some_and(|contents| contents.to_ascii_lowercase().contains(&needle))
+    })
+}
+
+fn apt_tiene_candidato(paquete: &str, env: &Environment) -> bool {
+    let Some(apt_cache) = which_en(env, "apt-cache") else {
+        return false;
+    };
+    Command::new(apt_cache)
+        .args(["policy", paquete])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.trim_start().starts_with("Candidate:") && !line.contains("(none)"))
+        })
+}
+
+fn ejecuta_apt_privilegiado(
+    env: &Environment,
+    accion: &str,
+    paquetes: &[&str],
+) -> Result<(), String> {
+    let apt = if which_en(env, "apt-get").is_some() {
+        "apt-get"
+    } else {
+        "apt"
+    };
+    let args = std::iter::once(accion)
+        .chain(paquetes.iter().copied())
+        .collect::<Vec<_>>();
+    ejecuta_admin(
+        env,
+        apt,
+        &args,
+        "no se pudo preparar el repositorio apt de XRT",
+    )
+}
+
+fn ejecuta_admin(
+    env: &Environment,
+    programa: &str,
+    args: &[&str],
+    descripcion: &str,
+) -> Result<(), String> {
+    let es_root = Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0");
+    let sudo = if es_root {
+        None
+    } else {
+        Some(which_en(env, "sudo").ok_or_else(|| format!("{descripcion}: hace falta sudo"))?)
+    };
+    let mut command = sudo
+        .as_ref()
+        .map(Command::new)
+        .unwrap_or_else(|| Command::new(programa));
+    if sudo.is_some() {
+        command.arg(programa);
+    }
+    let status = command
+        .args(args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| format!("{descripcion}: {error}"))?;
+    if !status.success() {
+        return Err(format!("{descripcion} (salida {status})"));
+    }
+    Ok(())
+}
+
+/// Instala paquetes AUR sólo mediante un helper explícito del usuario
+/// (`paru` o `yay`); pacman por sí solo no ejecuta recetas AUR.
+fn prepara_dependencias_aur(
+    install: &ropero_core::EngineInstallSpec,
+    env: &Environment,
+) -> Result<(), String> {
+    if install.aur_packages.is_empty() {
+        return Ok(());
+    }
+    if which_en(env, "pacman").is_none() {
+        // Las dependencias AUR son la receta específica de Arch. En sistemas
+        // apt se usan las dependencias declaradas para ese gestor.
+        return Ok(());
+    }
+    let faltantes: Vec<_> = install
+        .aur_packages
+        .iter()
+        .filter(|paquete| !paquete_instalado("pacman", paquete, env))
+        .collect();
+    if faltantes.is_empty() {
+        return Ok(());
+    }
+    let helper = ["paru", "yay"]
+        .iter()
+        .find_map(|nombre| which_en(env, nombre).map(|ruta| (nombre, ruta)))
+        .ok_or_else(|| {
+            format!(
+                "FLM requiere paquetes AUR: {}. Instala `paru` o `yay` y vuelve a ejecutar `ropero install engines fastflowllm`; pacman no instala paquetes AUR",
+                faltantes.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(" ")
+            )
+        })?;
+    if Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .is_some_and(|output| {
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "0"
+        })
+    {
+        return Err("no ejecutes la instalación AUR como root; vuelve a lanzar Ropero desde tu usuario normal".to_string());
+    }
+    if !hay_tty() {
+        return Err(format!(
+            "faltan paquetes AUR: {}. Ejecuta `ropero install engines fastflowllm` desde una terminal para revisar e instalar la receta con {}",
+            faltantes
+                .iter()
+                .map(|p| p.as_str())
+                .collect::<Vec<_>>()
+                .join(" "),
+            helper.0
+        ));
+    }
+    let status = Command::new(helper.1)
+        .args(["-S", "--needed"])
+        .args(faltantes.iter().map(|p| p.as_str()))
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| format!("no se pudo ejecutar {}: {error}", helper.0))?;
+    if !status.success() {
+        return Err(format!(
+            "{} no pudo instalar los paquetes AUR de FastFlowLM (salida {status})",
+            helper.0
+        ));
+    }
+    Ok(())
+}
+
 /// Gestor declarado por el motor que está disponible en el `PATH` capturado.
 /// Devuelve sólo métodos cuya invocación conoce Ropero; no infiere gestores
 /// por el sistema operativo ni intenta instalar con una receta ajena.
@@ -966,11 +1270,14 @@ fn paquete_instalado(gestor: &str, paquete: &str, env: &Environment) -> bool {
 /// `flm validate` ve el nodo DRM, pero el motor abre la NPU a través de XRT.
 /// Exige que el plugin esté cargable y que XRT enumere al menos una NPU antes
 /// de gastar tiempo compilando el servidor.
-fn valida_runtime_flm(env: &Environment) -> Result<(), String> {
+pub fn valida_runtime_flm(env: &Environment) -> Result<(), String> {
     let xrt_smi = which_en(env, "xrt-smi")
+        .or_else(|| crate::flm::xrt_root(&env.vars).map(|root| root.join("bin/xrt-smi")))
         .ok_or_else(|| "falta xrt-smi; instala XRT y xrt-plugin-amdxdna".to_string())?;
-    let output = Command::new(xrt_smi)
-        .arg("examine")
+    let mut command = Command::new(xrt_smi);
+    command.arg("examine");
+    crate::flm::configure_xrt_command(&mut command, &env.vars);
+    let output = command
         .output()
         .map_err(|e| format!("no se pudo ejecutar xrt-smi examine: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -985,8 +1292,13 @@ fn valida_runtime_flm(env: &Environment) -> Result<(), String> {
         || !tabla.contains("NPU")
         || salida.contains("Failed to open library")
     {
+        let sugerencia_arch = if which_en(env, "pacman").is_some() {
+            " En Arch/CachyOS, comprueba que XRT y su plugin sean de la misma versión; `paru -S amdxdna-git` compila el stack AMD junto y evita mezclar versiones de repositorios distintos."
+        } else {
+            " Comprueba que el paquete XRT y el plugin XDNA procedan de la misma versión/repositorio; en Ubuntu, la guía de FastFlowLM requiere el PPA oficial de Lemonade."
+        };
         return Err(format!(
-            "XRT no puede usar la NPU: `xrt-smi examine` no enumera un dispositivo. Comprueba que `xrt` y `xrt-plugin-amdxdna` sean compatibles entre sí y vuelve a ejecutar `xrt-smi examine`. FLM no puede quedar listo hasta que XRT detecte la NPU.\n{}",
+            "XRT no puede usar la NPU: `xrt-smi examine` no enumera un dispositivo. Comprueba driver, firmware y que XRT y su plugin XDNA sean compatibles; vuelve a ejecutar `xrt-smi examine`. FLM no puede quedar listo hasta que XRT detecte la NPU.{sugerencia_arch}\n{}",
             salida.trim()
         ));
     }
@@ -1112,8 +1424,8 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compila_motor, enlaza_ejecutables, gestor_paquetes_disponible,
-        prepara_dependencias_sistema, valida_runtime_flm,
+        compila_motor, enlaza_ejecutables, escribe_wrapper_flm, gestor_paquetes_disponible,
+        prepara_dependencias_sistema, valida_runtime_flm, wrapper_flm_propio,
     };
     use ropero_core::{
         DetectSpec, EngineColor, EngineId, EngineInstallSpec, EngineManifest, Environment,
@@ -1208,6 +1520,25 @@ mod tests {
         let error = prepara_dependencias_sistema(&install, &env).unwrap_err();
         assert!(error.contains("xrt"));
         assert!(error.contains("terminal"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn el_lanzador_flm_es_reconocible_y_prepara_xrt_para_la_shell() {
+        let base = std::env::temp_dir().join(format!("ropero-flm-wrapper-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let binary = base.join("build/install/bin/flm");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        let wrapper = base.join("bin/flm");
+        std::fs::create_dir_all(wrapper.parent().unwrap()).unwrap();
+        escribe_wrapper_flm(&wrapper, &binary).unwrap();
+        assert!(wrapper_flm_propio(&wrapper, &binary));
+        let text = std::fs::read_to_string(&wrapper).unwrap();
+        assert!(text.contains("LD_LIBRARY_PATH=\"$XILINX_XRT/lib"));
+        assert!(text.contains("ROPERO_MANAGED_FASTFLOWLLM"));
+        assert!(!wrapper_flm_propio(&wrapper, &base.join("otro/flm")));
         let _ = std::fs::remove_dir_all(base);
     }
 

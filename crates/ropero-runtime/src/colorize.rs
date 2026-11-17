@@ -161,7 +161,7 @@ pub fn colorize_engine_line(
             &["uvicorn", "fastapi", "airllm-server", "application startup"]
         }
         Some(ropero_core::EngineId::MlxServe) => &["mlx", "memory", "tokens/s"],
-        Some(ropero_core::EngineId::FastFlowLm) => &["fastflowlm", "flm", "npu"],
+        Some(ropero_core::EngineId::FastFlowLm) => &["fastflowllm", "flm", "npu"],
         Some(ropero_core::EngineId::Strata) => &["strata", "model loaded", "serving"],
         Some(ropero_core::EngineId::Vllm) => &["vllm", "enginecore", "scheduler"],
         Some(ropero_core::EngineId::Ignis) => &["ignis.", "ignis-server", "model loaded"],
@@ -484,7 +484,7 @@ mod tests {
     use ropero_core::EngineId;
 
     #[test]
-    fn aplica_el_patron_de_fastflowlm_con_el_tema_del_motor() {
+    fn aplica_el_patron_de_fastflowllm_con_el_tema_del_motor() {
         let salida = colorize_engine_line(
             "FastFlowLM NPU ready",
             Some(EngineId::FastFlowLm),

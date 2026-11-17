@@ -27,7 +27,7 @@ fn base_engines() -> PathBuf {
 const LOS_MOTORES: &[(&str, EngineId)] = &[
     ("llama-server", EngineId::LlamaServer),
     ("turbo-llama", EngineId::TurboLlama),
-    ("fastflowlm", EngineId::FastFlowLm),
+    ("fastflowllm", EngineId::FastFlowLm),
     ("mlx-serve", EngineId::MlxServe),
     ("airllm", EngineId::AirLlm),
     ("tensorrt-llm", EngineId::TensorRtLlm),
@@ -114,7 +114,7 @@ fn los_colores_son_los_de_la_leyenda() {
     let esperado = [
         ("llama-server", "naranja"),
         ("turbo-llama", "amarillo"),
-        ("fastflowlm", "rojo"),
+        ("fastflowllm", "rojo"),
         ("mlx-serve", "gris"),
         ("airllm", "blanco"),
         ("tensorrt-llm", "verde-pistacho"),
@@ -133,7 +133,7 @@ fn los_rangos_de_puertos_son_los_del_doc() {
         ("llama-server", 9980, 9989),
         ("turbo-llama", 9990, 9999),
         ("mlx-serve", 9960, 9969),
-        ("fastflowlm", 9970, 9979),
+        ("fastflowllm", 9970, 9979),
         ("tensorrt-llm", 9950, 9959),
         ("vllm", 9940, 9949),
         ("airllm", 9930, 9939),
@@ -177,7 +177,7 @@ fn la_madurez_distingue_probados_de_no_probados() {
 #[test]
 fn las_restricciones_de_hardware_son_las_del_doc() {
     // flm: sólo Linux, sólo CPU AMD compatible (NPU).
-    let flm = carga("fastflowlm");
+    let flm = carga("fastflowllm");
     let regla_flm = flm
         .compat
         .iter()
@@ -414,7 +414,7 @@ fn el_conjunto_real_se_evalua() {
         .iter()
         .map(|r| r.manifest.id.as_str())
         .collect();
-    assert!(incompatibles.contains("fastflowlm"), "{incompatibles:?}");
+    assert!(incompatibles.contains("fastflowllm"), "{incompatibles:?}");
     assert!(incompatibles.contains("tensorrt-llm"), "{incompatibles:?}");
     assert!(!incompatibles.contains("llama-server"), "{incompatibles:?}");
     assert!(!incompatibles.contains("vllm"), "{incompatibles:?}");

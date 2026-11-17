@@ -126,7 +126,7 @@ fn los_manifiestos_reales_estan_en_la_raiz_del_repo() {
     for id in [
         "llama-server",
         "turbo-llama",
-        "fastflowlm",
+        "fastflowllm",
         "mlx-serve",
         "airllm",
         "tensorrt-llm",

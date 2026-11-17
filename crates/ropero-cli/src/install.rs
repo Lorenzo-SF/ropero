@@ -73,7 +73,7 @@ fn engines(s: &crate::discovery::Scan, tokens: &[Token], force: bool) -> i32 {
         aviso_fastflow_manual();
         if lista
             .iter()
-            .any(|nombre| matches!(nombre.as_str(), "fastflowlm" | "flm"))
+            .any(|nombre| matches!(nombre.as_str(), "fastflowllm" | "fastflowlm" | "flm"))
         {
             return 1;
         }
@@ -154,7 +154,7 @@ fn elegir_motores(filas: &[EngineRow], env: &ropero_core::Environment) -> Result
 
 fn aviso_fastflow_manual() {
     ropero_core::err_line(
-        "fastflowlm: hay una NPU compatible, pero no encuentro apt-get ni pacman; instala FLM y sus dependencias manualmente según la guía oficial de Linux",
+        "fastflowllm: hay una NPU compatible, pero no encuentro apt-get ni pacman; instala FLM y sus dependencias manualmente según la guía oficial de Linux",
     );
 }
 
@@ -221,7 +221,7 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
             && engine_manifest.is_some_and(ropero_runtime::flm::delegated);
         if flm_delegado {
             let manifest = engine_manifest.expect("comprobado");
-            if baja_modelo_flm(&elegido.nombre, elegido.spec, manifest) != 0 {
+            if baja_modelo_flm(&elegido.nombre, elegido.spec, manifest, &s.env) != 0 {
                 codigo = 1;
             }
             continue;
@@ -392,8 +392,9 @@ fn baja_modelo_flm(
     nombre: &str,
     spec: &ropero_core::ModelSpec,
     manifest: &ropero_core::EngineManifest,
+    env: &ropero_core::Environment,
 ) -> i32 {
-    match ropero_runtime::flm::pull_model(manifest, spec) {
+    match ropero_runtime::flm::pull_model(manifest, spec, env) {
         Ok(resultados) => {
             let mut ok = true;
             for res in &resultados {

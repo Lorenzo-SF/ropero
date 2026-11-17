@@ -660,6 +660,17 @@ pub fn arranca(
         return outcome;
     }
 
+    // FLM consulta la NPU a través de XRT (no basta con que `flm validate`
+    // vea `/dev/accel`). Comprueba runtime y plugin antes de reservar puertos
+    // o ejecutar `--force`, para que una pila incompatible falle sin efectos.
+    if plan.engine.id == EngineId::FastFlowLm
+        && let Err(error) = crate::install::valida_runtime_flm(env)
+    {
+        let outcome = RunOutcome::error(error);
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
+
     // Detecta primero los bloqueos que `--force` no puede resolver. Así no
     // se detienen modelos gestionados cuando el puerto explícito pertenece a
     // un proceso externo, o cuando todos los puertos sólo los ocupa software
@@ -853,6 +864,11 @@ pub fn arranca(
         engine: plan.engine.id,
         engine_name: plan.engine.id.as_str().to_string(),
         server_api_key,
+        runtime_env: if plan.engine.id == EngineId::FastFlowLm {
+            crate::flm::xrt_environment(&env.vars)
+        } else {
+            std::collections::BTreeMap::new()
+        },
         program: binario,
         argv: plan.argv.clone(),
         level: plan.level.clone(),

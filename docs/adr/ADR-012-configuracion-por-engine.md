@@ -1,130 +1,72 @@
-# ADR-012 · Configuración de rutas y presentación por engine
+# ADR-012 · Rutas compartidas y presentación por engine
 
 **Estado**: aceptada para Ropero v2  
 **Fecha**: 2026-11-16
 
 ## Contexto
 
-ADR-008 fijó una configuración global con `models_dir`, `gguf_dir`,
-`safetensors_dir`, `bin_dir` y `logs_dir`. El usuario necesita ajustar por
-engine dónde guarda sus TOMLs y artefactos, el rango de puertos y el color.
-Los engines soportados forman un conjunto controlado: sus recetas de
-instalación, dependencias y hooks no deben convertirse en configuración del
-usuario.
+Ropero mantiene un catálogo TOML por engine y almacena artefactos en rutas
+configurables por el usuario. Esas ubicaciones deben ser compartidas: duplicar
+`gguf_dir`, `safetensors_dir` o `models_toml_dir` en cada engine provoca
+configuraciones divergentes, rutas olvidadas y modelos que no aparecen. FLM,
+además, gestiona internamente su almacén de modelos.
 
-El código actual refleja esa separación: `ropero-core::Config` contiene las
-cinco rutas globales (`crates/ropero-core/src/config.rs`), los manifiestos
-declaran metadatos fijos como color, puertos, dependencias y receta
-(`crates/ropero-core/src/manifest.rs`), y `resolve_paths` deriva los artefactos
-de GGUF y safetensors (`crates/ropero-core/src/paths.rs`).
+Cada engine sí puede necesitar puertos distintos y un color propio. Sus recetas,
+dependencias y hooks siguen siendo propiedad de Ropero y no son configurables.
 
 ## Decisión
 
-1. **Se conservan los campos globales de ADR-008.** Los archivos existentes
-   siguen siendo válidos. Los campos globales continúan siendo la base y el
-   fallback para los engines sin overrides.
-
-2. **Se admiten overrides por engine** bajo `[engines.<id>]`. Los campos son
-   opcionales:
+1. Todas las rutas se declaran juntas bajo `[models.paths]`:
 
    ```toml
-   [engines.ignis]
-   models_toml_dir = "~/.config/ropero/models/ignis"
+   [models.paths]
+   models_dir = "~/.config/ropero/models"
+   gguf_dir = "~/models/gguf"
+   safetensors_dir = "~/models/safetensors"
    artifacts_dir = "~/models/ignis"
-   port_min = 9910
-   port_max = 9919
-   color = "cian"
+   bin_dir = "~/.local/bin"
+   logs_dir = "~/.config/ropero/logs"
    ```
 
-   - `models_toml_dir` es el directorio que contiene los TOMLs de ese engine;
-     por defecto deriva de `models_dir/<id>`.
-   - `artifacts_dir` es la base para artefactos gestionados por el propio
-     motor, como los `.ninfer` de Ignis. Si se omite, cae en `gguf_dir`.
-   - `gguf_dir` y `safetensors_dir` son bases para los artefactos de ese
-     formato. Se mantiene la organización por modelo bajo cada base, de modo
-     que dos modelos del mismo engine no se mezclen. Si se omiten, se usan las
-     rutas globales correspondientes.
-   - `port_min` y `port_max` sustituyen el rango del manifiesto para ese engine.
-   - `color` sustituye su color de manifiesto.
+2. El catálogo de cada engine está en `models_dir/<engine-id>/`. Los artefactos
+   usan las rutas compartidas según su formato. FLM instala y lista sus modelos
+   a través de su almacén propio; no necesita una ruta de artefactos en su
+   sección de engine.
 
-3. **Precedencia de rutas**: variable de entorno global > valor por-engine en
-   `config.toml` > campo global en `config.toml` > valor por defecto. Las
-   variables globales existentes mantienen su función: `ROPERO_MODELS_DIR` y
-   `ROPERO_ROOT` para el catálogo, `GGUF_DIR` y `SAFETENSORS_DIR` para los
-   artefactos. No se añaden variables por-engine en esta decisión. Las rutas
-   relativas y `~` conservan la expansión existente.
+3. `[engines.<id>]` sólo permite `port_min`, `port_max`, `color` y `api_key`.
+   Puertos y color sustituyen los valores del manifest; `api_key` se envía como
+   Bearer al endpoint local. No se exponen por config rutas ni recetas de
+   instalación, dependencias, comandos o hooks.
 
-4. **Precedencia de color y puertos**: override por-engine > valores del
-   manifiesto del engine. No existe un override global para esos campos.
+4. Se conservan los campos de ruta antiguos en `[engines.<id>]` durante la
+   transición de configuración, pero Ropero los ignora y `doctor` los señala
+   para migrarlos a `[models.paths]`. La plantilla nueva ya no los genera.
 
-5. **Colores cerrados**: `color` sólo acepta los valores de `EngineColor` que
-   ya usa la leyenda (`naranja`, `amarillo`, `rojo`, `gris`, `blanco`,
-   `verde-pistacho`, `morado`, `verde-pálido`, `cian` y `sin-color`). No acepta códigos
-   ANSI, secuencias de escape ni colores arbitrarios. Esto permite reasignar
-   los colores existentes sin convertir el terminal en un canal de texto
-   ejecutable.
+5. El escaneo prefiere la carpeta canónica del engine. Los nombres históricos
+   `flm`, `mlx` y `tensorrt` sirven como fallback cuando el directorio canónico
+   no contiene TOMLs. Si ambos tienen TOMLs, sólo se escanea el canónico, para
+   no duplicar modelos.
 
-6. **Rangos validados tras el overlay**: se comprueba el rango efectivo de
-   cada engine después de aplicar `[engines.<id>]`. Los límites deben ser
-   puertos válidos y `port_min <= port_max`; el conjunto efectivo también se
-   valida para detectar rangos solapados. Un error se informa como error de
-   configuración antes de usar los puertos.
-
-7. **Configuración operativa cerrada**: no se exponen en `config.toml`
-   repositorios de instalación, dependencias, gestores de paquetes, comandos
-   pre/post instalación, flags de compilación ni hooks. Esos datos permanecen
-   en los manifests y en el código controlado por Ropero. La configuración
-   puede cambiar ubicación, puertos y color; no cambia qué engine instala
-   Ropero ni cómo lo instala.
-
-8. **Manifiestos centrales**: los manifests de engine siguen viviendo en el
-   directorio `engines/` del catálogo/configuración descrito por ADR-008. La
-   configuración por-engine sólo añade directorios de TOMLs de modelos; el
-   descubrimiento mezcla esos TOMLs con el catálogo global y no mueve ni
-   reescribe los manifests de engine.
+6. Los overrides de color y puertos se validan después de aplicarlos al
+   manifest. Los rangos deben ser válidos y no solaparse. Los colores pertenecen
+   al conjunto cerrado de `EngineColor`; no se aceptan secuencias ANSI.
 
 ## Compatibilidad y migración
 
-- No se requiere migración para usuarios actuales: sin `[engines.<id>]`, cada
-  engine conserva las rutas globales y los valores de su manifest.
-- La configuración inicial mantiene los cinco campos globales de ADR-008.
-  Las secciones por-engine son opt-in y pueden documentarse como ejemplos
-  comentados.
-- Las variables globales existentes conservan prioridad y semántica. En
-  particular, `ROPERO_MODELS_DIR` continúa aceptando los layouts actuales de
-  catálogo; no se redefine como un directorio obligatorio por-engine.
-- Los manifiestos existentes siguen siendo fuente de verdad para instalación,
-  dependencias y comportamiento. Un engine ausente de `EngineId` no se puede
-  añadir mediante TOML.
+- Las rutas globales antiguas en la raíz de `config.toml` siguen leyéndose.
+- Las rutas por engine antiguas se aceptan pero dejan de tener efecto; deben
+  consolidarse bajo `[models.paths]`.
+- Los TOMLs se mantienen en carpetas de engine canónicas. Si el directorio
+  canónico está vacío y existe un directorio legacy con modelos, éste se usa.
+- Las variables globales existentes mantienen prioridad sobre el archivo:
+  `ROPERO_MODELS_DIR`, `GGUF_DIR`, `SAFETENSORS_DIR`, `ARTIFACTS_DIR`,
+  `ROPERO_BIN_DIR` y `LOG_DIR`.
 
-## Consecuencias y límites
+## Consecuencias
 
-- El parser de configuración debe distinguir las cinco rutas raíz de las
-  tablas `[engines.<id>]`, validarlas de forma estricta y conservar el origen
-  de cada valor para `ropero config`.
-- El runtime debe escanear cada `models_toml_dir` configurado y combinar los
-  modelos con el catálogo normal, detectando IDs duplicados y manifiestos
-  colocados bajo el engine incorrecto.
-- El overlay de color y puertos debe aplicarse una sola vez antes de construir
-  snapshots, listados, menús, doctor y planes de arranque. Todas esas vistas
-  deben mostrar y usar los mismos valores efectivos.
-- Compartir un directorio de artefactos no concede propiedad exclusiva de
-  sus contenidos. La deduplicación de ficheros idénticos, el aislamiento de
-  auxiliares y la política de `remove` son contratos separados; esta ADR no
-  decide cómo resolverlos.
-- `models_toml_dir` no añade escritura o edición automática de TOMLs. `ropero
-  template` sigue imprimiendo la plantilla y sólo sugiere el destino.
-
-## Orden de integración
-
-1. Extender `ropero-core::Config` y su parser con la tabla tipada por
-   `EngineId`, defaults, origen y validación.
-2. Hacer que `Environment` y `resolve_paths` resuelvan rutas por engine con la
-   precedencia acordada.
-3. Extender el escaneo y bootstrap del runtime para los directorios de TOMLs
-   por engine y aplicar los overrides de metadatos a los manifests efectivos.
-4. Mostrar las rutas y sus orígenes en `ropero config`/`doctor`, y actualizar
-   la plantilla de configuración y la especificación CLI.
-5. Cubrir precedencia, compatibilidad de configuraciones antiguas, escaneo
-   multi-directorio, duplicados, rangos solapados y consistencia de color y
-   puertos en pruebas.
+- `ropero config` y `ropero doctor` muestran las rutas compartidas y sólo los
+  overrides de engine que tienen efecto.
+- El runtime escanea una carpeta por engine y no mezcla catálogos duplicados.
+- La ruta de compilación de un engine pertenece a su instalación bajo
+  `~/.local/share/ropero/engines/<id>/build-ropero/`; no es una ruta de modelo
+  ni se configura en `config.toml`.

@@ -148,7 +148,7 @@ fn flm_deriva_tag_de_decision_cuando_path_vacio() {
         r#"
 [model]
 name = "d3mini"
-engine = "fastflowlm"
+engine = "fastflowllm"
 context = 32768
 format = "q4nx"
 path = ""
@@ -176,7 +176,7 @@ fn flm_con_path_y_decision_confirma_tags_exactos() {
         r#"
 [model]
 name = "lfm3"
-engine = "fastflowlm"
+engine = "fastflowllm"
 context = 131072
 format = "q4nx"
 path = "lfm3:1.7b"
@@ -413,7 +413,7 @@ fn conserva_tag_flm_compartido_y_no_cuenta_aliases_como_duenos_extra() {
         r#"
 [model]
 name = "flm-a"
-engine = "fastflowlm"
+engine = "fastflowllm"
 context = 4096
 format = "q4nx"
 path = "tag:shared"
@@ -427,7 +427,7 @@ path = "tag:shared"
 [model]
 name = "flm-b"
 alias = "flm-b-alt"
-engine = "fastflowlm"
+engine = "fastflowllm"
 context = 4096
 format = "q4nx"
 path = "tag:shared"

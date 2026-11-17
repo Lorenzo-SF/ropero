@@ -9,6 +9,10 @@ La v1 nombraba los motores con ids que ya no describían lo que eran: `llama-ser
 ## Decisión
 La nomenclatura canónica de motores pasa a ser la **leyenda del dueño**: `llama-server` (oficial, naranja), `turbo-llama` (fork privado, amarillo), `flm` (rojo), `mlx` (gris), `airllm` (blanco), `tensorrt-llm` (verde pistacho), `vllm` (morado), `strata` (verde pálido). Los rangos siguen las bases del ropero viejo en bloques de diez: `llama-server` 9980-9989, `turbo-llama` 9990-9999, `fastflowlm` 9970-9979, `mlx-serve` 9960-9969, `tensorrt-llm` 9950-9959, `vllm` 9940-9949, `airllm` 9930-9939 y `strata` 9920-9929.
 
+**Aclaración (2026-11-17):** el id canónico de FastFlowLM es `fastflowllm`, que
+refleja la grafía del nombre del engine. `fastflowlm` y `flm` se conservan como
+aliases de compatibilidad para configuraciones y catálogos existentes.
+
 En la integración de Ignis se amplía la lista con `ignis` (cian), Linux x86_64
 con NVIDIA RTX, puerto `9910-9919` y artefactos `.ninfer`. Ignis usa el
 protocolo OpenAI y su propio descargador de modelos y companions.

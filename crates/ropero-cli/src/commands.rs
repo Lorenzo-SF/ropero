@@ -262,7 +262,7 @@ pub fn doctor() -> i32 {
                 installed: ropero_runtime::engine_installed_with_env(m, &s.env),
                 manifest: m.clone(),
                 checks: if ropero_core::evaluate_compat(m, &sistema).es_compatible() {
-                    comprueba_deps(&m.deps)
+                    comprueba_deps(&m.deps, &s.env)
                 } else {
                     Vec::new()
                 },
@@ -307,14 +307,17 @@ fn comprueba_ropero() -> Vec<ropero_core::doctor::DepCheck> {
 }
 
 /// Las dependencias de un motor.
-fn comprueba_deps(deps: &[String]) -> Vec<ropero_core::doctor::DepCheck> {
+fn comprueba_deps(
+    deps: &[String],
+    env: &ropero_core::Environment,
+) -> Vec<ropero_core::doctor::DepCheck> {
     deps.iter()
         .map(|nombre| ropero_core::doctor::DepCheck {
             dependency: ropero_core::doctor::Dependency {
                 name: nombre.clone(),
                 remedy: "instálalo con tu gestor de paquetes".to_string(),
             },
-            status: if ropero_runtime::which(nombre).is_some() {
+            status: if ropero_runtime::install::which_en(env, nombre).is_some() {
                 ropero_core::doctor::DepStatus::Ok
             } else {
                 ropero_core::doctor::DepStatus::Missing

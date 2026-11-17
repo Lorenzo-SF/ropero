@@ -23,7 +23,7 @@ const CANONICOS: &[(&str, EngineId)] = &[
     ("llama-server", EngineId::LlamaServer),
     ("turbo-llama", EngineId::TurboLlama),
     ("mlx-serve", EngineId::MlxServe),
-    ("fastflowlm", EngineId::FastFlowLm),
+    ("fastflowllm", EngineId::FastFlowLm),
     ("tensorrt-llm", EngineId::TensorRtLlm),
     ("vllm", EngineId::Vllm),
     ("airllm", EngineId::AirLlm),
@@ -41,6 +41,7 @@ const ALIAS_LEGACY: &[(&str, EngineId)] = &[
     ("llama", EngineId::LlamaServer),
     ("turbo", EngineId::TurboLlama),
     ("mlx_lm", EngineId::MlxServe),
+    ("fastflowlm", EngineId::FastFlowLm),
     ("flm", EngineId::FastFlowLm),
     ("tensorrt", EngineId::TensorRtLlm),
     ("strata_engine", EngineId::Strata),
@@ -203,6 +204,21 @@ fn from_str_legacy_acepta_canonicos_y_alias() {
     }
 }
 
+#[test]
+fn from_dir_name_acepta_ids_canonicos_y_alias_de_catalogo() {
+    for (dir, expected) in [
+        ("fastflowllm", EngineId::FastFlowLm),
+        ("fastflowlm", EngineId::FastFlowLm),
+        ("flm", EngineId::FastFlowLm),
+        ("mlx-serve", EngineId::MlxServe),
+        ("mlx", EngineId::MlxServe),
+        ("tensorrt-llm", EngineId::TensorRtLlm),
+        ("tensorrt", EngineId::TensorRtLlm),
+    ] {
+        assert_eq!(EngineId::from_dir_name(dir), Some(expected), "{dir}");
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // El id desconocido
 // ─────────────────────────────────────────────────────────────────────────────
@@ -277,7 +293,7 @@ fn los_ids_canonicos_son_los_de_adr_004() {
             "llama-server",
             "turbo-llama",
             "mlx-serve",
-            "fastflowlm",
+            "fastflowllm",
             "tensorrt-llm",
             "vllm",
             "airllm",

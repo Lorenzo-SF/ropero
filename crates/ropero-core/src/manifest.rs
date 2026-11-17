@@ -261,6 +261,14 @@ pub struct EngineInstallSpec {
     /// sólo invoca el gestor si falta alguno y deja que éste pida privilegios.
     #[serde(default)]
     pub system_packages: std::collections::BTreeMap<String, Vec<String>>,
+    /// Paquetes de AUR para gestores compatibles con Arch Linux. Se instalan
+    /// con `paru` o `yay` después de las dependencias oficiales.
+    #[serde(default)]
+    pub aur_packages: Vec<String>,
+    /// Repositorios APT indexados por `ID` de `/etc/os-release` (por ejemplo,
+    /// el PPA de XRT que requiere FastFlowLM en Ubuntu).
+    #[serde(default)]
+    pub apt_repositories: std::collections::BTreeMap<String, Vec<String>>,
     /// Comando para bajar/instalar un tag: `<cmd...> <tag>`.
     #[serde(default)]
     pub pull: Vec<String>,
