@@ -32,10 +32,13 @@ fn parse_config_roundtrip_rutas_especiales() {
     assert_eq!(parseado.gguf_dir.valor, ruta.join("gguf"));
     assert_eq!(parseado.models_dir.origen, Origen::Archivo);
     assert_eq!(parseado.engines.len(), 9);
+    assert!(texto.contains("[models.paths]"));
+    assert!(!texto.contains("models_toml_dir ="));
+    assert_eq!(texto.matches("gguf_dir =").count(), 1);
     for id in [
         "llama-server",
         "turbo-llama",
-        "fastflowlm",
+        "fastflowllm",
         "mlx-serve",
         "tensorrt-llm",
         "vllm",
@@ -130,6 +133,42 @@ fn config_por_engine_resuelve_rutas_y_preserva_precedencia_global_env() {
             .engine_artifact_path(id, "GGUF_DIR", "models/gguf"),
         std::path::PathBuf::from("/global/from-env")
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn models_paths_define_las_rutas_globales_y_legacy_por_engine_no_las_duplica() {
+    let base = std::env::temp_dir().join("ropero-model-paths-globales");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let home = base.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let text = format!(
+        "[models.paths]\nmodels_dir = \"{}\"\ngguf_dir = \"{}\"\nsafetensors_dir = \"{}\"\nartifacts_dir = \"{}\"\nbin_dir = \"{}\"\nlogs_dir = \"{}\"\n\n[engines.ignis]\nport_min = 9911\n",
+        base.join("catalog").display(),
+        base.join("weights").display(),
+        base.join("checkpoints").display(),
+        base.join("artifacts").display(),
+        base.join("bin").display(),
+        base.join("logs").display(),
+    );
+    let e = env(home.to_str().unwrap(), base.to_str().unwrap(), &[]);
+    let cfg = resuelve_config(&e, Some(&text)).unwrap();
+    assert_eq!(cfg.models_dir.valor, base.join("catalog"));
+    assert_eq!(
+        cfg.gguf_dir_de(ropero_core::EngineId::Ignis).valor,
+        base.join("weights")
+    );
+    assert_eq!(
+        cfg.safetensors_dir_de(ropero_core::EngineId::Ignis).valor,
+        base.join("checkpoints")
+    );
+    assert_eq!(
+        cfg.artifacts_dir_de(ropero_core::EngineId::Ignis).valor,
+        base.join("artifacts")
+    );
+    assert_eq!(cfg.bin_dir.valor, base.join("bin"));
+    assert_eq!(cfg.logs_dir.valor, base.join("logs"));
     let _ = std::fs::remove_dir_all(&base);
 }
 

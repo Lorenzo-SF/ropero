@@ -82,6 +82,9 @@ pub const VAR_GGUF: &str = "GGUF_DIR";
 /// La variable de entorno que fija el directorio de los checkpoints.
 pub const VAR_SAFETENSORS: &str = "SAFETENSORS_DIR";
 
+/// La variable de entorno que fija los artefactos de motores con almacén propio.
+pub const VAR_ARTIFACTS: &str = "ARTIFACTS_DIR";
+
 /// La variable de entorno que fija el directorio de los binarios.
 pub const VAR_BIN: &str = "ROPERO_BIN_DIR";
 
@@ -101,6 +104,7 @@ pub const CAMPOS: &[(&str, &str)] = &[
     ("models_dir", VAR_MODELOS),
     ("gguf_dir", VAR_GGUF),
     ("safetensors_dir", VAR_SAFETENSORS),
+    ("artifacts_dir", VAR_ARTIFACTS),
     ("bin_dir", VAR_BIN),
     ("logs_dir", VAR_LOGS),
 ];
@@ -189,7 +193,7 @@ impl Ruta {
 
 /// La configuración de ropero: las rutas que el usuario puede cambiar.
 ///
-/// Son **cinco**, y ninguna más: las que el usuario puede cambiar de verdad
+/// Son las rutas globales que el usuario puede cambiar de verdad
 /// (dónde está el catálogo, dónde los pesos, dónde los binarios y dónde los
 /// logs). Un campo que no sirve para algo no se pone.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,6 +204,8 @@ pub struct Config {
     pub gguf_dir: Ruta,
     /// El directorio de los checkpoints: `<[model].path>`.
     pub safetensors_dir: Ruta,
+    /// Artefactos descargados por motores con almacén propio (p. ej. Ignis).
+    pub artifacts_dir: Ruta,
     /// El directorio donde se crean los enlaces de los motores.
     pub bin_dir: Ruta,
     /// El directorio de los logs: `<modelo>.log`.
@@ -232,6 +238,7 @@ impl Config {
             VAR_MODELOS => Some(&self.models_dir),
             VAR_GGUF => Some(&self.gguf_dir),
             VAR_SAFETENSORS => Some(&self.safetensors_dir),
+            VAR_ARTIFACTS => Some(&self.artifacts_dir),
             VAR_BIN => Some(&self.bin_dir),
             VAR_LOGS => Some(&self.logs_dir),
             _ => None,
@@ -239,47 +246,34 @@ impl Config {
     }
 
     /// Las rutas de la configuración, en el orden en que se enseñan.
-    pub fn rutas(&self) -> [(&'static str, &Ruta); 5] {
+    pub fn rutas(&self) -> [(&'static str, &Ruta); 6] {
         [
             ("models_dir", &self.models_dir),
             ("gguf_dir", &self.gguf_dir),
             ("safetensors_dir", &self.safetensors_dir),
+            ("artifacts_dir", &self.artifacts_dir),
             ("bin_dir", &self.bin_dir),
             ("logs_dir", &self.logs_dir),
         ]
     }
 
     pub fn models_toml_dir(&self, engine: EngineId) -> Ruta {
-        self.engines
-            .get(&engine)
-            .and_then(|e| e.models_toml_dir.clone())
-            .unwrap_or_else(|| {
-                Ruta::new(
-                    self.models_dir.valor.join(engine.as_str()),
-                    self.models_dir.origen.clone(),
-                )
-            })
+        Ruta::new(
+            self.models_dir.valor.join(engine.as_str()),
+            self.models_dir.origen.clone(),
+        )
     }
 
-    pub fn gguf_dir_de(&self, engine: EngineId) -> Ruta {
-        self.engines
-            .get(&engine)
-            .and_then(|e| e.gguf_dir.clone())
-            .unwrap_or_else(|| self.gguf_dir.clone())
+    pub fn gguf_dir_de(&self, _engine: EngineId) -> Ruta {
+        self.gguf_dir.clone()
     }
 
-    pub fn artifacts_dir_de(&self, engine: EngineId) -> Ruta {
-        self.engines
-            .get(&engine)
-            .and_then(|e| e.artifacts_dir.clone())
-            .unwrap_or_else(|| self.gguf_dir.clone())
+    pub fn artifacts_dir_de(&self, _engine: EngineId) -> Ruta {
+        self.artifacts_dir.clone()
     }
 
-    pub fn safetensors_dir_de(&self, engine: EngineId) -> Ruta {
-        self.engines
-            .get(&engine)
-            .and_then(|e| e.safetensors_dir.clone())
-            .unwrap_or_else(|| self.safetensors_dir.clone())
+    pub fn safetensors_dir_de(&self, _engine: EngineId) -> Ruta {
+        self.safetensors_dir.clone()
     }
 
     /// Sobrescribe color y puertos una vez cargados los manifests.
@@ -424,17 +418,7 @@ pub fn archivo_config(env: &Environment) -> PathBuf {
 /// que gana el archivo de configuración.
 pub fn config_defectos(vars: &BTreeMap<String, String>, home: &Path, cwd: &Path) -> Config {
     let dir_config = directorio_config_de(vars, home, cwd);
-    let mut engines = BTreeMap::new();
-    engines.insert(
-        EngineId::Ignis,
-        ConfigEngine {
-            artifacts_dir: Some(Ruta::new(
-                ruta_por_defecto(home, "models/ignis"),
-                Origen::Defecto,
-            )),
-            ..ConfigEngine::default()
-        },
-    );
+    let engines = BTreeMap::new();
     Config {
         models_dir: Ruta::new(dir_config.join(DIR_MODELOS), Origen::Defecto),
         gguf_dir: Ruta::new(ruta_por_defecto(home, "models/gguf"), Origen::Defecto),
@@ -442,6 +426,7 @@ pub fn config_defectos(vars: &BTreeMap<String, String>, home: &Path, cwd: &Path)
             ruta_por_defecto(home, "models/safetensors"),
             Origen::Defecto,
         ),
+        artifacts_dir: Ruta::new(ruta_por_defecto(home, "models/ignis"), Origen::Defecto),
         bin_dir: Ruta::new(ruta_por_defecto(home, ".local/bin"), Origen::Defecto),
         logs_dir: Ruta::new(dir_config.join(DIR_LOGS), Origen::Defecto),
         engines,
@@ -477,6 +462,9 @@ fn con_variables(
     }
     if let Some(valor) = aplica(VAR_SAFETENSORS) {
         config.safetensors_dir = Ruta::new(valor, Origen::Variable(VAR_SAFETENSORS.to_string()));
+    }
+    if let Some(valor) = aplica(VAR_ARTIFACTS) {
+        config.artifacts_dir = Ruta::new(valor, Origen::Variable(VAR_ARTIFACTS.to_string()));
     }
     if let Some(valor) = aplica(VAR_BIN) {
         config.bin_dir = Ruta::new(valor, Origen::Variable(VAR_BIN.to_string()));
@@ -514,13 +502,6 @@ pub fn parse_config(texto: &str, env: &Environment) -> Result<Config, ErrorConfi
                         "engine desconocido; usa un id canónico de Ropero",
                     )
                 })?;
-                if id.as_str() != raw_id {
-                    return Err(ErrorConfig::de_campo(
-                        &format!("engines.{raw_id}"),
-                        raw_id,
-                        "usa el id canónico del engine, no un alias",
-                    ));
-                }
                 let Some(fields) = raw_config.as_table() else {
                     return Err(ErrorConfig::de_campo(
                         &format!("engines.{raw_id}"),
@@ -528,9 +509,41 @@ pub fn parse_config(texto: &str, env: &Environment) -> Result<Config, ErrorConfi
                         "debe ser una tabla",
                     ));
                 };
-                config
+                let parsed = parse_engine_config(raw_id, fields, env)?;
+                let current_is_canonical = config
                     .engines
-                    .insert(id, parse_engine_config(raw_id, fields, env)?);
+                    .get(&id)
+                    .is_some_and(|_| raw_id != id.as_str());
+                if !current_is_canonical || raw_id == id.as_str() {
+                    config.engines.insert(id, parsed);
+                }
+            }
+            continue;
+        }
+        if campo == "models" {
+            let Some(models) = valor.as_table() else {
+                return Err(ErrorConfig::de_campo(
+                    "models",
+                    "",
+                    "debe ser una tabla con una sección [models.paths]",
+                ));
+            };
+            for (section, section_value) in models {
+                if section != "paths" {
+                    return Err(ErrorConfig::de_campo(
+                        &format!("models.{section}"),
+                        "",
+                        "sección desconocida (usa [models.paths])",
+                    ));
+                }
+                let Some(paths) = section_value.as_table() else {
+                    return Err(ErrorConfig::de_campo(
+                        "models.paths",
+                        "",
+                        "debe ser una tabla de rutas",
+                    ));
+                };
+                parse_model_paths(paths, &mut config, env)?;
             }
             continue;
         }
@@ -555,6 +568,9 @@ pub fn parse_config(texto: &str, env: &Environment) -> Result<Config, ErrorConfi
             "safetensors_dir" => {
                 config.safetensors_dir = Ruta::new(ruta, Origen::Archivo);
             }
+            "artifacts_dir" => {
+                config.artifacts_dir = Ruta::new(ruta, Origen::Archivo);
+            }
             "bin_dir" => {
                 config.bin_dir = Ruta::new(ruta, Origen::Archivo);
             }
@@ -574,6 +590,46 @@ pub fn parse_config(texto: &str, env: &Environment) -> Result<Config, ErrorConfi
         }
     }
     Ok(config)
+}
+
+fn parse_model_paths(
+    paths: &toml::Table,
+    config: &mut Config,
+    env: &Environment,
+) -> Result<(), ErrorConfig> {
+    for (field, value) in paths {
+        let Some(raw) = value.as_str() else {
+            return Err(ErrorConfig::de_campo(
+                &format!("models.paths.{field}"),
+                "",
+                &format!("el valor no es una ruta (es {})", tipo_de(value)),
+            ));
+        };
+        if let Some(reason) = problema_de_ruta(raw) {
+            return Err(ErrorConfig::de_campo(
+                &format!("models.paths.{field}"),
+                raw,
+                reason,
+            ));
+        }
+        let route = Ruta::new(env.expand_path(raw), Origen::Archivo);
+        match field.as_str() {
+            "models_dir" => config.models_dir = route,
+            "gguf_dir" => config.gguf_dir = route,
+            "safetensors_dir" => config.safetensors_dir = route,
+            "artifacts_dir" => config.artifacts_dir = route,
+            "bin_dir" => config.bin_dir = route,
+            "logs_dir" => config.logs_dir = route,
+            _ => {
+                return Err(ErrorConfig::de_campo(
+                    &format!("models.paths.{field}"),
+                    raw,
+                    "campo desconocido (models_dir, gguf_dir, safetensors_dir, artifacts_dir, bin_dir, logs_dir)",
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn parse_engine_config(
@@ -763,6 +819,7 @@ pub fn ejemplo_config(config: &Config) -> String {
     out.push_str("# El catálogo de modelos del usuario vive en <config>/models/<motor>/\n");
     out.push_str("# y los manifiestos de motor en <config>/engines/.\n");
     out.push('\n');
+    out.push_str("[models.paths]\n");
     out.push_str(&format!(
         "# El catálogo: <motor>/<modelo>.toml\nmodels_dir = \"{}\"\n",
         escapa_toml(&config.models_dir.valor.to_string_lossy())
@@ -774,6 +831,10 @@ pub fn ejemplo_config(config: &Config) -> String {
     out.push_str(&format!(
         "# Los checkpoints: <[model].path>\nsafetensors_dir = \"{}\"\n",
         escapa_toml(&config.safetensors_dir.valor.to_string_lossy())
+    ));
+    out.push_str(&format!(
+        "# Artefactos gestionados por motores con almacén propio (p. ej. Ignis)\nartifacts_dir = \"{}\"\n",
+        escapa_toml(&config.artifacts_dir.valor.to_string_lossy())
     ));
     out.push_str(&format!(
         "# Los enlaces de los motores\nbin_dir = \"{}\"\n",
@@ -796,21 +857,9 @@ pub fn ejemplo_config(config: &Config) -> String {
         EngineId::Ignis,
     ] {
         let (port_min, port_max, color) = valores_por_defecto_engine(id);
-        let models = config.models_toml_dir(id);
-        let artifacts = config.artifacts_dir_de(id);
-        let gguf = config.gguf_dir_de(id);
-        let safetensors = config.safetensors_dir_de(id);
         out.push_str(&format!(
-            "\n[engines.{}]\nmodels_toml_dir = \"{}\"\n{}gguf_dir = \"{}\"\nsafetensors_dir = \"{}\"\nport_min = {}\nport_max = {}\ncolor = \"{}\"\n# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n",
+            "\n[engines.{}]\nport_min = {}\nport_max = {}\ncolor = \"{}\"\n# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n",
             id.as_str(),
-            escapa_toml(&models.valor.to_string_lossy()),
-            if id == EngineId::Ignis {
-                format!("artifacts_dir = \"{}\"\n", escapa_toml(&artifacts.valor.to_string_lossy()))
-            } else {
-                String::new()
-            },
-            escapa_toml(&gguf.valor.to_string_lossy()),
-            escapa_toml(&safetensors.valor.to_string_lossy()),
             port_min,
             port_max,
             color.as_str(),
@@ -896,26 +945,7 @@ pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -
             .columna(Columna::texto("valor"))
             .columna(Columna::texto("origen"));
         for (engine, overrides) in &config.engines {
-            let tomls = config.models_toml_dir(*engine);
-            let artifacts = config.artifacts_dir_de(*engine);
-            let gguf = config.gguf_dir_de(*engine);
-            let safetensors = config.safetensors_dir_de(*engine);
             let mut values = vec![
-                (
-                    "models_toml_dir",
-                    tomls.valor.to_string_lossy().to_string(),
-                    tomls.origen.texto(),
-                ),
-                (
-                    "gguf_dir",
-                    gguf.valor.to_string_lossy().to_string(),
-                    gguf.origen.texto(),
-                ),
-                (
-                    "safetensors_dir",
-                    safetensors.valor.to_string_lossy().to_string(),
-                    safetensors.origen.texto(),
-                ),
                 (
                     "puertos",
                     match (overrides.port_min, overrides.port_max) {
@@ -945,11 +975,15 @@ pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -
                     .to_string(),
                 ),
             ];
-            if overrides.artifacts_dir.is_some() {
+            if overrides.models_toml_dir.is_some()
+                || overrides.artifacts_dir.is_some()
+                || overrides.gguf_dir.is_some()
+                || overrides.safetensors_dir.is_some()
+            {
                 values.push((
-                    "artifacts_dir",
-                    artifacts.valor.to_string_lossy().to_string(),
-                    artifacts.origen.texto(),
+                    "rutas legacy",
+                    "ignoradas; usa [models.paths]".to_string(),
+                    "migración requerida".to_string(),
                 ));
             }
             for (field, value, origin) in values {
@@ -993,19 +1027,17 @@ pub fn lineas_doctor_config(estado: &EstadoConfig, config: &Config) -> Vec<Strin
     seccion.cuerpo(pares(1, &campos));
     out.extend(seccion.lineas());
     for (engine, overrides) in &config.engines {
-        let tomls = config.models_toml_dir(*engine);
-        let gguf = config.gguf_dir_de(*engine);
-        let safetensors = config.safetensors_dir_de(*engine);
-        out.push(format!(
-            "  {}: TOMLs {} ({}); GGUF {} ({}); safetensors {} ({})",
-            engine.as_str(),
-            tomls.valor.display(),
-            tomls.origen.texto(),
-            gguf.valor.display(),
-            gguf.origen.texto(),
-            safetensors.valor.display(),
-            safetensors.origen.texto(),
-        ));
+        if overrides.models_toml_dir.is_some()
+            || overrides.artifacts_dir.is_some()
+            || overrides.gguf_dir.is_some()
+            || overrides.safetensors_dir.is_some()
+        {
+            out.push(format!(
+                "  {}: hay rutas por-engine antiguas; se ignoran. Muévelas a [models.paths] en {}",
+                engine.as_str(),
+                estado.archivo.display()
+            ));
+        }
         if overrides.port_min.is_some() || overrides.port_max.is_some() || overrides.color.is_some()
         {
             out.push(format!(

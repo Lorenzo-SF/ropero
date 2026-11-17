@@ -61,25 +61,7 @@ pub fn scan(root: &Path, env: &Environment) -> Result<Scan, String> {
         .filter(|p| p.is_dir())
         .collect::<Vec<PathBuf>>();
     dirs.sort();
-    let config = env.config_resuelta();
-    let external_catalog_override =
-        env.get("ROPERO_MODELS_DIR").is_some() || env.get("ROPERO_ROOT").is_some();
-    let custom_dirs: BTreeMap<EngineId, PathBuf> = if external_catalog_override {
-        BTreeMap::new()
-    } else {
-        config
-            .engines
-            .iter()
-            .filter_map(|(id, engine)| {
-                engine
-                    .models_toml_dir
-                    .as_ref()
-                    .map(|ruta| (*id, ruta.valor.clone()))
-            })
-            .collect()
-    };
-    let mut scanned = Vec::new();
-    let mut scanned_paths = BTreeMap::<PathBuf, EngineId>::new();
+    let mut candidates = BTreeMap::<EngineId, Vec<PathBuf>>::new();
     for dir in dirs {
         let folder = dir.file_name().unwrap_or_default().to_string_lossy();
         // Una carpeta que no corresponde a ningún motor es un **problema** del
@@ -89,42 +71,34 @@ pub fn scan(root: &Path, env: &Environment) -> Result<Scan, String> {
             problems.push(msg);
             continue;
         };
-        if custom_dirs
-            .get(&engine)
-            .is_some_and(|custom| custom != &dir)
-        {
-            continue;
+        candidates.entry(engine).or_default().push(dir);
+    }
+    // Nombres antiguos de carpetas (`flm`, `mlx`, `tensorrt`) siguen siendo
+    // válidos para instalaciones previas. Si conviven con el nombre canónico,
+    // se escanea una sola carpeta: primero la canónica y, si está vacía, la
+    // antigua. Así no aparecen modelos duplicados y una carpeta canónica
+    // creada por el bootstrap no oculta un catálogo legado que aún tiene datos.
+    let mut scanned = Vec::new();
+    let mut scanned_paths = BTreeMap::<PathBuf, EngineId>::new();
+    for (engine, mut engine_dirs) in candidates {
+        engine_dirs.sort_by_key(|dir| {
+            let canonical = dir.file_name().is_some_and(|name| name == engine.as_str());
+            (!canonical, dir.clone())
+        });
+        let selected = engine_dirs
+            .iter()
+            .find(|dir| dir_has_model_toml(dir))
+            .or_else(|| engine_dirs.first());
+        if let Some(dir) = selected {
+            let identity = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            scanned_paths.insert(identity, engine);
+            scanned.push((engine, dir.clone()));
         }
-        let identity = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-        scanned_paths.insert(identity, engine);
-        scanned.push((engine, dir));
     }
     for (engine, dir) in scanned {
         files += collect_engine(
             engine,
             &dir,
-            &mut active,
-            &mut fired,
-            &mut problems,
-            &mut notices,
-            &mut texts,
-        )?;
-    }
-    for (engine, dir) in &custom_dirs {
-        let identity = dir.canonicalize().unwrap_or_else(|_| dir.clone());
-        if let Some(previous) = scanned_paths.get(&identity) {
-            if previous != engine {
-                problems.push(format!(
-                    "la ruta de TOML {} está asignada a los motores '{}' y '{}'; se ignora para '{}'",
-                    dir.display(), previous.as_str(), engine.as_str(), engine.as_str()
-                ));
-            }
-            continue;
-        }
-        scanned_paths.insert(identity, *engine);
-        files += collect_engine(
-            *engine,
-            dir,
             &mut active,
             &mut fired,
             &mut problems,
@@ -144,6 +118,7 @@ pub fn scan(root: &Path, env: &Environment) -> Result<Scan, String> {
         ropero_core::config::raiz_del_catalogo(&base).join(ropero_core::ENGINES_DIR_NAME)
     };
     let mut engines = scan_engines(&engines_dir, &mut problems);
+    let config = env.config_resuelta();
     let config_error = config.overlay_engines(&mut engines).err();
     Ok(Scan {
         catalog,
@@ -155,6 +130,18 @@ pub fn scan(root: &Path, env: &Environment) -> Result<Scan, String> {
         root: root.to_path_buf(),
         engines,
         config_error,
+    })
+}
+
+fn dir_has_model_toml(dir: &Path) -> bool {
+    fs::read_dir(dir).ok().is_some_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.path().is_file()
+                && entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+        })
     })
 }
 
@@ -226,8 +213,8 @@ fn scan_engines(dir: &Path, problems: &mut Vec<String>) -> Vec<EngineManifest> {
         ("airllm", include_str!("../../../engines/airllm.toml")),
         ("ignis", include_str!("../../../engines/ignis.toml")),
         (
-            "fastflowlm",
-            include_str!("../../../engines/fastflowlm.toml"),
+            "fastflowllm",
+            include_str!("../../../engines/fastflowllm.toml"),
         ),
         (
             "llama-server",
@@ -393,6 +380,27 @@ pub fn engine_installed_with_env(manifest: &EngineManifest, env: &Environment) -
             .map(|dir| dir.join(binary))
             .any(|candidate| es_ejecutable(&candidate))
     };
+    let checkout_binary = manifest.install.as_ref().and_then(|install| {
+        let binary = install.binary.as_deref()?;
+        let source = install
+            .source_dir
+            .as_deref()
+            .map(|raw| env.expand_path(raw))
+            .unwrap_or_else(|| {
+                env.home
+                    .join(".local/share/ropero/engines")
+                    .join(manifest.id.as_str())
+            });
+        let canonical = source.join(manifest.id.as_str());
+        let legacy = source.join("fastflowlm");
+        let engine_dir =
+            if manifest.id == EngineId::FastFlowLm && !canonical.exists() && legacy.exists() {
+                legacy
+            } else {
+                canonical
+            };
+        Some(engine_dir.join("build-ropero/install").join(binary))
+    });
     manifest
         .detect
         .binaries
@@ -406,6 +414,18 @@ pub fn engine_installed_with_env(manifest: &EngineManifest, env: &Environment) -
             let candidate = env.expand_path(raw);
             es_ejecutable(&candidate)
         })
+        || checkout_binary.as_deref().is_some_and(es_ejecutable)
+        || (manifest.id == EngineId::Ignis && ignis_installed_under_ropero(env))
+}
+
+fn ignis_installed_under_ropero(env: &Environment) -> bool {
+    let root = env.home.join(".local/share/ropero/engines/ignis");
+    std::fs::read_dir(root).ok().is_some_and(|entries| {
+        entries.flatten().any(|entry| {
+            let candidate = entry.path().join("ignis-server");
+            es_ejecutable(&candidate)
+        })
+    })
 }
 
 /// Si el modelo está descargado: sus ficheros `[files]` existen.
@@ -448,7 +468,7 @@ pub fn model_downloaded_with_engine(
             return false;
         };
         if crate::flm::delegated(engine) {
-            return crate::flm::installed_status(engine, spec).unwrap_or(false);
+            return crate::flm::installed_status(engine, spec, env).unwrap_or(false);
         }
         return false;
     }

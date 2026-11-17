@@ -60,7 +60,7 @@ mod tests {
     const D3: &str = r#"
 [model]
 name    = "d3mini"
-engine  = "fastflowlm"
+engine  = "fastflowllm"
 context = 32768
 format  = "q4nx"
 path    = ""
@@ -74,7 +74,7 @@ base = ["--decision", "d3:mini", "--prefill-chunk-len", "8192"]
     const LFM3: &str = r#"
 [model]
 name    = "lfm3"
-engine  = "fastflowlm"
+engine  = "fastflowllm"
 context = 131072
 format  = "q4nx"
 path    = "lfm3:1.7b"

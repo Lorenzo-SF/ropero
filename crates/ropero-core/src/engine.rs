@@ -31,7 +31,7 @@ pub enum EngineId {
     TurboLlama,
     #[serde(rename = "mlx-serve")]
     MlxServe,
-    #[serde(rename = "fastflowlm")]
+    #[serde(rename = "fastflowllm")]
     FastFlowLm,
     #[serde(rename = "tensorrt-llm")]
     TensorRtLlm,
@@ -74,7 +74,7 @@ impl std::fmt::Display for UnknownEngine {
         write!(
             f,
             "motor desconocido: '{}'; usa uno de: llama-server, turbo-llama, \
-             mlx-serve, fastflowlm, tensorrt-llm, vllm, airllm, strata, ignis",
+             mlx-serve, fastflowllm, tensorrt-llm, vllm, airllm, strata, ignis",
             self.0
         )
     }
@@ -96,7 +96,7 @@ pub const CANONICAL_IDS: &[&str] = &[
     "llama-server",
     "turbo-llama",
     "mlx-serve",
-    "fastflowlm",
+    "fastflowllm",
     "tensorrt-llm",
     "vllm",
     "airllm",
@@ -111,7 +111,7 @@ impl EngineId {
             Self::LlamaServer => "llama-server",
             Self::TurboLlama => "turbo-llama",
             Self::MlxServe => "mlx-serve",
-            Self::FastFlowLm => "fastflowlm",
+            Self::FastFlowLm => "fastflowllm",
             Self::TensorRtLlm => "tensorrt-llm",
             Self::Vllm => "vllm",
             Self::AirLlm => "airllm",
@@ -131,7 +131,7 @@ impl EngineId {
             "llama-server" => Self::LlamaServer,
             "turbo-llama" => Self::TurboLlama,
             "mlx-serve" => Self::MlxServe,
-            "fastflowlm" => Self::FastFlowLm,
+            "fastflowllm" => Self::FastFlowLm,
             "tensorrt-llm" => Self::TensorRtLlm,
             "vllm" => Self::Vllm,
             "airllm" => Self::AirLlm,
@@ -147,6 +147,7 @@ impl EngineId {
             "llama" => Self::LlamaServer,
             "turbo" => Self::TurboLlama,
             "mlx_lm" => Self::MlxServe,
+            "fastflowlm" => Self::FastFlowLm,
             "flm" => Self::FastFlowLm,
             "tensorrt" => Self::TensorRtLlm,
             "strata_engine" => Self::Strata,
@@ -168,7 +169,7 @@ impl EngineId {
     /// Los directorios no son ids de motor: son las carpetas donde viven los
     /// modelos de cada motor, y su nombre no siempre coincide con él
     /// (`turbo-llama/` → `turbo-llama`, `mlx/` → `mlx-serve`, `flm/` →
-    /// `fastflowlm`). `None` si el directorio no corresponde a ningún motor.
+    /// `fastflowllm`). `None` si el directorio no corresponde a ningún motor.
     ///
     /// Los directorios **legacy** del catálogo de la v1 (`llama/`,
     /// `llama-official/`) también se mapean, para que un catálogo viejo se
@@ -178,8 +179,12 @@ impl EngineId {
             "turbo-llama" => Some(Self::TurboLlama),
             "llama-server" => Some(Self::LlamaServer),
             "mlx" => Some(Self::MlxServe),
+            "mlx-serve" => Some(Self::MlxServe),
             "flm" => Some(Self::FastFlowLm),
+            "fastflowlm" => Some(Self::FastFlowLm),
+            "fastflowllm" => Some(Self::FastFlowLm),
             "tensorrt" => Some(Self::TensorRtLlm),
+            "tensorrt-llm" => Some(Self::TensorRtLlm),
             "vllm" => Some(Self::Vllm),
             "airllm" => Some(Self::AirLlm),
             "strata" => Some(Self::Strata),

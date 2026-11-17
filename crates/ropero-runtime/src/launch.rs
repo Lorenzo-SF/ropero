@@ -47,6 +47,10 @@ pub struct LaunchSpec {
     /// nunca como argumento visible en la lista de procesos.
     pub server_api_key: Option<String>,
 
+    /// Variables propias del runtime que el proceso necesita. No incluyen
+    /// credenciales generales de Ropero; por ejemplo, las rutas de AMD XRT.
+    pub runtime_env: std::collections::BTreeMap<String, String>,
+
     /// El binario del motor (o el comando con sus argumentos).
     pub program: PathBuf,
 

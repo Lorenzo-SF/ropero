@@ -248,6 +248,7 @@ fn spec() -> LaunchSpec {
         engine: EngineId::LlamaServer,
         engine_name: "llama-server".to_string(),
         server_api_key: None,
+        runtime_env: Default::default(),
         program: PathBuf::from("/usr/bin/llama-server"),
         argv: vec!["--model".to_string(), "/models/groot.gguf".to_string()],
         level: "think".to_string(),

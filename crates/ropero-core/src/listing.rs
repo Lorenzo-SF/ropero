@@ -7,7 +7,7 @@
 //! MODELOS
 //!   modelo      tamaño   artefacto
 //!   ─────────────────────────────────────────
-//!   fastflowlm
+//!   fastflowllm
 //!   d3mini      ~3.50 GB  d3:mini
 //!   ─────────────────────────────────────────
 //!   llama-server

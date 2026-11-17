@@ -157,7 +157,7 @@ size = "~3.5 GB"
 const TOML_TAG_DECISION: &str = r#"
 [model]
 name    = "d3mini"
-engine  = "fastflowlm"
+engine  = "fastflowllm"
 context = 32768
 format  = "q4nx"
 path    = ""

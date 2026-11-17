@@ -35,7 +35,7 @@ pub fn es_metal(os: &str, arch: &str) -> bool {
 
 /// Si el texto de `xrt-smi examine` o de `lscpu` anuncia una NPU AMD.
 ///
-/// Las señales son las de la v1 (`ropero-code/bin/lib/engines/fastflowlm.sh`):
+/// Las señales son las de la v1 (`ropero-code/bin/lib/engines/fastflowllm.sh`):
 /// el XRT dice `npu` o `accel`, y `lscpu` dice `xdna` o `ryzen ai`.
 pub fn hace_npu(texto: &str) -> bool {
     let texto = texto.to_lowercase();

@@ -158,7 +158,7 @@ fn una_nota_ocupa_la_tabla_entera() {
     let mut tabla = Tabla::nivel(0)
         .columna(Columna::texto("motor"))
         .columna(Columna::texto("color"));
-    tabla.fila(vec![Celda::plana("fastflowlm"), Celda::plana("rojo")]);
+    tabla.fila(vec![Celda::plana("fastflowllm"), Celda::plana("rojo")]);
     tabla.nota(Celda::plana("no: sólo funciona en Linux"));
     let lineas = tabla.lineas(&Palette::plain());
     assert_eq!(lineas[3], "  no: sólo funciona en Linux");

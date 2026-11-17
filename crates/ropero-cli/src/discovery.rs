@@ -87,8 +87,10 @@ fn scan_with_config(
 
 /// Captura el entorno del proceso.
 pub fn capture_environment() -> Environment {
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    ropero_runtime::flm::augment_environment(&mut vars);
     Environment::new(
-        std::env::vars().collect(),
+        vars,
         std::env::var("HOME").unwrap_or_default(),
         std::env::current_dir().unwrap_or_default(),
     )

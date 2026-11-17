@@ -50,7 +50,7 @@ pub fn run(alias: &str, args: &[String]) -> i32 {
         return 1;
     }
     match confirmar(alias, &plan) {
-        Ok(true) => ropero_runtime::remove::ejecutar(&s.engines, spec, &plan),
+        Ok(true) => ropero_runtime::remove::ejecutar(&s.engines, spec, &plan, &s.env),
         Ok(false) => {
             ropero_core::out_line("operación cancelada; no se ha eliminado nada");
             0

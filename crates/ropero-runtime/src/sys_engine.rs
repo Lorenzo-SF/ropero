@@ -63,6 +63,7 @@ impl Default for SysEngine {
 impl Engine for SysEngine {
     fn spawn(&self, spec: &LaunchSpec, port: u16) -> Result<Spawned, String> {
         let mut command = Command::new(&spec.program);
+        command.envs(&spec.runtime_env);
         if let Some(key) = &spec.server_api_key {
             if spec.engine == ropero_core::EngineId::Ignis {
                 command.env("IGNIS_SERVER_API_KEY", key);
