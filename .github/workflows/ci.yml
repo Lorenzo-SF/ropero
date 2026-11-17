@@ -2,8 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
@@ -21,22 +27,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
         run: cargo fmt --all -- --check
+      - name: check
+        run: cargo check --locked --workspace --all-targets --all-features
       - name: clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
       - name: tests
-        run: cargo test --workspace --all-features
+        run: cargo test --locked --workspace --all-features
       - name: nextest
         uses: taiki-e/install-action@nextest
       - name: run nextest
-        run: cargo nextest run --workspace --all-features
+        run: cargo nextest run --locked --workspace --all-features
+      - name: release build
+        run: cargo build --locked --release -p ropero-cli
+      - name: CLI smoke test
+        run: ./target/release/ropero --help
       - name: install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: coverage
         # Sin umbrales todavía: los crates stubs tienen 0% de cobertura; activar
         # los umbrales de §9.4 cuando exista implementación real.
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+        run: cargo llvm-cov --locked --workspace --all-features --lcov --output-path lcov.info
       - name: upload coverage
         uses: actions/upload-artifact@v4
         with:
