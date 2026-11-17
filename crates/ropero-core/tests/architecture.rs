@@ -254,7 +254,7 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
     }
 }
 
-/// `ropero-cli` mide menos de 2200 líneas.
+/// `ropero-cli` mide menos de 2850 líneas.
 ///
 /// Es un dispatcher: la lógica vive en `ropero-core` (doc B §3.3) y la E/S
 /// en `ropero-runtime`.
@@ -262,10 +262,12 @@ fn ropero_core_does_not_depend_on_workspace_crates() {
 /// El umbral subió de 400 a 800 en el ADR-005, de 800 a 1100 en el ADR-006,
 /// a 1200 en el ADR-007, a 1600 y 1700 en el ADR-009 (configuración
 /// externa/bootstrap; `ropero <modelo> remove`). El comando `connect`
-/// añade adaptadores de CLI por agente y sube el límite hasta 2200;
-/// la escritura y preservación de configuración sigue en `ropero-runtime`.
+/// añade adaptadores de CLI por agente. La ampliación de `models add` añade
+/// el flujo de entrada, asistente y validación visible al usuario; la lógica
+/// de persistencia sigue separada de los adaptadores de configuración. Se
+/// reserva una ampliación acotada para los conectores manuales documentados.
 #[test]
-fn ropero_cli_under_2200_lines() {
+fn ropero_cli_under_2850_lines() {
     let cli_src = repo_root().join("crates").join("ropero-cli").join("src");
     let mut lines = 0usize;
     for file in collect_rs(&cli_src) {
@@ -273,8 +275,8 @@ fn ropero_cli_under_2200_lines() {
         lines += content.lines().count();
     }
     assert!(
-        lines < 2200,
-        "ropero-cli has {lines} lines, expected fewer than 2200 (connect adapters)"
+        lines < 2850,
+        "ropero-cli has {lines} lines, expected fewer than 2850 (connect and model catalog commands)"
     );
 }
 

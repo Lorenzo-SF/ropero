@@ -165,8 +165,11 @@ fn la_madurez_distingue_probados_de_no_probados() {
         .filter(|m| m.maturity == Maturity::Proven)
         .count();
     let no_probados = manifiestos.len() - probados;
-    assert_eq!(probados, 6, "los 6 motores probados");
-    assert_eq!(no_probados, 3, "los 3 motores no probados o integrados");
+    assert_eq!(probados, 5, "los 5 motores probados");
+    assert_eq!(
+        no_probados, 4,
+        "los 4 motores parciales, no probados o integrados"
+    );
 }
 
 /// Las restricciones de SO y hardware del doc CLI v2 §4.

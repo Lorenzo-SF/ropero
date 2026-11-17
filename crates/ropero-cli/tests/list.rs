@@ -1,4 +1,4 @@
-//! Tests de `ropero list`: los modelos disponibles, agrupados por motor,
+//! Tests de `ropero models`: los modelos disponibles, agrupados por motor,
 //! con la leyenda de colores.
 //!
 //! Van en su propio fichero porque son los del bloque 2 del ciclo: el
@@ -32,7 +32,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 /// está instalado, su grupo no se despliega.
 #[test]
 fn list_agrupa_por_motor() {
-    let (code, stdout, stderr) = run(&["list"]);
+    let (code, stdout, stderr) = run(&["models"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     // Los motores del fixture salen, cada uno en su color de la leyenda.
     assert!(stdout.contains("turbo-llama"), "stdout={}", stdout);
@@ -48,7 +48,7 @@ fn list_agrupa_por_motor() {
 /// instalado: no están disponibles (doc CLI v2 §15).
 #[test]
 fn list_no_saca_los_no_disponibles() {
-    let (code, stdout, stderr) = run(&["list"]);
+    let (code, stdout, stderr) = run(&["models"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     assert!(
         !stdout.contains("modelo-alpha"),
@@ -62,10 +62,10 @@ fn list_no_saca_los_no_disponibles() {
     );
 }
 
-/// `ropero list --all` saca también los que no están disponibles, marcados.
+/// `ropero models --all` saca también los que no están disponibles, marcados.
 #[test]
 fn list_all_marca_los_no_disponibles() {
-    let (code, stdout, stderr) = run(&["list", "--all"]);
+    let (code, stdout, stderr) = run(&["models", "--all"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     assert!(stdout.contains("modelo-alpha"), "stdout={}", stdout);
     assert!(
@@ -78,7 +78,7 @@ fn list_all_marca_los_no_disponibles() {
 /// leyenda.
 #[test]
 fn list_pinta_con_el_color_de_la_leyenda() {
-    let (code, stdout, stderr) = run(&["list"]);
+    let (code, stdout, stderr) = run(&["models"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     // La leyenda del doc CLI v2 §4: turbo-llama es amarillo (220).
     assert!(
@@ -97,7 +97,7 @@ fn el_listado_pone_una_sola_cabecera() {
     let es_cabecera = |linea: &str| {
         linea.contains("modelo") && linea.contains("tamaño") && linea.contains("artefacto")
     };
-    let (code, stdout, stderr) = run(&["list", "--all"]);
+    let (code, stdout, stderr) = run(&["models", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
     // En el fixture hay tres motores con modelos y la cabecera no se repite.
     let cabeceras: Vec<&str> = stdout.lines().filter(|l| es_cabecera(l)).collect();
@@ -121,7 +121,7 @@ fn el_listado_pone_una_sola_cabecera() {
     // Plegado, en el fixture ningún motor tiene modelos: una línea por motor
     // y ninguna cabecera. La cabecera plegada (con `nº` y `motor`) sólo sale
     // cuando hay modelos que enumerar, y entonces es una sola.
-    let (code, stdout, stderr) = run(&["list"]);
+    let (code, stdout, stderr) = run(&["models"]);
     assert_eq!(code, 0, "stderr={stderr}");
     assert_eq!(
         stdout.lines().filter(|l| es_cabecera(l)).count(),
@@ -133,7 +133,7 @@ fn el_listado_pone_una_sola_cabecera() {
 /// Ninguna línea del listado lleva espacios al final.
 #[test]
 fn el_listado_no_deja_espacios_al_final() {
-    for args in [&["list"][..], &["list", "--all"][..]] {
+    for args in [&["models"][..], &["models", "--all"][..]] {
         let (code, stdout, stderr) = run(args);
         assert_eq!(code, 0, "stderr={stderr}");
         for linea in stdout.lines() {
@@ -148,7 +148,7 @@ fn el_listado_no_deja_espacios_al_final() {
 /// la columna del tamaño no se alineaba.
 #[test]
 fn el_listado_da_una_sola_forma_al_tamano() {
-    let (code, stdout, stderr) = run(&["list", "--all"]);
+    let (code, stdout, stderr) = run(&["models", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
     let tamaños: Vec<String> = stdout
         .lines()
@@ -184,7 +184,7 @@ fn el_listado_da_una_sola_forma_al_tamano() {
 /// columna, no pegado al artefacto.
 #[test]
 fn la_columna_del_estado_no_se_mueve() {
-    let (code, stdout, stderr) = run(&["list", "--all"]);
+    let (code, stdout, stderr) = run(&["models", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
     let posiciones: Vec<usize> = stdout
         .lines()

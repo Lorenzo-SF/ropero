@@ -579,12 +579,13 @@ fn ejecutables_compilados(source_dir: &Path, principal: &Path) -> Result<Vec<Pat
             let entry = entry
                 .map_err(|e| format!("no puedo leer una entrada de {}: {e}", bin_dir.display()))?;
             let path = entry.path();
-            if path.is_file() && es_ejecutable(&path) {
-                if let Some(name) = path.file_name() {
-                    // El segundo directorio es install/bin y prevalece en
-                    // caso de que CMake haya instalado el mismo ejecutable.
-                    por_nombre.insert(name.to_os_string(), path);
-                }
+            if path.is_file()
+                && es_ejecutable(&path)
+                && let Some(name) = path.file_name()
+            {
+                // El segundo directorio es install/bin y prevalece en
+                // caso de que CMake haya instalado el mismo ejecutable.
+                por_nombre.insert(name.to_os_string(), path);
             }
         }
     }
@@ -1682,7 +1683,7 @@ mod tests {
         let foreign = base.join("foreign/llama-cli");
         std::fs::create_dir_all(&build_bin).unwrap();
         std::fs::create_dir_all(&install_bin).unwrap();
-        std::fs::create_dir_all(&foreign.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(foreign.parent().unwrap()).unwrap();
         std::fs::create_dir_all(&local_bin).unwrap();
         executable(&install_bin.join("llama-server"), "#!/bin/sh\nexit 0\n");
         executable(&install_bin.join("llama-cli"), "#!/bin/sh\nexit 0\n");

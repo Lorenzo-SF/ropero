@@ -198,6 +198,8 @@ impl Ruta {
 /// logs). Un campo que no sirve para algo no se pone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
+    /// Idioma preferido para la interfaz (es/en).
+    pub lang: String,
     /// El directorio del catálogo: `<motor>/<modelo>.toml`.
     pub models_dir: Ruta,
     /// El directorio de los GGUFs: `<modelo>/<fichero>.gguf`.
@@ -420,6 +422,7 @@ pub fn config_defectos(vars: &BTreeMap<String, String>, home: &Path, cwd: &Path)
     let dir_config = directorio_config_de(vars, home, cwd);
     let engines = BTreeMap::new();
     Config {
+        lang: "EN".to_string(),
         models_dir: Ruta::new(dir_config.join(DIR_MODELOS), Origen::Defecto),
         gguf_dir: Ruta::new(ruta_por_defecto(home, "models/gguf"), Origen::Defecto),
         safetensors_dir: Ruta::new(
@@ -486,6 +489,21 @@ pub fn parse_config(texto: &str, env: &Environment) -> Result<Config, ErrorConfi
     let tabla: toml::Table =
         toml::from_str(texto).map_err(|e| ErrorConfig::de_archivo(&e.to_string()))?;
     for (campo, valor) in tabla {
+        if campo == "lang" {
+            let Some(lang) = valor.as_str() else {
+                return Err(ErrorConfig::de_campo("lang", "", "debe ser ES o EN"));
+            };
+            let normalized = lang.to_ascii_uppercase();
+            if normalized != "ES" && normalized != "EN" {
+                return Err(ErrorConfig::de_campo(
+                    "lang",
+                    lang,
+                    "sólo se admite ES o EN",
+                ));
+            }
+            config.lang = normalized;
+            continue;
+        }
         if campo == "engines" {
             let Some(engines) = valor.as_table() else {
                 return Err(ErrorConfig::de_campo(
@@ -819,6 +837,7 @@ pub fn ejemplo_config(config: &Config) -> String {
     out.push_str("# El catálogo de modelos del usuario vive en <config>/models/<motor>/\n");
     out.push_str("# y los manifiestos de motor en <config>/engines/.\n");
     out.push('\n');
+    out.push_str(&format!("lang = \"{}\"\n\n", config.lang));
     out.push_str("[models.paths]\n");
     out.push_str(&format!(
         "# El catálogo: <motor>/<modelo>.toml\nmodels_dir = \"{}\"\n",
@@ -907,47 +926,87 @@ pub fn escapa_toml(texto: &str) -> String {
 
 /// Las líneas de `ropero config`: la configuración resuelta y de dónde sale
 /// cada ruta.
-pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -> Vec<String> {
+pub fn lineas_config(
+    estado: &EstadoConfig,
+    config: &Config,
+    paleta: &Palette,
+    lang: &str,
+) -> Vec<String> {
+    let english = lang.eq_ignore_ascii_case("EN");
     let directorio = estado.directorio.to_string_lossy().to_string();
     let archivo = estado.archivo.to_string_lossy().to_string();
-    let estado_del_archivo = estado_texto(estado);
+    let estado_del_archivo = if english {
+        estado_texto_en(estado)
+    } else {
+        estado_texto(estado)
+    };
     let mut out: Vec<String> = Vec::new();
-    let mut seccion = Seccion::nueva("CONFIGURACIÓN");
+    let mut seccion = Seccion::nueva(if english {
+        "CONFIGURATION"
+    } else {
+        "CONFIGURACIÓN"
+    });
     seccion.cuerpo(pares(
         1,
         &[
-            ("directorio de configuración", &directorio),
-            ("archivo de configuración", &archivo),
-            ("estado del archivo", &estado_del_archivo),
+            (if english { "language" } else { "idioma" }, &config.lang),
+            (
+                if english {
+                    "configuration directory"
+                } else {
+                    "directorio de configuración"
+                },
+                &directorio,
+            ),
+            (
+                if english {
+                    "configuration file"
+                } else {
+                    "archivo de configuración"
+                },
+                &archivo,
+            ),
+            (
+                if english {
+                    "file status"
+                } else {
+                    "estado del archivo"
+                },
+                &estado_del_archivo,
+            ),
         ],
     ));
     out.extend(seccion.lineas());
     out.push(String::new());
     let mut tabla = Tabla::nivel(1)
-        .columna(Columna::texto("ruta"))
-        .columna(Columna::texto("valor"))
-        .columna(Columna::texto("origen"));
+        .columna(Columna::texto(if english { "path" } else { "ruta" }))
+        .columna(Columna::texto(if english { "value" } else { "valor" }))
+        .columna(Columna::texto(if english { "source" } else { "origen" }));
     for (nombre, ruta) in config.rutas() {
         tabla.fila(vec![
             Celda::plana(nombre),
             Celda::plana(ruta.valor.to_string_lossy().to_string()),
-            Celda::plana(ruta.origen.texto()),
+            Celda::plana(if english {
+                origen_texto_en(&ruta.origen)
+            } else {
+                ruta.origen.texto()
+            }),
         ]);
     }
-    let mut seccion = Seccion::nueva("RUTAS");
+    let mut seccion = Seccion::nueva(if english { "PATHS" } else { "RUTAS" });
     seccion.cuerpo(tabla.lineas(paleta));
     out.extend(seccion.lineas());
     if !config.engines.is_empty() {
         out.push(String::new());
         let mut tabla = Tabla::nivel(1)
             .columna(Columna::texto("engine"))
-            .columna(Columna::texto("campo"))
-            .columna(Columna::texto("valor"))
-            .columna(Columna::texto("origen"));
+            .columna(Columna::texto(if english { "field" } else { "campo" }))
+            .columna(Columna::texto(if english { "value" } else { "valor" }))
+            .columna(Columna::texto(if english { "source" } else { "origen" }));
         for (engine, overrides) in &config.engines {
             let mut values = vec![
                 (
-                    "puertos",
+                    if english { "ports" } else { "puertos" },
                     match (overrides.port_min, overrides.port_max) {
                         (None, None) => "manifest".to_string(),
                         (Some(min), Some(max)) => format!("{min}-{max}"),
@@ -955,7 +1014,11 @@ pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -
                         (None, Some(max)) => format!("manifest-{max}"),
                     },
                     if overrides.port_min.is_some() || overrides.port_max.is_some() {
-                        "archivo config.toml"
+                        if english {
+                            "config.toml file"
+                        } else {
+                            "archivo config.toml"
+                        }
                     } else {
                         "manifest"
                     }
@@ -968,7 +1031,11 @@ pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -
                         .map(|color| color.as_str().to_string())
                         .unwrap_or_else(|| "manifest".to_string()),
                     if overrides.color.is_some() {
-                        "archivo config.toml"
+                        if english {
+                            "config.toml file"
+                        } else {
+                            "archivo config.toml"
+                        }
                     } else {
                         "manifest"
                     }
@@ -981,9 +1048,23 @@ pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -
                 || overrides.safetensors_dir.is_some()
             {
                 values.push((
-                    "rutas legacy",
-                    "ignoradas; usa [models.paths]".to_string(),
-                    "migración requerida".to_string(),
+                    if english {
+                        "legacy paths"
+                    } else {
+                        "rutas legacy"
+                    },
+                    if english {
+                        "ignored; use [models.paths]"
+                    } else {
+                        "ignoradas; usa [models.paths]"
+                    }
+                    .to_string(),
+                    if english {
+                        "migration required"
+                    } else {
+                        "migración requerida"
+                    }
+                    .to_string(),
                 ));
             }
             for (field, value, origin) in values {
@@ -995,14 +1076,25 @@ pub fn lineas_config(estado: &EstadoConfig, config: &Config, paleta: &Palette) -
                 ]);
             }
         }
-        let mut seccion = Seccion::nueva("OVERRIDES POR ENGINE");
+        let mut seccion = Seccion::nueva(if english {
+            "ENGINE OVERRIDES"
+        } else {
+            "OVERRIDES POR ENGINE"
+        });
         seccion.cuerpo(tabla.lineas(paleta));
         out.extend(seccion.lineas());
     }
     if !estado.existe && estado.error.is_none() {
         out.push(String::new());
-        let mut seccion = Seccion::nueva("PARA CAMBIAR LAS RUTAS");
-        seccion.cuerpo(pares(1, &[("archivo", &archivo)]));
+        let mut seccion = Seccion::nueva(if english {
+            "TO CHANGE PATHS"
+        } else {
+            "PARA CAMBIAR LAS RUTAS"
+        });
+        seccion.cuerpo(pares(
+            1,
+            &[(if english { "file" } else { "archivo" }, &archivo)],
+        ));
         out.extend(seccion.lineas());
         for linea in ejemplo_config(config).lines() {
             out.push(format!("    {linea}"));
@@ -1063,6 +1155,22 @@ fn estado_texto(estado: &EstadoConfig) -> String {
         Some(error) => format!("no vale: {}", error),
         None if estado.existe => "ok".to_string(),
         None => "no existe: se creará en el primer uso".to_string(),
+    }
+}
+
+fn estado_texto_en(estado: &EstadoConfig) -> String {
+    match &estado.error {
+        Some(error) => format!("invalid: {error}"),
+        None if estado.existe => "ok".to_string(),
+        None => "not found: will be created on first use".to_string(),
+    }
+}
+
+fn origen_texto_en(origen: &Origen) -> String {
+    match origen {
+        Origen::Variable(var) => format!("environment variable {var}"),
+        Origen::Archivo => format!("{} file", ARCHIVO_CONFIG),
+        Origen::Defecto => "default".to_string(),
     }
 }
 

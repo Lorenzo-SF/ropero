@@ -18,9 +18,17 @@ pub fn decision_tag(spec: &ModelSpec) -> Option<String> {
 
 /// El tag primario de FLM para un modelo.
 ///
-/// Prioridad: `[model].path` si no está vacío; en su defecto, el tag de
-/// `--decision` en `[args].base`.
+/// Prioridad: `[model].alias` (tag registrado que FLM expone), luego
+/// `[model].path`; en su defecto, el tag de `--decision` en `[args].base`.
 pub fn primary_tag(spec: &ModelSpec) -> Option<String> {
+    if let Some(alias) = spec
+        .model
+        .alias
+        .as_deref()
+        .filter(|alias| !alias.is_empty())
+    {
+        return Some(alias.to_string());
+    }
     if !spec.model.path.is_empty() {
         Some(spec.model.path.clone())
     } else {
@@ -34,7 +42,14 @@ pub fn primary_tag(spec: &ModelSpec) -> Option<String> {
 /// distinto), en ese orden y sin duplicados.
 pub fn tags(spec: &ModelSpec) -> Vec<String> {
     let mut tags = Vec::new();
-    if !spec.model.path.is_empty() {
+    if let Some(alias) = spec
+        .model
+        .alias
+        .as_deref()
+        .filter(|alias| !alias.is_empty())
+    {
+        tags.push(alias.to_string());
+    } else if !spec.model.path.is_empty() {
         tags.push(spec.model.path.clone());
     }
     if let Some(decision) = decision_tag(spec)
@@ -98,6 +113,18 @@ base = ["--decision", "d3:mini"]
         let spec = parse_model(LFM3, Path::new("lfm3.toml")).expect("parse");
         assert_eq!(primary_tag(&spec).as_deref(), Some("lfm3:1.7b"));
         assert_eq!(decision_tag(&spec).as_deref(), Some("d3:mini"));
+        assert_eq!(
+            tags(&spec),
+            vec!["lfm3:1.7b".to_string(), "d3:mini".to_string()]
+        );
+    }
+
+    #[test]
+    fn alias_flm_es_el_tag_publico_y_no_el_nombre_interno() {
+        let mut spec = parse_model(LFM3, Path::new("lfm3.toml")).expect("parse");
+        spec.model.name = "mi-lfm".to_string();
+        spec.model.alias = Some("lfm3:1.7b".to_string());
+        assert_eq!(primary_tag(&spec).as_deref(), Some("lfm3:1.7b"));
         assert_eq!(
             tags(&spec),
             vec!["lfm3:1.7b".to_string(), "d3:mini".to_string()]

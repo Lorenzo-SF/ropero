@@ -232,6 +232,36 @@ fn disponible_es_motor_instalado_y_modelo_descargado() {
     assert!(!nombres.contains(&"epsilon"), "nombres={nombres:?}");
 }
 
+/// Un motor con integración parcial no se presenta como utilizable aunque
+/// figure instalado y el artefacto del modelo exista.
+#[test]
+fn no_disponible_si_el_motor_tiene_integracion_parcial() {
+    let mut foto = todo_instalado();
+    let air = foto
+        .engines
+        .iter_mut()
+        .find(|engine| engine.manifest.id == EngineId::AirLlm)
+        .expect("debe estar airllm");
+    air.presence = EnginePresence::Installed;
+    air.manifest.maturity = ropero_core::Maturity::Partial;
+
+    assert!(
+        available_models(&foto)
+            .iter()
+            .all(|model| model.spec.model.engine != EngineId::AirLlm)
+    );
+
+    let groups = engine_groups(&foto, true, &BTreeMap::new());
+    let air = groups
+        .iter()
+        .find(|group| group.manifest.id == EngineId::AirLlm)
+        .expect("debe estar airllm");
+    assert_eq!(air.models.len(), 1, "--all conserva el catálogo");
+    let output = ropero_core::listing::list_lines(&foto, true, &Palette::plain(), &BTreeMap::new())
+        .join("\n");
+    assert!(output.contains("integración parcial"), "{output}");
+}
+
 /// El listado agrupa por motor y sólo enseña lo disponible.
 #[test]
 fn el_listado_agrupa_por_motor_y_solo_enseña_lo_disponible() {

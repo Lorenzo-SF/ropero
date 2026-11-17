@@ -2,6 +2,7 @@
 name = "qwen3.8-27b-16g"
 engine = "ignis"
 format = "ninfer"
+alias = "qwen3.8-27b"
 # El perfil RTX de 16 GB adapta el límite efectivo a 131072 tokens; mantener
 # ese límite también en OpenCode evita que el cliente prometa más contexto.
 context = 131072
@@ -16,9 +17,9 @@ size = "según perfil de GPU"
 
 [args]
 base = [
-  "--model-id", "qwen3.8-27b-16g",
+  "--model-id", "qwen3.8-27b",
   "--profile", "rtx-16gb",
-  "--download-path", "${artifacts_dir}",
+  "--download-path", "${artifacts_dir}/qwen3.8-27b-16g",
   "--download-enabled", "false",
   "--model-max-context", "${ctx}",
   "--spec-backend", "dflash2",

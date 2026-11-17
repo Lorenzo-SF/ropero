@@ -1,6 +1,6 @@
 //! La salida del programa, tolerante a un pipe roto.
 //!
-//! `println!` **panica** cuando el destino ya no existe: `ropero args groot |
+//! `println!` **panica** cuando el destino ya no existe: `ropero command groot |
 //! head -1` cierra el pipe antes de que termine la salida y el programa
 //! revienta con un panic (`Broken pipe (os error 32)`). Es un crash en un
 //! idiom de shell muy común, así que la escritura es **tolerante**:
@@ -10,7 +10,7 @@
 //! - Cualquier otro error de E/S **sí** es un error, y se reporta.
 //!
 //! La salida rota **no** cambia el código de salida del comando: un
-//! `ropero list | head -1` termina con 0, como si no hubiera pasado nada.
+//! `ropero models | head -1` termina con 0, como si no hubiera pasado nada.
 //!
 //! ## Por qué vive aquí y no en la CLI
 //!

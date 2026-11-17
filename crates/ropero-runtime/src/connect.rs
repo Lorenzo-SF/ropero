@@ -3,6 +3,10 @@
 
 use std::path::{Path, PathBuf};
 
+use jsonc_parser::{
+    ParseOptions,
+    cst::{CstInputValue, CstObject, CstRootNode},
+};
 use ropero_core::{EngineManifest, ModelSpec, config::Config};
 use serde_json::{Value, json};
 use toml_edit::{DocumentMut, Item, Table, value};
@@ -11,11 +15,9 @@ const OPENCODE_PACKAGE: &str = "@opencode/ai/providers/openai-compatible";
 
 /// Agentes enumerados por `ropero connect --list` y estado de integración.
 pub const AGENTS: &[(&str, &str)] = &[
-    ("gemini", "sin proveedor OpenAI-compatible nativo"),
-    ("cursor", "requiere configuración interactiva del usuario"),
     (
         "claude",
-        "bloqueado: Claude Code usa Anthropic Messages y Ropero sirve OpenAI-compatible",
+        "Anthropic Messages API: variables de entorno para engines compatibles",
     ),
     (
         "codebuddy",
@@ -46,6 +48,14 @@ pub const AGENTS: &[(&str, &str)] = &[
         "compatible: chatLanguageModels.json, provider Custom Endpoint",
     ),
     (
+        "trae",
+        "manual: OpenAI Chat Completions custom model in Settings > Models",
+    ),
+    (
+        "trae-cn",
+        "manual: OpenAI Chat Completions custom model in Settings > Models",
+    ),
+    (
         "claw",
         "alias histórico de OpenClaw (Clawdbot/Moltbot); mismo adaptador",
     ),
@@ -53,24 +63,13 @@ pub const AGENTS: &[(&str, &str)] = &[
         "droid",
         "compatible: customModels en ~/.factory/settings.json",
     ),
-    ("trae", "configuración interactiva dependiente de versión"),
-    (
-        "trae-cn",
-        "configuración interactiva dependiente de versión",
-    ),
-    ("antigravity", "sin integración automática verificada"),
     (
         "hermes",
         "compatible: CLI de configuración y credenciales protegidas en .env",
     ),
-    ("kiro", "sin integración automática verificada"),
     (
         "pi",
         "compatible: ~/.pi/agent/models.json con providers custom",
-    ),
-    (
-        "devin",
-        "servicio remoto; no se modifica configuración local",
     ),
     (
         "mcode",
@@ -81,6 +80,150 @@ pub const AGENTS: &[(&str, &str)] = &[
         "compatible: models.json por agente con providers custom",
     ),
 ];
+
+/// Engines whose documented HTTP surface includes OpenAI's Responses API,
+/// which Codex CLI requires for custom providers.
+pub fn codex_responses_supported(engine: &str) -> bool {
+    matches!(
+        engine,
+        "ignis" | "llama-server" | "turbo-llama" | "strata" | "vllm" | "tensorrt-llm" | "mlx-serve"
+    )
+}
+
+/// Genera la configuración de entorno que Claude Code necesita para hablar
+/// con una API Anthropic Messages servida localmente.
+/// Claude Code sólo admite un `ANTHROPIC_BASE_URL` por proceso, así que los
+/// modelos solicitados deben compartir engine y puerto. La URL es la raíz
+/// del servidor: Claude añade `/v1/messages` por su cuenta.
+pub fn claude_env_instructions(
+    config: &Config,
+    models: &[ModelSpec],
+    remove: bool,
+) -> Result<Vec<String>, String> {
+    let Some(first) = models.first() else {
+        return Err("indica al menos un modelo para Claude Code".into());
+    };
+    let engine = first.model.engine.as_str();
+    if !matches!(
+        engine,
+        "llama-server" | "turbo-llama" | "vllm" | "strata" | "tensorrt-llm" | "mlx-serve"
+    ) {
+        return Err(format!(
+            "el engine '{engine}' no está documentado como compatible con Anthropic Messages"
+        ));
+    }
+    if models
+        .iter()
+        .any(|model| model.model.engine.as_str() != engine)
+    {
+        return Err(
+            "Claude Code usa un solo ANTHROPIC_BASE_URL; selecciona modelos de un mismo engine"
+                .into(),
+        );
+    }
+    let ports = models
+        .iter()
+        .filter_map(|model| model.model.port.map(|port| port.0))
+        .collect::<std::collections::BTreeSet<_>>();
+    if ports.len() > 1 {
+        return Err(
+            "Claude Code usa un solo endpoint; los modelos tienen puertos distintos".into(),
+        );
+    }
+    let port = ports
+        .first()
+        .copied()
+        .ok_or_else(|| "no se pudo resolver el puerto del engine".to_string())?;
+    let aliases = models
+        .iter()
+        .map(|model| model.model.alias.as_deref().unwrap_or(&model.model.name))
+        .collect::<Vec<_>>();
+    if remove {
+        return Ok(vec![
+            "Claude Code no guarda providers: elimina o desactiva estas variables en tu shell/perfil:".into(),
+            "ANTHROPIC_BASE_URL".into(),
+            "ANTHROPIC_AUTH_TOKEN".into(),
+            "API_TIMEOUT_MS".into(),
+            "DISABLE_TELEMETRY".into(),
+            "ANTHROPIC_MODEL".into(),
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".into(),
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".into(),
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".into(),
+            format!("modelos seleccionados: {}", aliases.join(", ")),
+        ]);
+    }
+    let primary = aliases[0];
+    let auth = config
+        .engines
+        .get(&first.model.engine)
+        .and_then(|engine| engine.api_key.as_deref())
+        .map(|_| "<clave-api-configurada-en-ropero>")
+        .unwrap_or("dummy");
+    Ok(vec![
+        format!("Claude Code — engine {engine}, API Anthropic Messages"),
+        format!("ANTHROPIC_BASE_URL=http://127.0.0.1:{port}"),
+        format!("ANTHROPIC_AUTH_TOKEN={auth}"),
+        "API_TIMEOUT_MS=600000".into(),
+        "DISABLE_TELEMETRY=1".into(),
+        format!("ANTHROPIC_MODEL={primary}"),
+        format!("ANTHROPIC_DEFAULT_HAIKU_MODEL={primary}"),
+        format!("ANTHROPIC_DEFAULT_OPUS_MODEL={primary}"),
+        format!("ANTHROPIC_DEFAULT_SONNET_MODEL={primary}"),
+        format!("modelos seleccionados: {}", aliases.join(", ")),
+        "Ejecuta `claude` con estas variables exportadas. La URL no lleva `/v1`: Claude solicita `/v1/messages`.".into(),
+    ])
+}
+
+/// Values for registering Ropero models through TRAE's documented UI. This
+/// intentionally never returns API-key material, even if one is configured.
+pub fn trae_instructions(
+    agent: &str,
+    config: &Config,
+    engines: &[EngineManifest],
+    models: &[ModelSpec],
+    remove: bool,
+) -> Vec<String> {
+    let edition = if agent == "trae-cn" {
+        "China edition"
+    } else {
+        "international edition"
+    };
+    let mut lines = vec![format!(
+        "TRAE manual setup ({edition}): Settings > Models > Add model > Custom model; choose OpenAI Chat Completions."
+    )];
+    for model in models {
+        let alias = model.model.alias.as_deref().unwrap_or(&model.model.name);
+        let port = model
+            .model
+            .port
+            .map(|port| port.0)
+            .or_else(|| {
+                engines
+                    .iter()
+                    .find(|engine| engine.id == model.model.engine)
+                    .map(|engine| engine.port_range.min)
+            })
+            .unwrap_or_default();
+        if remove {
+            lines.push(format!("  Remove custom model `{alias}` from TRAE."));
+        } else {
+            let key = config
+                .engines
+                .get(&model.model.engine)
+                .and_then(|engine| engine.api_key.as_deref())
+                .map(|_| "use the API key configured for this Ropero engine")
+                .unwrap_or("leave the API key empty if the engine has no key configured");
+            lines.push(format!(
+                "  {alias}: request URL http://127.0.0.1:{port}/v1; model ID {alias}; {key}."
+            ));
+        }
+    }
+    lines.push(
+        "Ropero does not edit TRAE's private UI-managed settings or print API key values."
+            .to_string(),
+    );
+    lines
+}
 
 /// Añade modelos OpenAI-compatible a los registros oficiales de Aider. Cada
 /// entrada conserva su endpoint y clave, lo que permite agruparlos por engine
@@ -132,12 +275,13 @@ pub fn aider(
     })?;
 
     for model in models {
+        let served = served_model_id(model);
         let manifest = engines
             .iter()
             .find(|e| e.id == model.model.engine)
             .ok_or_else(|| format!("no hay manifiesto para {}", model.model.engine.as_str()))?;
         let engine = manifest.id.as_str();
-        let alias = format!("openai/ropero-{engine}/{}", model.model.name);
+        let alias = format!("openai/ropero-{engine}/{served}");
         list.retain(|entry| {
             entry.get("name").and_then(serde_yaml::Value::as_str) != Some(alias.as_str())
         });
@@ -237,15 +381,23 @@ pub fn opencode(
     } else {
         json_path
     };
-    let mut root: Value = if path.exists() {
-        let data = std::fs::read_to_string(&path)
-            .map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?;
-        serde_json::from_str(&data).map_err(|e| {
-            format!(
-                "{} no es JSON estricto modificable con seguridad ({e}); no se ha alterado",
-                path.display()
-            )
-        })?
+    let original = if path.exists() {
+        Some(
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?,
+        )
+    } else {
+        None
+    };
+    let mut root: Value = if let Some(data) = &original {
+        jsonc_parser::parse_to_serde_value::<Value>(data, &ParseOptions::default()).map_err(
+            |e| {
+                format!(
+                    "{} no es JSONC válido ({e}); no se ha alterado",
+                    path.display()
+                )
+            },
+        )?
     } else {
         json!({})
     };
@@ -258,13 +410,13 @@ pub fn opencode(
         if let Some(old) = old_value.as_object_mut() {
             let managed: Vec<String> = old
                 .iter()
-                .filter_map(|(id, p)| {
-                    (id.starts_with("ropero-")
+                .filter(|(id, p)| {
+                    id.starts_with("ropero-")
                         && p.get("name")
                             .and_then(Value::as_str)
-                            .is_some_and(|n| n.starts_with("This is ROPERO! (")))
-                    .then(|| id.clone())
+                            .is_some_and(|n| n.starts_with("This is ROPERO! ("))
                 })
+                .map(|(id, _)| id.clone())
                 .collect();
             if !managed.is_empty() {
                 let plural = root_obj.entry("providers").or_insert_with(|| json!({}));
@@ -297,7 +449,7 @@ pub fn opencode(
         }
     }
     if uninstall && !root_obj.contains_key("providers") {
-        write_json_atomic(&path, &root)?;
+        write_opencode_jsonc(&path, original.as_deref(), &root)?;
         return Ok(path);
     }
     let providers = root_obj
@@ -307,6 +459,7 @@ pub fn opencode(
         .ok_or_else(|| "`providers` en OpenCode no es un objeto; no se ha alterado".to_string())?;
 
     for model in models {
+        let served = served_model_id(model);
         let manifest = engines
             .iter()
             .find(|e| e.id == model.model.engine)
@@ -328,7 +481,7 @@ pub fn opencode(
                 }
                 if let Some(models_obj) = provider.get_mut("models").and_then(Value::as_object_mut)
                 {
-                    models_obj.remove(&model.model.name);
+                    models_obj.remove(served);
                     if models_obj.is_empty()
                         && provider.get("name").and_then(Value::as_str)
                             == Some(managed_name.as_str())
@@ -401,7 +554,7 @@ pub fn opencode(
             })?;
         let context = u64::from(model.model.context.max(1));
         let mut model_config = json!({
-            "name": model.model.name.clone(),
+            "name": served,
             "tool_call": true,
             "reasoning": true,
             "limit": {"context": context, "input": context * 80 / 100, "output": context * 25 / 100},
@@ -429,7 +582,7 @@ pub fn opencode(
                     .collect::<Vec<_>>()
             );
         }
-        model_map.insert(model.model.name.clone(), model_config);
+        model_map.insert(served.to_string(), model_config);
     }
     // Versiones anteriores pudieron dejar modelos sin etiqueta en el
     // provider singular o en providers Ropero ya existentes. Completa sólo
@@ -458,7 +611,7 @@ pub fn opencode(
     if uninstall && providers.is_empty() {
         root_obj.remove("providers");
     }
-    write_json_atomic(&path, &root)?;
+    write_opencode_jsonc(&path, original.as_deref(), &root)?;
     Ok(path)
 }
 
@@ -502,8 +655,12 @@ pub fn pi(
     )
 }
 
-/// Registra providers de Codex CLI. Codex sólo acepta Responses API; Ignis la
-/// implementa. Los modelos se solicitan por su ID al seleccionar este provider.
+/// Registra providers utilizables desde Codex CLI.
+///
+/// Codex tiene un único `model_provider` activo por configuración. Un provider
+/// definido en `model_providers` no queda seleccionado por registrarlo
+/// solamente; por eso Ropero crea un archivo de perfil por engine, sin cambiar
+/// el perfil global. Codex los carga desde `$CODEX_HOME/<perfil>.config.toml`.
 pub fn codex(
     home: &Path,
     config: &Config,
@@ -511,7 +668,30 @@ pub fn codex(
     models: &[ModelSpec],
     uninstall: bool,
 ) -> Result<PathBuf, String> {
-    let path = home.join(".codex/config.toml");
+    codex_in_dir(
+        home,
+        &home.join(".codex"),
+        config,
+        engines,
+        models,
+        uninstall,
+    )
+}
+
+/// Variante para respetar `CODEX_HOME`; `home` sigue siendo el HOME del
+/// usuario donde Ropero guarda su registro de propiedad.
+pub fn codex_in_dir(
+    home: &Path,
+    codex_home: &Path,
+    config: &Config,
+    engines: &[EngineManifest],
+    models: &[ModelSpec],
+    uninstall: bool,
+) -> Result<PathBuf, String> {
+    if models.is_empty() {
+        return Err("indica al menos un modelo para Codex".into());
+    }
+    let path = codex_home.join("config.toml");
     let mut doc = if path.exists() {
         std::fs::read_to_string(&path)
             .map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?
@@ -525,20 +705,20 @@ pub fn codex(
     } else {
         DocumentMut::new()
     };
-    if doc["model_providers"].is_none() {
+    if doc.get("model_providers").is_none() {
         doc["model_providers"] = Item::Table(Table::new());
-    } else if !doc["model_providers"].is_table() {
+    } else if !doc.get("model_providers").is_some_and(Item::is_table) {
         return Err("`model_providers` en Codex no es una tabla; no se ha alterado".into());
     }
-    let providers = doc["model_providers"]
-        .as_table_mut()
-        .expect("tabla verificada");
     for model in models {
+        let served = served_model_id(model);
         let manifest = engines
             .iter()
             .find(|e| e.id == model.model.engine)
             .ok_or_else(|| format!("no hay manifiesto para {}", model.model.engine.as_str()))?;
         let id = format!("ropero-{}", manifest.id.as_str());
+        let profile_id = id.clone();
+        let profile_path = codex_home.join(format!("{profile_id}.config.toml"));
         let marker = home.join(format!(
             ".config/ropero/connect/codex/{}.json",
             manifest.id.as_str()
@@ -559,7 +739,7 @@ pub fn codex(
                     "Ropero no tiene un registro propio del provider de Codex `{id}`; no se ha alterado"
                 ));
             }
-            if providers
+            if doc["model_providers"]
                 .get(&id)
                 .and_then(|p| p.get("name"))
                 .and_then(Item::as_str)
@@ -569,30 +749,67 @@ pub fn codex(
                     "el provider de Codex `{id}` ya no conserva la marca Ropero; no se ha retirado"
                 ));
             }
-            installed.retain(|name| name != &model.model.name);
+            installed.retain(|name| name != served);
             if installed.is_empty() {
-                providers.remove(&id);
+                doc.get_mut("model_providers")
+                    .and_then(Item::as_table_mut)
+                    .ok_or_else(|| {
+                        "`model_providers` en Codex no es una tabla; no se ha alterado".to_string()
+                    })?
+                    .remove(&id);
+                std::fs::remove_file(&profile_path).map_err(|e| {
+                    format!(
+                        "no se pudo retirar el perfil Codex {}: {e}",
+                        profile_path.display()
+                    )
+                })?;
                 let _ = std::fs::remove_file(&marker);
             } else {
+                let mut profile = read_codex_profile(&profile_path)?;
+                profile["model_provider"] = value(id.as_str());
+                profile["model"] = value(installed[0].as_str());
+                write_codex_profile(&profile_path, &profile)?;
                 write_json_atomic(&marker, &json!(installed))?;
             }
             continue;
         }
-        if providers.contains_key(&id) && !marker_exists {
+        let provider_exists = doc
+            .get("model_providers")
+            .and_then(Item::as_table)
+            .is_some_and(|providers| providers.contains_key(&id));
+        if provider_exists && !marker_exists {
             return Err(format!(
                 "Codex ya tiene `{id}` sin marca de Ropero; no se ha alterado"
             ));
         }
-        if providers.contains_key(&id) && !providers[&id].is_table() {
+        if profile_path.exists() && !marker_exists {
+            return Err(format!(
+                "Codex ya tiene el perfil `{profile_id}` sin marca de Ropero; no se ha alterado"
+            ));
+        }
+        if provider_exists
+            && doc
+                .get("model_providers")
+                .and_then(Item::as_table)
+                .and_then(|providers| providers.get(&id))
+                .is_none_or(|provider| !provider.is_table())
+        {
             return Err(format!(
                 "Codex ya tiene un provider incompatible `{id}`; no se ha alterado"
             ));
         }
-        if !providers.contains_key(&id) {
+        if !provider_exists {
+            let providers = doc
+                .get_mut("model_providers")
+                .and_then(Item::as_table_mut)
+                .ok_or_else(|| "`model_providers` en Codex no es una tabla".to_string())?;
             let table = providers.entry(&id).or_insert(Item::Table(Table::new()));
             table["name"] = value("ROPERO");
         }
-        let table = providers
+        let table = doc
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+            .ok_or_else(|| "`model_providers` en Codex no es una tabla".to_string())?
             .get_mut(&id)
             .and_then(Item::as_table_mut)
             .ok_or_else(|| format!("provider `{id}` no es una tabla"))?;
@@ -614,9 +831,13 @@ pub fn codex(
         } else {
             table.remove("experimental_bearer_token");
         }
-        installed.push(model.model.name.clone());
+        installed.push(served.to_string());
         installed.sort();
         installed.dedup();
+        let mut profile = read_codex_profile(&profile_path)?;
+        profile["model_provider"] = value(id.as_str());
+        profile["model"] = value(installed[0].as_str());
+        write_codex_profile(&profile_path, &profile)?;
         write_json_atomic(&marker, &json!(installed))?;
     }
     let mut bytes = doc.to_string().into_bytes();
@@ -633,6 +854,31 @@ pub fn codex(
     })?;
     bytes.clear();
     Ok(path)
+}
+
+fn read_codex_profile(path: &Path) -> Result<DocumentMut, String> {
+    if !path.exists() {
+        return Ok(DocumentMut::new());
+    }
+    std::fs::read_to_string(path)
+        .map_err(|e| format!("no se pudo leer el perfil Codex {}: {e}", path.display()))?
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("perfil Codex {} no es TOML válido ({e})", path.display()))
+}
+
+fn write_codex_profile(path: &Path, doc: &DocumentMut) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "ruta de perfil Codex sin directorio".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
+    let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
+    write_temp_private(&tmp, doc.to_string().as_bytes())
+        .map_err(|e| format!("no se pudo preparar el perfil Codex: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("no se pudo reemplazar {}: {e}", path.display())
+    })
 }
 
 /// Configura providers OpenAI-compatible en el archivo global de Kilo Code.
@@ -970,11 +1216,10 @@ pub fn codebuddy(
         if let Some(filter) = root
             .get_mut("availableModels")
             .and_then(Value::as_array_mut)
+            && !filter.iter().any(|entry| entry.as_str() == Some(id))
         {
-            if !filter.iter().any(|entry| entry.as_str() == Some(id)) {
-                filter.push(json!(id));
-                added_to_filter.push(id.to_owned());
-            }
+            filter.push(json!(id));
+            added_to_filter.push(id.to_owned());
         }
     }
     write_json_atomic(&path, &Value::Object(root.clone()))?;
@@ -1149,7 +1394,7 @@ pub fn mcode(
         };
         let requested = entries
             .iter()
-            .map(|m| m.model.name.clone())
+            .map(|m| served_model_id(m).to_string())
             .collect::<Vec<_>>();
         if uninstall {
             if !marker_exists {
@@ -1172,7 +1417,7 @@ pub fn mcode(
                     .map_err(|e| format!("se retiró el provider, pero no el registro ({e})"))?;
             } else {
                 return Err(format!(
-                    "MCode sólo permite retirar un provider completo. Quedarían los modelos Ropero {}; no se ha cambiado nada. Ejecuta --uninstall con todos los modelos registrados de ese engine: {}",
+                    "MCode sólo permite retirar un provider completo. Quedarían los modelos Ropero {}; no se ha cambiado nada. Ejecuta --remove con todos los modelos registrados de ese engine: {}",
                     installed.join(", "),
                     installed.join(",")
                 ));
@@ -1220,7 +1465,7 @@ pub fn mcode(
             .arg(format!("http://127.0.0.1:{port}/v1"))
             .args(["--api-format", "openai-completions"]);
         for entry in entries {
-            command.arg("--model").arg(&entry.model.name);
+            command.arg("--model").arg(served_model_id(entry));
         }
         command.args([
             "--context-limit",
@@ -1591,6 +1836,7 @@ fn json_array_provider(
         .as_object_mut()
         .ok_or_else(|| "`providers` no es un objeto; no se ha alterado".to_string())?;
     for model in models {
+        let served = served_model_id(model);
         let manifest = engines
             .iter()
             .find(|e| e.id == model.model.engine)
@@ -1603,9 +1849,7 @@ fn json_array_provider(
                     continue;
                 }
                 if let Some(list) = provider.get_mut("models").and_then(Value::as_array_mut) {
-                    list.retain(|entry| {
-                        entry.get("id").and_then(Value::as_str) != Some(model.model.name.as_str())
-                    });
+                    list.retain(|entry| entry.get("id").and_then(Value::as_str) != Some(served));
                     if list.is_empty()
                         && provider.get("name").and_then(Value::as_str)
                             == Some(managed_name.as_str())
@@ -1663,14 +1907,18 @@ fn json_array_provider(
             .ok_or_else(|| format!("`models` de `{id}` no es una lista"))?;
         if !list
             .iter()
-            .any(|entry| entry.get("id").and_then(Value::as_str) == Some(model.model.name.as_str()))
+            .any(|entry| entry.get("id").and_then(Value::as_str) == Some(served))
         {
             let context = u64::from(model.model.context.max(1));
-            list.push(json!({"id": model.model.name, "name": model.model.name, "reasoning": true, "input": ["text"], "contextWindow": context, "contextTokens": context * 80 / 100, "maxTokens": context * 25 / 100, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}));
+            list.push(json!({"id": served, "name": served, "reasoning": true, "input": ["text"], "contextWindow": context, "contextTokens": context * 80 / 100, "maxTokens": context * 25 / 100, "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}}));
         }
     }
     write_json_atomic(&path, &root)?;
     Ok(path)
+}
+
+fn served_model_id(model: &ModelSpec) -> &str {
+    model.model.alias.as_deref().unwrap_or(&model.model.name)
 }
 
 /// Construye una variante OpenCode para un nivel declarado por el modelo.
@@ -1696,12 +1944,11 @@ fn opencode_reasoning_variant(model: &ModelSpec, level: &str) -> Value {
     if let Some(enabled) = thinking_enabled {
         body.insert("enable_thinking".into(), json!(enabled == "true"));
     }
-    if let Some(budget) = value_for("--model-thinking-budget") {
-        if budget != "off" {
-            if let Ok(tokens) = budget.parse::<u64>() {
-                body.insert("thinking_budget".into(), json!(tokens));
-            }
-        }
+    if let Some(budget) = value_for("--model-thinking-budget")
+        && budget != "off"
+        && let Ok(tokens) = budget.parse::<u64>()
+    {
+        body.insert("thinking_budget".into(), json!(tokens));
     }
     let mut variant = json!({ "id": level, "body": body });
     if let Some(effort) = effort {
@@ -1710,11 +1957,116 @@ fn opencode_reasoning_variant(model: &ModelSpec, level: &str) -> Value {
     variant
 }
 
+fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "ruta de configuración sin directorio".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".{}.tmp", std::process::id()));
+    let tmp = PathBuf::from(tmp);
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
+    write_temp_private(&tmp, &bytes)
+        .map_err(|e| format!("no se pudo preparar configuración protegida: {e}"))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("no se pudo reemplazar {}: {e}", path.display())
+    })
+}
+
+/// Reescribe el objeto administrado dentro del CST existente para conservar
+/// comentarios, espacios y comas finales del JSONC de OpenCode.
+fn write_opencode_jsonc(
+    path: &Path,
+    original: Option<&str>,
+    desired: &Value,
+) -> Result<(), String> {
+    let root = match original {
+        Some(text) => CstRootNode::parse(text, &ParseOptions::default()).map_err(|e| {
+            format!(
+                "{} no es JSONC válido ({e}); no se ha alterado",
+                path.display()
+            )
+        })?,
+        None => CstRootNode::parse("{}", &ParseOptions::default())
+            .expect("un objeto JSON vacío siempre es válido"),
+    };
+    let destination = root
+        .value()
+        .and_then(|node| node.as_object())
+        .ok_or_else(|| {
+            format!(
+                "la raíz de {} debe ser un objeto; no se ha alterado",
+                path.display()
+            )
+        })?;
+    let desired = desired
+        .as_object()
+        .ok_or_else(|| "la raíz de la configuración de OpenCode debe ser un objeto".to_string())?;
+    sync_cst_object(&destination, desired);
+    write_private_atomic(path, root.to_string().as_bytes())
+}
+
+fn sync_cst_object(destination: &CstObject, desired: &serde_json::Map<String, Value>) {
+    let names: Vec<String> = destination
+        .properties()
+        .iter()
+        .filter_map(|prop| prop.decoded_name())
+        .collect();
+    for name in names {
+        if !desired.contains_key(&name)
+            && let Some(prop) = destination.get(&name)
+        {
+            prop.remove();
+        }
+    }
+
+    for (name, desired_value) in desired {
+        match (destination.get(name), desired_value.as_object()) {
+            (Some(prop), Some(desired_object)) => {
+                if let Some(existing) = prop.object_value() {
+                    sync_cst_object(&existing, desired_object);
+                } else {
+                    prop.set_value(cst_value(desired_value));
+                }
+            }
+            (Some(prop), _) => prop.set_value(cst_value(desired_value)),
+            (None, _) => {
+                destination.append(name, cst_value(desired_value));
+            }
+        }
+    }
+}
+
+fn cst_value(value: &Value) -> CstInputValue {
+    match value {
+        Value::Null => CstInputValue::Null,
+        Value::Bool(value) => CstInputValue::Bool(*value),
+        Value::Number(value) => CstInputValue::Number(value.to_string()),
+        Value::String(value) => CstInputValue::String(value.clone()),
+        Value::Array(values) => CstInputValue::Array(values.iter().map(cst_value).collect()),
+        Value::Object(values) => CstInputValue::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), cst_value(value)))
+                .collect(),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::opencode_reasoning_variant;
-    use ropero_core::parse_model;
+    use super::{
+        claude_env_instructions, codex, codex_in_dir, codex_responses_supported, opencode,
+        opencode_reasoning_variant,
+    };
+    use jsonc_parser::ParseOptions;
+    use ropero_core::config::Config;
+    use ropero_core::{parse_engine_manifest, parse_model};
+    use serde_json::Value;
     use std::path::Path;
+    use toml_edit::DocumentMut;
 
     #[test]
     fn ignis_opencode_variants_follow_the_declared_thinking_levels() {
@@ -1739,22 +2091,319 @@ mod tests {
         assert_eq!(max["body"]["enable_thinking"], true);
         assert!(max["body"].get("thinking_budget").is_none());
     }
-}
 
-fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| "ruta de configuración sin directorio".to_string())?;
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".{}.tmp", std::process::id()));
-    let tmp = PathBuf::from(tmp);
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
-    write_temp_private(&tmp, &bytes)
-        .map_err(|e| format!("no se pudo preparar configuración protegida: {e}"))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("no se pudo reemplazar {}: {e}", path.display())
-    })
+    #[test]
+    fn codex_rechaza_una_lista_vacia_sin_crear_configuracion() {
+        let home = std::env::temp_dir().join(format!("ropero-codex-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let result = codex(&home, &Config::default(), &[], &[], false);
+        assert!(result.is_err());
+        assert!(!home.join(".codex/config.toml").exists());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn codex_usa_code_home_y_restringe_engines_a_responses_api() {
+        let home =
+            std::env::temp_dir().join(format!("ropero-codex-custom-home-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let codex_home = home.join("codex-custom");
+        let mut model = parse_model(
+            include_str!("../../../models/turbo-llama/ornith.toml"),
+            Path::new("models/turbo-llama/ornith.toml"),
+        )
+        .unwrap();
+        model.model.alias = Some("ornith-publico".into());
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/turbo-llama.toml"),
+            Path::new("engines/turbo-llama.toml"),
+        )
+        .unwrap();
+        let result = codex_in_dir(
+            &home,
+            &codex_home,
+            &Config::default(),
+            &[engine],
+            &[model],
+            false,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(codex_home.join("config.toml").exists());
+        assert!(codex_home.join("ropero-turbo-llama.config.toml").exists());
+        assert!(codex_responses_supported("turbo-llama"));
+        assert!(!codex_responses_supported("fastflowllm"));
+        assert!(!codex_responses_supported("airllm"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn codex_registra_modelo_en_perfil_del_engine_y_lo_retira_sin_tocar_config_ajena() {
+        let home = std::env::temp_dir().join(format!("ropero-codex-model-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/config.toml"),
+            "model = \"user-model\"\nmodel_provider = \"user-provider\"\n\n[mcp_servers.keep-me]\ncommand = \"keep\"\n",
+        )
+        .unwrap();
+        let mut model = parse_model(
+            include_str!("../../../models/turbo-llama/ornith.toml"),
+            Path::new("models/turbo-llama/ornith.toml"),
+        )
+        .unwrap();
+        model.model.alias = Some("ornith-publico".into());
+        model.model.port = Some(ropero_core::Port(9994));
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/turbo-llama.toml"),
+            Path::new("engines/turbo-llama.toml"),
+        )
+        .unwrap();
+
+        let path = codex(
+            &home,
+            &Config::default(),
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            false,
+        )
+        .unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        let doc = saved.parse::<DocumentMut>().unwrap();
+        let provider = &doc["model_providers"]["ropero-turbo-llama"];
+        let profile_path = home.join(".codex/ropero-turbo-llama.config.toml");
+        let profile = std::fs::read_to_string(&profile_path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            provider["base_url"].as_str(),
+            Some("http://127.0.0.1:9994/v1")
+        );
+        assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+        assert_eq!(profile["model"].as_str(), Some("ornith-publico"));
+        assert_eq!(
+            profile["model_provider"].as_str(),
+            Some("ropero-turbo-llama")
+        );
+        assert_eq!(doc["model"].as_str(), Some("user-model"));
+        assert_eq!(doc["model_provider"].as_str(), Some("user-provider"));
+        assert_eq!(
+            doc["mcp_servers"]["keep-me"]["command"].as_str(),
+            Some("keep")
+        );
+
+        codex(&home, &Config::default(), &[engine], &[model], true).unwrap();
+        let after = std::fs::read_to_string(path).unwrap();
+        let doc = after.parse::<DocumentMut>().unwrap();
+        assert!(doc["model_providers"].get("ropero-turbo-llama").is_none());
+        assert_eq!(doc["model"].as_str(), Some("user-model"));
+        assert_eq!(doc["model_provider"].as_str(), Some("user-provider"));
+        assert!(!profile_path.exists());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn claude_muestra_url_messages_raiz_alias_y_variables_requeridas() {
+        let mut model = parse_model(
+            include_str!("../../../models/llama-server/groot-o.toml"),
+            Path::new("models/llama-server/groot-o.toml"),
+        )
+        .unwrap();
+        model.model.alias = Some("groot-publico".into());
+        model.model.port = Some(ropero_core::Port(9984));
+        let lines = claude_env_instructions(&Config::default(), &[model], false).unwrap();
+        let text = lines.join("\n");
+        for expected in [
+            "ANTHROPIC_BASE_URL=http://127.0.0.1:9984",
+            "ANTHROPIC_AUTH_TOKEN=dummy",
+            "API_TIMEOUT_MS=600000",
+            "DISABLE_TELEMETRY=1",
+            "ANTHROPIC_MODEL=groot-publico",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL=groot-publico",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL=groot-publico",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL=groot-publico",
+        ] {
+            assert!(text.contains(expected), "falta {expected}: {text}");
+        }
+        assert!(
+            !text.contains(":9984/v1"),
+            "Claude añade /v1/messages: {text}"
+        );
+    }
+
+    #[test]
+    fn claude_rechaza_multiples_engines_y_engines_sin_messages() {
+        let mut llama = parse_model(
+            include_str!("../../../models/llama-server/groot-o.toml"),
+            Path::new("models/llama-server/groot-o.toml"),
+        )
+        .unwrap();
+        llama.model.port = Some(ropero_core::Port(9980));
+        let ignis = parse_model(
+            include_str!("../../../models/ignis/qwen3.8-27b-16g.toml"),
+            Path::new("models/ignis/qwen3.8-27b-16g.toml"),
+        )
+        .unwrap();
+        assert!(
+            claude_env_instructions(&Config::default(), &[llama.clone(), ignis.clone()], false)
+                .unwrap_err()
+                .contains("un solo ANTHROPIC_BASE_URL")
+        );
+        assert!(
+            claude_env_instructions(&Config::default(), &[ignis], false)
+                .unwrap_err()
+                .contains("no está documentado")
+        );
+    }
+
+    #[test]
+    fn opencode_registra_el_alias_del_engine_y_no_el_nombre_interno() {
+        let home =
+            std::env::temp_dir().join(format!("ropero-opencode-alias-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let mut model = parse_model(
+            include_str!("../../../models/ignis/qwen3.8-27b-16g.toml"),
+            Path::new("models/ignis/qwen3.8-27b-16g.toml"),
+        )
+        .unwrap();
+        model.model.alias = Some("qwen3.8-27b".into());
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/ignis.toml"),
+            Path::new("engines/ignis.toml"),
+        )
+        .unwrap();
+        let state_dir = home.join("state");
+        let result = opencode(
+            &home,
+            &state_dir,
+            &Config::default(),
+            &[engine],
+            &[model],
+            false,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(home.join(".config/opencode/opencode.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(value["providers"]["ropero-ignis"]["models"]["qwen3.8-27b"].is_object());
+        assert!(value["providers"]["ropero-ignis"]["models"]["qwen3.8-27b-16g"].is_null());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn opencode_consolida_provider_legacy_y_al_desinstalar_deja_el_config_limpio() {
+        let home =
+            std::env::temp_dir().join(format!("ropero-opencode-clean-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let dir = home.join(".config/opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        let config_path = dir.join("opencode.jsonc");
+        std::fs::write(
+            &config_path,
+            r#"{
+  // This user's comment must survive connect.
+  "provider": {"ropero-ignis": {"name": "This is ROPERO! (ignis)", "models": {"qwen3.8-27b": {"name": "qwen3.8-27b"}}}},
+  "providers": {
+    "custom": {"name": "User provider"}, // Keep custom provider.
+  },
+}"#,
+        )
+        .unwrap();
+        let mut model = parse_model(
+            include_str!("../../../models/ignis/qwen3.8-27b-16g.toml"),
+            Path::new("models/ignis/qwen3.8-27b-16g.toml"),
+        )
+        .unwrap();
+        model.model.alias = Some("qwen3.8-27b".into());
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/ignis.toml"),
+            Path::new("engines/ignis.toml"),
+        )
+        .unwrap();
+        let state_dir = home.join("state");
+        let models = [model];
+        assert!(
+            opencode(
+                &home,
+                &state_dir,
+                &Config::default(),
+                std::slice::from_ref(&engine),
+                &models,
+                false
+            )
+            .is_ok()
+        );
+        let installed: Value = jsonc_parser::parse_to_serde_value(
+            &std::fs::read_to_string(&config_path).unwrap(),
+            &ParseOptions::default(),
+        )
+        .unwrap();
+        let installed_text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(installed_text.contains("This user's comment must survive connect."));
+        assert!(installed_text.contains("Keep custom provider."));
+        assert!(installed.get("provider").is_none(), "{installed}");
+        assert_eq!(installed["providers"]["custom"]["name"], "User provider");
+        assert_eq!(
+            installed["providers"]["ropero-ignis"]["models"]["qwen3.8-27b"]["name"],
+            "qwen3.8-27b"
+        );
+
+        assert!(
+            opencode(
+                &home,
+                &state_dir,
+                &Config::default(),
+                &[engine],
+                &models,
+                true
+            )
+            .is_ok()
+        );
+        let removed: Value = jsonc_parser::parse_to_serde_value(
+            &std::fs::read_to_string(&config_path).unwrap(),
+            &ParseOptions::default(),
+        )
+        .unwrap();
+        assert!(removed.get("provider").is_none(), "{removed}");
+        assert!(
+            removed["providers"].get("ropero-ignis").is_none(),
+            "{removed}"
+        );
+        assert_eq!(removed["providers"]["custom"]["name"], "User provider");
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn opencode_jsonc_invalido_no_se_modifica() {
+        let home =
+            std::env::temp_dir().join(format!("ropero-opencode-invalid-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let dir = home.join(".config/opencode");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("opencode.jsonc");
+        let original = "{ // unfinished\n  \"providers\": {, }";
+        std::fs::write(&path, original).unwrap();
+        let model = parse_model(
+            include_str!("../../../models/ignis/qwen3.8-27b-16g.toml"),
+            Path::new("models/ignis/qwen3.8-27b-16g.toml"),
+        )
+        .unwrap();
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/ignis.toml"),
+            Path::new("engines/ignis.toml"),
+        )
+        .unwrap();
+        let result = opencode(
+            &home,
+            &home.join("state"),
+            &Config::default(),
+            &[engine],
+            &[model],
+            false,
+        );
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        let _ = std::fs::remove_dir_all(home);
+    }
 }

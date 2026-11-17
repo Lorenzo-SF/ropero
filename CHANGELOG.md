@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased — 2026-11-17
+
+### Español
+
+- Se completan `models add`, `info` y `command`; `models` sustituye a `list`.
+- `config --lang ES|EN` guarda la preferencia de idioma. FLM usa el id
+  canónico `fastflowllm`, y los modelos Ignis separan nombre interno y alias
+  público.
+- `connect` usa `--remove`; `--list` enumera sólo integraciones implementadas.
+- `connect` muestra instrucciones manuales para TRAE y TRAE CN; OpenCode conserva
+  comentarios y comas finales al editar `opencode.jsonc` y deja intacto el
+  archivo si el JSONC es inválido.
+- El arranque acepta niveles, flags y opciones declarados por cada TOML.
+- Codex guarda el provider y el perfil por engine en `CODEX_HOME` (o
+  `~/.codex`) y rechaza engines sin Responses API documentada. llama.cpp recibe
+  el alias público mediante `--alias`.
+- `ropero test` usa `--model`, `--group`, `--test`, `--dimension` y `--all`.
+- Ignis guarda y busca cada descarga bajo `ARTIFACTS_DIR/<nombre-interno>`;
+  Codex valida las tablas TOML opcionales sin accesos que puedan provocar panic.
+- `models` consulta `strata models list --installed --output json` para mostrar
+  perfiles Strata completos como disponibles.
+- `info`, `config`, la ayuda y el informe Markdown de `test` respetan el idioma
+  guardado. El informe enlaza las trazas y métricas de los subagentes.
+- Los alias públicos se aplican donde el engine lo admite, incluidos perfiles
+  Strata mediante una copia privada; los motores parciales no aparecen como
+  utilizables en `models`.
+- `connect --agent codex` ya no entra en pánico si `config.toml` no contiene
+  `[model_providers]`; crea la tabla con accesos validados.
+
+### English
+
+- `models add`, `info`, and `command` are implemented; `models` replaces `list`.
+- `config --lang ES|EN` stores the language preference. FLM uses the canonical
+  `fastflowllm` id, and Ignis models separate their internal name and public
+  alias.
+- `connect` uses `--remove`; `--list` reports only implemented integrations.
+- `connect` prints manual setup instructions for TRAE and TRAE CN. OpenCode
+  preserves comments and trailing commas when editing `opencode.jsonc`, and
+  leaves invalid JSONC files untouched.
+- Model startup accepts levels, flags, and options declared by each TOML.
+- Codex stores the provider and per-engine profile in `CODEX_HOME` (or
+  `~/.codex`) and rejects engines without documented Responses API support.
+  llama.cpp receives the public alias through `--alias`.
+- `ropero test` uses `--model`, `--group`, `--test`, `--dimension`, and `--all`.
+- Ignis stores and checks each download under `ARTIFACTS_DIR/<internal-name>`;
+  Codex validates optional TOML tables without panic-prone indexing.
+- `models` queries `strata models list --installed --output json` and marks
+  complete Strata profiles as available.
+- `info`, `config`, help, and the `test` Markdown report follow the saved
+  language. The report links each subagent's trace and includes its metrics.
+- Public aliases are applied where supported, including Strata through a
+  private profile copy; partial engines are not shown as usable in `models`.
+- `connect --agent codex` no longer panics when `config.toml` lacks
+  `[model_providers]`; it creates the table and validates its structure.
+
 ## En trabajo — instalación de motores
 - `ropero install engines` ejecuta recetas declaradas `[install]` para compilar
   `llama-server` upstream y el fallback público de `turbo-llama` antes de crear

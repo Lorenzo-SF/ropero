@@ -21,7 +21,7 @@
 #   name      Identificador único global (activos+fired), kebab-case. Es lo que
 #             se escribe en `ropero <name>`.
 #   engine    Uno de: llama-server | turbo-llama | vllm | mlx-serve | airllm
-#             | tensorrt-llm | fastflowlm | strata. Los ids legacy
+#             | tensorrt-llm | fastflowllm | strata | ignis. Los ids legacy
 #             ("llama-server-official", "llama-official", "llama", "turbo",
 #             "mlx_lm", "flm", "tensorrt", "strata_engine") se aceptan y se
 #             canónizan a la forma nueva con un aviso.

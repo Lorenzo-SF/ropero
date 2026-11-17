@@ -1,5 +1,5 @@
-//! Los comandos que hacen su trabajo: `list`, `engines`, `levels`, `path`,
-//! `status`, `doctor`, `template`, `validate` y `args`.
+//! Los comandos que hacen su trabajo: `models`, `engines`, `info`, `status`,
+//! `doctor`, `template`, `validate` y `command`.
 //!
 //! Todos comparten la misma forma: escanear (o capturar), componer el
 //! texto en el dominio e imprimirlo. Por eso viven juntos: separarlos en
@@ -8,7 +8,7 @@
 
 use ropero_core::Catalog;
 
-/// `ropero list [--all]`: los modelos **disponibles**, agrupados por motor.
+/// `ropero models [--all]`: los modelos **disponibles**, agrupados por motor.
 ///
 /// "Disponible" son las dos cosas a la vez (doc CLI v2 §15): el motor está
 /// instalado y el modelo está descargado.
@@ -32,11 +32,59 @@ pub fn list(all: bool) -> i32 {
 }
 
 /// `ropero status`: el estado de la máquina, tipo `nvidia-smi`.
-pub fn status() -> i32 {
-    let maquina = ropero_runtime::capture_machine_state();
-    let texto = ropero_core::status::status_text_color(&maquina, &ropero_core::Palette::color());
-    ropero_core::out(&texto, false);
+pub fn status(live: Option<f64>) -> i32 {
+    if live.is_some_and(|seconds| !seconds.is_finite() || seconds <= 0.0) {
+        ropero_core::err_line("error: el intervalo de --live debe ser mayor que cero");
+        return 2;
+    }
+    if live.is_some() && !std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        ropero_core::err_line(
+            "error: --live requiere una terminal interactiva para refrescar la vista",
+        );
+        return 2;
+    }
+    loop {
+        let maquina = ropero_runtime::capture_machine_state();
+        let mut texto =
+            ropero_core::status::status_text_color(&maquina, &ropero_core::Palette::color());
+        texto.push_str(&tabla_engines_activos());
+        if live.is_some() {
+            print!("\x1b[2J\x1b[H");
+        }
+        ropero_core::out(&texto, false);
+        let Some(seconds) = live else {
+            break;
+        };
+        std::thread::sleep(std::time::Duration::from_secs_f64(seconds));
+    }
     0
+}
+
+fn tabla_engines_activos() -> String {
+    let Ok(scan) = crate::discovery::scan_tolerant() else {
+        return String::new();
+    };
+    let state_dir =
+        ropero_runtime::state::state_dir(&scan.env.home, scan.env.get("ROPERO_STATE_DIR"));
+    let active = ropero_runtime::state::managed_ports(&state_dir)
+        .into_iter()
+        .filter_map(|port| {
+            let state = ropero_runtime::state::read_state(&state_dir, port)?;
+            let pid = state.pid?;
+            ropero_runtime::process::estado_del_proceso(pid).filter(|status| *status != 'Z')?;
+            Some((state.engine, state.port.unwrap_or(port), pid, state.model))
+        })
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from(
+        "\nENGINES ACTIVOS\n  engine          puerto  pid      modelo\n  ───────────────────────────────────────\n",
+    );
+    for (engine, port, pid, model) in active {
+        out.push_str(&format!("  {engine:<15} {port:>6}  {pid:<8} {model}\n"));
+    }
+    out
 }
 
 /// `ropero engines [--all]`: la lista de motores con su color, su madurez
@@ -58,46 +106,34 @@ pub fn engines(all: bool) -> i32 {
     0
 }
 
-/// `ropero levels <modelo>`.
-pub fn levels(modelo: &str) -> i32 {
-    let Ok(s) = crate::discovery::scan() else {
-        return 1;
-    };
-    let Some(spec) = find(&s.catalog, modelo) else {
-        return unknown_model("levels", modelo);
-    };
-    for linea in ropero_core::level_lines(spec) {
-        ropero_core::out_line(&linea);
-    }
-    0
-}
-
-/// `ropero path <modelo>`.
-pub fn path(modelo: &str) -> i32 {
-    let Ok(s) = crate::discovery::scan() else {
-        return 1;
-    };
-    let Some(spec) = find(&s.catalog, modelo) else {
-        return unknown_model("path", modelo);
-    };
-    let paths = ropero_core::resolve_paths(spec, &s.env);
-    for linea in ropero_core::path_lines(&paths) {
-        ropero_core::out_line(&linea);
-    }
-    0
-}
-
 /// `ropero config`: muestra la configuración resuelta y su origen.
 ///
 /// Tolera configuración ilegible para poder mostrar el error y su remedio.
-pub fn config() -> i32 {
-    let Ok(s) = crate::discovery::scan_tolerant() else {
+pub fn config(lang: Option<&str>) -> i32 {
+    let Ok(mut s) = crate::discovery::scan_tolerant() else {
         return 1;
     };
+    if let Some(lang) = lang {
+        let lang = lang.to_ascii_uppercase();
+        if lang != "ES" && lang != "EN" {
+            ropero_core::err_line("error: --lang sólo admite ES o EN");
+            return 2;
+        }
+        let path = ropero_core::config::archivo_config(&s.env);
+        if let Err(error) = ropero_runtime::config_bootstrap::guardar_idioma(&path, &lang) {
+            ropero_core::err_line(&format!("error: no se pudo guardar el idioma: {error}"));
+            return 1;
+        }
+        let Ok(refreshed) = crate::discovery::scan_tolerant() else {
+            return 1;
+        };
+        s = refreshed;
+    }
     for linea in ropero_core::config::lineas_config(
         &s.estado_config,
         &s.config,
         &ropero_core::Palette::color(),
+        &s.config.lang,
     ) {
         ropero_core::out_line(&linea);
     }
@@ -174,38 +210,117 @@ pub fn validate() -> i32 {
     exit
 }
 
-/// `ropero args <modelo> [--<nivel>] [--<flag>] [--<opcion>=<valor>]`.
-pub fn args(modelo: &str, tokens: &[String]) -> i32 {
-    if let Some(tok) = ropero_core::first_invalid_token(tokens) {
-        let msg = ropero_core::surface::invalid_token_message(tok);
-        ropero_core::err_line(&ropero_core::surface::usage_message("args", &msg));
-        return 2;
-    }
+/// `ropero command <modelo>`: muestra el comando de arranque por defecto.
+pub fn args(modelo: &str) -> i32 {
     let Ok(s) = crate::discovery::scan() else {
         return 1;
     };
     let Some(spec) = find(&s.catalog, modelo) else {
-        return unknown_model("args", modelo);
+        return unknown_model("command", modelo);
     };
-    let parsed = ropero_core::parse_request(spec, tokens);
-    if let Some(prev) = &parsed.repeated_level {
-        let now = parsed.level.as_deref().unwrap_or_default();
-        ropero_core::err_line(&ropero_core::surface::repeated_level_notice(prev, now));
-    }
-    let req = parsed.to_launch_request();
-    let ctx = ropero_core::resolve_context(spec, &s.env);
-    match ropero_core::build_argv(spec, &req, &ctx) {
-        Ok(argv) => {
-            for a in argv {
-                ropero_core::out_line(&a);
+    let plan = match ropero_runtime::run::preparar(
+        &s.catalog,
+        &s.engines,
+        &s.env,
+        &ropero_runtime::RunRequest {
+            model: spec.model.name.clone(),
+            ..ropero_runtime::RunRequest::default()
+        },
+    ) {
+        Ok(plan) => plan,
+        Err(error) => {
+            if let Some(message) = error.error {
+                ropero_core::err_line(&message);
             }
-            0
+            return error.code;
         }
-        Err(e) => {
-            ropero_core::err_line(&ropero_core::surface::argv_error_message(&e.to_string()));
-            2
+    };
+    let program = ropero_runtime::binary_of(&plan.engine, &s.env)
+        .or_else(|| {
+            plan.engine
+                .detect
+                .binaries
+                .first()
+                .map(std::path::PathBuf::from)
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| plan.engine.id.as_str().to_string());
+    let mut argv = plan.argv;
+    if plan.engine.id == ropero_core::EngineId::Ignis {
+        let mut cleaned = Vec::with_capacity(argv.len() + 2);
+        let mut index = 0;
+        while index < argv.len() {
+            if argv[index] == "--server-bind" {
+                index += 2;
+            } else if argv[index].starts_with("--server-bind=") {
+                index += 1;
+            } else {
+                cleaned.push(argv[index].clone());
+                index += 1;
+            }
+        }
+        argv = cleaned;
+        argv.extend([
+            "--server-bind".into(),
+            format!("127.0.0.1:{}", plan.engine.port_range.min),
+        ]);
+    } else {
+        argv.extend(["--port".into(), plan.engine.port_range.min.to_string()]);
+    }
+    let mut lines = vec![shell_quote(&program)];
+    lines.extend(command_lines(&argv));
+    for (index, line) in lines.iter().enumerate() {
+        let suffix = if index + 1 < lines.len() { " \\" } else { "" };
+        ropero_core::out_line(&format!("{line}{suffix}"));
+    }
+    0
+}
+
+/// `ropero info <modelo>`: reúne artefactos y opciones declaradas.
+pub fn info(modelo: &str) -> i32 {
+    let Ok(s) = crate::discovery::scan() else {
+        return 1;
+    };
+    let Some(spec) = find(&s.catalog, modelo) else {
+        return unknown_model("info", modelo);
+    };
+    for line in ropero_core::info::lines(spec, &s.env, &s.config.lang) {
+        ropero_core::out_line(&line);
+    }
+    0
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"@%_+=:,./-".contains(&b))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+}
+
+fn command_lines(argv: &[String]) -> Vec<String> {
+    if argv.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    let mut index = 0;
+    while index < argv.len() {
+        let flag = shell_quote(&argv[index]);
+        if argv[index].starts_with('-')
+            && index + 1 < argv.len()
+            && !argv[index + 1].starts_with('-')
+        {
+            lines.push(format!("{flag} {}", shell_quote(&argv[index + 1])));
+            index += 2;
+        } else {
+            lines.push(flag);
+            index += 1;
         }
     }
+    lines
 }
 
 /// `ropero <modelo>`: arranca el modelo en su motor.

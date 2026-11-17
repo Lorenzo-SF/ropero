@@ -6,7 +6,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
         && matches.get_one::<String>("agent").is_none()
     {
         ropero_core::out(
-            "Conecta modelos del catálogo con agentes de código\n\nUSO: ropero connect --model MODELOS --agent AGENTE [--uninstall]\n     ropero connect --list\n\nMODELOS admite nombres separados por coma o punto y coma. Los providers se agrupan por engine de Ropero.\n",
+            "Conecta modelos del catálogo con agentes de código\n\nUSO: ropero connect --model MODELOS --agent AGENTE [--remove]\n     ropero connect --list\n\nMODELOS admite nombres separados por coma o punto y coma. Los providers se agrupan por engine de Ropero.\n",
             false,
         );
         return 0;
@@ -14,11 +14,9 @@ pub fn run(matches: &ArgMatches) -> i32 {
     if matches.get_flag("list") {
         if matches.get_one::<String>("model").is_some()
             || matches.get_one::<String>("agent").is_some()
-            || matches.get_flag("uninstall")
+            || matches.get_flag("remove")
         {
-            ropero_core::err_line(
-                "error: --list no se combina con --model, --agent ni --uninstall",
-            );
+            ropero_core::err_line("error: --list no se combina con --model, --agent ni --remove");
             return 2;
         }
         for (id, note) in ropero_runtime::connect::AGENTS {
@@ -36,26 +34,25 @@ pub fn run(matches: &ArgMatches) -> i32 {
         ropero_core::err_line("error: falta --model");
         return 2;
     };
-    if agent == "claude" {
-        ropero_core::err_line(
-            "error: Claude Code requiere Anthropic Messages; los engines OpenAI-compatible de Ropero no implementan ese protocolo",
-        );
-        return 1;
-    }
-    if agent != "opencode"
-        && agent != "openclaw"
-        && agent != "claw"
-        && agent != "pi"
-        && agent != "codex"
-        && agent != "hermes"
-        && agent != "mcode"
-        && agent != "aider"
-        && agent != "kilo"
-        && agent != "droid"
-        && agent != "codebuddy"
-        && agent != "copilot"
-        && agent != "vscode"
-    {
+    if !matches!(
+        agent,
+        "claude"
+            | "opencode"
+            | "openclaw"
+            | "claw"
+            | "pi"
+            | "codex"
+            | "hermes"
+            | "mcode"
+            | "aider"
+            | "kilo"
+            | "droid"
+            | "codebuddy"
+            | "copilot"
+            | "vscode"
+            | "trae"
+            | "trae-cn"
+    ) {
         ropero_core::err_line(&format!(
             "error: la integración automática con '{agent}' aún no está implementada; consulta 'ropero connect --list'"
         ));
@@ -105,6 +102,22 @@ pub fn run(matches: &ArgMatches) -> i32 {
         ropero_core::err_line("error: indica al menos un modelo");
         return 2;
     }
+    if agent == "codex" && !matches.get_flag("remove") {
+        let incompatible = selected
+            .iter()
+            .filter(|model| {
+                !ropero_runtime::connect::codex_responses_supported(model.model.engine.as_str())
+            })
+            .map(|model| format!("{} ({})", model.model.name, model.model.engine.as_str()))
+            .collect::<Vec<_>>();
+        if !incompatible.is_empty() {
+            ropero_core::err_line(&format!(
+                "error: Codex sólo admite providers con Responses API; no se pueden conectar: {}",
+                incompatible.join(", ")
+            ));
+            return 1;
+        }
+    }
     let state_dir =
         ropero_runtime::state::state_dir(&scan.env.home, scan.env.get("ROPERO_STATE_DIR"));
     let mut owned = selected.into_iter().cloned().collect::<Vec<_>>();
@@ -121,7 +134,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
                 });
             let configured_port = model.model.port.map(|p| p.0);
             let fallback_port = configured_port.unwrap_or(engine.port_range.min);
-            if active_port.is_none() && !matches.get_flag("uninstall") {
+            if active_port.is_none() && !matches.get_flag("remove") {
                 let occupied_by_other = ropero_runtime::state::managed_ports(&state_dir)
                     .into_iter()
                     .find_map(|port| {
@@ -159,13 +172,43 @@ pub fn run(matches: &ArgMatches) -> i32 {
         ));
         return 1;
     }
+    if agent == "claude" {
+        match ropero_runtime::connect::claude_env_instructions(
+            &scan.config,
+            &owned,
+            matches.get_flag("remove"),
+        ) {
+            Ok(lines) => {
+                for line in lines {
+                    ropero_core::out_line(&line);
+                }
+                return 0;
+            }
+            Err(error) => {
+                ropero_core::err_line(&format!("error: {error}"));
+                return 1;
+            }
+        }
+    }
+    if agent == "trae" || agent == "trae-cn" {
+        for line in ropero_runtime::connect::trae_instructions(
+            agent,
+            &scan.config,
+            &scan.engines,
+            &owned,
+            matches.get_flag("remove"),
+        ) {
+            ropero_core::out_line(&line);
+        }
+        return 0;
+    }
     let result = if agent == "aider" {
         ropero_runtime::connect::aider(
             &scan.env.home,
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "opencode" {
         ropero_runtime::connect::opencode(
@@ -174,7 +217,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "openclaw" || agent == "claw" {
         ropero_runtime::connect::openclaw(
@@ -182,7 +225,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "pi" {
         ropero_runtime::connect::pi(
@@ -190,15 +233,21 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "codex" {
-        ropero_runtime::connect::codex(
+        let codex_home = scan
+            .env
+            .get("CODEX_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| scan.env.home.join(".codex"));
+        ropero_runtime::connect::codex_in_dir(
             &scan.env.home,
+            &codex_home,
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "hermes" {
         let hermes_home = scan
@@ -212,7 +261,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
         .map(|()| hermes_home.join("config.yaml"))
     } else if agent == "kilo" {
@@ -221,7 +270,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
         .map(|()| scan.env.home.join(".config/kilo/kilo.json"))
     } else if agent == "droid" {
@@ -230,7 +279,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "codebuddy" {
         ropero_runtime::connect::codebuddy(
@@ -238,7 +287,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else if agent == "copilot" || agent == "vscode" {
         ropero_runtime::connect::vscode(
@@ -246,7 +295,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
     } else {
         ropero_runtime::connect::mcode(
@@ -254,7 +303,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             &scan.config,
             &scan.engines,
             &owned,
-            matches.get_flag("uninstall"),
+            matches.get_flag("remove"),
         )
         .map(|()| ropero_runtime::connect::mcode_data_dir(&scan.env.home).join("config.yaml"))
     };
@@ -267,7 +316,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
             };
             ropero_core::out_line(&format!(
                 "{} {}{} en {}",
-                if matches.get_flag("uninstall") {
+                if matches.get_flag("remove") {
                     "Conexiones retiradas"
                 } else {
                     "Modelos conectados"
@@ -276,6 +325,18 @@ pub fn run(matches: &ArgMatches) -> i32 {
                 target,
                 path.display()
             ));
+            if agent == "codex" && !matches.get_flag("remove") {
+                let engines = owned
+                    .iter()
+                    .map(|model| model.model.engine.as_str())
+                    .collect::<std::collections::BTreeSet<_>>();
+                for engine in engines {
+                    let profile = format!("ropero-{engine}");
+                    ropero_core::out_line(&format!(
+                        "Usa el perfil de Codex así: codex --profile {profile} -m <alias-del-modelo>"
+                    ));
+                }
+            }
             0
         }
         Err(e) => {

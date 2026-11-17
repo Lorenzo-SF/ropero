@@ -33,7 +33,15 @@ pub struct ResolvedPaths {
 pub fn resolve_paths(spec: &ModelSpec, env: &Environment) -> ResolvedPaths {
     let real = crate::catalog::real_name(spec);
     let gguf_dir = env.engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf");
-    let artifacts_dir = env.engine_artifact_path(spec.model.engine, "ARTIFACTS_DIR", "models");
+    let artifacts_dir = env.engine_artifact_path(
+        spec.model.engine,
+        "ARTIFACTS_DIR",
+        if spec.model.engine == crate::EngineId::Ignis {
+            "models/ignis"
+        } else {
+            "models"
+        },
+    );
     let safetensors_dir =
         env.engine_artifact_path(spec.model.engine, "SAFETENSORS_DIR", "models/safetensors");
     let log_dir = env.env_path("LOG_DIR", "logs");

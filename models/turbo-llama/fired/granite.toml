@@ -44,10 +44,6 @@ imatrix_file = "imatrix_unsloth.gguf_file"
 keep_source  = true
 size = "64.4 GB"
 
-[levels]
-list    = ["low", "medium", "high"]
-default = "medium"
-
 [args]
 base = [
     "--n-gpu-layers", "41",

@@ -62,6 +62,12 @@ pub struct RunRequest {
     /// El nivel de razonamiento pedido.
     pub level: Option<String>,
 
+    /// Flags declarados por el modelo en `[flags]`.
+    pub model_flags: Vec<String>,
+
+    /// Opciones declaradas por el modelo en `[options]`.
+    pub model_options: Vec<(String, String)>,
+
     /// Nivel común de logs solicitado por el usuario.
     pub log_level: Option<String>,
 
@@ -177,7 +183,7 @@ pub fn preparar(
     // 1. El modelo tiene que estar en el catálogo.
     let Some(spec) = ropero_core::find_spec(catalogo, &peticion.model) else {
         return Err(RunOutcome::error(format!(
-            "modelo desconocido: '{}' (ropero list)",
+            "modelo desconocido: '{}' (ropero models)",
             peticion.model
         )));
     };
@@ -204,12 +210,17 @@ pub fn preparar(
     }
     let peticion_argv = LaunchRequest {
         level: peticion.level.clone(),
-        flags: Vec::new(),
-        options: Vec::new(),
+        flags: peticion.model_flags.clone(),
+        options: peticion.model_options.clone(),
     };
     let model_argv = build_argv(spec, &peticion_argv, &ctx)
         .map_err(|e| RunOutcome::error(ropero_core::surface::argv_error_message(&e.to_string())))?;
-    let mut argv = if ropero_core::flm::is_flm_model(spec)
+    let mut argv = if engine.id == EngineId::Strata {
+        let profile = crate::strata::profile_for(&engine, spec, env).map_err(RunOutcome::error)?;
+        let mut strata_argv = crate::strata::serve_argv(&profile);
+        strata_argv.extend(model_argv);
+        strata_argv
+    } else if ropero_core::flm::is_flm_model(spec)
         && (engine.serve.is_some() || engine.install.is_some())
     {
         crate::flm::serve_argv(&engine, spec, &model_argv, Some(ctx.context))
@@ -217,9 +228,25 @@ pub fn preparar(
     } else {
         model_argv
     };
-    if engine.id == EngineId::Strata {
-        let profile = crate::strata::profile_for(&engine, spec, env).map_err(RunOutcome::error)?;
-        argv = crate::strata::serve_argv(&profile);
+    // Ignis exposes its model through /v1/models using model-id. Keep the
+    // catalog name for Ropero's paths/state, but honor the engine-facing alias.
+    if engine.id == EngineId::Ignis
+        && let Some(alias) = spec.model.alias.as_deref()
+    {
+        set_flag_value(&mut argv, "--model-id", alias);
+    }
+    // llama.cpp otherwise publishes the GGUF path as `/v1/models` id.
+    // Connect uses the public alias, so make the serving id deterministic.
+    if matches!(engine.id, EngineId::LlamaServer | EngineId::TurboLlama) {
+        let alias = spec.model.alias.as_deref().unwrap_or(&spec.model.name);
+        set_flag_value(&mut argv, "--alias", alias);
+    }
+    if let Some(alias) = spec.model.alias.as_deref() {
+        match engine.id {
+            EngineId::Vllm => set_flag_value(&mut argv, "--served-model-name", alias),
+            EngineId::TensorRtLlm => set_flag_value(&mut argv, "--served_model_name", alias),
+            _ => {}
+        }
     }
     // llama-server y turbo-llama no reciben el GGUF como argv implícito:
     // sin `-m`, versiones recientes arrancan un router vacío y el servidor
@@ -286,6 +313,23 @@ pub fn preparar(
     })
 }
 
+fn set_flag_value(argv: &mut Vec<String>, flag: &str, value: &str) {
+    if let Some(index) = argv.iter().position(|arg| arg == flag) {
+        if let Some(argument) = argv.get_mut(index + 1) {
+            *argument = value.to_string();
+        } else {
+            argv.push(value.to_string());
+        }
+    } else if let Some(argument) = argv
+        .iter_mut()
+        .find(|argument| argument.starts_with(&format!("{flag}=")))
+    {
+        *argument = format!("{flag}={value}");
+    } else {
+        argv.extend([flag.to_string(), value.to_string()]);
+    }
+}
+
 /// El preflight de un plan: lo que hay que comprobar antes de lanzar.
 pub fn preflight_de(
     plan: &RunPlan,
@@ -332,21 +376,13 @@ pub fn tamano_modelo(plan: &RunPlan, env: &Environment) -> Option<u64> {
         .collect();
     let numero: f64 = numero.parse().ok()?;
     let superior = texto.to_uppercase();
-    let bytes = if superior.contains("TIB") {
+    let bytes = if superior.contains("TIB") || superior.contains("TB") {
         numero * 1024.0 * 1024.0 * 1024.0 * 1024.0
-    } else if superior.contains("TB") {
-        numero * 1024.0 * 1024.0 * 1024.0 * 1024.0
-    } else if superior.contains("GIB") {
+    } else if superior.contains("GIB") || superior.contains("GB") {
         numero * 1024.0 * 1024.0 * 1024.0
-    } else if superior.contains("GB") {
-        numero * 1024.0 * 1024.0 * 1024.0
-    } else if superior.contains("MIB") {
+    } else if superior.contains("MIB") || superior.contains("MB") {
         numero * 1024.0 * 1024.0
-    } else if superior.contains("MB") {
-        numero * 1024.0 * 1024.0
-    } else if superior.contains("KIB") {
-        numero * 1024.0
-    } else if superior.contains("KB") {
+    } else if superior.contains("KIB") || superior.contains("KB") {
         numero * 1024.0
     } else if superior.contains('B') {
         numero
@@ -492,6 +528,8 @@ pub fn peticion_de(
         no_api_key,
         context: None,
         level: None,
+        model_flags: Vec::new(),
+        model_options: Vec::new(),
         log_level,
         background,
     };
@@ -990,4 +1028,46 @@ pub fn arranca(
     let outcome = RunOutcome::ok(resultado.port, resultado.pid);
     registra_uso(env, plan, peticion, &outcome);
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_flag_value;
+
+    #[test]
+    fn ignis_qwen27b_toml_usa_el_alias_expuesto_por_el_engine() {
+        let source = include_str!("../../../models/ignis/qwen3.8-27b-16g.toml");
+        let model = ropero_core::parse_model(source, std::path::Path::new("qwen3.8-27b-16g.toml"))
+            .expect("el TOML de Qwen de Ignis debe seguir siendo válido");
+
+        let base = &model.args.base;
+        let model_id = base
+            .windows(2)
+            .find(|pair| pair[0] == "--model-id")
+            .map(|pair| pair[1].as_str());
+        assert_eq!(model_id, model.model.alias.as_deref());
+        assert_ne!(model_id, Some(model.model.name.as_str()));
+    }
+
+    #[test]
+    fn alias_served_model_replaces_or_adds_exactly_one_flag() {
+        let mut args = vec!["--alias=old".to_string(), "--ctx-size".to_string()];
+        set_flag_value(&mut args, "--alias", "new-public-name");
+        assert_eq!(args, ["--alias=new-public-name", "--ctx-size"]);
+
+        let mut args = Vec::new();
+        set_flag_value(&mut args, "--alias", "catalog-name");
+        assert_eq!(args, ["--alias", "catalog-name"]);
+    }
+
+    #[test]
+    fn los_flags_de_alias_de_vllm_y_tensorrt_sustituyen_el_modelo_servido() {
+        let mut vllm = vec!["--served-model-name".into(), "internal".into()];
+        set_flag_value(&mut vllm, "--served-model-name", "public");
+        assert_eq!(vllm, ["--served-model-name", "public"]);
+
+        let mut tensorrt = Vec::new();
+        set_flag_value(&mut tensorrt, "--served_model_name", "public");
+        assert_eq!(tensorrt, ["--served_model_name", "public"]);
+    }
 }

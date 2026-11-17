@@ -36,7 +36,7 @@ fn run(args: &[&str]) -> (i32, String, String) {
 /// que se recibió.
 #[test]
 fn un_grupo_que_no_existe_sale_con_dos_y_nombra_el_valor() {
-    let (code, _stdout, stderr) = run(&["test", "--grupo", "Z"]);
+    let (code, _stdout, stderr) = run(&["test", "--group", "Z"]);
     assert_eq!(code, 2, "stderr={stderr}");
     assert!(stderr.contains('Z'), "nombra el valor: {stderr}");
     assert!(stderr.contains('F'), "dice qué grupos hay: {stderr}");
@@ -45,7 +45,7 @@ fn un_grupo_que_no_existe_sale_con_dos_y_nombra_el_valor() {
 /// Dos selecciones a la vez son un error de uso.
 #[test]
 fn dos_selecciones_a_la_vez_salen_con_dos() {
-    let (code, _stdout, stderr) = run(&["test", "--grupo", "D", "--test", "F2"]);
+    let (code, _stdout, stderr) = run(&["test", "--group", "D", "--test", "F2"]);
     assert_eq!(code, 2, "stderr={stderr}");
     assert!(stderr.contains("D"), "nombra el grupo: {stderr}");
     assert!(stderr.contains("F2"), "nombra el test: {stderr}");
@@ -57,13 +57,13 @@ fn dos_selecciones_a_la_vez_salen_con_dos() {
 fn sin_terminal_no_se_elige_modelo_y_sale_con_dos() {
     let (code, _stdout, stderr) = run(&["test"]);
     assert_eq!(code, 2, "stderr={stderr}");
-    assert!(stderr.contains("--modelo"), "dice qué hacer: {stderr}");
+    assert!(stderr.contains("--model"), "dice qué hacer: {stderr}");
 }
 
 /// Un modelo que no está en el catálogo es un error de uso.
 #[test]
 fn un_modelo_desconocido_sale_con_dos() {
-    let (code, _stdout, stderr) = run(&["test", "--modelo", "no-existe", "--grupo", "F"]);
+    let (code, _stdout, stderr) = run(&["test", "--model", "no-existe", "--group", "F"]);
     assert_eq!(code, 2, "stderr={stderr}");
     assert!(stderr.contains("no-existe"), "nombra el modelo: {stderr}");
 }
@@ -74,12 +74,11 @@ fn la_ayuda_enseña_los_flags_de_la_bateria() {
     let (code, stdout, stderr) = run(&["test", "--help"]);
     assert_eq!(code, 0, "stderr={stderr}");
     for flag in [
-        "--modelo",
-        "--grupo",
+        "--model",
+        "--group",
         "--test",
         "--dimension",
-        "--tipo",
-        "--todos",
+        "--all",
         "--json",
     ] {
         assert!(stdout.contains(flag), "la ayuda no enseña {flag}: {stdout}");

@@ -238,9 +238,28 @@ fn regla_12_rechaza_alias_a_level_inexistente() {
 fn regla_13_rechaza_default_de_option_fuera_de_list() {
     let mut model = valid();
     model.options.list = vec!["temp".to_string()];
-    model.options.default = Some("top-p".to_string());
+    model
+        .options
+        .default
+        .insert("top-p".to_string(), "0.95".to_string());
     let errors = validate(&model, &ctx());
     assert_eq!(rule(&errors), ValidationRule::OptionDefaultMissing);
+}
+
+#[test]
+fn regla_17_rechaza_parametros_anunciados_sin_mapeo_de_arranque() {
+    let mut model = valid();
+    model.levels.list.push("fast".to_string());
+    model.flags.list.push("vision".to_string());
+    model.options.list.push("batch".to_string());
+    let errors = validate(&model, &ctx());
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.rule() == ValidationRule::LaunchMappingMissing)
+            .count(),
+        3
+    );
 }
 
 #[test]

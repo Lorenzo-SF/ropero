@@ -17,7 +17,7 @@ use std::path::Path;
 use crate::ModelSpec;
 use crate::paths::ResolvedPaths;
 
-/// Las líneas de `ropero path`: las rutas resueltas, una por línea.
+/// Las líneas de `ropero info`: las rutas resueltas, una por línea.
 ///
 /// El formato es `CLAVE=valor`; una ruta que no existe no sale (quien pide
 /// `path` pregunta por lo que hay).
@@ -42,12 +42,12 @@ pub fn path_lines(paths: &ResolvedPaths) -> Vec<String> {
     out
 }
 
-/// Las líneas de `ropero levels`: los niveles declarados, uno por línea.
+/// Las líneas de `ropero info`: los niveles declarados, uno por línea.
 pub fn level_lines(spec: &ModelSpec) -> Vec<String> {
     spec.levels.list.clone()
 }
 
-/// El primer token de `ropero args` que no tiene forma de `--<nivel>`,
+/// El primer token del arranque que no tiene forma de `--<nivel>`,
 /// `--<flag>` ni `--<opcion>=<valor>`.
 ///
 /// PURA: no lee disco, no consulta el entorno. La CLI decide qué hacer con

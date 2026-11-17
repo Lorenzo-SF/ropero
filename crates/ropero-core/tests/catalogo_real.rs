@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 /// Nº de modelos activos esperados en el catálogo real.
-const ACTIVOS_ESPERADOS: usize = 20;
+const ACTIVOS_ESPERADOS: usize = 21;
 /// Nº de modelos retirados (`fired/`) esperados en el catálogo real.
 const FIRED_ESPERADOS: usize = 27;
 /// Nº total de modelos del catálogo real (activos + retirados).
@@ -61,7 +61,7 @@ fn recoge(base: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
 }
 
 #[test]
-fn catalogo_real_tiene_47_modelos() {
+fn catalogo_real_tiene_48_modelos() {
     let base = base_real();
     assert!(
         base.is_dir(),
@@ -137,8 +137,8 @@ fn catalogo_real_usa_la_nomenclatura_de_adr_004() {
     );
     assert_eq!(
         por_motor.get("llama-server").copied(),
-        Some(4),
-        "el oficial (llama-server) tiene 4 TOML: {:?}",
+        Some(5),
+        "el oficial (llama-server) tiene 5 TOML: {:?}",
         por_motor
     );
     assert!(

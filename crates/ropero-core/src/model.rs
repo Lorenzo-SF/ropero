@@ -212,7 +212,8 @@ pub struct OptionsSpec {
     pub list: Vec<String>,
 
     #[serde(default)]
-    pub default: Option<String>,
+    /// Valor por defecto para cada opción declarada en `list`.
+    pub default: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

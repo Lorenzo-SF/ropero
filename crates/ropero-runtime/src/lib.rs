@@ -12,6 +12,7 @@ pub mod inferencia;
 pub mod install;
 pub mod launch;
 mod machine;
+pub mod model_draft;
 pub mod probe;
 pub mod process;
 pub mod remove;
@@ -20,6 +21,7 @@ pub mod state;
 pub mod stop;
 pub mod strata;
 mod sys_engine;
+pub use sys_engine::binary_of;
 pub mod sysinfo;
 pub mod usage;
 

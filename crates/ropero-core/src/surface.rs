@@ -114,14 +114,14 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "connect",
-        usage: "connect (--list | --model MODELOS --agent AGENTE [--uninstall])",
+        usage: "connect (--list | --model MODELOS --agent AGENTE [--remove])",
         summary: "conecta o desconecta modelos de agentes de código",
         phase: None,
         state: CommandState::Ready,
     },
     Command {
-        name: "list",
-        usage: "list [--all]",
+        name: "models",
+        usage: "models [--all] [add]",
         summary: "modelos disponibles, agrupados por motor",
         phase: None,
         state: CommandState::Ready,
@@ -148,29 +148,22 @@ pub const COMMANDS: &[Command] = &[
         state: CommandState::Ready,
     },
     Command {
-        name: "args",
-        usage: "args <modelo> [--<nivel>] [--<flag>] [--<opcion>=<valor>]",
-        summary: "argv final con el que se sirve el modelo",
+        name: "command",
+        usage: "command <modelo>",
+        summary: "comando completo de arranque, listo para copiar",
         phase: None,
         state: CommandState::Ready,
     },
     Command {
-        name: "levels",
-        usage: "levels <modelo>",
-        summary: "niveles de razonamiento declarados",
-        phase: None,
-        state: CommandState::Ready,
-    },
-    Command {
-        name: "path",
-        usage: "path <modelo>",
-        summary: "rutas resueltas del modelo",
+        name: "info",
+        usage: "info <modelo>",
+        summary: "configuración, artefactos y argumentos del modelo",
         phase: None,
         state: CommandState::Ready,
     },
     Command {
         name: "test",
-        usage: "test [--modelo <id>] [--grupo A..G] [--test <id>] [--dimension <nombre>] [--todos]",
+        usage: "test [--model <id>] [--group A..G] [--test <id>] [--dimension <name>] [--all]",
         summary: "lanza la batería de pruebas contra un modelo",
         phase: None,
         state: CommandState::Ready,
@@ -293,7 +286,7 @@ pub const FLAGS_CONNECT: &[Flag] = &[
         "modelo(s) separados por coma o punto y coma",
     ),
     Flag::value("agent", "AGENTE", "agente de destino"),
-    Flag::switch("uninstall", "quita la conexión indicada"),
+    Flag::switch("remove", "quita la conexión indicada"),
 ];
 
 /// Los flags de `ropero gguffer` (doc CLI v2 §11.2).
@@ -350,11 +343,50 @@ pub const FLAGS_GGUFFER: &[Flag] = &[
     ),
 ];
 
-/// Los flags de `ropero list` y `ropero engines`.
+/// Los flags de `ropero models` y `ropero engines`.
 pub const FLAGS_ALL: &[Flag] = &[Flag::switch(
     "all",
     "muestra también lo que no está disponible",
 )];
+pub const FLAGS_CONFIG: &[Flag] = &[Flag::value("lang", "ES|EN", "idioma de la interfaz")];
+pub const FLAGS_STATUS: &[Flag] = &[Flag::value(
+    "live",
+    "SEGUNDOS",
+    "actualiza la vista; intervalo en segundos (por defecto 1)",
+)];
+pub const FLAGS_MODELS_ADD: &[Flag] = &[
+    Flag::value("path", "TOML", "lee el TOML desde un fichero"),
+    Flag::switch("stdin", "lee el TOML completo desde la entrada estándar"),
+    Flag::value("name", "ID", "nombre interno y nombre del fichero"),
+    Flag::value("engine", "ENGINE", "engine del modelo"),
+    Flag::value("format", "FORMATO", "formato del artefacto"),
+    Flag::value("artifact", "RUTA", "artefacto del modelo"),
+    Flag::value("repo", "OWNER/NAME", "repositorio de descarga o build"),
+    Flag::value("context", "TOKENS", "ventana de contexto"),
+    Flag::value("alias", "ID", "alias público del modelo"),
+    Flag::many(
+        "set",
+        "CAMPO=VALOR",
+        "valor TOML adicional; repetible y con rutas por bloques",
+    ),
+];
+pub const FLAGS_MODELS: &[Flag] = &[
+    Flag::switch("all", "muestra también lo que no está disponible"),
+    Flag::value("path", "TOML", "lee el TOML desde un fichero"),
+    Flag::switch("stdin", "lee el TOML completo desde la entrada estándar"),
+    Flag::value("name", "ID", "nombre interno y nombre del fichero"),
+    Flag::value("engine", "ENGINE", "engine del modelo"),
+    Flag::value("format", "FORMATO", "formato del artefacto"),
+    Flag::value("artifact", "RUTA", "artefacto del modelo"),
+    Flag::value("repo", "OWNER/NAME", "repositorio de descarga o build"),
+    Flag::value("context", "TOKENS", "ventana de contexto"),
+    Flag::value("alias", "ID", "alias público del modelo"),
+    Flag::many(
+        "set",
+        "CAMPO=VALOR",
+        "valor TOML adicional; repetible y con rutas por bloques",
+    ),
+];
 
 /// Los flags de `ropero <modelo>` (doc CLI v2 §8.2).
 pub const FLAGS_RUN: &[Flag] = &[
@@ -380,25 +412,22 @@ pub const FLAGS_RUN: &[Flag] = &[
 
 /// Los flags de `ropero test` (doc CLI v2 §13).
 ///
-/// El índice de la batería tiene **dos** taxonomías: los grupos (A–F) y las
-/// doce dimensiones del perfil. El doc habla de «lanzar por tipo»: aquí el
-/// «tipo» es la **dimensión**, y `--tipo` es su **alias** (el índice no
-/// declara ningún «tipo»). Los dos no pueden ir a la vez.
+/// Los selectores se llaman en inglés de forma consistente con el contrato
+/// CLI: `--model`, `--group`, `--test`, `--dimension` y `--all`.
 pub const FLAGS_TEST: &[Flag] = &[
     Flag::value(
-        "modelo",
+        "model",
         "MODELO",
         "el modelo que se prueba (sin él, se elige de los disponibles)",
     ),
-    Flag::value("grupo", "A..G", "el grupo de tests que se lanza"),
+    Flag::value("group", "A..G", "el grupo de tests que se lanza"),
     Flag::value("test", "ID|FICHERO", "un solo test (su id o su fichero)"),
     Flag::value(
         "dimension",
         "NOMBRE",
         "las tests de una dimensión del índice (prefijo único vale)",
     ),
-    Flag::value("tipo", "NOMBRE", "alias de --dimension"),
-    Flag::switch("todos", "toda la batería"),
+    Flag::switch("all", "toda la batería"),
     Flag::switch(
         "json",
         "el informe en JSON por stdout (el texto va a stderr)",
@@ -415,7 +444,10 @@ pub fn flags_de(cmd: &str) -> &'static [Flag] {
         "stop" => FLAGS_STOP,
         "connect" => FLAGS_CONNECT,
         "gguffer" => FLAGS_GGUFFER,
-        "list" | "engines" => FLAGS_ALL,
+        "models" => FLAGS_MODELS,
+        "engines" => FLAGS_ALL,
+        "config" => FLAGS_CONFIG,
+        "status" => FLAGS_STATUS,
         "run" => FLAGS_RUN,
         "test" => FLAGS_TEST,
         _ => &[],
@@ -437,7 +469,7 @@ pub mod help {
     pub const STATUS: &str = "estado de la máquina: CPU, GPU, RAM y swap";
     /// `ropero doctor`
     pub const DOCTOR: &str = "comprueba las dependencias de ropero y de cada motor";
-    /// `ropero list`
+    /// `ropero models`
     pub const LIST: &str = "modelos disponibles, agrupados por motor";
     /// `ropero template`
     pub const TEMPLATE: &str = "vuelca la plantilla del catálogo";
@@ -445,11 +477,11 @@ pub mod help {
     pub const ENGINES: &str = "motores, con su color y su compatibilidad";
     /// `ropero validate`
     pub const VALIDATE: &str = "valida los TOML del catálogo";
-    /// `ropero args`
+    /// `ropero command`
     pub const ARGS: &str = "argv final con el que se sirve el modelo";
-    /// `ropero levels`
+    /// `ropero info`
     pub const LEVELS: &str = "niveles de razonamiento declarados";
-    /// `ropero path`
+    /// `ropero info`
     pub const PATH: &str = "rutas resueltas del modelo";
     /// `ropero test`
     pub const TEST: &str = "lanza la batería de pruebas contra un modelo";
@@ -545,7 +577,7 @@ pub fn missing_model_message(cmd: &str) -> String {
 
 /// El mensaje de un modelo que no está en el catálogo.
 pub fn unknown_model_message(name: &str) -> String {
-    format!("modelo desconocido: '{}' (ropero list)", name)
+    format!("modelo desconocido: '{}' (ropero models)", name)
 }
 
 /// Un token que no tiene forma de `--<nivel>`, `--<flag>` ni `--<opcion>=<valor>`.
@@ -563,7 +595,7 @@ pub fn repeated_level_notice(previous: &str, current: &str) -> String {
 
 /// El mensaje de error cuando el argv no se puede montar.
 pub fn argv_error_message(error: &str) -> String {
-    format!("error: {error}\n  (ropero args --help → uso de args)")
+    format!("error: {error}\n  (ropero command --help → uso de command)")
 }
 
 /// Un marcador de fase, para los tests: el nombre de la fase actual.

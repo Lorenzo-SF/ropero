@@ -28,7 +28,7 @@ preserves v1's contracts and on-disk state while v2 is built.
 
 The TOML files in [`models/`](models/) are reference copies and backups. The
 application does **not** discover them as its normal catalog. By default,
-`install models`, `list`, and `ropero <alias>` read the user's catalog from
+`install models`, `models`, and `ropero <alias>` read the user's catalog from
 `$XDG_CONFIG_HOME/ropero/models/` or `~/.config/ropero/models/`. Place model
 TOML files there. `ROPERO_MODELS_DIR` and `ROPERO_ROOT` are development and test
 overrides.
@@ -78,7 +78,7 @@ of the current working directory:
 
 ```bash
 cargo run --locked -p ropero-cli -- config
-cargo run --locked -p ropero-cli -- list --all
+cargo run --locked -p ropero-cli -- models --all
 ```
 
 ### Catalog, configuration, and overrides
@@ -122,15 +122,36 @@ idempotent configuration bootstrap may run if configuration is missing.
 ropero connect --model qwen --agent opencode
 ```
 
-Separate multiple models with commas or semicolons. Add `--uninstall` to remove
+Separate multiple models with commas or semicolons. Add `--remove` to remove
 the selected model connections. OpenCode, Pi, OpenClaw (`claw` is an alias),
 Codex, Hermes, and Kilo group providers by engine. VS Code and Copilot use
 Custom Endpoint; CodeBuddy and Droid store endpoints on each custom entry.
 Aider registers an endpoint and key per model in its official model
 settings/metadata files. MCode uses its official CLI; because it removes entire
 providers, uninstall requires selecting all Ropero models for that engine.
-Claude Code requires the Anthropic Messages API, which Ropero's
-OpenAI-compatible engines do not expose directly.
+Claude Code requires the Anthropic Messages API. Ropero prints the environment
+variables needed to configure a compatible URL and token.
+
+For Codex, Ropero creates one profile per engine without changing the global
+provider. Connect the models and use the profile printed by the command, for
+example `codex --profile ropero-turbo-llama -m ornith`. If `CODEX_HOME` is set,
+Ropero writes the configuration and profiles there. Codex requires the
+Responses API; Ropero rejects engines that do not declare support for it.
+
+TRAE and TRAE CN require adding or removing the model in their model settings;
+`ropero connect --agent trae|trae-cn --model <model>` prints the exact values
+for that step without editing private application files or displaying keys.
+`claw` is a historical OpenClaw alias, not a separate agent. Gemini CLI,
+Cursor, Kiro, Antigravity, and Devin are omitted from `--list`: no documented
+integration compatible with Ropero engine endpoints and/or safe persistent
+model-registration interface was found.
+
+`ropero config --lang EN` or `--lang ES` stores the interface language; EN is
+the default. `ropero models add` creates a TOML through a wizard, flags, file,
+or stdin. Repeat `--set block.field=TOML_VALUE` to define schema fields, e.g.
+`--set levels.list='["low","high"]'`. `ropero info <model>` displays its configuration, and
+`ropero command <model>` prints serving arguments in copyable form.
+`ropero status --live [SECONDS]` refreshes the terminal view.
 
 ## Documentation
 
@@ -140,6 +161,10 @@ Read the two normative documents together:
 |---|---|
 | [Specification and requirements](docs-especificacion/ropero-especificacion.md) | What should ropero do, and with what exact semantics? |
 | [Build specification](docs-especificacion/ropero-construccion.md) | How is it built, in what phases, and with which quality gates? |
+
+The [current CLI reference](docs-especificacion/ropero-cli.en.md) and the
+[English](docs/engine-support.en.md) and [Spanish](docs/engine-support.es.md)
+engine compatibility guides document commands, evidence, and support limits.
 
 If they conflict, the requirements specification governs system behavior; the
 build specification governs implementation. Architecture decisions are in

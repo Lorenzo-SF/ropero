@@ -102,6 +102,15 @@ fn parse_config_rechaza_campo_desconocido_y_tipo_invalido() {
 }
 
 #[test]
+fn idioma_se_guarda_y_solo_admite_es_o_en() {
+    let e = env("/tmp/home-cfg-lang", "/tmp", &[]);
+    assert_eq!(parse_config("lang = \"ES\"\n", &e).unwrap().lang, "ES");
+    assert_eq!(parse_config("lang = \"EN\"\n", &e).unwrap().lang, "EN");
+    assert!(parse_config("lang = \"FR\"\n", &e).is_err());
+    assert!(parse_config("lang = 4\n", &e).is_err());
+}
+
+#[test]
 fn config_por_engine_resuelve_rutas_y_preserva_precedencia_global_env() {
     let base = std::env::temp_dir().join("ropero-config-engine-paths");
     let _ = std::fs::remove_dir_all(&base);
@@ -116,9 +125,15 @@ fn config_por_engine_resuelve_rutas_y_preserva_precedencia_global_env() {
     let e = env(home.to_str().unwrap(), base.to_str().unwrap(), &[]);
     let cfg = resuelve_config(&e, Some(&text)).unwrap();
     let id = ropero_core::EngineId::LlamaServer;
-    assert_eq!(cfg.models_toml_dir(id).valor, base.join("models/custom"));
-    assert_eq!(cfg.gguf_dir_de(id).valor, home.join("custom-gguf"));
-    assert_eq!(cfg.safetensors_dir_de(id).valor, home.join("custom-safe"));
+    assert_eq!(
+        cfg.models_toml_dir(id).valor,
+        base.join("catalog/llama-server")
+    );
+    assert_eq!(cfg.gguf_dir_de(id).valor, base.join("gguf-global"));
+    assert_eq!(
+        cfg.safetensors_dir_de(id).valor,
+        home.join("models/safetensors")
+    );
     assert_eq!(cfg.engines[&id].port_min, Some(8110));
     assert_eq!(cfg.engines[&id].color.unwrap().as_str(), "morado");
 

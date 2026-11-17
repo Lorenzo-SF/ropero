@@ -20,7 +20,7 @@ default = "medium"
 [args]
 base = [
   "--model-id", "qwen3.8-flash-next",
-  "--download-path", "${artifacts_dir}",
+  "--download-path", "${artifacts_dir}/qwen3.8-flash-next",
   "--download-enabled", "false",
   "--model-max-context", "${ctx}",
   # Flash-Next tiene su propio prefill y drafter MTP; DFlash2 es del 27B.

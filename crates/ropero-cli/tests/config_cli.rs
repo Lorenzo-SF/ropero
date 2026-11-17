@@ -37,10 +37,10 @@ fn config_y_doctor_reportan_estado_y_origen() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert_eq!(out.status.code(), Some(0), "stderr={stderr}");
-    assert!(stdout.contains("CONFIGURACIÓN"), "stdout={stdout}");
-    assert!(stdout.contains("RUTAS"), "stdout={stdout}");
+    assert!(stdout.contains("CONFIGURATION"), "stdout={stdout}");
+    assert!(stdout.contains("PATHS"), "stdout={stdout}");
     assert!(
-        stdout.contains("archivo config.toml") || stdout.contains("por defecto"),
+        stdout.contains("config.toml file") || stdout.contains("default"),
         "stdout={stdout}"
     );
 

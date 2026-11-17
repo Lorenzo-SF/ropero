@@ -125,7 +125,15 @@ pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
     let gguf_dir = env.engine_artifact_path(spec.model.engine, "GGUF_DIR", "models/gguf");
     let safetensors_dir =
         env.engine_artifact_path(spec.model.engine, "SAFETENSORS_DIR", "models/safetensors");
-    let artifacts_dir = env.engine_artifact_path(spec.model.engine, "ARTIFACTS_DIR", "models");
+    let artifacts_dir = env.engine_artifact_path(
+        spec.model.engine,
+        "ARTIFACTS_DIR",
+        if spec.model.engine == crate::EngineId::Ignis {
+            "models/ignis"
+        } else {
+            "models"
+        },
+    );
     let gguf_name = env
         .get(&format!("ROPERO_{}_GGUF", crate::catalog::slug(&real)))
         .filter(|s| !s.is_empty())
@@ -198,6 +206,11 @@ pub enum ArgvError {
     },
     UnknownOption {
         option: String,
+        declared: Vec<String>,
+    },
+    InvalidOptionValue {
+        option: String,
+        value: String,
         declared: Vec<String>,
     },
     MissingFile {
@@ -408,6 +421,18 @@ pub fn build_argv(
             });
         }
     }
+    for (key, value) in &request.options {
+        if let Some(cfg) = spec.args.option.get(key)
+            && !cfg.values.is_empty()
+            && !cfg.values.contains_key(value)
+        {
+            return Err(ArgvError::InvalidOptionValue {
+                option: key.clone(),
+                value: value.clone(),
+                declared: cfg.values.keys().cloned().collect(),
+            });
+        }
+    }
 
     let mut argv: Vec<String> = Vec::new();
 
@@ -446,7 +471,8 @@ pub fn build_argv(
     }
 
     // 4. [args.option.<opción>]
-    // Resolve which options are active: explicit request + env defaults.
+    // Resolve options in priority order: explicit request, environment
+    // override, then the TOML default.
     let mut resolved: Vec<(String, String)> = Vec::new();
     for (k, v) in &request.options {
         resolved.push((k.clone(), v.clone()));
@@ -457,10 +483,10 @@ pub fn build_argv(
         }
         let slug = slug_upper(key);
         let env_key = format!("ROPERO_MODEL_OPT_{}", slug);
-        if let Some(val) = ctx.env.get(&env_key)
-            && !val.is_empty()
-        {
+        if let Some(val) = ctx.env.get(&env_key).filter(|value| !value.is_empty()) {
             resolved.push((key.clone(), val.clone()));
+        } else if let Some(value) = spec.options.default.get(key) {
+            resolved.push((key.clone(), value.clone()));
         }
     }
 
@@ -533,6 +559,14 @@ impl std::fmt::Display for ArgvError {
                     option, declared
                 )
             }
+            ArgvError::InvalidOptionValue {
+                option,
+                value,
+                declared,
+            } => write!(
+                f,
+                "valor no admitido para {option}: {value}; valores: {declared:?}"
+            ),
             ArgvError::MissingFile { key } => {
                 write!(f, "fichero no disponible: {}", key)
             }

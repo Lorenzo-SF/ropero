@@ -1,5 +1,5 @@
 //! La vista del **resumen** (`ropero` a secas) y del **listado por motor**
-//! (`ropero list`).
+//! (`ropero models`).
 //!
 //! Es la parte del dominio que decide **qué se ve** y **cómo se ve**. La
 //! E/S (buscar un binario en el `PATH`, mirar si un fichero existe) vive
@@ -176,6 +176,12 @@ pub fn available_models(snapshot: &Snapshot) -> Vec<&ModelState> {
         .models_downloaded()
         .into_iter()
         .filter(|m| instalados.contains(&m.spec.model.engine))
+        .filter(|m| {
+            snapshot.engines.iter().any(|engine| {
+                engine.manifest.id == m.spec.model.engine
+                    && engine.manifest.maturity != crate::Maturity::Partial
+            })
+        })
         .collect()
 }
 

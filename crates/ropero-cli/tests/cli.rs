@@ -55,7 +55,7 @@ fn validate_ok() {
     assert!(stdout.contains("4 modelo(s)"), "stdout={}", stdout);
 }
 
-/// `ropero list` agrupa por motor: sale un grupo por motor del catálogo.
+/// `ropero models` agrupa por motor: sale un grupo por motor del catálogo.
 ///
 /// En la máquina de pruebas los motores del fixture **no** están
 /// instalados (no hay sus binarios en el `PATH`), así que sus grupos salen
@@ -71,29 +71,31 @@ fn template_outputs() {
     assert!(stdout.contains("[args]"), "stdout={}", stdout);
 }
 
-/// `ropero levels <modelo>`: un nivel por línea.
+/// `ropero info <model>` exposes levels and their mapped arguments.
 #[test]
 fn levels_lines() {
-    let (code, stdout, stderr) = run(&["levels", "modelo-alpha"]);
+    let (code, stdout, stderr) = run(&["info", "modelo-alpha"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    let mut rows: Vec<&str> = stdout.lines().collect();
-    rows.sort();
-    assert_eq!(rows, vec!["high", "low", "medium"], "stdout={}", stdout);
-    assert!(!stdout.contains("nivel"));
+    assert!(
+        stdout.contains("levels: low, medium, high"),
+        "stdout={stdout}"
+    );
+    assert!(stdout.contains("args level high:"), "stdout={stdout}");
 }
 
-/// Un modelo sin niveles sale con la salida vacía y código 0.
+/// A model without levels still prints the rest of its metadata.
 #[test]
 fn levels_of_model_without_levels_is_empty() {
-    let (code, stdout, stderr) = run(&["levels", "modelo-beta"]);
+    let (code, stdout, stderr) = run(&["info", "modelo-beta"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    assert_eq!(stdout.lines().count(), 0, "stdout={}", stdout);
+    assert!(stdout.contains("MODEL modelo-beta"), "stdout={stdout}");
+    assert!(stdout.contains("levels: "), "stdout={stdout}");
 }
 
-/// `ropero path <modelo>`: una ruta por línea.
+/// `ropero info <model>`: one artifact path per line.
 #[test]
 fn path_lines() {
-    let (code, stdout, stderr) = run(&["path", "modelo-alpha"]);
+    let (code, stdout, stderr) = run(&["info", "modelo-alpha"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     assert!(
         stdout.lines().any(|l| l.starts_with("GGUF=")),
@@ -116,7 +118,7 @@ fn path_lines() {
 /// Un modelo desconocido es un error de uso (código 2).
 #[test]
 fn unknown_model_is_usage_error() {
-    let (code, _stdout, stderr) = run(&["args", "no-existe"]);
+    let (code, _stdout, stderr) = run(&["command", "no-existe"]);
     assert_eq!(code, 2, "stderr={}", stderr);
     assert!(stderr.contains("modelo desconocido"), "stderr={}", stderr);
 }
@@ -124,66 +126,16 @@ fn unknown_model_is_usage_error() {
 /// Un flag que el comando no conoce es un error de uso (código 2).
 #[test]
 fn usage_error_exit2() {
-    let (code, _stdout, stderr) = run(&["list", "--bogus"]);
+    let (code, _stdout, stderr) = run(&["models", "--bogus"]);
     assert_eq!(code, 2, "stderr={}", stderr);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Alias de nivel (`[aliases]`)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// Un alias de nivel se monta como su nivel canónico: mismo argv.
+/// \`command\` es un comando de sólo lectura: no acepta selección de nivel ni flags.
 #[test]
-fn alias_de_nivel_monta_el_nivel_canónico() {
-    let (code_alias, stdout_alias, stderr) = run(&["args", "modelo-alpha", "--alto"]);
-    assert_eq!(code_alias, 0, "stderr={}", stderr);
-    let (code_nivel, stdout_nivel, stderr) = run(&["args", "modelo-alpha", "--high"]);
-    assert_eq!(code_nivel, 0, "stderr={}", stderr);
-    assert_eq!(stdout_alias, stdout_nivel);
-    assert!(
-        stdout_alias.contains("--reasoning-budget"),
-        "stdout={}",
-        stdout_alias
-    );
-    assert!(stdout_alias.contains("16384"), "stdout={}", stdout_alias);
-}
-
-/// Un alias que no existe es error de uso (exit 2).
-#[test]
-fn alias_de_nivel_inexistente_es_error_de_uso() {
-    let (code, _stdout, stderr) = run(&["args", "modelo-alpha", "--no-existe"]);
-    assert_eq!(code, 2, "stderr={}", stderr);
-}
-
-/// `replace` en el argv.
-#[test]
-fn replace_sustituye_la_pareja_del_base() {
-    let (code, stdout, stderr) = run(&["args", "modelo-alpha", "--temp=0.9"]);
-    assert_eq!(code, 0, "stderr={}", stderr);
-    let rows: Vec<&str> = stdout.lines().collect();
-    assert_eq!(
-        rows.iter().filter(|r| **r == "--temp").count(),
-        1,
-        "stdout={}",
-        stdout
-    );
-    assert!(rows.contains(&"0.9"), "stdout={}", stdout);
-    assert!(!rows.contains(&"0.7"), "stdout={}", stdout);
-}
-
-/// Sin pedir la opción, el base no se toca.
-#[test]
-fn replace_no_toca_el_base_si_no_se_pide_la_opcion() {
-    let (code, stdout, stderr) = run(&["args", "modelo-alpha"]);
-    assert_eq!(code, 0, "stderr={}", stderr);
-    let rows: Vec<&str> = stdout.lines().collect();
-    assert!(rows.contains(&"0.7"), "stdout={}", stdout);
-    assert_eq!(
-        rows.iter().filter(|r| **r == "--temp").count(),
-        1,
-        "stdout={}",
-        stdout
-    );
+fn command_rechaza_opciones_dinamicas() {
+    let (code, _stdout, stderr) = run(&["command", "modelo-alpha", "--high"]);
+    assert_eq!(code, 2, "stderr={stderr}");
+    assert!(stderr.contains("opción desconocida"), "stderr={stderr}");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,8 +165,8 @@ fn la_ayuda_anuncia_los_once_comandos() {
     let (code, stdout, stderr) = run(&["--help"]);
     assert_eq!(code, 0, "stderr={}", stderr);
     for comando in [
-        "install", "stop", "gguffer", "status", "doctor", "list", "template", "engines",
-        "validate", "args", "levels", "path",
+        "install", "stop", "gguffer", "status", "doctor", "models", "template", "engines",
+        "validate", "command", "info",
     ] {
         assert!(
             stdout.contains(comando),
@@ -224,22 +176,22 @@ fn la_ayuda_anuncia_los_once_comandos() {
     }
 }
 
-/// La ayuda está en español y sugiere el uso de cada comando.
+/// La ayuda usa inglés por defecto y sugiere el uso de cada comando.
 #[test]
 fn la_ayuda_esta_en_espanol_y_sugiere_el_uso() {
     let (code, stdout, stderr) = run(&["--help"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    assert!(stdout.contains("USO:"), "stdout={}", stdout);
-    assert!(stdout.contains("COMANDOS:"), "stdout={}", stdout);
+    assert!(stdout.contains("USAGE:"), "stdout={}", stdout);
+    assert!(stdout.contains("COMMANDS:"), "stdout={}", stdout);
     assert!(
-        stdout.contains("ropero <comando> --help"),
+        stdout.contains("ropero <command> --help"),
         "la ayuda no sugiere el uso de cada comando: stdout={}",
         stdout
     );
     // Nada de cabeceras en inglés.
-    assert!(!stdout.contains("Usage:"), "stdout={}", stdout);
-    assert!(!stdout.contains("Commands:"), "stdout={}", stdout);
-    assert!(!stdout.contains("Options:"), "stdout={}", stdout);
+    assert!(!stdout.contains("UsO:"), "stdout={}", stdout);
+    assert!(!stdout.contains("COMANDOS:"), "stdout={}", stdout);
+    assert!(!stdout.contains("OPCIONES:"), "stdout={}", stdout);
 }
 
 /// Las descripciones de la ayuda van todas en la **misma columna**.
@@ -257,7 +209,7 @@ fn la_ayuda_alinea_las_descripciones_en_una_columna() {
         .filter_map(|(i, linea)| {
             (linea.starts_with("  ")
                 && !linea.starts_with("   ")
-                && !linea.starts_with("  ropero <comando>")
+                && !linea.starts_with("  ropero <command>")
                 && !linea.ends_with(':'))
             .then_some(i)
         })
@@ -277,7 +229,7 @@ fn la_ayuda_alinea_las_descripciones_en_una_columna() {
     }
 }
 
-/// La pista de la ayuda va **al final** y un nivel dentro, no en el margen.
+/// The help hint goes last and one indentation level in.
 #[test]
 fn la_ayuda_deja_la_pista_al_final_y_no_en_el_margen() {
     let (code, stdout, stderr) = run(&["--help"]);
@@ -286,7 +238,7 @@ fn la_ayuda_deja_la_pista_al_final_y_no_en_el_margen() {
     let (indice, pista) = lineas
         .iter()
         .enumerate()
-        .find(|(_, l)| l.contains("ropero <comando> --help"))
+        .find(|(_, l)| l.contains("ropero <command> --help"))
         .unwrap_or_else(|| panic!("la ayuda no sugiere el uso: stdout={stdout}"));
     assert!(
         pista.starts_with("  "),
@@ -305,7 +257,7 @@ fn la_ayuda_deja_la_pista_al_final_y_no_en_el_margen() {
 /// salida del CLI en dos idiomas.
 #[test]
 fn los_errores_de_uso_de_clap_estan_en_espanol() {
-    for argumentos in [vec!["list", "--bogus"], vec!["install", "--bogus"]] {
+    for argumentos in [vec!["models", "--bogus"], vec!["install", "--bogus"]] {
         let (code, _stdout, stderr) = run(&argumentos);
         assert_eq!(code, 2, "{argumentos:?} salió con {code}: {stderr}");
         assert!(
@@ -340,7 +292,7 @@ fn los_errores_de_uso_de_clap_estan_en_espanol() {
 /// El texto es el del dominio: el runtime y la CLI lo toman de aquí.
 #[test]
 fn el_modelo_desconocido_dice_el_texto_del_dominio() {
-    let (code, _stdout, stderr) = run(&["args", "no-existe"]);
+    let (code, _stdout, stderr) = run(&["command", "no-existe"]);
     assert_eq!(code, 2, "stderr={}", stderr);
     let esperado = ropero_core::surface::unknown_model_message("no-existe");
     assert!(
@@ -349,18 +301,18 @@ fn el_modelo_desconocido_dice_el_texto_del_dominio() {
     );
 }
 
-/// Cada comando tiene su propio `--help`, en español.
+/// Cada comando tiene su propio `--help`, en inglés por defecto.
 #[test]
 fn cada_comando_tiene_su_ayuda() {
     for comando in [
-        "install", "stop", "gguffer", "status", "doctor", "list", "template", "engines",
-        "validate", "args", "levels", "path",
+        "install", "stop", "gguffer", "status", "doctor", "models", "template", "engines",
+        "validate", "command", "info",
     ] {
         let (code, stdout, stderr) = run(&[comando, "--help"]);
         assert_eq!(code, 0, "{comando} --help salió con {code}: {stderr}");
         assert!(
-            stdout.contains("USO:"),
-            "la ayuda de '{comando}' no está en español: stdout={}",
+            stdout.contains("USAGE:"),
+            "la ayuda de '{comando}' no está en inglés: stdout={}",
             stdout
         );
     }

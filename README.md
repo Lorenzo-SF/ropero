@@ -30,7 +30,7 @@ v2 por capas para conservar los contratos y el estado en disco de la v1.
 
 Los TOML de [`models/`](models/) se conservan en el repositorio como copia de
 referencia y respaldo. **La aplicación no los usa como catálogo**: en uso
-normal, `install models`, `list` y `ropero <alias>` leen el catálogo del
+normal, `install models`, `models` y `ropero <alias>` leen el catálogo del
 usuario en `$XDG_CONFIG_HOME/ropero/models/` (o `~/.config/ropero/models/`).
 El usuario debe colocar allí sus TOML. Los overrides `ROPERO_MODELS_DIR` y
 `ROPERO_ROOT` se reservan para desarrollo y pruebas.
@@ -83,7 +83,7 @@ workspace por directorios ancestrales):
 
 ```bash
 cargo run --locked -p ropero-cli -- config
-cargo run --locked -p ropero-cli -- list --all  # catálogo del usuario
+cargo run --locked -p ropero-cli -- models --all  # catálogo del usuario
 ```
 
 ### Catálogo, configuración y overrides (v2)
@@ -122,15 +122,37 @@ modelos; el bootstrap idempotente de configuración puede ejecutarse si falta.
 
 `ropero connect --list` muestra las integraciones disponibles. Por ejemplo,
 `ropero connect --model qwen --agent opencode` registra el modelo; separa varios
-modelos con comas o punto y coma y usa `--uninstall` para retirarlos. Los
+modelos con comas o punto y coma y usa `--remove` para retirarlos. Los
 providers OpenCode, Pi, OpenClaw (`claw` es alias), Codex, Hermes y Kilo se
 agrupan por engine; VS Code y Copilot usan Custom Endpoint; CodeBuddy y Droid
 guardan el endpoint en cada entrada custom. Aider registra endpoint y clave
 por modelo en sus archivos oficiales de model settings/metadata. MCode usa su
-CLI oficial; como ésta elimina providers completos, `--uninstall` requiere
+CLI oficial; como ésta elimina providers completos, `--remove` requiere
 seleccionar todos los modelos Ropero de ese engine. Claude Code requiere la API
-Anthropic Messages, que los engines OpenAI-compatible de Ropero no exponen
-directamente.
+Anthropic Messages; Ropero muestra las variables necesarias para configurar una
+URL compatible y el token correspondiente.
+
+Para Codex, Ropero crea un perfil por engine sin cambiar el provider global.
+Conecta los modelos y usa el perfil que imprime el comando, por ejemplo
+`codex --profile ropero-turbo-llama -m ornith`. Si usas `CODEX_HOME`, Ropero
+escribe ahí la configuración y los perfiles. Codex requiere Responses API;
+Ropero rechaza engines que no la declaran soportada.
+
+TRAE y TRAE CN requieren añadir o quitar el modelo desde su panel de modelos;
+`ropero connect --agent trae|trae-cn --model <modelo>` imprime los valores
+exactos para ese paso, sin editar archivos privados de la aplicación ni mostrar
+claves. `claw` es sólo un alias histórico de OpenClaw; no es un agente distinto.
+Gemini CLI, Cursor, Kiro, Antigravity y Devin no aparecen en `--list`: no se
+encontró una vía documentada compatible con los endpoints servidos por Ropero
+y/o una interfaz persistente segura para registrar el modelo.
+
+`ropero config --lang EN` o `--lang ES` guarda el idioma de la interfaz; EN es
+el valor inicial. `ropero models add` crea un TOML nuevo mediante asistente,
+flags, fichero o stdin; usa `--set niveles.campo=VALOR_TOML` repetible para
+añadir campos del esquema, por ejemplo `--set levels.list='["low","high"]'`.
+`ropero info <modelo>` muestra la configuración y
+`ropero command <modelo>` imprime los argumentos de serving en formato copiable.
+`ropero status --live [SEGUNDOS]` refresca la vista en la terminal.
 
 ## La documentación
 
@@ -140,6 +162,10 @@ Los dos documentos normativos se leen **juntos**:
 |---|---|
 | [Especificación y requerimientos](docs-especificacion/ropero-especificacion.md) | ¿Qué hace ropero y con qué semántica exacta? |
 | [Especificación de construcción](docs-especificacion/ropero-construccion.md) | ¿Cómo se construye, en qué fases y con qué puertas? |
+
+La [referencia actual del CLI en inglés](docs-especificacion/ropero-cli.en.md)
+y las guías de compatibilidad de [engines en español](docs/engine-support.es.md)
+y [en inglés](docs/engine-support.en.md) documentan los comandos y sus límites.
 
 **Regla de conflicto**: si discrepan sobre *qué debe hacer el sistema*, manda
 la especificación; si discrepan sobre *cómo construirlo*, manda el documento de
