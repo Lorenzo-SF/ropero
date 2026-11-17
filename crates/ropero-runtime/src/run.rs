@@ -698,6 +698,14 @@ pub fn arranca(
         return outcome;
     }
 
+    if plan.engine.id == EngineId::MlxServe
+        && let Err(error) = crate::mlxserve::aplica_alias(&plan.spec, env)
+    {
+        let outcome = RunOutcome::error(error);
+        registra_uso(env, plan, peticion, &outcome);
+        return outcome;
+    }
+
     // FLM consulta la NPU a través de XRT (no basta con que `flm validate`
     // vea `/dev/accel`). Comprueba runtime y plugin antes de reservar puertos
     // o ejecutar `--force`, para que una pila incompatible falle sin efectos.

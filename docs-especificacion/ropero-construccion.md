@@ -7,6 +7,8 @@ date: "2026-11-12"
 
 # ropero — Especificación de construcción
 
+[English](ropero-construccion.en.md) · [Español](ropero-construccion.md)
+
 > Documento **de construcción**, no de requerimientos. Los requerimientos —qué debe
 > hacer el sistema, con qué semántica exacta y con qué evidencia— están en
 > `ropero-especificacion.md` (317 requisitos, R-ARQ…R-GGUF). Este documento

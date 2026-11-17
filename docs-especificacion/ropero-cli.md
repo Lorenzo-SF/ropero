@@ -1,5 +1,7 @@
 # ropero — Especificación del CLI v2
 
+[English](ropero-cli.en.md) · [Español](ropero-cli.md)
+
 **Estado**: normativa. Dada por el dueño el **2026-11-14**. Prevalece sobre la
 familia `R-CLI` del [doc A](ropero-especificacion.md#44-la-línea-de-comandos) en
 lo que la contradiga.

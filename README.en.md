@@ -12,19 +12,18 @@ selected engine, checks that it is ready, and exposes an OpenAI-compatible API.
 > Its status table is an initial assessment; partial or pending items are not
 > completed features.
 
-## Two generations in transition
+## Project status
 
-The repository contains the working v1 and the Rust v2 workspace under active
-development:
+The repository contains Ropero's Rust workspace. The earlier v1 implementation
+is not part of this checkout:
 
 | Generation | Location | Status |
 |---|---|---|
-| **v1** | [`ropero-code/`](ropero-code/) | Working Bash and Python implementation. It remains the released version. It is a reference for v2, not a dependency; see [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md). |
+| **v1** | Not included in this checkout | The earlier implementation is not part of this working tree. Its historical contracts remain as documentation. |
 | **v2** | [`crates/`](crates/) | Rust workspace under development; it is not yet presented as a published replacement for v1. |
 
-The two generations coexist until F9, as described in
-[`ADR-002`](docs/adr/ADR-002-extraccion-vs-reescritura.md). The staged plan
-preserves v1's contracts and on-disk state while v2 is built.
+The Rust workspace preserves the earlier version's documented contracts and
+on-disk state.
 
 The TOML files in [`models/`](models/) are reference copies and backups. The
 application does **not** discover them as its normal catalog. By default,
@@ -41,27 +40,7 @@ agent connections, and an internal evaluation suite. Support varies by command,
 engine, and agent. Check `ropero --help`, the changelog, and the specification
 before assuming a workflow is complete.
 
-## Install and use v1
-
-```bash
-git clone https://github.com/Lorenzo-SF/ropero.git
-cd ropero/ropero-code
-bash install.sh --local
-```
-
-This creates `~/.local/bin/ropero → <repo>/ropero-code/bin/ropero` (the only
-entry in `PATH`) and `~/.local/share/ropero → <repo>/ropero-code/bin`.
-
-```bash
-ropero install setup      # base dependencies (python3, git, uv, hf, jq, cmake…)
-ropero install engines    # choose engines and install their dependencies
-ropero install models     # choose models (download or build a GGUF)
-```
-
-Running `ropero install` without arguments performs all three steps in order.
-See the [v1 usage guide](ropero-code/README.md) for the rest of the workflow.
-
-## Build and check v2
+## Build and check
 
 From the repository root:
 
@@ -70,8 +49,11 @@ cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
-cargo build --locked --workspace --release
+cargo build --locked --release -p ropero-cli
 ```
+
+The executable is `target/release/ropero`; run `--help` to see the available
+commands.
 
 In normal use, the CLI resolves the catalog from user configuration, regardless
 of the current working directory:
@@ -159,15 +141,17 @@ Read the two normative documents together:
 
 | Document | Answers |
 |---|---|
-| [Specification and requirements](docs-especificacion/ropero-especificacion.md) | What should ropero do, and with what exact semantics? |
-| [Build specification](docs-especificacion/ropero-construccion.md) | How is it built, in what phases, and with which quality gates? |
+| [Specification and requirements](docs-especificacion/ropero-especificacion.en.md) | What should ropero do, and with what exact semantics? |
+| [Build specification](docs-especificacion/ropero-construccion.en.md) | How is it built, in what phases, and with which quality gates? |
 
-The [current CLI reference](docs-especificacion/ropero-cli.en.md) and the
-[English](docs/engine-support.en.md) and [Spanish](docs/engine-support.es.md)
-engine compatibility guides document commands, evidence, and support limits.
+The current CLI references in [English](docs-especificacion/ropero-cli.en.md)
+and [Spanish](docs-especificacion/ropero-cli.md), together with the engine
+compatibility guides in [English](docs/engine-support.en.md) and
+[Spanish](docs/engine-support.es.md), document commands, evidence, and support
+limits.
 
 If they conflict, the requirements specification governs system behavior; the
 build specification governs implementation. Architecture decisions are in
-[`docs/adr/`](docs/adr/). The [v2 changelog](CHANGELOG.md) records this
-workspace's changes; the [v1 changelog](ropero-code/CHANGELOG.md) remains in
-effect for the working release.
+[`docs/adr/`](docs/adr/). The [changelog](CHANGELOG.en.md) records this
+workspace's changes; the historical v1 changelog is not included in this
+checkout.
