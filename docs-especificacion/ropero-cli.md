@@ -192,10 +192,11 @@ Notas de la tabla:
   [`qwen-abliterated.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen-abliterated.sh),
   [`qwen36.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen36.sh)),
   que viven en la raíz del repo.
-- `basalt` requiere preparar manualmente su release Linux x86-64 completo
-  (incluido su entorno Python) bajo `~/.local/share/ropero/engines/basalt`;
-  Ropero enlaza `bin/basalt` y gestiona la descarga del pack `.basalt` desde
-  el TOML del modelo. La integración y sus límites están descritos en
+- `basalt` descarga e instala automáticamente el release Linux x86-64 y sus
+  requisitos Python bajo `~/.local/share/ropero/engines/basalt`; comprueba
+  Blackwell, driver y CUDA 13 antes de instalar. Ropero enlaza `bin/basalt` y
+  gestiona por separado la descarga del pack `.basalt` desde el TOML del
+  modelo. La integración y sus límites están descritos en
   [ADR-014](../docs/adr/ADR-014-integracion-de-basalt.md) y en la
   [guía de compatibilidad](../docs/engine-support.es.md#instalar-y-usar-basalt).
 

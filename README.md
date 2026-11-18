@@ -44,8 +44,10 @@ el grado de soporte dependen del comando, el motor y el agente; consulta
 `ropero --help`, el changelog y la especificación antes de asumir que un flujo
 está completo.
 
-Basalt está integrado para Linux x86-64 con GPU NVIDIA Blackwell. Ropero instala
-su pack `.basalt`, lo arranca mediante su servidor OpenAI y asigna el puerto;
+Basalt está integrado para Linux x86-64 con GPU NVIDIA Blackwell.
+`ropero install engines basalt` instala el runtime y prepara sus dependencias
+Python y CUDA; la instalación del pack `.basalt` queda separada. Ropero lo
+arranca mediante su servidor OpenAI y asigna el puerto;
 el manifiesto y el TOML de Qwen3.8-Flash-Next están en `engines/basalt.toml` y
 `models/basalt/`. La [guía de compatibilidad](docs/engine-support.es.md#instalar-y-usar-basalt)
 documenta los requisitos de CUDA/Python, instalación y límites de autenticación.

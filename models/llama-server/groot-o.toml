@@ -6,11 +6,10 @@ context = 65536
 [files]
 gguf = "Groot-19B-A3B-261023-Q4_K_M.gguf"
 
-[build] 
-repo         = "GrootTeam/Groot-19B-A3B-261023-GGUF"
-gguf         = true
-gguf_file    = "Groot-19B-A3B-261023-Q4_K_M.gguf"
-size = "11.7 GB"
+[download]
+repo    = "GrootTeam/Groot-19B-A3B-261023-GGUF"
+file    = "Groot-19B-A3B-261023-Q4_K_M.gguf"
+size    = "11.7 GB"
 
 [levels]
 list    = ["think", "instruct"]
