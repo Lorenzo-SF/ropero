@@ -35,10 +35,32 @@ fn fixture_root() -> PathBuf {
 /// Comando `ropero` con el entorno limpio y apuntando al catálogo de pruebas.
 fn bin() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_ropero"));
+    let test_name = std::thread::current()
+        .name()
+        .unwrap_or("cli-contract")
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
     cmd.env("ROPERO_MODELS_DIR", fixture_root());
     cmd.env("GGUF_DIR", fixture_root().join("gguf"));
     cmd.env("SAFETENSORS_DIR", fixture_root().join("safetensors"));
     cmd.env("LOG_DIR", fixture_root().join("logs"));
+    // Never read state from a real local Ropero installation: a running
+    // engine there could change connect's selected endpoint and break the
+    // fixture's expected output.
+    cmd.env(
+        "ROPERO_STATE_DIR",
+        std::env::temp_dir().join(format!(
+            "ropero-cli-contract-state-{}-{test_name}",
+            std::process::id()
+        )),
+    );
     cmd
 }
 
@@ -155,6 +177,26 @@ fn connect_claude_emite_variables_para_endpoint_anthropic_messages_del_engine() 
         assert!(stdout.contains(expected), "falta {expected}: {stdout}");
     }
     assert!(!stdout.contains("9990/v1"), "stdout={stdout}");
+}
+
+#[test]
+fn test_all_models_es_excluyente_con_model_y_filtra_modelos_no_disponibles() {
+    let (code, _stdout, stderr) = run(&[
+        "test",
+        "--model",
+        "modelo-alpha",
+        "--all-models",
+        "--test-group",
+        "A",
+    ]);
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+
+    let (code, _stdout, stderr) = run(&["test", "--all-models", "--test-group", "A"]);
+    assert_eq!(code, CODIGO_ERROR_USO, "stderr={stderr}");
+    assert!(
+        stderr.contains("no hay modelos disponibles") || stderr.contains("no available models"),
+        "all-models debe admitir el uso headless y excluir motores no instalados: {stderr}"
+    );
 }
 
 /// `ropero` a secas es una ayuda breve, no un error: sale con 0 (doc CLI v2

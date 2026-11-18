@@ -37,7 +37,7 @@
 
 [model]
 name    = "d3mini"
-engine  = "fastflowllm"
+engine  = "fastflowlm"
 # El máximo de entrada del D3 son 32768 tokens (su default_context_length
 # en el catálogo de FLM, src/model_list.json, para TODOS los d3:*). Suficiente
 # y de sobra para una petición de routing.

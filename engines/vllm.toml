@@ -5,7 +5,6 @@
 
 id = "vllm"
 label = "vLLM"
-color = "morado"
 description = "vLLM (Linux y macOS)"
 
 # R-CTX-3: `integrated` = **integrado pero nunca arrancado**. El doc A

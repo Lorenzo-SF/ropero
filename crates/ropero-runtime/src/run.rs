@@ -249,6 +249,9 @@ pub fn preparar(
     if matches!(engine.id, EngineId::LlamaServer | EngineId::TurboLlama) {
         let alias = spec.model.alias.as_deref().unwrap_or(&spec.model.name);
         set_flag_value(&mut argv, "--alias", alias);
+        if !argv.iter().any(|arg| arg == "--jinja") {
+            argv.push("--jinja".into());
+        }
     }
     if let Some(alias) = spec.model.alias.as_deref() {
         match engine.id {
@@ -874,29 +877,6 @@ pub fn arranca(
         return outcome;
     }
 
-    // La sonda: con clave de API si el usuario la pidió.
-    let clave = peticion
-        .api_key
-        .clone()
-        .filter(|_| peticion.quiere_api_key())
-        .or_else(|| {
-            (!peticion.no_api_key)
-                .then(|| {
-                    env.config_resuelta()
-                        .engines
-                        .get(&plan.engine.id)
-                        .and_then(|e| e.api_key.clone())
-                })
-                .flatten()
-        });
-    let server_api_key = (plan.engine.id == EngineId::Ignis)
-        .then(|| clave.clone())
-        .flatten();
-    let probe = crate::probe::NetProbe {
-        timeout: Duration::from_secs(3),
-        api_key: clave.clone(),
-    };
-
     // 2. Los puertos ocupados del rango del motor.
     let ports = if peticion.port.is_some() {
         Vec::new()
@@ -938,6 +918,29 @@ pub fn arranca(
         return outcome;
     }
 
+    // Resuelve la clave justo antes de lanzar el proceso. Así no se cambia
+    // el estado persistente si el preflight o la selección del puerto fallan.
+    let clave = match crate::api_key::launch_key(
+        plan.engine.id,
+        &env.config_resuelta(),
+        env,
+        state_dir,
+        peticion.api_key.as_deref(),
+        peticion.no_api_key,
+    ) {
+        Ok(key) => key,
+        Err(error) => {
+            let outcome = RunOutcome::error(error);
+            registra_uso(env, plan, peticion, &outcome);
+            return outcome;
+        }
+    };
+    let server_api_key = clave.clone();
+    let probe = crate::probe::NetProbe {
+        timeout: Duration::from_secs(3),
+        api_key: clave.clone(),
+    };
+
     let spec = LaunchSpec {
         model: plan.spec.model.name.clone(),
         engine: plan.engine.id,
@@ -978,7 +981,7 @@ pub fn arranca(
     // terminal.
     let follower = if foreground {
         let desde = crate::colorize::line_count(&log);
-        let engine_color = ropero_core::palette::engine_ansi(plan.engine.color);
+        let engine_color = ropero_core::palette::engine_hex(plan.engine.color);
         crate::colorize::LogFollower::start(
             log.clone(),
             desde,

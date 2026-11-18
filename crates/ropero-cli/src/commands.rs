@@ -47,7 +47,12 @@ pub fn status(live: Option<f64>) -> i32 {
         let maquina = ropero_runtime::capture_machine_state();
         let mut texto =
             ropero_core::status::status_text_color(&maquina, &ropero_core::Palette::color());
-        texto.push_str(&tabla_engines_activos());
+        let activos = tabla_engines_activos();
+        if activos.is_empty() {
+            texto.push_str("LLM  Sin modelos arrancados\n");
+        } else {
+            texto.push_str(&activos);
+        }
         if live.is_some() {
             print!("\x1b[2J\x1b[H");
         }
@@ -61,11 +66,8 @@ pub fn status(live: Option<f64>) -> i32 {
 }
 
 fn tabla_engines_activos() -> String {
-    let Ok(scan) = crate::discovery::scan_tolerant() else {
-        return String::new();
-    };
-    let state_dir =
-        ropero_runtime::state::state_dir(&scan.env.home, scan.env.get("ROPERO_STATE_DIR"));
+    let env = crate::discovery::capture_environment();
+    let state_dir = ropero_runtime::state::state_dir(&env.home, env.get("ROPERO_STATE_DIR"));
     let active = ropero_runtime::state::managed_ports(&state_dir)
         .into_iter()
         .filter_map(|port| {
@@ -78,13 +80,38 @@ fn tabla_engines_activos() -> String {
     if active.is_empty() {
         return String::new();
     }
-    let mut out = String::from(
-        "\nENGINES ACTIVOS\n  engine          puerto  pid      modelo\n  ───────────────────────────────────────\n",
-    );
-    for (engine, port, pid, model) in active {
-        out.push_str(&format!("  {engine:<15} {port:>6}  {pid:<8} {model}\n"));
+    let mut out = String::new();
+    let config = ropero_runtime::carga_config(&env)
+        .ok()
+        .map(|(_, config, _)| config);
+    for (engine, port, _pid, model) in active {
+        let real = config
+            .as_ref()
+            .and_then(|config| engine_model_name(config, &engine, &model))
+            .unwrap_or_else(|| model.clone());
+        out.push_str(&format!("LLM\t{model} :{port} {real}\n"));
     }
     out
+}
+
+fn engine_model_name(
+    config: &ropero_core::config::Config,
+    engine: &str,
+    model: &str,
+) -> Option<String> {
+    let (engine, _) = ropero_core::EngineId::from_str_legacy(engine).ok()?;
+    let path = config
+        .models_toml_dir(engine)
+        .valor
+        .join(format!("{model}.toml"));
+    let source = std::fs::read_to_string(path).ok()?;
+    let value = source.parse::<toml::Table>().ok()?;
+    let model_table = value.get("model")?.as_table()?;
+    model_table
+        .get("alias")
+        .or_else(|| model_table.get("path"))?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// `ropero engines [--all]`: la lista de motores con su color, su madurez
@@ -342,10 +369,8 @@ pub fn arranca(peticion: &ropero_runtime::RunRequest) -> i32 {
 ///
 /// Sin argumento para **todos**; con argumento, sólo el de ese modelo.
 pub fn stop(modelo: &str) -> i32 {
-    let Ok(s) = crate::discovery::scan() else {
-        return 1;
-    };
-    ropero_runtime::para_todo(modelo, &s.env)
+    // Only HOME and ROPERO_STATE_DIR are needed to stop managed processes.
+    ropero_runtime::para_todo(modelo, &crate::discovery::capture_environment())
 }
 
 /// `ropero doctor`: las dependencias de ropero y las de cada motor.

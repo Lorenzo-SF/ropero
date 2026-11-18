@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+clear
+
+TOOLCHAIN=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml)
+if [[ -z "$TOOLCHAIN" ]]; then
+  echo "❌ No se pudo leer el canal de rust-toolchain.toml" >&2
+  exit 1
+fi
+
 MODE="dev"
 for arg in "$@"; do
   case "$arg" in
@@ -37,10 +45,10 @@ cargo fmt --all -- --check
 
 if [ "$MODE" = "dev" ]; then
   echo "🔧 Compilando e instalando en modo desarrollo (debug)…"
-  cargo install --path "$PKG_DIR" --debug --root "$HOME/.local" --locked --force
+  cargo "+$TOOLCHAIN" install --path "$PKG_DIR" --debug --root "$HOME/.local" --locked --force
 else
   echo "🚀 Compilando e instalando en modo producción (release)…"
-  cargo install --path "$PKG_DIR" --root "$HOME/.local" --locked --force
+  cargo "+$TOOLCHAIN" install --path "$PKG_DIR" --root "$HOME/.local" --locked --force
 fi
 
 echo "✅ Listo. Binario en $HOME/.local/bin/ropero"

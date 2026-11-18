@@ -106,8 +106,6 @@ pub struct MachineState {
 pub const NO_DISPONIBLE: &str = "no disponible";
 
 /// El título de la sección del estado.
-const TITULO: &str = "ESTADO DE LA MÁQUINA";
-
 /// Formatea una medida, o dice que no está.
 pub fn format_reading(reading: &Option<Reading>) -> String {
     match reading {
@@ -126,71 +124,75 @@ pub fn status_text(maquina: &MachineState) -> String {
 
 /// Salida compacta y coloreada: temperatura y saturación de memoria por umbral.
 pub fn status_text_color(maquina: &MachineState, paleta: &Palette) -> String {
-    let mut lineas = vec![TITULO.to_string()];
-    let cpu_temp = lectura_color(paleta, &maquina.cpu_temp_c, true);
-    let cpu_clock = format_reading(&maquina.cpu_ghz);
-    lineas.push(format!(" CPU  {cpu_clock} · {cpu_temp}"));
-    for (label, gpu) in [("GPU", &maquina.dgpu), ("iGPU", &maquina.igpu)] {
-        if let Some(gpu) = gpu {
-            let device = paleta.paint_code(51, &gpu.name);
-            lineas.push(format!(
-                " {label}  {device} · {} · {}",
-                format_reading(&gpu.ghz),
-                lectura_color(paleta, &gpu.temp_c, true)
-            ));
-        } else if label == "GPU" {
-            lineas.push(format!(" GPU  {NO_DISPONIBLE}"));
-        }
-    }
+    let cpu = format!(
+        "CPU  {} {}",
+        medida(&maquina.cpu_ghz),
+        medida(&maquina.cpu_temp_c)
+    );
+    let gpu = maquina.dgpu.as_ref().map_or_else(
+        || format!("GPU  {NO_DISPONIBLE}"),
+        |gpu| {
+            format!(
+                "GPU  {} {} {}",
+                gpu.name,
+                medida(&gpu.ghz),
+                medida(&gpu.temp_c)
+            )
+        },
+    );
     let mem = &maquina.memory;
-    for (label, used, total) in [
-        ("RAM", &mem.ram_used_mb, &mem.ram_total_mb),
-        ("SWAP", &mem.swap_used_mb, &mem.swap_total_mb),
-    ] {
-        let display = match (used, total) {
-            (Some(u), Some(t)) if t.value > 0.0 => {
-                let pct = u.value * 100.0 / t.value;
-                paleta.paint_code(
-                    if pct < 70.0 {
-                        82
-                    } else if pct < 88.0 {
-                        220
-                    } else {
-                        196
-                    },
-                    &format!("{:.1}/{:.1} {} ({pct:.0}%)", u.value, t.value, u.unit),
-                )
-            }
-            _ => format!("{} / {}", format_reading(used), format_reading(total)),
-        };
-        lineas.push(format!(" {label}  {display}"));
-    }
-    if let Some(zram) = &mem.zram_mb {
-        lineas.push(format!(
-            "      zram {}",
-            format_reading(&Some(zram.clone()))
-        ));
-    }
-    lineas.push(String::new());
-    lineas.join("\n")
+    let ram = memoria(&mem.ram_used_mb, &mem.ram_total_mb, paleta);
+    let swap_pct = porcentaje(&mem.swap_used_mb, &mem.swap_total_mb);
+    let zram = mem
+        .zram_mb
+        .as_ref()
+        .map_or_else(String::new, |z| format!(" · zram {:.1}G", z.value / 1024.0));
+    format!(
+        "{} │ {}\nRAM {} │ SWP {}{}\n",
+        decimal(&cpu),
+        decimal(&gpu),
+        decimal(&ram),
+        swap_pct,
+        decimal(&zram)
+    )
 }
 
-fn lectura_color(paleta: &Palette, lectura: &Option<Reading>, temperatura: bool) -> String {
-    let Some(r) = lectura else {
-        return NO_DISPONIBLE.to_string();
-    };
-    let code = if temperatura {
-        if r.value < 65.0 {
-            82
-        } else if r.value < 80.0 {
-            220
-        } else {
-            196
+fn decimal(value: &str) -> String {
+    value.replace('.', ",")
+}
+
+fn medida(value: &Option<Reading>) -> String {
+    value.as_ref().map_or_else(
+        || NO_DISPONIBLE.into(),
+        |r| format!("{:.2}{}", r.value, r.unit),
+    )
+}
+
+fn memoria(used: &Option<Reading>, total: &Option<Reading>, palette: &Palette) -> String {
+    match (used, total) {
+        (Some(u), Some(t)) if t.value > 0.0 => {
+            let pct = u.value * 100.0 / t.value;
+            let value = format!("{:.1}/{:.1}G {pct:.0}%", u.value / 1024.0, t.value / 1024.0);
+            palette.paint_hex(
+                if pct < 70.0 {
+                    crate::palette::RAM_LOW
+                } else if pct < 88.0 {
+                    crate::palette::RAM_MEDIUM
+                } else {
+                    crate::palette::RAM_HIGH
+                },
+                &value,
+            )
         }
-    } else {
-        255
-    };
-    paleta.paint_code(code, &format!("{:.1} {}", r.value, r.unit))
+        _ => format!("{} / {}", format_reading(used), format_reading(total)),
+    }
+}
+
+fn porcentaje(used: &Option<Reading>, total: &Option<Reading>) -> String {
+    match (used, total) {
+        (Some(u), Some(t)) if t.value > 0.0 => format!("{:.0}%", u.value * 100.0 / t.value),
+        _ => NO_DISPONIBLE.into(),
+    }
 }
 
 /// Las líneas del `status`, una por recurso.

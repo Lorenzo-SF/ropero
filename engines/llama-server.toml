@@ -8,7 +8,6 @@
 
 id = "llama-server"
 label = "llama-server (oficial)"
-color = "naranja"
 description = "llama.cpp (repo oficial de Meta y la comunidad)"
 
 # R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.

@@ -63,6 +63,25 @@ cargo run --locked -p ropero-cli -- config
 cargo run --locked -p ropero-cli -- models --all
 ```
 
+### Model setup and evaluation
+
+`ropero models add` opens an interactive model wizard. It also accepts a TOML
+file with `--path`, TOML from standard input with `--stdin`, or direct values
+and repeatable `--set` assignments. `ropero template` prints the compact schema
+guide; model creation is validated by Ropero itself.
+
+`ropero test` opens model, group, and test selectors when run without options.
+For automation, pass `--model` and exactly one of `--test` or `--test-group`;
+`--path` selects the results directory. For example:
+
+```bash
+ropero test --model qwen --test-group A --path ./results
+ropero test --model qwen --test A1 --path ./results
+ropero command qwen
+ropero info qwen
+ropero status --live
+```
+
 ### Catalog, configuration, and overrides
 
 The normal catalog lives in

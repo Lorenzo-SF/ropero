@@ -688,6 +688,28 @@ pub fn codex_in_dir(
     models: &[ModelSpec],
     uninstall: bool,
 ) -> Result<PathBuf, String> {
+    codex_in_dir_with_api_keys(
+        home,
+        codex_home,
+        config,
+        engines,
+        models,
+        uninstall,
+        &std::collections::BTreeMap::new(),
+    )
+}
+
+/// Igual que `codex_in_dir`, permitiendo proporcionar la clave efectiva del
+/// engine cuando procede de entorno o del estado privado de Ropero.
+pub fn codex_in_dir_with_api_keys(
+    home: &Path,
+    codex_home: &Path,
+    config: &Config,
+    engines: &[EngineManifest],
+    models: &[ModelSpec],
+    uninstall: bool,
+    api_keys: &std::collections::BTreeMap<ropero_core::EngineId, Option<String>>,
+) -> Result<PathBuf, String> {
     if models.is_empty() {
         return Err("indica al menos un modelo para Codex".into());
     }
@@ -822,14 +844,20 @@ pub fn codex_in_dir(
         table["base_url"] = value(format!("http://127.0.0.1:{active}/v1"));
         table["wire_api"] = value("responses");
         table["requires_openai_auth"] = value(false);
-        if let Some(key) = config
-            .engines
-            .get(&manifest.id)
-            .and_then(|e| e.api_key.as_ref())
-        {
-            table["experimental_bearer_token"] = value(key.as_str());
-        } else {
-            table.remove("experimental_bearer_token");
+        match api_keys.get(&manifest.id) {
+            Some(Some(key)) => table["experimental_bearer_token"] = value(key.as_str()),
+            Some(None) => {
+                table.remove("experimental_bearer_token");
+            }
+            None => {
+                if let Some(key) = config
+                    .engines
+                    .get(&manifest.id)
+                    .and_then(|entry| entry.api_key.as_deref())
+                {
+                    table["experimental_bearer_token"] = value(key);
+                }
+            }
         }
         installed.push(served.to_string());
         installed.sort();
@@ -2158,10 +2186,12 @@ mod tests {
             Path::new("engines/turbo-llama.toml"),
         )
         .unwrap();
+        let mut configured = Config::default();
+        configured.engines.entry(engine.id).or_default().api_key = Some("codex-test-key".into());
 
         let path = codex(
             &home,
-            &Config::default(),
+            &configured,
             std::slice::from_ref(&engine),
             std::slice::from_ref(&model),
             false,
@@ -2180,6 +2210,10 @@ mod tests {
             Some("http://127.0.0.1:9994/v1")
         );
         assert_eq!(provider["wire_api"].as_str(), Some("responses"));
+        assert_eq!(
+            provider["experimental_bearer_token"].as_str(),
+            Some("codex-test-key")
+        );
         assert_eq!(profile["model"].as_str(), Some("ornith-publico"));
         assert_eq!(
             profile["model_provider"].as_str(),
@@ -2192,7 +2226,32 @@ mod tests {
             Some("keep")
         );
 
-        codex(&home, &Config::default(), &[engine], &[model], true).unwrap();
+        codex(
+            &home,
+            &Config::default(),
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            false,
+        )
+        .unwrap();
+        let after_reconnect = std::fs::read_to_string(&path)
+            .unwrap()
+            .parse::<DocumentMut>()
+            .unwrap();
+        assert_eq!(
+            after_reconnect["model_providers"]["ropero-turbo-llama"]["experimental_bearer_token"]
+                .as_str(),
+            Some("codex-test-key")
+        );
+
+        codex(
+            &home,
+            &Config::default(),
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            true,
+        )
+        .unwrap();
         let after = std::fs::read_to_string(path).unwrap();
         let doc = after.parse::<DocumentMut>().unwrap();
         assert!(doc["model_providers"].get("ropero-turbo-llama").is_none());
@@ -2273,21 +2332,42 @@ mod tests {
         )
         .unwrap();
         let state_dir = home.join("state");
+        let mut configured = Config::default();
+        configured.engines.entry(engine.id).or_default().api_key = Some("opencode-test-key".into());
         let result = opencode(
             &home,
             &state_dir,
-            &Config::default(),
-            &[engine],
-            &[model],
+            &configured,
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
             false,
         );
         assert!(result.is_ok(), "{result:?}");
-        let value: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(home.join(".config/opencode/opencode.json")).unwrap(),
-        )
-        .unwrap();
+        let config_path = home.join(".config/opencode/opencode.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         assert!(value["providers"]["ropero-ignis"]["models"]["qwen3.8-27b"].is_object());
         assert!(value["providers"]["ropero-ignis"]["models"]["qwen3.8-27b-16g"].is_null());
+        assert_eq!(
+            value["providers"]["ropero-ignis"]["settings"]["apiKey"],
+            "opencode-test-key"
+        );
+
+        opencode(
+            &home,
+            &state_dir,
+            &Config::default(),
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            false,
+        )
+        .unwrap();
+        let reconnected: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        assert_eq!(
+            reconnected["providers"]["ropero-ignis"]["settings"]["apiKey"],
+            "opencode-test-key"
+        );
         let _ = std::fs::remove_dir_all(home);
     }
 

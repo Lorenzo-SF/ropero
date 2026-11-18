@@ -9,7 +9,6 @@
 
 id = "turbo-llama"
 label = "turbo-llama (fork)"
-color = "amarillo"
 description = "llama.cpp (fork del dueño, turboquant)"
 
 # R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.

@@ -68,6 +68,25 @@ cargo run --locked -p ropero-cli -- config
 cargo run --locked -p ropero-cli -- models --all  # catálogo del usuario
 ```
 
+### Registrar y probar modelos
+
+`ropero models add` abre un asistente interactivo. También recibe un TOML con
+`--path`, TOML por stdin con `--stdin`, o valores y asignaciones repetibles con
+`--set`. `ropero template` muestra una guía breve del esquema; Ropero valida el
+modelo antes de registrarlo.
+
+`ropero test` permite elegir modelo, grupo y test si se ejecuta sin opciones.
+En modo automatizado, requiere `--model` y exactamente uno entre `--test` y
+`--test-group`; `--path` indica dónde guardar resultados. Ejemplos:
+
+```bash
+ropero test --model qwen --test-group A --path ./resultados
+ropero test --model qwen --test A1 --path ./resultados
+ropero command qwen
+ropero info qwen
+ropero status --live
+```
+
 ### Catálogo, configuración y overrides (v2)
 
 En uso normal, el catálogo es externo en

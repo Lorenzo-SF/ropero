@@ -57,7 +57,7 @@ fn escanea_tomls_desde_ruta_por_engine_y_aplica_overlay() {
         .iter()
         .find(|engine| engine.id == EngineId::LlamaServer)
         .unwrap();
-    assert_eq!(engine.color.as_str(), "morado");
+    assert_eq!(engine.color.as_str(), "naranja");
     assert_eq!(engine.port_range.min, 9100);
     assert_eq!(engine.port_range.max, 9199);
     assert!(scan.config_error.is_none());

@@ -215,6 +215,19 @@ impl Fake {
             .env("ROPERO_MODELS_DIR", &self.root)
             .env("ROPERO_BIN_DIR", &self.bin)
             .env("HOME", self.root.parent().expect("HOME"))
+            .env(
+                "XDG_CONFIG_HOME",
+                self.root.parent().expect("HOME").join("xdg"),
+            )
+            .env(
+                "GGUF_DIR",
+                self.root.parent().expect("HOME").join("models/gguf"),
+            )
+            .env(
+                "SAFETENSORS_DIR",
+                self.root.parent().expect("HOME").join("models/safetensors"),
+            )
+            .env("LOG_DIR", self.root.parent().expect("HOME").join("logs"))
             .env("PATH", &self.path)
             .output()
             .expect("correr ropero");

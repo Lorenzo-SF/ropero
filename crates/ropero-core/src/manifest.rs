@@ -30,6 +30,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::engine::EngineId;
+use crate::palette::engine_color_for_id;
 
 /// El color de un motor en los listados (doc CLI v2 §4).
 ///
@@ -388,8 +389,8 @@ pub struct EngineManifest {
 struct EngineManifestFlat {
     id: EngineId,
     label: String,
-    #[serde(default)]
-    color: EngineColor,
+    #[serde(default, rename = "color")]
+    _legacy_color: EngineColor,
     #[serde(default)]
     description: String,
     #[serde(default)]
@@ -479,7 +480,10 @@ pub fn parse_engine_manifest(
     Ok(EngineManifest {
         id: plano.id,
         label: plano.label,
-        color: plano.color,
+        // Engine colors are a built-in UI theme. The manifest's old `color`
+        // field is parsed for backwards compatibility but no longer controls
+        // the palette.
+        color: engine_color_for_id(plano.id),
         description: plano.description,
         maturity: plano.maturity,
         formats: plano.formats,

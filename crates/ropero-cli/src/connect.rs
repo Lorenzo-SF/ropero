@@ -172,9 +172,27 @@ pub fn run(matches: &ArgMatches) -> i32 {
         ));
         return 1;
     }
+    // Los conectores reciben una copia en memoria con la clave efectiva del
+    // engine (config, entorno o estado privado). No escribimos secretos en
+    // config.toml; cada integración los guarda donde su agente los necesita.
+    let mut connect_config = scan.config.clone();
+    for model in &owned {
+        if let Some(key_state) = ropero_runtime::api_key::connect_key(
+            model.model.engine,
+            &scan.config,
+            &scan.env,
+            &state_dir,
+        ) {
+            connect_config
+                .engines
+                .entry(model.model.engine)
+                .or_default()
+                .api_key = key_state;
+        }
+    }
     if agent == "claude" {
         match ropero_runtime::connect::claude_env_instructions(
-            &scan.config,
+            &connect_config,
             &owned,
             matches.get_flag("remove"),
         ) {
@@ -193,7 +211,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     if agent == "trae" || agent == "trae-cn" {
         for line in ropero_runtime::connect::trae_instructions(
             agent,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -205,7 +223,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     let result = if agent == "aider" {
         ropero_runtime::connect::aider(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -214,7 +232,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
         ropero_runtime::connect::opencode(
             &scan.env.home,
             &state_dir,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -222,7 +240,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else if agent == "openclaw" || agent == "claw" {
         ropero_runtime::connect::openclaw(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -230,7 +248,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else if agent == "pi" {
         ropero_runtime::connect::pi(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -241,13 +259,26 @@ pub fn run(matches: &ArgMatches) -> i32 {
             .get("CODEX_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| scan.env.home.join(".codex"));
-        ropero_runtime::connect::codex_in_dir(
+        let api_keys = owned
+            .iter()
+            .filter_map(|model| {
+                ropero_runtime::api_key::connect_key(
+                    model.model.engine,
+                    &connect_config,
+                    &scan.env,
+                    &state_dir,
+                )
+                .map(|key| (model.model.engine, key))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        ropero_runtime::connect::codex_in_dir_with_api_keys(
             &scan.env.home,
             &codex_home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
+            &api_keys,
         )
     } else if agent == "hermes" {
         let hermes_home = scan
@@ -258,7 +289,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
         ropero_runtime::connect::hermes(
             &scan.env.home,
             &hermes_home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -267,7 +298,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else if agent == "kilo" {
         ropero_runtime::connect::kilo(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -276,7 +307,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else if agent == "droid" {
         ropero_runtime::connect::droid(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -284,7 +315,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else if agent == "codebuddy" {
         ropero_runtime::connect::codebuddy(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -292,7 +323,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else if agent == "copilot" || agent == "vscode" {
         ropero_runtime::connect::vscode(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -300,7 +331,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
     } else {
         ropero_runtime::connect::mcode(
             &scan.env.home,
-            &scan.config,
+            &connect_config,
             &scan.engines,
             &owned,
             matches.get_flag("remove"),
@@ -332,9 +363,15 @@ pub fn run(matches: &ArgMatches) -> i32 {
                     .collect::<std::collections::BTreeSet<_>>();
                 for engine in engines {
                     let profile = format!("ropero-{engine}");
-                    ropero_core::out_line(&format!(
-                        "Usa el perfil de Codex así: codex --profile {profile} -m <alias-del-modelo>"
-                    ));
+                    for model in owned
+                        .iter()
+                        .filter(|model| model.model.engine.as_str() == engine)
+                    {
+                        let alias = model.model.alias.as_deref().unwrap_or(&model.model.name);
+                        ropero_core::out_line(&format!(
+                            "Para usar {alias} en Codex: codex --profile {profile} -m {alias}"
+                        ));
+                    }
                 }
             }
             0

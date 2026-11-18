@@ -60,7 +60,7 @@ base = [
     "--presence-penalty", "0.0",
     "--repeat-penalty", "1.0",
     "--reasoning", "on",
-    "--reasoning-format", "auto",
+    "--reasoning-format", "deepseek",
     "--reasoning-budget", "32768",
 ]
 

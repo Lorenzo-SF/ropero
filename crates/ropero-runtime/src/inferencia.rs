@@ -754,7 +754,7 @@ pub fn tira(
     root: &Path,
     modelo: Option<String>,
     seleccion: &Seleccion,
-    json: bool,
+    resultados: &Path,
     lang: &str,
 ) -> i32 {
     let bateria = match lee_indice(root) {
@@ -769,7 +769,29 @@ pub fn tira(
         Ok(modelo) => modelo,
         Err(e) => return e.informa(),
     };
-    match tira_la_bateria(catalogo, motores, env, root, &bateria, &ids, &modelo, lang) {
+    let run_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let resultados = resultados.join(format!("{run_id}-{}", std::process::id()));
+    if let Err(error) = std::fs::create_dir_all(&resultados) {
+        return ErrorInferencia::ejecucion(format!(
+            "no se pudo crear el directorio de resultados {}: {error}",
+            resultados.display()
+        ))
+        .informa();
+    }
+    match tira_la_bateria(
+        catalogo,
+        motores,
+        env,
+        root,
+        &bateria,
+        &ids,
+        &modelo,
+        &resultados,
+        lang,
+    ) {
         Ok(informe) => {
             let hubo_error = informe.respuestas.iter().any(|r| {
                 matches!(
@@ -777,7 +799,7 @@ pub fn tira(
                     ropero_bateria::puntuadores::Puntuacion::ErrorEjecucion { .. }
                 )
             });
-            imprime(&informe, json, lang);
+            imprime(&informe, false, lang);
             if hubo_error { 1 } else { 0 }
         }
         Err(e) => e.informa(),
@@ -798,6 +820,7 @@ pub fn tira_la_bateria(
     bateria: &Bateria,
     ids: &[String],
     modelo: &str,
+    resultados: &Path,
     lang: &str,
 ) -> Result<Informe, ErrorInferencia> {
     if let Some(spec) = ropero_core::find_spec(catalogo, modelo)
@@ -813,6 +836,11 @@ pub fn tira_la_bateria(
     let motor = match motor_de(modelo, &state_dir) {
         Some(motor) => motor,
         None => arranca_motor(catalogo, motores, env, &state_dir, modelo)?,
+    };
+    let _stop_after_test = DetenerAlTerminar {
+        env,
+        modelo,
+        detener: motor.lanzado,
     };
     let memoria_inicio = crate::machine::capture_machine_state();
 
@@ -920,8 +948,7 @@ pub fn tira_la_bateria(
         .map(|spec| crate::run::log_de(spec, env))
         .and_then(|path| std::fs::read_to_string(path).ok());
     if let Some(path) = guarda_transcripcion(
-        &state_dir,
-        &marca,
+        resultados,
         &informe,
         &transcript,
         &memoria_inicio,
@@ -932,6 +959,20 @@ pub fn tira_la_bateria(
         ropero_core::err_line(&format!("transcripción Markdown: {}", path.display()));
     }
     Ok(informe)
+}
+
+struct DetenerAlTerminar<'a> {
+    env: &'a Environment,
+    modelo: &'a str,
+    detener: bool,
+}
+
+impl Drop for DetenerAlTerminar<'_> {
+    fn drop(&mut self) {
+        if self.detener {
+            let _ = crate::para_todo(self.modelo, self.env);
+        }
+    }
 }
 
 fn respuesta_fallida(id: &str, mensaje: &str) -> RespuestaTest {
@@ -969,8 +1010,7 @@ type TestTranscriptEntry = (String, String, String, Vec<String>, Vec<SubagentTra
 
 #[allow(clippy::too_many_arguments)] // Mantiene juntas las entradas de informe, recursos y localización.
 fn guarda_transcripcion(
-    state_dir: &Path,
-    marca: &str,
+    results_dir: &Path,
     informe: &Informe,
     transcript: &[TestTranscriptEntry],
     memoria_inicio: &ropero_core::status::MachineState,
@@ -980,7 +1020,7 @@ fn guarda_transcripcion(
 ) -> Option<std::path::PathBuf> {
     use std::fmt::Write as _;
 
-    let dir = state_dir.join("tests").join(marca);
+    let dir = results_dir.to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
     let mut md = String::new();
     let en = lang.eq_ignore_ascii_case("EN");

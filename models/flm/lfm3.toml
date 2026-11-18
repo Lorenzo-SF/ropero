@@ -1,6 +1,6 @@
 [model]
 name    = "lfm3"
-engine  = "fastflowllm"
+engine  = "fastflowlm"
 context = 131072
 format  = "q4nx"
 path    = "lfm3:1.7b"

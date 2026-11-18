@@ -64,12 +64,23 @@ impl Engine for SysEngine {
     fn spawn(&self, spec: &LaunchSpec, port: u16) -> Result<Spawned, String> {
         let mut command = Command::new(&spec.program);
         command.envs(&spec.runtime_env);
-        if let Some(key) = &spec.server_api_key {
-            if spec.engine == ropero_core::EngineId::Ignis {
-                command.env("IGNIS_SERVER_API_KEY", key);
-            } else {
-                command.env("ROPERO_API_KEY", key);
+        let key_env = match spec.engine {
+            ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama => {
+                "LLAMA_API_KEY"
             }
+            ropero_core::EngineId::Ignis => "IGNIS_SERVER_API_KEY",
+            ropero_core::EngineId::MlxServe => "MLX_API_KEY",
+            _ => "ROPERO_API_KEY",
+        };
+        // El proceso hijo hereda el entorno del CLI. Borrar la clave previa
+        // permite que `--no-api-key` tenga efecto también con variables exportadas.
+        command
+            .env_remove("ROPERO_API_KEY")
+            .env_remove("LLAMA_API_KEY")
+            .env_remove("IGNIS_SERVER_API_KEY")
+            .env_remove("MLX_API_KEY");
+        if let Some(key) = &spec.server_api_key {
+            command.env(key_env, key);
         }
         if spec.engine == ropero_core::EngineId::Ignis {
             // Ignis takes its listener as HOST:PORT, whereas the other

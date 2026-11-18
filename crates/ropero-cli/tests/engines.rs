@@ -1,6 +1,6 @@
 //! Tests de integración del comando `ropero engines`.
 //!
-//! El comando lista los motores con su color, su madurez y su rango de
+//! El comando lista los motores con su madurez y su rango de
 //! puertos, y dice cuáles encajan con esta máquina y por qué no los demás.
 //!
 //! La batería es hermética: el catálogo de pruebas es el de
@@ -48,21 +48,27 @@ fn engines_sale_con_cero_y_lista_los_motores() {
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stdout.contains("llama-server"), "stdout={stdout}");
     assert!(stdout.contains("turbo-llama"), "stdout={stdout}");
-    // La leyenda de colores del doc CLI v2 §4.
-    assert!(stdout.contains("naranja"), "stdout={stdout}");
-    assert!(stdout.contains("amarillo"), "stdout={stdout}");
+    // Los motores usan fondo hexadecimal y texto negro desde la paleta común.
+    assert!(
+        stdout.contains("\u{1b}[48;2;253;186;116m\u{1b}[38;2;0;0;0mllama-server"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("\u{1b}[48;2;253;230;138m\u{1b}[38;2;0;0;0mturbo-llama"),
+        "stdout={stdout}"
+    );
 }
 
-/// La lista muestra el color, la madurez y el rango de puertos.
+/// La lista omite la columna de color y muestra madurez y puertos.
 #[test]
-fn la_linea_del_motor_muestra_color_madurez_y_puertos() {
+fn la_linea_del_motor_muestra_madurez_y_puertos_sin_columna_color() {
     let (code, stdout, stderr) = run(&["engines"]);
     assert_eq!(code, 0, "stderr={stderr}");
     let linea = stdout
         .lines()
         .find(|l| l.contains("llama-server"))
         .expect("debe salir la línea de llama-server");
-    assert!(linea.contains("naranja"), "linea={linea}");
+    assert!(!stdout.contains("COLOR"), "stdout={stdout}");
     assert!(linea.contains("proven"), "linea={linea}");
     assert!(linea.contains("9980-9989"), "linea={linea}");
 }

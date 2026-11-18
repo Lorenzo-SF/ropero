@@ -18,8 +18,14 @@ use ropero_core::estilo::{
 #[test]
 fn el_ancho_visible_ignora_los_codigos_ansi() {
     assert_eq!(ancho_visible("llama-server"), 12);
-    assert_eq!(ancho_visible("\x1b[38;5;208mllama-server\x1b[39m"), 12);
-    assert_eq!(ancho_visible("\x1b[38;5;208mllama\x1b[39m-server"), 12);
+    assert_eq!(
+        ancho_visible("\x1b[38;2;255;135;0mllama-server\x1b[39m"),
+        12
+    );
+    assert_eq!(
+        ancho_visible("\x1b[38;2;255;135;0mllama\x1b[39m-server"),
+        12
+    );
 }
 
 /// Las tildes y los signos valen **una** columna: no descuadran la tabla.
@@ -44,7 +50,7 @@ fn los_caracteres_anchos_valen_dos_columnas() {
 /// Un texto con color y el mismo sin color ocupan lo mismo.
 #[test]
 fn el_color_no_cambia_el_ancho() {
-    let con_color = "\x1b[38;5;154mturbo-llama\x1b[39m";
+    let con_color = "\x1b[38;2;0;255;0mturbo-llama\x1b[39m";
     assert_eq!(ancho_visible(con_color), ancho_visible("turbo-llama"));
 }
 
@@ -110,7 +116,7 @@ fn el_color_de_la_leyenda_no_descuadra_la_tabla() {
     ]);
     let lineas = tabla.lineas(&Palette::color());
     assert!(
-        lineas[2].contains("\x1b[38;5;220m"),
+        lineas[2].contains("\x1b[48;2;253;230;138m\x1b[38;2;0;0;0m"),
         "linea={:?}",
         lineas[2]
     );
@@ -232,15 +238,13 @@ fn los_guiones_valen_una_columna() {
 /// El recorte **cierra** el color: si no, el color se derrama sobre la
 /// columna de al lado.
 ///
-/// Lo cierra con el **mismo** reset que usa la paleta: el del primer plano
-/// (`39m`). Un `0m` (reset total) es otro idioma: apagaría también el fondo
-/// y los atributos que el sistema no toca.
+/// Lo cierra con el reset total que usa la paleta (`0m`).
 #[test]
 fn el_recorte_de_un_texto_coloreado_cierra_el_color() {
-    let coloreado = "\x1b[38;5;220mturbo-llama\x1b[39m";
+    let coloreado = "\x1b[48;2;253;230;138m\x1b[38;2;0;0;0mturbo-llama\x1b[0m";
     let recortado = truncar(coloreado, 6);
     assert_eq!(ancho_visible(&recortado), 6, "recortado={recortado:?}");
-    assert!(recortado.ends_with("\u{1b}[39m"), "recortado={recortado:?}");
+    assert!(recortado.ends_with("\u{1b}[0m"), "recortado={recortado:?}");
     assert!(recortado.contains("turbo"), "recortado={recortado:?}");
 }
 
@@ -251,7 +255,7 @@ fn un_rotulo_con_color_alinea_el_valor() {
     let lineas = pares(
         1,
         &[
-            ("\x1b[38;5;208mbuild\x1b[39m", "0.1.0"),
+            ("\x1b[38;2;255;135;0mbuild\x1b[39m", "0.1.0"),
             ("autor", "lorenzo"),
         ],
     );

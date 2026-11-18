@@ -7,6 +7,11 @@
 
 use std::io::{self, BufRead, Write};
 
+use ropero_core::palette::{
+    HexColor, LOG_DEFAULT, LOG_ERROR, LOG_INFO, LOG_LIGHT, LOG_LLAMA_WARN_OFFICIAL,
+    LOG_LLAMA_WARN_TURBO, LOG_MUTED, LOG_PERFORMANCE, LOG_WARNING,
+};
+
 /// Si la salida debe ir coloreada.
 ///
 /// El color se apaga con `NO_COLOR` o si el destino no es un TTY. Se
@@ -32,9 +37,9 @@ pub fn color_enabled() -> bool {
 
 /// Colorea una línea según su semántica.
 ///
-/// `engine_color` es el código ANSI 256 del motor (si se conoce) para las
+/// `engine_color` es el índice heredado del color del motor (si se conoce) para las
 /// líneas informativas de arranque/carga; si no, se usa un verde neutro.
-pub fn colorize_line(line: &str, engine_color: Option<u8>, enabled: bool) -> String {
+pub fn colorize_line(line: &str, engine_color: Option<HexColor>, enabled: bool) -> String {
     colorize_engine_line(line, None, engine_color, enabled)
 }
 
@@ -46,7 +51,7 @@ pub fn colorize_line(line: &str, engine_color: Option<u8>, enabled: bool) -> Str
 pub fn colorize_engine_line(
     line: &str,
     engine: Option<ropero_core::EngineId>,
-    engine_color: Option<u8>,
+    engine_color: Option<HexColor>,
     enabled: bool,
 ) -> String {
     if !enabled {
@@ -54,66 +59,44 @@ pub fn colorize_engine_line(
     }
     let lower = line.to_lowercase();
     let rst = "\x1b[0m";
-    let bred = "\x1b[1;31m";
-    let yel = "\x1b[1;33m";
-    let mag = "\x1b[1;35m";
-    let cyn = "\x1b[2;36m";
-    let gry = "\x1b[90m";
-    let main = engine_color
-        .map(|c| format!("\x1b[38;5;{c}m"))
-        .unwrap_or_else(|| "\x1b[1;32m".to_string());
+    let bred = LOG_ERROR.foreground();
+    let yel = LOG_WARNING.foreground();
+    let mag = LOG_PERFORMANCE.foreground();
+    let cyn = LOG_INFO.foreground();
+    let gry = LOG_MUTED.foreground();
+    let light = LOG_LIGHT.foreground();
+    let llama_warn_official = LOG_LLAMA_WARN_OFFICIAL.foreground();
+    let llama_warn_turbo = LOG_LLAMA_WARN_TURBO.foreground();
+    let main = engine_color.unwrap_or(LOG_DEFAULT).foreground();
 
-    // llama.cpp prefija cada mensaje con su severidad (`I`, `W`, `E`, ...).
-    // Respetamos esa estructura antes de aplicar el color común por palabra:
-    // así una sesión Turbo no queda como un bloque amarillo uniforme.
     if matches!(
         engine,
         Some(ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama)
     ) {
-        let ansi = if lower.contains(" e ") || lower.contains(" fatal") {
-            Some("\x1b[1;31m")
-        } else if lower.contains(" w ") {
-            Some(if engine == Some(ropero_core::EngineId::TurboLlama) {
-                "\x1b[38;5;214m"
+        let llama_level = line.split_whitespace().find_map(|token| match token {
+            "E" => Some(bred.as_str()),
+            "W" => Some(if engine == Some(ropero_core::EngineId::TurboLlama) {
+                llama_warn_turbo.as_str()
             } else {
-                "\x1b[38;5;208m"
-            })
-        } else if lower.contains(" d ") || lower.contains(" t ") {
-            Some("\x1b[2;37m")
-        } else if lower.contains(" i ") {
-            Some(if engine == Some(ropero_core::EngineId::TurboLlama) {
-                "\x1b[38;5;220m"
-            } else {
-                "\x1b[38;5;208m"
-            })
-        } else {
-            None
-        };
-        if let Some(ansi) = ansi {
+                llama_warn_official.as_str()
+            }),
+            "I" => Some(main.as_str()),
+            "D" => Some(gry.as_str()),
+            "T" => Some(light.as_str()),
+            _ => None,
+        });
+        if let Some(ansi) = llama_level {
             return format!("{ansi}{line}{rst}");
         }
     }
+
     // Ignis uses tracing's timestamp + level + target layout. Preserve its
     // per-line severity. Recent Ignis builds emit OpenTelemetry JSONL, so
     // normalize those records into a compact event summary before the legacy
     // text fallback below.
     if engine == Some(ropero_core::EngineId::Ignis) {
-        if let Some((summary, ansi)) = ignis_json_line(line) {
-            return format!("{ansi}{summary}{rst}");
-        }
-        let severity = if lower.contains(" error ") {
-            Some(bred)
-        } else if lower.contains(" warn ") {
-            Some("\x1b[38;5;214m")
-        } else if lower.contains(" debug ") || lower.contains(" trace ") {
-            Some(gry)
-        } else if lower.contains(" info ") {
-            Some("\x1b[38;5;51m")
-        } else {
-            None
-        };
-        if let Some(ansi) = severity {
-            return format!("{ansi}{line}{rst}");
+        if let Some((summary, ansi)) = ignis_json_line(line, engine_color.unwrap_or(LOG_DEFAULT)) {
+            return format!("{}{summary}{rst}", ansi.foreground());
         }
     }
 
@@ -134,7 +117,7 @@ pub fn colorize_engine_line(
             && lower.split_whitespace().any(|w| {
                 w.len() == 3 && w.starts_with('5') && w.chars().all(|c| c.is_ascii_digit())
             });
-    if es_error {
+    if es_error || tiene_nivel(line, &["error", "fatal", "critical", "crit"]) {
         return format!("{bred}{line}{rst}");
     }
     if [
@@ -149,11 +132,21 @@ pub fn colorize_engine_line(
     {
         return format!("{mag}{line}{rst}");
     }
-    if ["warning", "deprecated", " wrn", "warn"]
-        .iter()
-        .any(|p| lower.contains(p))
-    {
-        return format!("{yel}{line}{rst}");
+    if tiene_nivel(line, &["warning", "warn", "wrn"]) || lower.contains("deprecated") {
+        let ansi = if engine == Some(ropero_core::EngineId::LlamaServer) {
+            llama_warn_official.as_str()
+        } else if engine == Some(ropero_core::EngineId::TurboLlama) {
+            llama_warn_turbo.as_str()
+        } else {
+            yel.as_str()
+        };
+        return format!("{ansi}{line}{rst}");
+    }
+    if tiene_nivel(line, &["debug", "dbg"]) {
+        return format!("{gry}{line}{rst}");
+    }
+    if tiene_nivel(line, &["trace", "trc"]) {
+        return format!("{light}{line}{rst}");
     }
     let engine_markers: &[&str] = match engine {
         Some(ropero_core::EngineId::TensorRtLlm) => &["[trt-llm]", "tensorrt_llm", "tensorrt-llm"],
@@ -171,6 +164,9 @@ pub fn colorize_engine_line(
         None => &[],
     };
     if engine_markers.iter().any(|marker| lower.contains(marker)) {
+        return format!("{main}{line}{rst}");
+    }
+    if tiene_nivel(line, &["info", "informational", "notice"]) {
         return format!("{main}{line}{rst}");
     }
     if [
@@ -198,32 +194,42 @@ pub fn colorize_engine_line(
     format!("{gry}{line}{rst}")
 }
 
+/// Detecta niveles de log como tokens para evitar que palabras como
+/// `information` o `warning_count` disparen un falso positivo.
+fn tiene_nivel(line: &str, levels: &[&str]) -> bool {
+    line.split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|token| levels.iter().any(|level| token.eq_ignore_ascii_case(level)))
+}
+
 /// Convierte un registro JSONL de Ignis en una línea corta y el color de su
 /// severidad OpenTelemetry. Los atributos se filtran por evento para no
 /// volcar planes completos de memoria ni metadatos de trazas.
-fn ignis_json_line(line: &str) -> Option<(String, &'static str)> {
+fn ignis_json_line(line: &str, info_color: HexColor) -> Option<(String, HexColor)> {
     let record: serde_json::Value = serde_json::from_str(line).ok()?;
     let object = record.as_object()?;
     let level = object.get("severity_text")?.as_str()?.to_ascii_uppercase();
     let number = object.get("severity_number").and_then(|v| v.as_u64());
-    let ansi = match level.as_str() {
-        "FATAL" | "CRITICAL" => "\x1b[1;31m",
-        "ERROR" => "\x1b[1;31m",
-        "WARN" | "WARNING" => "\x1b[38;5;214m",
-        "INFO" => "\x1b[38;5;51m",
-        "DEBUG" => "\x1b[90m",
-        "TRACE" => "\x1b[2;37m",
-        _ => match number? {
-            21..=24 => "\x1b[1;31m",
-            17..=20 => "\x1b[1;31m",
-            13..=16 => "\x1b[38;5;214m",
-            9..=12 => "\x1b[38;5;51m",
-            5..=8 => "\x1b[90m",
-            1..=4 => "\x1b[2;37m",
-            _ => "\x1b[90m",
-        },
-    };
     let event = object.get("event_name")?.as_str()?;
+    let ansi = if event.ends_with("request.done") {
+        LOG_PERFORMANCE
+    } else {
+        match level.as_str() {
+            "FATAL" | "CRITICAL" | "ERROR" => LOG_ERROR,
+            "WARN" | "WARNING" => LOG_WARNING,
+            "INFO" => info_color,
+            "DEBUG" => LOG_MUTED,
+            "TRACE" => LOG_LIGHT,
+            _ => match number? {
+                21..=24 => LOG_ERROR,
+                17..=20 => LOG_ERROR,
+                13..=16 => LOG_WARNING,
+                9..=12 => info_color,
+                5..=8 => LOG_MUTED,
+                1..=4 => LOG_LIGHT,
+                _ => LOG_MUTED,
+            },
+        }
+    };
     let body = object.get("body").and_then(|v| v.as_str()).unwrap_or("");
     let timestamp = object
         .get("timestamp")
@@ -376,7 +382,7 @@ impl LogFollower {
         path: std::path::PathBuf,
         from_line: usize,
         engine: ropero_core::EngineId,
-        engine_color: Option<u8>,
+        engine_color: Option<HexColor>,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let enabled = color_enabled();
@@ -421,7 +427,7 @@ fn follow_loop(
     path: &std::path::Path,
     mut from_line: usize,
     engine: ropero_core::EngineId,
-    engine_color: Option<u8>,
+    engine_color: Option<HexColor>,
     enabled: bool,
     stop: &AtomicBool,
 ) {
@@ -481,17 +487,21 @@ fn read_from(path: &std::path::Path, from_line: usize) -> io::Result<(Vec<String
 #[cfg(test)]
 mod tests {
     use super::colorize_engine_line;
-    use ropero_core::EngineId;
+    use ropero_core::{EngineColor, EngineId, palette};
+
+    fn red_engine_color() -> Option<palette::HexColor> {
+        palette::engine_hex(EngineColor::Rojo)
+    }
 
     #[test]
     fn aplica_el_patron_de_fastflowllm_con_el_tema_del_motor() {
         let salida = colorize_engine_line(
             "FastFlowLM NPU ready",
             Some(EngineId::FastFlowLm),
-            Some(196),
+            red_engine_color(),
             true,
         );
-        assert!(salida.starts_with("\x1b[38;5;196m"));
+        assert!(salida.starts_with(&palette::engine_hex(EngineColor::Rojo).unwrap().foreground()));
     }
 
     #[test]
@@ -499,17 +509,17 @@ mod tests {
         let salida = colorize_engine_line(
             "FastFlowLM ERROR: out of memory",
             Some(EngineId::FastFlowLm),
-            Some(196),
+            red_engine_color(),
             true,
         );
-        assert!(salida.starts_with("\x1b[1;31m"));
+        assert!(salida.starts_with(&palette::LOG_ERROR.foreground()));
     }
 
     #[test]
     fn sin_color_preserva_la_linea_literal() {
         let linea = "FastFlowLM listening";
         assert_eq!(
-            colorize_engine_line(linea, Some(EngineId::FastFlowLm), Some(196), false),
+            colorize_engine_line(linea, Some(EngineId::FastFlowLm), red_engine_color(), false),
             linea
         );
     }

@@ -80,9 +80,9 @@ fn list_all_marca_los_no_disponibles() {
 fn list_pinta_con_el_color_de_la_leyenda() {
     let (code, stdout, stderr) = run(&["models"]);
     assert_eq!(code, 0, "stderr={}", stderr);
-    // La leyenda del doc CLI v2 §4: turbo-llama es amarillo (220).
+    // turbo-llama uses the central hexadecimal background color.
     assert!(
-        stdout.contains("\x1b[38;5;220m"),
+        stdout.contains("\x1b[48;2;253;230;138m\x1b[38;2;0;0;0m"),
         "el motor no va en su color: stdout={:?}",
         stdout
     );
