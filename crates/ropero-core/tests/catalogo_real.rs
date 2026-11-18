@@ -11,9 +11,9 @@
 use std::path::{Path, PathBuf};
 
 /// Nº de modelos activos esperados en el catálogo real.
-const ACTIVOS_ESPERADOS: usize = 21;
+const ACTIVOS_ESPERADOS: usize = 20;
 /// Nº de modelos retirados (`fired/`) esperados en el catálogo real.
-const FIRED_ESPERADOS: usize = 27;
+const FIRED_ESPERADOS: usize = 28;
 /// Nº total de modelos del catálogo real (activos + retirados).
 const TOTAL_ESPERADO: usize = ACTIVOS_ESPERADOS + FIRED_ESPERADOS;
 

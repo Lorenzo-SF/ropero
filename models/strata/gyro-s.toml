@@ -1,20 +1,9 @@
 # =============================================================================
-# strata-gyro-s — Qwen3.8-Flash-Next (Gyro) Gyro-S servido por STRATA
-# =============================================================================
-# La variante que AHORRA memoria: la cuantización trellis (TQK6/TQK7 en base
-# Hadamard) son 27,64 GiB de pesos, pero el archivo pesa 58,5 GB porque lleva
-# dentro la tabla n-gram de 28,8 GB. Es el modelo grande CON la tabla: la
-# tabla se queda en el SSD y es lo que hunde el modo low-RAM.
+# gyro-s — Qwen3.8-Flash-Next (Gyro-S) servido por Strata
 #
-# Mismo criterio que qwen38-q2: sin min_ram_gb, que lo decida Strata.
-#
-# [model].path NO es una ruta: es el par familia/paquete del catálogo de
-# Strata ("qwen36" + "UD-Q4_K_XL"). Los ficheros los baja y los prepara
-# Strata en su carpeta; ropero sólo apunta.
-#
-# Los pesos NO los baja ropero: los baja Strata al arrancar (no hay modo de
-# "descargar sin arrancar"). Ver docs/strata.md.
-# =============================================================================
+# [model].path identifica el perfil ya preparado por Strata; "gyro/Gyro-S"
+# se convierte al id de perfil "gyro-gyro-s" que devuelve su CLI.
+# Ropero sólo sirve perfiles instalados y no descarga ni prepara sus componentes.
 
 [model]
 name    = "gyro-s"

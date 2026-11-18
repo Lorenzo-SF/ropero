@@ -228,6 +228,15 @@ pub fn preparar(
     } else {
         model_argv
     };
+    if engine.id == EngineId::MlxServe {
+        configura_mlx_argv(
+            &mut argv,
+            spec,
+            &ctx.files.model_path,
+            ctx.files.gguf.as_deref(),
+        )
+        .map_err(RunOutcome::error)?;
+    }
     // Ignis exposes its model through /v1/models using model-id. Keep the
     // catalog name for Ropero's paths/state, but honor the engine-facing alias.
     if engine.id == EngineId::Ignis
@@ -328,6 +337,30 @@ fn set_flag_value(argv: &mut Vec<String>, flag: &str, value: &str) {
     } else {
         argv.extend([flag.to_string(), value.to_string()]);
     }
+}
+
+/// MLX-Serve necesita que el checkpoint y el bind local formen parte del
+/// comando; su CLI escucha en todas las interfaces si no se fija `--host`.
+fn configura_mlx_argv(
+    argv: &mut Vec<String>,
+    spec: &ropero_core::ModelSpec,
+    model_path: &str,
+    gguf_path: Option<&str>,
+) -> Result<(), String> {
+    let path = match spec.model.format {
+        ropero_core::ModelFormat::Safetensors => model_path,
+        ropero_core::ModelFormat::Gguf => gguf_path.unwrap_or_default(),
+        _ => "",
+    };
+    if path.is_empty() {
+        return Err(format!(
+            "MLX-Serve necesita una ruta local para el modelo '{}'",
+            spec.model.name
+        ));
+    }
+    set_flag_value(argv, "--model", path);
+    set_flag_value(argv, "--host", "127.0.0.1");
+    Ok(())
 }
 
 /// El preflight de un plan: lo que hay que comprobar antes de lanzar.
@@ -1040,7 +1073,7 @@ pub fn arranca(
 
 #[cfg(test)]
 mod tests {
-    use super::set_flag_value;
+    use super::{configura_mlx_argv, set_flag_value};
 
     #[test]
     fn ignis_qwen27b_toml_usa_el_alias_expuesto_por_el_engine() {
@@ -1077,5 +1110,17 @@ mod tests {
         let mut tensorrt = Vec::new();
         set_flag_value(&mut tensorrt, "--served_model_name", "public");
         assert_eq!(tensorrt, ["--served_model_name", "public"]);
+    }
+
+    #[test]
+    fn mlx_usa_la_ruta_del_modelo_y_solo_escucha_en_loopback() {
+        let spec = ropero_core::parse_model(
+            include_str!("../../../models/mlx/metalqwen.toml"),
+            std::path::Path::new("metalqwen.toml"),
+        )
+        .unwrap();
+        let mut args = vec!["--host".into(), "0.0.0.0".into()];
+        configura_mlx_argv(&mut args, &spec, "/models/qwen", None).unwrap();
+        assert_eq!(args, ["--host", "127.0.0.1", "--model", "/models/qwen"]);
     }
 }

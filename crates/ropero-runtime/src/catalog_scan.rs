@@ -118,6 +118,24 @@ pub fn scan(root: &Path, env: &Environment) -> Result<Scan, String> {
         ropero_core::config::raiz_del_catalogo(&base).join(ropero_core::ENGINES_DIR_NAME)
     };
     let mut engines = scan_engines(&engines_dir, &mut problems);
+    for model in catalog.models.iter().chain(catalog.fired.iter()) {
+        if let Some(engine) = engines
+            .iter()
+            .find(|engine| engine.id == model.model.engine)
+            && !engine
+                .formats
+                .iter()
+                .any(|format| format == model.model.format.as_str())
+        {
+            problems.push(format!(
+                "el modelo '{}' usa formato '{}' que no declara el manifiesto de '{}' ({})",
+                model.model.name,
+                model.model.format.as_str(),
+                engine.id.as_str(),
+                model.source.display()
+            ));
+        }
+    }
     let config = env.config_resuelta();
     let config_error = config.overlay_engines(&mut engines).err();
     Ok(Scan {

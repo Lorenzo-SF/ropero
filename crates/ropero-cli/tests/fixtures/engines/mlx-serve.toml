@@ -1,18 +1,18 @@
 # Manifiesto del motor `mlx-serve` (doc B §4.3).
 #
-# MLX-LM + mlx-server: sólo macOS ARM. Su formato nativo es la estructura
-# MLX (safetensors); también acepta los cuantizados de MLX (4-bit, 8-bit…).
+# MLX-Serve: sólo macOS ARM. Acepta modelos MLX (safetensors y cuantizados)
+# y GGUF mediante su backend llama.cpp integrado.
 
 id = "mlx-serve"
 label = "MLX (Apple Silicon)"
 color = "gris"
-description = "MLX-LM + mlx-server (sólo macOS ARM)"
+description = "MLX-Serve (sólo macOS ARM)"
 
-# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
-maturity = "proven"
+# R-CTX-3: integrado según upstream, todavía no probado en esta máquina.
+maturity = "integrated"
 
 # Los formatos que el motor acepta (doc CLI v2 §4).
-formats = ["safetensors", "mlx-quantized"]
+formats = ["safetensors", "gguf"]
 
 # El rango de puertos propio (doc CLI v2 §5.1).
 port_min = 9960

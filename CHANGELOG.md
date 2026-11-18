@@ -2,9 +2,17 @@
 
 [Read this changelog in Spanish](CHANGELOG.es.md).
 
-## Unreleased — 2026-11-17
+## Unreleased — 2026-11-18
 
 ### Changes
+
+- Model format declarations are checked against the selected engine manifest;
+  MLX now receives its resolved model path and is bound to loopback by default.
+- MLX and TensorRT maturity labels now match the recorded evidence. The
+  TensorRT NVFP4 checkpoint rejected by the tested release is retired.
+- Strata accepts its profile-backed `strata` format; its model TOMLs and guide
+  now describe the installed-profile IDs returned by the upstream CLI.
+- The FLM install manifest uses TOML 1.0-compatible dotted keys.
 
 - `models add`, `info`, and `command` are complete; `models` replaces `list`.
 - `config --lang ES|EN` saves the language preference. FLM uses the canonical

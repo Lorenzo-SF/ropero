@@ -63,3 +63,32 @@ fn escanea_tomls_desde_ruta_por_engine_y_aplica_overlay() {
     assert!(scan.config_error.is_none());
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn validate_detecta_un_formato_que_el_engine_no_declara() {
+    let root = std::env::temp_dir().join("ropero-scan-engine-format");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("models/llama-server")).unwrap();
+    fs::create_dir_all(root.join("engines")).unwrap();
+    fs::write(
+        root.join("models/llama-server/model.toml"),
+        include_str!("../../../models/llama-server/groot-o.toml"),
+    )
+    .unwrap();
+    let incompatible = include_str!("../../../engines/llama-server.toml")
+        .replace("formats = [\"gguf\"]", "formats = [\"safetensors\"]");
+    fs::write(root.join("engines/llama-server.toml"), incompatible).unwrap();
+
+    let home = root.join("home");
+    fs::create_dir_all(&home).unwrap();
+    let env = Environment::new(BTreeMap::new(), &home, &root);
+    let scan = ropero_runtime::scan(&root, &env).unwrap();
+    assert!(
+        scan.problems
+            .iter()
+            .any(|problem| problem.contains("formato 'gguf' que no declara")),
+        "problemas={:?}",
+        scan.problems
+    );
+    let _ = fs::remove_dir_all(root);
+}

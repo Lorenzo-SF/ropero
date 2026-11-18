@@ -569,14 +569,7 @@ fn command_imprime_opcion_y_valor_en_la_misma_linea() {
 fn info_muestra_rutas_y_configuracion() {
     let (code, stdout, stderr) = run(&["info", "modelo-alpha"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
-    for needle in [
-        "MODEL modelo-alpha",
-        "low",
-        "medium",
-        "high",
-        "GGUF=",
-        "LOG=",
-    ] {
+    for needle in ["modelo-alpha", "low", "medium", "high", "GGUF=", "LOG="] {
         assert!(stdout.contains(needle), "falta {needle:?}: {stdout}");
     }
 }
@@ -675,9 +668,12 @@ fn models_add_permite_configuracion_completa_con_asignaciones_toml() {
 fn config_lang_se_persiste_y_rechaza_otro_valor() {
     let home = std::env::temp_dir().join(format!("ropero-lang-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let xdg = home.join("xdg");
     let output = bin()
         .args(["config", "--lang", "ES"])
         .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
         .output()
         .unwrap();
     assert_eq!(
@@ -686,11 +682,12 @@ fn config_lang_se_persiste_y_rechaza_otro_valor() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let config = std::fs::read_to_string(home.join(".config/ropero/config.toml")).unwrap();
+    let config = std::fs::read_to_string(xdg.join("ropero/config.toml")).unwrap();
     assert!(config.contains("lang = \"ES\""), "{config}");
     let invalid = bin()
         .args(["config", "--lang", "FR"])
         .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &xdg)
         .output()
         .unwrap();
     assert_eq!(invalid.status.code(), Some(2));

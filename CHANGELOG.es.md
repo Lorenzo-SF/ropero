@@ -2,9 +2,17 @@
 
 [English](CHANGELOG.md) · **Español**
 
-## Unreleased — 2026-11-17
+## Unreleased — 2026-11-18
 
 ### Español
+
+- La validación compara el formato de cada modelo con el manifiesto del engine;
+  MLX recibe su ruta resuelta y queda enlazado a loopback por defecto.
+- Las etiquetas de madurez de MLX y TensorRT reflejan la evidencia registrada.
+  Se retira el checkpoint TensorRT NVFP4 rechazado por la versión probada.
+- Strata admite el formato `strata` respaldado por perfiles; sus TOML y la guía
+  describen los ids que devuelve el CLI upstream.
+- El manifiesto de instalación de FLM usa claves compatibles con TOML 1.0.
 
 - Se completan `models add`, `info` y `command`; `models` sustituye a `list`.
 - `config --lang ES|EN` guarda la preferencia de idioma. FLM usa el id

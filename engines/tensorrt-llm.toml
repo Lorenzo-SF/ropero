@@ -8,8 +8,8 @@ label = "TensorRT-LLM (RTX)"
 color = "verde-pistacho"
 description = "TensorRT-LLM (sólo Linux, sólo dGPU RTX)"
 
-# R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.
-maturity = "proven"
+# R-CTX-3: integrado según upstream, todavía no probado en esta máquina.
+maturity = "integrated"
 
 # Los formatos que el motor acepta (doc CLI v2 §4).
 formats = ["safetensors", "pytorch-bin", "trt-checkpoint", "trt-engine"]

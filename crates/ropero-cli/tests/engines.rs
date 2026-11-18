@@ -73,22 +73,31 @@ fn la_linea_del_motor_muestra_color_madurez_y_puertos() {
 fn los_motores_incompatibles_dicen_por_que() {
     let (code, stdout, stderr) = run(&["engines", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    // `mlx-serve` es sólo macOS: en cualquier otra máquina no encaja, y el
-    // motivo tiene que estar escrito.
+    // `mlx-serve` sólo encaja en macOS Apple Silicon con Metal. En macOS la
+    // fila es compatible y no tiene nota; en el resto de plataformas explica
+    // el motivo de incompatibilidad debajo de la fila.
     let lineas: Vec<&str> = stdout.lines().collect();
     let posicion = lineas
         .iter()
         .position(|l| l.contains("mlx-serve"))
         .expect("debe salir la línea de mlx-serve");
-    // El motivo va en la nota de debajo de su fila (doc CLI v2 §2).
-    let nota = lineas
-        .get(posicion + 1)
-        .expect("debe salir la nota del motivo");
-    assert!(nota.contains("no:"), "nota={nota}");
-    assert!(
-        nota.contains("macOS") || nota.contains("Metal"),
-        "nota={nota}"
-    );
+    if cfg!(target_os = "macos") {
+        assert!(
+            !lineas[posicion].contains("no:"),
+            "fila={}",
+            lineas[posicion]
+        );
+    } else {
+        // El motivo va en la nota de debajo de su fila (doc CLI v2 §2).
+        let nota = lineas
+            .get(posicion + 1)
+            .expect("debe salir la nota del motivo");
+        assert!(nota.contains("no:"), "nota={nota}");
+        assert!(
+            nota.contains("macOS") || nota.contains("Metal"),
+            "nota={nota}"
+        );
+    }
 }
 
 /// `ropero engines --help` sale con 0 y enseña el uso.

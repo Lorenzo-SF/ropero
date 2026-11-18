@@ -18,7 +18,7 @@ description = "Strata (Linux y macOS)"
 maturity = "integrated"
 
 # Los formatos que el motor acepta (doc CLI v2 §4).
-formats = ["gguf", "strata-pack"]
+formats = ["gguf", "strata-pack", "strata"]
 
 # El rango de puertos propio (doc CLI v2 §5.1). Incluye el 9999 que usan
 # por defecto los scripts de referencia, para que un motor lanzado por ropero
