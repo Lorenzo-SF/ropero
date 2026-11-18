@@ -1808,9 +1808,9 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compila_motor, cuda13_runtime_disponible, enlaza_ejecutables, escribe_wrapper_flm,
-        gestor_paquetes_disponible, prepara_dependencias_sistema, valida_hardware_basalt,
-        valida_runtime_flm, version_tuple, wrapper_flm_propio,
+        compila_motor, cpu_avx2_available, cuda13_runtime_disponible, enlaza_ejecutables,
+        escribe_wrapper_flm, gestor_paquetes_disponible, prepara_dependencias_sistema,
+        valida_hardware_basalt, valida_runtime_flm, version_tuple, wrapper_flm_propio,
     };
     use ropero_core::{
         DetectSpec, EngineColor, EngineId, EngineInstallSpec, EngineManifest, Environment,
@@ -1906,7 +1906,7 @@ mod tests {
         vars.insert("PATH".to_string(), base.display().to_string());
         vars.insert("LD_LIBRARY_PATH".to_string(), libs.display().to_string());
         let env = Environment::new(vars, &base, &base);
-        if std::is_x86_feature_detected!("avx2") {
+        if cpu_avx2_available() {
             let valid = valida_hardware_basalt(&env);
             assert!(valid.is_ok(), "{valid:?}");
             executable(
