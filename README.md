@@ -165,6 +165,6 @@ Las decisiones de arquitectura están en:
 - [`ADR-002: Extracción vs reescritura`](docs/adr/ADR-002-extraccion-vs-reescritura.md).
 - [`ADR-003: `ropero-code` es referencia, no dependencia`](docs/adr/ADR-003-ropero-code-es-referencia.md).
 
-El [CHANGELOG en español](CHANGELOG.md) y su
-[versión inglesa](CHANGELOG.en.md) registran los cambios de este workspace. El
+El [CHANGELOG en español](CHANGELOG.es.md) y su
+[versión inglesa](CHANGELOG.md) registran los cambios de este workspace. El
 historial de cambios de la v1 no está incluido en este checkout.

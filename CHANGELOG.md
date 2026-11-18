@@ -1,576 +1,546 @@
 # Changelog
 
-[English](CHANGELOG.en.md) · **Español**
+[Read this changelog in Spanish](CHANGELOG.es.md).
 
 ## Unreleased — 2026-11-17
 
-### Español
+### Changes
 
-- Se completan `models add`, `info` y `command`; `models` sustituye a `list`.
-- `config --lang ES|EN` guarda la preferencia de idioma. FLM usa el id
-  canónico `fastflowllm`, y los modelos Ignis separan nombre interno y alias
-  público.
-- `connect` usa `--remove`; `--list` enumera sólo integraciones implementadas.
-- `connect` muestra instrucciones manuales para TRAE y TRAE CN; OpenCode conserva
-  comentarios y comas finales al editar `opencode.jsonc` y deja intacto el
-  archivo si el JSONC es inválido.
-- El arranque acepta niveles, flags y opciones declarados por cada TOML.
-- Codex guarda el provider y el perfil por engine en `CODEX_HOME` (o
-  `~/.codex`) y rechaza engines sin Responses API documentada. llama.cpp recibe
-  el alias público mediante `--alias`.
-- `ropero test` usa `--model`, `--group`, `--test`, `--dimension` y `--all`.
-- Ignis guarda y busca cada descarga bajo `ARTIFACTS_DIR/<nombre-interno>`;
-  Codex valida las tablas TOML opcionales sin accesos que puedan provocar panic.
-- `models` consulta `strata models list --installed --output json` para mostrar
-  perfiles Strata completos como disponibles.
-- `info`, `config`, la ayuda y el informe Markdown de `test` respetan el idioma
-  guardado. El informe enlaza las trazas y métricas de los subagentes.
-- Los alias públicos se aplican donde el engine lo admite, incluidos perfiles
-  Strata mediante una copia privada y MLX-Serve en sus ajustes globales por
-  ruta; los motores parciales se identifican como tales en `models --all`.
-- `connect --agent codex` ya no entra en pánico si `config.toml` no contiene
-  `[model_providers]`; crea la tabla con accesos validados.
-
-### English
-
-- `models add`, `info`, and `command` are implemented; `models` replaces `list`.
-- `config --lang ES|EN` stores the language preference. FLM uses the canonical
-  `fastflowllm` id, and Ignis models separate their internal name and public
-  alias.
+- `models add`, `info`, and `command` are complete; `models` replaces `list`.
+- `config --lang ES|EN` saves the language preference. FLM uses the canonical
+  `fastflowllm` id, and Ignis models separate their internal name from their
+  public alias.
 - `connect` uses `--remove`; `--list` reports only implemented integrations.
 - `connect` prints manual setup instructions for TRAE and TRAE CN. OpenCode
   preserves comments and trailing commas when editing `opencode.jsonc`, and
-  leaves invalid JSONC files untouched.
-- Model startup accepts levels, flags, and options declared by each TOML.
+  leaves the file untouched if the JSONC is invalid.
+- Model startup accepts the levels, flags, and options declared in each TOML.
 - Codex stores the provider and per-engine profile in `CODEX_HOME` (or
   `~/.codex`) and rejects engines without documented Responses API support.
   llama.cpp receives the public alias through `--alias`.
 - `ropero test` uses `--model`, `--group`, `--test`, `--dimension`, and `--all`.
-- Ignis stores and checks each download under `ARTIFACTS_DIR/<internal-name>`;
+- Ignis stores and looks up each download under `ARTIFACTS_DIR/<internal-name>`;
   Codex validates optional TOML tables without panic-prone indexing.
-- `models` queries `strata models list --installed --output json` and marks
+- `models` queries `strata models list --installed --output json` and shows
   complete Strata profiles as available.
 - `info`, `config`, help, and the `test` Markdown report follow the saved
-  language. The report links each subagent's trace and includes its metrics.
+  language. The report links subagent traces and metrics.
 - Public aliases are applied where supported, including Strata through a
-  private profile copy and MLX-Serve's global per-path settings; partial
-  engines are marked as such in `models --all`.
-- `connect --agent codex` no longer panics when `config.toml` lacks
+  private copy of its profile and MLX-Serve through its per-path global
+  settings; partial engines are identified as such in `models --all`.
+- `connect --agent codex` no longer panics if `config.toml` lacks
   `[model_providers]`; it creates the table and validates its structure.
 
-## En trabajo — instalación de motores
-- `ropero install engines` ejecuta recetas declaradas `[install]` para compilar
-  `llama-server` upstream y el fallback público de `turbo-llama` antes de crear
-  el enlace. La receta turbo no aplica los parches privados turboquant; otros
-  motores sin receta siguen requiriendo su runtime/binario.
+### Engine installation work
 
-Este fichero registra los cambios del workspace Rust de **ropero**. El
-historial de cambios de la v1 no está incluido en este checkout.
+- `ropero install engines` runs declared `[install]` recipes to build upstream
+  `llama-server` and the public `turbo-llama` fallback before creating the
+  symlink. The Turbo recipe does not apply the private turboquant patches;
+  other engines without recipes still require their runtime or binary.
 
-El formato sigue [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el
-versionado sigue [SemVer](https://semver.org/lang/es/).
+This file records changes to **ropero v2**, the Rust reimplementation being
+built in `crates/`. The v1 changelog is not included in this checkout.
 
-## [Sin publicar] (working tree)
+The format follows [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) and
+versioning follows [SemVer](https://semver.org/lang/es/).
 
-Cambios de contrato/operación documentados para el árbol de trabajo actual:
+## [Unreleased] (working tree)
 
-- **Configuración y catálogo (ADR-008):** catálogo externo por defecto en
-  `<config>/models/<motor>/` con manifiestos en `<config>/engines/`; bootstrap
-  idempotente de `<config>/` y `config.toml` sin sobrescribir; precedencia
-  `entorno > config.toml > defecto` para `models_dir`, `gguf_dir`,
-  `safetensors_dir`, `bin_dir`, `logs_dir` (por defecto `<config>/logs`).
-  Overrides `ROPERO_MODELS_DIR`/`ROPERO_ROOT` preservados; TOML/manifiestos del
-  repositorio para desarrollo/pruebas sin autodiscovery en uso normal.
-- **Superficie CLI:** `ropero config` muestra rutas/origen; `ropero doctor`
-  incluye estado de configuración; `ropero template` sugiere plantilla sin
-  escribirla. Estos comandos no modifican artefactos de modelos (puede ocurrir
-  bootstrap idempotente de configuración).
-- **FLM delegado (ADR-010):** tag primario `[model].path` o `--decision`;
-  instalación/eliminación/listado delegados al manifiesto cuando aplica;
-  `flm serve <tag>` con defaults y `--ctx-len` si falta; estado por
-  `flm list --json` de **mejor esfuerzo** (sin afirmar verificación end-to-end).
-- **Ejecución y logs (ADR-010):** `--background` desacoplado sin salida terminal
-  ni `ROPERO_PORT`, logs en `logs_dir`; foreground con salida en vivo
-  (colorizado semántico común más patrones característicos por motor) y
-  log de modelo; registro de uso append-only en `logs_dir/usage.log` (sin API
-  keys ni flags/argumentos).
-- **Eliminación de modelos (ADR-010):** `ropero <alias> remove` con plan de
-  artefactos derivables, confirmación interactiva en TTY, sin borrar
-  compartidos/no declarados, retirada del directorio de modelo en `GGUF_DIR`
-  sólo si queda vacío, eliminación del checkpoint safetensors exacto declarado y
-  eliminación delegada de todos los tags FLM declarados que se instalaron.
-- **Migración:** copiar TOML heredados a `~/.config/ropero/models/<motor>/` y
-  manifiestos a `~/.config/ropero/engines/` (o rutas configuradas).
+Contract and operational changes documented for the current working tree:
+
+- **Configuration and catalog (ADR-008):** external catalog by default under
+  `<config>/models/<engine>/` with manifests under `<config>/engines/`; an
+  idempotent bootstrap of `<config>/` and `config.toml` without overwriting;
+  precedence `environment > config.toml > default` for `models_dir`, `gguf_dir`,
+  `safetensors_dir`, `bin_dir`, and `logs_dir` (default `<config>/logs`).
+  `ROPERO_MODELS_DIR`/`ROPERO_ROOT` overrides are preserved; repository
+  TOMLs/manifests are for development and tests and are not auto-discovered in
+  normal use.
+- **CLI surface:** `ropero config` shows paths and their source; `ropero doctor`
+  includes configuration status; `ropero template` suggests a template without
+  writing it. These commands do not modify model artifacts (an idempotent
+  configuration bootstrap may occur).
+- **Delegated FLM (ADR-010):** primary tag from `[model].path` or `--decision`;
+  installation/removal/listing delegated to the manifest where applicable;
+  `flm serve <tag>` with defaults and `--ctx-len` when missing; status from
+  `flm list --json` is **best effort** (without claiming end-to-end verification).
+- **Execution and logs (ADR-010):** detached `--background` without terminal
+  output or `ROPERO_PORT`, logs under `logs_dir`; foreground mode with live
+  output (common semantic coloring plus engine-specific patterns) and a model
+  log; append-only usage records in `logs_dir/usage.log` (without API keys or
+  flags/arguments).
+- **Model removal (ADR-010):** `ropero <alias> remove` plans derived artifacts,
+  requires interactive confirmation in a TTY, does not delete shared or
+  undeclared files, removes a model directory under `GGUF_DIR` only if empty,
+  removes only the declared safetensors checkpoint, and delegates removal of
+  all declared FLM tags that were installed.
+- **Migration:** copy legacy TOMLs to `~/.config/ropero/models/<engine>/` and
+  manifests to `~/.config/ropero/engines/` (or configured paths).
 
 ## [0.1.0] - 2026-11-15
 
-Es la versión del workspace (`Cargo.toml`). Reúne lo publicado de la v2 hasta
-la forja, en orden de fase: **F0** cimientos, **F1** modelo de datos, **F2**
-motores, **F3 y F4** runtime y estado, **F5** catálogo y descargas, **F6**
-forja (`ropero gguffer`).
+This is the workspace version (`Cargo.toml`). It gathers the v2 work published
+through the forge, ordered by phase: **F0** foundations, **F1** data model,
+**F2** engines, **F3 and F4** runtime and state, **F5** catalog and downloads,
+**F6** forge (`ropero gguffer`).
 
-### Añadido
+### Added
 
-**F0 · Cimientos**
+**F0 · Foundations**
 
-- **Workspace Rust de seis crates** (doc B T-01: `ropero-core`, `ropero-runtime`,
-  `ropero-download`, `ropero-forge`, `ropero-server` y `ropero-cli`), con Rust
-  1.100.0 fijado en `rust-toolchain.toml`, edition 2024, `Cargo.lock` y perfil
-  release (`lto = thin`, `codegen-units = 1`, símbolos cortados,
-  `panic = abort`). El trabajo vivía en el disco sin versionar, a un fallo de
-  persistencia de distancia: versionarlo es lo que permite evolucionarlo y
-  verificarlo de forma continua.
-- **Toolchain, configuración y CI reproducibles**: `rustfmt.toml`,
-  `clippy.toml`, `deny.toml` y un workflow para Linux y macOS con `fmt`,
-  `clippy --all-targets --all-features -D warnings`, `cargo-deny`, `test` y
-  `nextest` con `--all-features`, y cobertura con `cargo llvm-cov --lcov`.
-  Fijan las versiones y hacen comparables los cambios que siguen la
-  especificación de construcción.
-- **Test de arquitectura** (`R-ARQ-1`, puerta T-02): `ropero-core` no depende
-  de E/S prohibidas ni de crates superiores, el grafo de crates no admite
-  ciclos y `ropero-cli` es un dispatcher por debajo de un umbral de líneas. El
-  umbral se ha recalibrado tres veces **con medición, no con estimación**:
+- **Six-crate Rust workspace** (doc B T-01: `ropero-core`, `ropero-runtime`,
+  `ropero-download`, `ropero-forge`, `ropero-server`, and `ropero-cli`), with
+  Rust 1.100.0 pinned in `rust-toolchain.toml`, edition 2024, `Cargo.lock`, and
+  a release profile (`lto = thin`, `codegen-units = 1`, stripped symbols,
+  `panic = abort`). The work had lived on disk without version control, one
+  persistence failure away from being lost: versioning it makes continued
+  development and verification possible.
+- **Reproducible toolchain, configuration, and CI:** `rustfmt.toml`,
+  `clippy.toml`, `deny.toml`, and a Linux/macOS workflow with `fmt`,
+  `clippy --all-targets --all-features -D warnings`, `cargo-deny`, `test`,
+  `nextest` with `--all-features`, and coverage with `cargo llvm-cov --lcov`.
+  These pin versions and make changes following the build specification
+  comparable.
+- **Architecture test** (`R-ARQ-1`, T-02 gate): `ropero-core` does not depend on
+  forbidden I/O or higher-level crates, the crate graph has no cycles, and
+  `ropero-cli` remains a dispatcher under a line-count threshold. The threshold
+  has been recalibrated three times **by measurement, not estimation**:
   400 → 800 ([ADR-005](docs/adr/ADR-005-umbral-de-lineas-del-cli.md)),
   800 → 1100
-  ([ADR-006](docs/adr/ADR-006-umbral-de-lineas-del-cli-tras-install.md)) y
+  ([ADR-006](docs/adr/ADR-006-umbral-de-lineas-del-cli-tras-install.md)), and
   1100 → 1200
-  ([ADR-007](docs/adr/ADR-007-umbral-de-lineas-del-cli-tras-gguffer.md)). Lo
-  que se mide sigue siendo lo mismo: que la lógica no se instale en la CLI.
-- **Los tres ADR de F0, aceptados**: [ADR-001](docs/adr/ADR-001-por-que-rust.md)
-  decide usar Rust; [ADR-002](docs/adr/ADR-002-extraccion-vs-reescritura.md)
-  decide extraer por capas y mantener la convivencia v1/v2 hasta F9; y
-  [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md) decide que
-  `ropero-code/` es **referencia, no dependencia**, y que el catálogo de la v2
-  es nuevo e independiente. La segunda evita un salto único que rompería
-  contratos y estado en disco; la tercera evita que la v2 herede la forma de
-  la v1 y sus datos defectuosos.
+  ([ADR-007](docs/adr/ADR-007-umbral-de-lineas-del-cli-tras-gguffer.md)). The
+  measurement remains the same: ensuring logic does not migrate into the CLI.
+- **The three F0 ADRs, accepted:** [ADR-001](docs/adr/ADR-001-por-que-rust.md)
+  chooses Rust; [ADR-002](docs/adr/ADR-002-extraccion-vs-reescritura.md) chooses
+  a layered extraction and keeps v1 and v2 side by side until F9; and
+  [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md) makes
+  `ropero-code/` **a reference, not a dependency**, and gives v2 a new,
+  independent catalog. The second avoids a single jump that would break
+  contracts and on-disk state; the third avoids inheriting v1's structure and
+  defective data.
 
-**F1 · Modelo de datos**
+**F1 · Data model**
 
-- **Modelo de datos tipado y validador del catálogo** con las **15 reglas** del
-  contrato (doc B §4.1.1) y errores `ruta:línea`. La validación pura comprueba
-  el nombre y su unicidad, que el nombre case con el fichero, el formato, los
-  ficheros, la descarga, los placeholders, los niveles, los alias, las
-  opciones, la RAM mínima, las claves desconocidas y que `context`, cuando
-  está declarado, sea múltiplo de 32. Los errores de parseo de clave
-  desconocida y motor desconocido se clasifican como `UnknownKey` y
-  `EngineInvalid`, y el fallo de sintaxis es `ParseInvalid`, que no es una
-  regla: así la regla que se reporta es la que de verdad se rompió. Los tipos
-  del TOML cierran `R-DATA-1…16` y el validador `R-DATA-17…23` (doc B T-06 y
-  T-07): un TOML inválido no pasa sin explicar dónde falla.
-- **Catálogo con unicidad y alias**, descubrimiento de modelos activos y
-  retirados, y resolución de nombres y alias. Un directorio de motor
-  desconocido se informa como error del catálogo, pero no aborta el escaneo
-  del resto de modelos.
-- **Catálogo propio de la v2 en `models/`** (doc B §2.4): 46 TOML versionados
-  (17 activos + 28 retirados en `fired/`, cada uno bajo el directorio de su
-  motor, + `_template.toml`), generados desde los TOML de la v1 como **fuente
-  de referencia, en modo lectura**. Dos correcciones: `context = 133072` →
-  `131072` en `mlx/metalnemotron.toml` y `mlx/metalqwen.toml` (el valor
-  estándar 2¹⁷ = 128 K, múltiplo de 32; 133072 era un typo), y el renombrado
-  de `tensorrt/groot.toml` a `tensorrt/groot-trt.toml` para que el fichero
-  coincida con `name = "groot-trt"` (el nombre **no** se toca: los nombres son
-  únicos globales y `llama/groot.toml` ya ocupa `groot`). Todo lo demás es
-  idéntico a la fuente, y `ropero validate` sobre el catálogo nuevo da
-  `OK: 45 modelo(s) validados` (exit 0).
-- **`ModelSpec` y sus rutas**: el formato declara dónde vive el artefacto
-  (R-MOD-6) — `gguf` es `$GGUF_DIR/<modelo>/<[files].gguf>`,
-  `safetensors` es `$SAFETENSORS_DIR/<[model].path>`, y en `q4nx`
-  `[model].path` es un tag de FLM y en `strata` es `<familia>/<paquete>`. Un
-  único resolutor calcula las rutas del runtime, de la descarga y del listado:
-  así un modelo no puede vivir en un sitio y buscarse en otro.
-- **Montaje del argv** en el orden `base → level → flags → options`, con
-  placeholders, comprobación de `requires`, alias de nivel y `replace`.
-  `replace` sustituye la pareja del base en su posición para no duplicar una
-  opción y dejar que el motor gane por casualidad. Cubre `R-DATA-16` y
-  `R-DATA-17`, y `R-DATA-13` queda ligado al contrato de motor.
-- **Golden master del argv** congelado con la salida de la v1 para cuatro
-  modelos reales. Los TOML de referencia están congelados en
-  `crates/ropero-core/tests/golden/models/`, de modo que la prueba no depende
-  del catálogo real. Antes de reimplementar una función se fija su
-  comportamiento observable, para detectar regresiones durante la extracción.
-- **Identificadores de motor y alias legacy**: los ids canónicos y los alias
-  heredados se canonicalizan con aviso, nunca en silencio. Cierra `R-ENG-1` en
-  el alcance del enum `EngineId`.
+- **Typed data model and catalog validator** with the contract's **15 rules**
+  (doc B §4.1.1) and `path:line` errors. Pure validation checks the name and its
+  uniqueness, that the name matches the file, the format, files, downloads,
+  placeholders, levels, aliases, options, minimum RAM, unknown keys, and that
+  `context`, when declared, is a multiple of 32. Unknown-key parse errors and
+  unknown engines are classified as `UnknownKey` and `EngineInvalid`; syntax
+  failure is `ParseInvalid`, which is not a rule. This ensures the reported
+  rule identifies the actual failure. TOML types close `R-DATA-1…16` and the
+  validator closes `R-DATA-17…23` (doc B T-06 and T-07): invalid TOML does not
+  pass without explaining where it failed.
+- **Catalog with uniqueness and aliases**, discovery of active and retired
+  models, and name and alias resolution. An unknown engine directory is
+  reported as a catalog error but does not abort scanning the remaining models.
+- **The v2 catalog under `models/`** (doc B §2.4): 46 versioned TOMLs (17
+  active + 28 retired under `fired/`, each under its engine directory, plus
+  `_template.toml`), generated from v1 TOMLs as a **read-only reference**.
+  Two corrections: `context = 133072` → `131072` in
+  `mlx/metalnemotron.toml` and `mlx/metalqwen.toml` (the standard 2¹⁷ = 128 K,
+  a multiple of 32; 133072 was a typo), and `tensorrt/groot.toml` renamed to
+  `tensorrt/groot-trt.toml` so the filename matches `name = "groot-trt"` (the
+  name itself is **not** changed: names are globally unique and
+  `llama/groot.toml` already uses `groot`). Everything else is identical to
+  the source, and `ropero validate` on the new catalog reports
+  `OK: 45 model(s) validated` (exit 0).
+- **`ModelSpec` and its paths**: the format declares where an artifact lives
+  (R-MOD-6) — `gguf` is `$GGUF_DIR/<model>/<[files].gguf>`, `safetensors` is
+  `$SAFETENSORS_DIR/<[model].path>`, and for `q4nx`, `[model].path` is an FLM
+  tag; for `strata`, it is `<family>/<package>`. A single resolver calculates
+  paths for runtime, download, and listing so a model cannot live in one place
+  and be searched for in another.
+- **Argument vector assembly** in the order `base → level → flags → options`,
+  with placeholders, `requires` checks, level aliases, and `replace`. `replace`
+  substitutes the pair in the base at its original position so an option is not
+  duplicated and engine precedence is not left to chance. Covers `R-DATA-16`
+  and `R-DATA-17`; `R-DATA-13` remains tied to the engine contract.
+- **Golden-master argument vector** frozen from v1 output for four real models.
+  Reference TOMLs are frozen under `crates/ropero-core/tests/golden/models/`,
+  so tests do not depend on the live catalog. Observable behavior is fixed
+  before reimplementing a function to catch regressions during extraction.
+- **Engine identifiers and legacy aliases:** canonical ids and inherited
+  aliases are canonicalized with a notice, never silently. Closes `R-ENG-1`
+  within the `EngineId` enum.
 
-**F2 · Motores**
+**F2 · Engines**
 
-- **Ocho manifiestos de motor** (`engines/*.toml`), uno por motor, al lado del
-  catálogo: id, etiqueta, color, descripción, formatos, madurez, rango de
-  puertos, dependencias (lo que chequea `ropero doctor`), reglas `compat` de
-  SO y hardware, y `[detect]` con binario y rutas de instalación. Los motores
-  pasan a ser **datos**: la leyenda, los puertos y las dependencias tienen un
-  solo sitio, y un campo desconocido se rechaza nombrando el campo culpable.
-  `maturity` distingue los seis motores arrancados de verdad en la máquina del
-  dueño (`proven`) de los dos integrados y nunca arrancados (`vllm`, `strata`),
-  y el criterio está escrito en el TOML de cada motor.
-- **La nomenclatura canónica de motores**
-  ([ADR-004](docs/adr/ADR-004-nomenclatura-de-motores.md)): `llama-server` es
-  el repo **oficial** de llama.cpp y `turbo-llama` es el **fork privado** del
-  dueño. El cambio **invierte** los dos nombres de la v1, donde `llama-server`
-  era el fork; los alias legacy (`llama-server-official`, `llama-official`,
-  `llama`, `turbo`) siguen entrando, con aviso. El catálogo migra con el
-  renombrado: `models/llama/` → `models/turbo-llama/` y `models/llama-official/`
-  → `models/llama-server/`; los directorios legacy se siguen mapeando, para que
-  un catálogo viejo se lea igual.
-- **Evaluación de compatibilidad que acumula todas las razones**: las reglas de
-  un manifiesto son **alternativas** (la máquina vale si cumple al menos una) y
-  dentro de una regla las condiciones son **acumulativas**. El usuario que está
-  en Linux y quiere TensorRT-LLM necesita saber que le faltan *dos* cosas (una
-  NVIDIA y 32 GB de RAM), no una sola. La captura de la máquina
-  entra por parámetro —`ropero-core` sigue sin leer disco— y un dato que no se
-  pudo leer se trata como ausente: nunca tumba el escaneo.
-- **Puertos por motor, sin solapes**: `llama-server` 8100-8199, `turbo-llama`
-  8200-8299, `mlx-serve` 8300-8399, `fastflowlm` 8400-8499, `tensorrt-llm`
-  8500-8599, `vllm` 8600-8699, `airllm` 8700-8799 y `strata` 9900-9999. Varios
-  motores pueden servir a la vez sin pisarse, y cada arranque comprueba que
-  nadie escuche en el puerto que va a usar.
+- **Eight engine manifests** (`engines/*.toml`), one per engine alongside the
+  catalog: id, label, color, description, formats, maturity, port range,
+  dependencies (what `ropero doctor` checks), OS and hardware `compat` rules,
+  and `[detect]` with binary and installation paths. Engines become **data**:
+  the legend, ports, and dependencies each have one source of truth, and an
+  unknown field is rejected with the offending field named. `maturity`
+  distinguishes the six engines actually started on the owner's machine
+  (`proven`) from the two integrated but never started (`vllm`, `strata`), and
+  the criterion is recorded in each engine TOML.
+- **Canonical engine names**
+  ([ADR-004](docs/adr/ADR-004-nomenclatura-de-motores.md)):
+  `llama-server` is the **official** llama.cpp repository and `turbo-llama` is
+  the owner's **private fork**. The change **reverses** the two v1 names, where
+  `llama-server` referred to the fork; legacy aliases (`llama-server-official`,
+  `llama-official`, `llama`, `turbo`) remain accepted with a notice. The catalog
+  is migrated by renaming `models/llama/` → `models/turbo-llama/` and
+  `models/llama-official/` → `models/llama-server/`; legacy directories keep
+  mapping so an old catalog is read the same way.
+- **Compatibility evaluation accumulates all reasons:** manifest rules are
+  **alternatives** (the machine qualifies if it satisfies at least one), while
+  conditions within a rule are **cumulative**. A Linux user who wants
+  TensorRT-LLM needs to know that two things are missing (an NVIDIA GPU and
+  32 GB RAM), not just one. Machine information is passed as a parameter —
+  `ropero-core` still does not read from disk — and data that could not be read
+  is treated as absent; it never brings down the scan.
+- **Non-overlapping per-engine ports:** `llama-server` 8100-8199,
+  `turbo-llama` 8200-8299, `mlx-serve` 8300-8399, `fastflowlm` 8400-8499,
+  `tensorrt-llm` 8500-8599, `vllm` 8600-8699, `airllm` 8700-8799, and `strata`
+  9900-9999. Several engines can serve at once without colliding, and each
+  launch checks that no process is listening on the port it will use.
 
-**F3 y F4 · Runtime y estado**
+**F3 and F4 · Runtime and state**
 
-- **Preflight del arranque y elección de puerto, puros**: el preflight (motor
-  instalado, modelo instalado, VRAM/RAM) acumula **todas** las razones y cada
-  razón dice qué hacer; `pick_port` da el menor puerto libre del rango del
-  motor, y un rango invertido se reporta como error en vez de arreglarse
-  invirtiendo los extremos. Son decisiones, no lecturas: se prueban sin
-  máquina.
-- **Arranque de modelos con preflight, sonda, sello y estado en disco** (doc B
-  §3.3): preflight, `--force`, puerto, `spawn`, sonda y estado. El **sello** es
-  la identidad completa (`PID` + `start_time` + digest del binario), que es lo
-  que impide matar procesos ajenos (P-3). El estado se escribe de forma atómica
-  (tmp + rename) y conserva las claves que no vienen; las claves nuevas son
-  adiciones compatibles: un lector de la v1 sigue entendiendo el fichero. El
-  motor se lanza en su propio grupo de procesos, así que su salida va al log:
-  sin eso, un motor que aborta se queda sin explicar por qué.
-- **Sonda de readiness en tres niveles**: TCP (el puerto acepta conexiones) →
-  HTTP (el endpoint de salud responde 200) → inferencia (`GET /v1/models`). Se
-  prueban en orden y el primero que pasa es suficiente: esperar a la inferencia
-  en un modelo que carga rápido es tirar el tiempo del usuario, y un puerto
-  abierto antes de tiempo es mentir. La prueba es la misma de la v1, con la
-  clave de API, y dice **qué** modelo está sirviendo.
-- **Primer plano con Ctrl-C propagado**: ropero espera al motor, coge el SIGINT
-  y se lo manda al grupo; si no, el Ctrl-C deja el motor sirviendo y ropero
-  muerto. Sale con **130** (doc CLI v2 §3). El puerto se anuncia con
-  `ROPERO_PORT=<n>` en cuanto el motor está listo: es la última línea de stdout
-  y es lo que leen los scripts.
-- **Parada por PID verificado, nunca por nombre** (R-EST-8): hay estado, el
-  proceso sigue vivo, el `start_time` coincide, el digest coincide; a partir de
-  ahí, SIGTERM al grupo, espera y SIGKILL. No mata por nombre de proceso (un
-  `pkill -f` mataría los motores de otro proyecto), no mata un PID reciclado y
-  no toca un estado sin `start_time`. Parar un modelo respeta a los demás
-  modelos que comparten motor, porque se mata por PID.
-- **Doce comandos y dos invocaciones**: `install`, `stop`, `gguffer`,
+- **Pure startup preflight and port selection:** preflight (engine installed,
+  model installed, VRAM/RAM) accumulates **all** reasons and each reason says
+  what to do; `pick_port` returns the lowest free port in the engine's range,
+  and an inverted range is reported as an error rather than silently fixing
+  its endpoints. These are decisions, not reads, so they can be tested without
+  a machine.
+- **Model startup with preflight, probe, identity seal, and on-disk state**
+  (doc B §3.3): preflight, `--force`, port, `spawn`, probe, and state. The
+  **identity seal** is the complete identity (`PID` + `start_time` + binary
+  digest), which prevents killing unrelated processes (P-3). State is written
+  atomically (tmp + rename) and retains keys that were not supplied; new keys
+  are compatible additions, so a v1 reader still understands the file. The
+  engine is launched in its own process group so its output goes to the log;
+  without this, an engine that aborts would not explain why.
+- **Three-level readiness probe:** TCP (port accepts connections) → HTTP (health
+  endpoint returns 200) → inference (`GET /v1/models`). They are tried in order
+  and the first passing check is sufficient: waiting for inference on a model
+  that loads quickly wastes the user's time, while an early open port is a
+  false positive. This is the same test as v1, with the API key, and it reports
+  **which** model is serving.
+- **Foreground mode propagates Ctrl-C:** Ropero waits for the engine, catches
+  SIGINT, and sends it to the process group; otherwise Ctrl-C would leave the
+  engine serving and Ropero dead. It exits with **130** (doc CLI v2 §3). The
+  port is announced as `ROPERO_PORT=<n>` as soon as the engine is ready: it is
+  the last stdout line and the value read by scripts.
+- **Stop by verified PID, never by process name** (R-EST-8): state exists, the
+  process is alive, `start_time` matches, and the digest matches; then SIGTERM
+  is sent to the group, followed by a wait and SIGKILL. It never kills by
+  process name (a `pkill -f` would kill engines from another project), a
+  recycled PID, or state lacking `start_time`. Stopping one model respects
+  other models sharing the engine because it kills by PID.
+- **Twelve commands and two invocations:** `install`, `stop`, `gguffer`,
   `status`, `doctor`, `list`, `engines`, `template`, `validate`, `args`,
-  `levels` y `path`, más `ropero` a secas y `ropero <modelo>` (seis flags:
-  `--force`, `--cpu`, `--port`, `--api-key`, `--no-api-key`, `--ctx`). El
-  contrato vive en el dominio (`ropero_core::surface`) y la CLI lo traduce: un
-  comando que aún no se ejecuta **se parsea** y dice qué falta (exit 1), y un
-  flag inválido sigue siendo error de uso (2). `build.rs` fija versión, fecha de
-  compilación (con `SOURCE_DATE_EPOCH`) y autor.
-- **Resumen, `list` con colores, `status` y `doctor`**: `ropero` a secas muestra
-  nombre, build, autor, motores y modelos (disponibles e instalados) y la
-  sugerencia de `--help`; `ropero list` lista **sólo** los modelos disponibles
-  (motor instalado **y** modelo descargado) agrupados por motor, con la leyenda
-  de colores en ANSI de 256 colores, y `--all` añade los no disponibles,
-  marcados; un motor no instalado sale **plegado**, con su conteo y la razón.
-  `ropero status` da la vista de la máquina (CPU, dGPU, iGPU, RAM/SWAP, con el
-  zram enseñado aparte para que no se confunda), y lo que no se puede leer sale
-  «no disponible»: un `status` que miente es peor que un `status` con huecos.
-  `ropero doctor` comprueba primero las dependencias del propio ropero y
-  después las de **cada** motor, diciendo para cada una si se cumple y, si no,
-  qué hacer.
+  `levels`, and `path`, plus bare `ropero` and `ropero <model>` (six flags:
+  `--force`, `--cpu`, `--port`, `--api-key`, `--no-api-key`, `--ctx`). The
+  contract lives in the domain (`ropero_core::surface`) and the CLI translates
+  it: a command that cannot yet run is **parsed** and says what is missing
+  (exit 1), while an invalid flag remains a usage error (2). `build.rs` pins
+  the version, build date (with `SOURCE_DATE_EPOCH`), and author.
+- **Summary, colorized `list`, `status`, and `doctor`:** bare `ropero` shows
+  name, build, author, engines and models (available and installed), and the
+  `--help` suggestion; `ropero list` lists **only** available models (engine
+  installed **and** model downloaded), grouped by engine, with a 256-color ANSI
+  legend; `--all` adds unavailable entries and marks them; an uninstalled
+  engine is **folded**, with its count and reason. `ropero status` shows the
+  machine (CPU, dGPU, iGPU, RAM/SWAP, with zram shown separately to avoid
+  confusion); unreadable values appear as “unavailable”: a misleading status is
+  worse than one with gaps. `ropero doctor` checks Ropero's own dependencies
+  first and then those of **each** engine, reporting whether each is met and,
+  if not, what to do.
 
-**F5 · Catálogo y descargas**
+**F5 · Catalog and downloads**
 
-- **`ropero install engines [<lista>]` y `ropero install models [<lista>]`**:
-  con lista, directo (modo desatendido); sin lista, menú, y el de modelos
-  ofrece **sólo los modelos de los motores instalados**. Sin terminal el menú es
-  error de uso (2): un menú que se traga un EOF acabaría eligiendo por su
-  cuenta. La instalación de un motor es **sólo el enlace** (R-INST-1) a su
-  binario, resuelto con la precedencia **PATH → `$BIN_DIR` → rutas largas**
-  (R-INST-24) y enlazado con su `basename` (R-INST-25): ni copia, ni descarga,
-  ni compila, y el motor que se usa es el del `PATH`, no el recién compilado. Un
-  motor ya enlazado se dice y no se toca, y un fichero real en el destino tampoco
-  se pisa.
-- **El contrato de `--prio`** (doc B §4.10.7), entero: `--prio=download|build`
-  puede ser **global** (antes del primer modelo) o **por modelo** (se aplica al
-  último modelo que lo precede, y su ámbito termina en el siguiente modelo), con
-  **precedencia del por modelo**; se **ignora** si el modelo no tiene ese camino
-  —y el aviso **no** aborta los demás modelos—, y se **pregunta al usuario**
-  cuando el modelo declara las dos vías y no hay `--prio`. Un valor inválido es
-  error de uso **con el valor recibido íntegro**, y `--prio` en
-  `install engines` es error de uso: sólo vale para `install models`. Es dominio
-  puro, así que el contrato entero se prueba con entradas.
-- **La descarga real con `hf` según la secuencia exacta de R-MOD-16**: el plan
-  puro calcula destino, repo, fichero, tamaño informativo, excludes,
-  auxiliares y los argumentos exactos de `hf`; la ejecución sigue el doc (final
-  presente y no vacío → «ya descargado»; fichero con el nombre del repo → `mv`;
-  **`hf` antes de preguntar**; confirmación con el tamaño y default **no**;
-  `hf download` al staging; búsqueda por `basename`; rename comparando rutas
-  absolutas; `rm -rf` del staging). El GGUF usa staging propio **dentro del
-  destino** (el `mv` es atómico y dos descargas con el mismo nombre de fichero no
-  se pisan) y el checkpoint **no** (R-MOD-17): `hf` es reanudable con
-  `--local-dir` fijo, y un staging mataría la reanudación de una descarga de
-  12 GB cortada a medias. La verificación es por contenido real (R-MOD-18) y se
-  **re-verifica aunque `hf` salga con 0** (R-MOD-19): la salida de `hf` no
-  prueba que el fichero esté. No hay verificación por hash, y el estado se
-  deduce del disco. Los auxiliares `use = run` se bajan al directorio del GGUF,
-  y la salida de `hf` va a stderr: stdout es para los datos.
-- **`ropero install models <lista>` instala de verdad la vía `download`**, y la
-  línea por modelo dice qué pasó (`ya descargado`, `descargado`, `omitido por el
-  usuario` o `error: …`), con códigos 0 (todo instalado u omitido), 1 (algo
-  falló) y 2 (uso). La vía `build` dice la verdad: fabricar el GGUF es la forja.
+- **`ropero install engines [<list>]` and `ropero install models [<list>]`:**
+  with a list, install directly (unattended mode); without one, show a menu, and
+  the model menu offers **only models from installed engines**. Without a
+  terminal, the menu is a usage error (2): a menu that consumes EOF could make
+  a selection by itself. Engine installation is **only a symlink** (R-INST-1)
+  to its binary, resolved with precedence **PATH → `$BIN_DIR` → long paths**
+  (R-INST-24) and linked using its `basename` (R-INST-25): no copying,
+  downloading, or compiling, and the engine used is the one on `PATH`, not a
+  newly compiled one. An already linked engine is reported and left alone, and
+  a real file at the destination is not overwritten.
+- **The `--prio` contract** (doc B §4.10.7), in full: `--prio=download|build`
+  may be **global** (before the first model) or **per model** (applies to the
+  last preceding model, and its scope ends at the next model), with **per-model
+  precedence**; it is **ignored** if that model lacks the selected path — and
+  the notice does **not** abort other models — and the user is **prompted** if
+  the model declares both paths and no `--prio` was supplied. An invalid value
+  is a usage error that includes the complete received value; `--prio` with
+  `install engines` is a usage error because it applies only to
+  `install models`. This is pure domain logic, so the entire contract is tested
+  with inputs.
+- **Real `hf` download following the exact R-MOD-16 sequence:** the pure plan
+  calculates destination, repository, file, informational size, excludes,
+  auxiliaries, and the exact `hf` arguments; execution follows the spec (final
+  file present and non-empty → “already downloaded”; file named after the repo
+  → `mv`; **ask before running `hf`**; confirmation shows size and defaults to
+  **no**; `hf download` to staging; search by `basename`; rename comparing
+  absolute paths; `rm -rf` staging). GGUF uses its own staging area **inside
+  the destination** (`mv` is atomic and two downloads with the same filename do
+  not collide); checkpoints do **not** (R-MOD-17): `hf` resumes using a fixed
+  `--local-dir`, and staging would destroy the resumability of a 12 GB download
+  interrupted halfway. Verification checks actual contents (R-MOD-18) and is
+  **repeated even if `hf` exits 0** (R-MOD-19): `hf` output does not prove the
+  file exists. There is no hash verification; state is inferred from disk.
+  Auxiliary files with `use = run` are downloaded into the GGUF directory, and
+  `hf` output goes to stderr so stdout remains available for data.
+- **`ropero install models <list>` really installs the `download` path**, and
+  each model's line says what happened (“already downloaded”, “downloaded”,
+  “skipped by user”, or “error: …”), with exit codes 0 (all installed or
+  skipped), 1 (something failed), and 2 (usage). The `build` path tells the
+  truth: producing the GGUF is the forge.
 
-**F6 · Forja**
+**F6 · Forge**
 
-- **`ropero gguffer`**, el último comando del contrato del CLI v2 (§11):
-  fabrica un GGUF desde un repo de HuggingFace, desde un directorio de pesos
-  locales o desde un GGUF que ya existe. Sus **diecisiete flags** —los quince de
-  la tabla del doc (§11.2) más `--gguf` y `--out-principal`, que vienen de
-  R-GGUF-3/4—, con `--quant` repetible y con coma, y la pareja
-  `--imatrix-repo`/`--imatrix-file` comprobada **por el dominio** y no por
-  `clap`, para que el mensaje sea el del doc, en español, y diga qué hacer.
-  `--list-quants` enseña los quants que publica el motor (nombre ↔
-  `file_type`) y los ya publicados de ese modelo; sin motor, la tabla de
-  reserva y qué hacer. `--diagnostico` enseña qué motor hay, dónde y qué falta,
-  y está exento de la regla del imatrix. La lógica no vive en la CLI: `gguffer`
-  son 77 líneas, 19 de ellas comentarios.
-- **Las seis fases de la tirada** (R-GGUF-15), en orden fijo: fuente →
-  conversión → cuantización → verificación → limpieza → procedencia. La
-  conversión produce el intermedio **sólo** si va a haber cuantización; una
-  colocación o una conversión de dtype plana sale directo al fichero final, sin
-  imatrix ni horas de CPU; el cuantizador corre con log aparte y su cola (20
-  líneas) va al error, y el error de imatrix se traduce a las dos salidas de la
-  cabeza MTP.
-- **Checkpoint por fase con la huella de la petición**
-  (`<work>/.ropero-forge.json`): la huella es la forma canónica de la petición
-  (fuente, quants en orden, intermedio, imatrix, `out`, `out-principal`,
-  `no-mtp`/`no-dflash`/`force`); los `--keep-*` no entran porque no cambian lo
-  que se produce. Una huella distinta descarta el checkpoint y **rehace** la
-  tirada, y `--force` lo descarta siempre; el informe lo dice. Lo que hace que
-  una tirada cara no se repita de gratis: si la cuantización falla a las tres de
-  la madrugada, la descarga (una hora, 60 GB) y la conversión **no** se repiten.
-  Un checkpoint sin huella o corrupto no reanuda.
-- **Política de limpieza** (R-GGUF-16/17/18) en **una función pura** que la fase
-  5 ejecuta: al fallar la cuantización **no se borra nada** —un fallo de
-  cuantización no debe costar 60 GB de descarga—; los pesos sólo se borran si la
-  verificación pasó, porque un GGUF corrupto con los safetensors vale más que 60
-  GB; el GGUF que trajo el usuario **jamás** se borra; el intermedio se borra
-  después de todos los quants, y si el F16 **es** el resultado, no se toca. El
-  checkpoint de la limpieza se escribe **antes** de los borrados, porque la
-  limpieza puede eliminar el work con el checkpoint dentro.
-- **La procedencia es obligatoria** (`<out>.fuente.json`, R-GGUF-19): de dónde
-  salió el modelo, el quant **por nombre** (no por número: es lo que va al model
-  card), la importance matrix con su fichero, su repo y su sha256, y la cabeza
-  MTP si quedó en un quant aparte. El JSON se escribe a mano, como el resto de la
-  forja, para que el crate no arrastre dependencias. **Un GGUF sin sidecar no
-  sale con éxito**: el camino «ya está» salía con 0 y sin procedencia, y ahora la
-  tirada falla con un error que dice qué hacer (borrar el GGUF y rehacer, o
-  rehacer con `--force`). «Un GGUF sin saber CÓMO se hizo no se puede publicar
-  con vergüenza.»
-- **El estado real de cada salida** (R-GGUF-20): **convertido** (lo generó el
-  conversor), **colocado** (el GGUF de origen ya estaba en ese quant y se copió
-  tal cual), **cuantizado** (pasó por el cuantizador) o **ya existía** (no se
-  rehizo). El sidecar y el informe los nombran, y el checkpoint los guarda para
-  que una tirada reanudada siga diciendo la verdad: lo que se cuenta es lo que
-  las fases hicieron, no lo que la tirada iba a hacer.
-- **La cabecera GGUF se lee con las constantes del formato**: magic `GGUF`,
-  versión `u32` (1, 2 o 3), `n_tensors` y `n_kv` (`u64`) y los pares
-  clave/valor con la tabla de tipos de `gguf.h`, con longitudes `u32` hasta la
-  v1 y `u64` desde la v2. La lectura es **acotada** (1 MiB) y devuelve `None` si
-  el fichero está truncado, si la versión no vale o si `general.file_type` no
-  está. La clase del GGUF sale de su cabecera, no de su nombre: un fichero que
-  dice BF16 puede contener un IQ2_M.
-- **La precondición del motor, antes de descargar** (R-GGUF-56, T-29): sin
-  `llama.cpp` no hay conversión, ni cuantización, ni unión de shards, y **no se
-  baja ni un byte**. El conversor (`convert_hf_to_gguf.py`) **no admite
-  sustituto**; el cuantizador y el unidor sí tienen alternativa en el `PATH`. El
-  motor se busca en `$LLAMA_DIR` (el fork) y `$LLAMA_OFFICIAL_DIR` (el
-  oficial), y el error nombra el motor que falta y la variable que lo apunta. La
-  viabilidad de la clase se comprueba con **sólo la metadata** del repo (un par
-  de KB, R-GGUF-8), antes de bajar los pesos: si el GGUF está en un quant que no
-  se puede re-cuantizar, el error sugiere el repo hermano sin cuantizar. Las
-  validaciones duras de la petición se comprueban **antes de nada** (R-GGUF-6):
-  bajan 60 GB tontos con la misma facilidad que un error de uso.
+- **`ropero gguffer`**, the last command in the v2 CLI contract (§11): builds a
+  GGUF from a Hugging Face repository, a local weights directory, or an
+  existing GGUF. Its **seventeen flags** — the fifteen in the doc's table
+  (§11.2) plus `--gguf` and `--out-principal`, from R-GGUF-3/4 — include
+  repeatable, comma-separated `--quant`. The `--imatrix-repo`/`--imatrix-file`
+  pair is checked **by the domain**, not by `clap`, so the message matches the
+  Spanish doc and says what to do. `--list-quants` shows the quants published
+  by the engine (name ↔ `file_type`) and those already published for that
+  model; without an engine it shows the fallback table and what to do.
+  `--diagnostico` shows which engine is present, where it is, and what is
+  missing, and is exempt from the imatrix rule. The logic does not live in the
+  CLI: `gguffer` is 77 lines, 19 of them comments.
+- **The six run phases** (R-GGUF-15), in fixed order: source → conversion →
+  quantization → verification → cleanup → provenance. Conversion produces an
+  intermediate only when quantization will follow; placement or flat dtype
+  conversion goes directly to the final file, without imatrix or hours of CPU.
+  The quantizer runs with a separate log and its last 20 lines go to stderr; an
+  imatrix error is translated for both MTP output heads.
+- **Per-phase checkpoint with a request fingerprint**
+  (`<work>/.ropero-forge.json`): the fingerprint is the canonical request
+  (source, quants in order, intermediate format, imatrix, `out`,
+  `out-principal`, `no-mtp`/`no-dflash`/`force`); `--keep-*` is excluded because
+  it does not change what is produced. A different fingerprint discards the
+  checkpoint and **restarts** the run, and `--force` always discards it; the
+  report says so. This prevents an expensive run from repeating for free: if
+  quantization fails at three in the morning, the download (an hour, 60 GB) and
+  conversion are **not** repeated. A checkpoint without a fingerprint or one
+  that is corrupt does not resume.
+- **Cleanup policy** (R-GGUF-16/17/18) is in **one pure function** executed by
+  phase 5: quantization failure **deletes nothing** — a quantization failure
+  must not cost 60 GB of downloads; weights are deleted only after successful
+  verification because a corrupt GGUF with safetensors is worth more than
+  60 GB; a user-supplied GGUF is **never** deleted; the intermediate is deleted
+  after all quants, but if F16 **is** the result it remains untouched. The
+  cleanup checkpoint is written **before** deletions because cleanup may
+  delete the work directory containing the checkpoint.
+- **Provenance is mandatory** (`<out>.fuente.json`, R-GGUF-19): model source,
+  quant **by name** (not number: that is what goes into the model card), the
+  importance matrix with its file, repository and sha256, and the MTP head if
+  it ended up in a separate quant. JSON is written by hand, like the rest of
+  the forge, so the crate gains no extra dependencies. **A GGUF without a
+  sidecar does not exit successfully**: the “already exists” path used to exit
+  0 without provenance; now the run fails with guidance (delete the GGUF and
+  rebuild, or rebuild with `--force`). “A GGUF whose build process is unknown
+  cannot be published with a clean conscience.”
+- **Actual state of each output** (R-GGUF-20): **converted** (created by the
+  converter), **placed** (the source GGUF already had that quant and was copied
+  as is), **quantized** (passed through the quantizer), or **already existed**
+  (not rebuilt). The sidecar and report name the state, and the checkpoint
+  stores it so a resumed run continues to tell the truth: it reports what the
+  phases did, not what the run planned to do.
+- **GGUF header read using format constants:** magic `GGUF`, `u32` version (1,
+  2, or 3), `n_tensors` and `n_kv` (`u64`), and key/value pairs using the type
+  table from `gguf.h`, with `u32` lengths through v1 and `u64` from v2 onward.
+  Reading is **bounded** (1 MiB) and returns `None` if the file is truncated,
+  the version is invalid, or `general.file_type` is absent. The GGUF class comes
+  from its header, not its filename: a file that says BF16 may contain IQ2_M.
+- **Engine prerequisite, before downloading** (R-GGUF-56, T-29): without
+  `llama.cpp` there is no conversion, quantization, or shard merge, and **not a
+  byte is downloaded**. The converter (`convert_hf_to_gguf.py`) has **no
+  substitute**; the quantizer and merger do have alternatives on `PATH`. The
+  engine is searched under `$LLAMA_DIR` (the fork) and `$LLAMA_OFFICIAL_DIR`
+  (official), and the error names the missing engine and the variable pointing
+  to it. Quantization class feasibility is checked with **repository metadata
+  only** (a few KB, R-GGUF-8), before downloading weights: if the GGUF is in a
+  quant that cannot be requantized, the error suggests the unquantized sibling
+  repository. Hard request validation is performed **before anything else**
+  (R-GGUF-6): downloading 60 GB by mistake is just as easy as a usage error.
 
-### Cambiado
+### Changed
 
-- **El dominio de `ropero-core` es puro**: recibe datos ya resueltos y no abre
-  ficheros, procesos ni red, y el escaneo del catálogo y la captura de la máquina
-  pasan a `ropero-runtime`, que es la capa de E/S. Separar la decisión de la E/S
-  permite probar el comportamiento sin red ni GPU, localizar mejor los fallos y
-  mantener la CLI como dispatcher.
-- **El parser pasa de escrito a mano a `clap` con el builder**, y el contrato de
-  los flags vive en el dominio (`ropero_core::surface`): añadir un flag es añadir
-  una línea al dominio y cero a la CLI. El `derive` no servía: obligaba a repetir
-  cada flag y no sabía expresar `ropero <modelo>` (un token que puede ser comando
-  o modelo) sin `external_subcommand`, que no parsea flags.
-- **La ayuda de la CLI enumera los comandos que existen** y está **en español**,
-  incluidas las cabeceras que `clap` pone en inglés. Se evita anunciar una
-  superficie todavía no implementada.
-- **`Limits::min_ram_gb` es `Option<f64>`**: el campo es opcional y sólo se
-  comprueba cuando está declarado; un valor declarado debe ser mayor que cero,
-  como en la v1.
-- **La resolución de placeholders de `[files]` usa un predicado único**: el
-  mismo reconoce las claves de `[files]` declaradas y las variables de entorno
-  disponibles.
-- **`ropero validate` valida también los manifiestos de motor** y el catálogo de
-  la v1 (`ropero-code/models`) **ya no se valida**: es sólo referencia, y la v2 se
-  desarrolla como si esa carpeta no existiera. Es la decisión de
-  [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md). Las tres fichas de la
-  v1 con `[download]` **y** `[build]` (`llama/nemotron.toml`,
-  `llama-official/nemotron-o.toml` y `llama/fired/granite.toml`) eran violaciones
-  por la regla que **se eliminó**: tener las dos vías es un estado válido del
-  TOML, y la elección de camino es contrato de `ropero install models`
-  (R-MOD-29), no del validador.
-- **La batería por defecto deja de depender de `ropero-code/`**: los TOML del
-  golden master están congelados en el crate, y las dos comparaciones contra la
-  v1 real quedan marcadas `#[ignore = …]` y se ejecutan de forma explícita
-  (`cargo test --locked --workspace -- --ignored`). El catálogo de la v2
-  (`crates/ropero-core/tests/catalogo_real.rs`) corre siempre, en la batería y
-  en CI.
-- **Se retira la API redundante y los tipos muertos** de `ropero-core`. Una única
-  API hace más difícil conservar contratos duplicados durante la extracción.
+- **`ropero-core` domain logic is pure:** it receives resolved data and does
+  not open files, processes, or network connections; catalog scanning and
+  machine capture move to `ropero-runtime`, the I/O layer. Separating decisions
+  from I/O makes behavior testable without network or GPU, makes failures
+  easier to locate, and keeps the CLI as a dispatcher.
+- **The parser moves from hand-written code to `clap`'s builder**, and the flag
+  contract lives in the domain (`ropero_core::surface`): adding a flag means
+  adding one line to the domain and none to the CLI. `derive` was unsuitable: it
+  required repeating each flag and could not express `ropero <model>` (a token
+  that may be either command or model) without `external_subcommand`, which
+  cannot parse flags.
+- **CLI help lists commands that exist** and is **in Spanish**, including the
+  headings that `clap` emits in English. It avoids advertising a surface that
+  is not yet implemented.
+- **`Limits::min_ram_gb` is `Option<f64>`**: the field is optional and is checked
+  only when declared; a declared value must be greater than zero, as in v1.
+- **`[files]` placeholder resolution uses one predicate:** it recognizes both
+  declared `[files]` keys and available environment variables.
+- **`ropero validate` also validates engine manifests**, and the v1 catalog
+  (`ropero-code/models`) is **no longer validated**: it is reference only, and
+  v2 is developed as if that directory did not exist. This is the decision in
+  [ADR-003](docs/adr/ADR-003-ropero-code-es-referencia.md). The three v1 files
+  with both `[download]` **and** `[build]` (`llama/nemotron.toml`,
+  `llama-official/nemotron-o.toml`, and `llama/fired/granite.toml`) violated a
+  rule that was **removed**: both paths are a valid TOML state, and path choice
+  is the contract of `ropero install models` (R-MOD-29), not the validator.
+- **The default test suite no longer depends on `ropero-code/`:** golden-master
+  TOMLs are frozen in the crate, and the two comparisons against real v1 are
+  marked `#[ignore = …]` and run explicitly
+  (`cargo test --locked --workspace -- --ignored`). The v2 catalog
+  (`crates/ropero-core/tests/catalogo_real.rs`) always runs in the test suite
+  and CI.
+- **The redundant API and dead types are removed** from `ropero-core`. One API
+  makes it harder to keep duplicate contracts during the extraction.
 
-### Corregido
+### Fixed
 
-- **El puerto se reintenta cuando el motor muere al hacer `bind`**: elegir el
-  menor puerto libre y arrancar es una **carrera** —dos procesos que usan el
-  mismo rango ven el mismo puerto y lo cogen—, y el que pierde el `bind` moría
-  con «address already in use», dejando arranque fallado, sin estado en disco y
-  puerto ocupado por el motor que ganó. Ahora se prueba con el siguiente puerto
-  libre del rango, con el bucle **acotado** por el tamaño del rango, y sin
-  reintento cuando el puerto lo pidió el usuario (`--port`); `--force` queda
-  **antes** del bucle, así que lo que se paró sigue parado.
-- **Un motor zombi ya no parece vivo**: `kill(pid, 0)` daba por vivo al motor que
-  murió al hacer `bind` y que el padre no había recogido, y el arranque no podía
-  distinguir «motor sano» de «motor muerto». `alive()` mira el estado que dice el
-  kernel, y el motor muerto se recoge en cuanto se ve muerto, para que el
-  reintento no deje zombis. La sonda pregunta al motor **primero** y sólo acepta
-  la respuesta si el motor sigue vivo (antes podía estar respondiendo otro motor
-  que cogió el puerto), y la parada usa la misma comprobación, así que un motor
-  zombi se da por parado en vez de esperar al deadline.
-- **El motor falso de los tests de la CLI ya no sobrevive como nieto**: su padre
-  era el ropero, así que al soltar el test sólo se mataba al ropero y el motor
-  se quedaba escuchando en el puerto del rango, donde el siguiente test —o la
-  siguiente vuelta de la suite— lo encontraba ocupado. Ahora el `Drop` para
-  también el motor, con la misma parada verificada (PID + `start_time`) que usa
-  `ropero stop`, para no matar un PID reciclado.
-- **Las rutas del catálogo están acotadas al directorio de modelos** (path
-  traversal): con `Path::join` una ruta absoluta absorbe el base y un `..` sube,
-  así que un `[download].file = "../../../secreto.txt"` hacía que el `mv` de
-  R-MOD-16.2 se llevara un fichero de fuera del directorio, y un
-  `[download.aux.*].name` fuera lo sobrescribía. Un único helper
-  (`ropero_download::ruta_dentro`) comprueba la ruta **antes** de unirla:
-  rechaza la raíz absoluta, rechaza los `..` y exige que la ruta normalizada
-  empiece por el base; se aplica a `download.file`, `download.name`, `aux.file`,
-  `aux.name` y `model.path`, y en la ejecución, antes de cada `join`, `rename` y
-  `create_dir_all`. El error es defecto del catálogo (exit 1) y nombra el campo
-  y el valor recibido.
-- **El GGUF se descarga donde el runtime lo busca** (R-MOD-6): el destino se
-  construía con el `basename` de `[files].gguf`, así que con
-  `[files].gguf = "carpeta/mi.gguf"` el fichero caía en `…/<modelo>/mi.gguf`
-  mientras `ropero path <modelo>` decía `…/<modelo>/carpeta/mi.gguf`. El modelo
-  quedaba inutilizable y la segunda instalación volvía a descargar. Ahora se usa
-  la **ruta relativa completa** y el subdirectorio se crea al descargar.
-- **La selección en el menú es consentimiento de la descarga** (R-MOD-27): en el
-  menú de `ropero install models` se preguntaba «¿Descargar X (~4 GB)? [s/N]:» y
-  con Intro **no se descargaba nada** (exit 0): elegir un modelo no era consentir
-  su descarga. Elegir un modelo **es** consentir su descarga, y la pregunta de
-  tamaño no se repite: el comando va siempre en modo desatendido.
-- **El resumen cuenta los TOML del catálogo, no las filas de alias**: los cuatro
-  TOML con `[model].alias` materializan una fila extra cada uno, y `ropero` a
-  secas decía «modelos disponibles: 49» con 45 TOML. Ahora `counts()` cuenta
-  **modelos únicos por nombre real** —la fila de un alias y la de su TOML de
-  origen son el mismo modelo—, y los dos recuentos (`ropero` y
-  `ropero validate`) coinciden. El listado no cambia: las filas de alias siguen
-  apareciendo, porque un alias responde igual que el nombre.
-- **La cabecera GGUF se lee con la tabla canónica del formato**: el lector usaba
-  los tipos equivocados (UINT32=6, STRING=12, ARRAY=13) y por eso no encontraba
-  `general.file_type` en ningún GGUF real: la clase salía siempre del nombre del
-  fichero. Las fixtures se rehacen **según el formato, no según el código roto**
-  (v1, v2 y v3, el `file_type` de cada tipo de valor, las arrays anidadas, el
-  fichero truncado y la versión inválida).
-- **El hash de la imatrix remoto llega al sidecar**: se bajaba a la caché del
-  work, y la limpieza (fase 5) borraba el work **antes** de que la procedencia
-  (fase 6) se escribiera, así que el sha256 salía sin escribir y el sidecar
-  afirmaba el fichero y el repo pero no **cuál** matriz se usó. Ahora el hash se
-  calcula en la fase 3, con la imatrix delante, y se guarda en el checkpoint.
-- **El sidecar nombra el estado real de cada salida**: decía «el GGUF ya estaba:
-  no se cuantizó» para un GGUF que el conversor acababa de convertir en esa misma
-  tirada. La segunda parte era cierta; la primera, mentira.
-- **El checkpoint sabe qué petición es**: guardaba sólo la fase, y otra petición
-  sobre la misma fuente reanudaba con el checkpoint ajeno y salía 0 anunciando un
-  GGUF que no estaba hecho. Con huella distinta se descarta y la tirada se
-  rehace.
-- **El listado encuentra los GGUFs publicados**: miraba sólo los ficheros del
-  primer nivel, así que los GGUFs del directorio del modelo no aparecían; ahora
-  recorre el primer nivel de subdirectorios y el artefacto `<modelo>.gguf`, y el
-  quant se toma del trozo tras el último `-` **sólo** si el fichero es de ese
-  modelo: el listado no mezcla modelos.
-- **El nombre de la fuente no pierde los dígitos del fichero.**
-- **Los mensajes y los errores dicen qué hacer** (P-13): un `--quant` inválido
-  sale con **2** (error de uso), como el resto de la superficie, y no con 1; el
-  informe no puede enseñar un GGUF que no está en disco (nuevo
-  `Error::SalidaFaltante`); la imatrix **local** se comprueba y su error dice el
-  origen; y las pistas dicen «rehaz con `--force`» sin borrar los pesos,
-  «comprueba que se puede escribir», «comprueba el disco y el entorno» y
-  «reintenta: el checkpoint reanuda por donde iba». El mensaje falso de la v1
-  («faltan ficheros en el clon: la descarga está incompleta») empujaba a borrar
-  60 GB por un problema que no era de la descarga.
-- **La ejecución de `hf` reintenta ante `ETXTBSY`** («Text file busy»): era una
-  carrera de milisegundos cuando otro proceso tenía el fichero abierto para
-  escribir, y fallaba el `exec`. Con el reintento, 60 tiradas seguidas salen
-  bien; antes fallaba el 5 %.
-- **El plan no repite el sufijo del quant**: pedir NVFP4 del repo
-  `acme/modelo-NVFP4` colocaba `modelo-NVFP4-NVFP4.gguf`.
-- **La batería de CLI es hermética**: usa un catálogo de pruebas propio y no
-  depende del catálogo real de la v1. Así sus resultados no cambian cuando cambia
-  un TOML de producción, y los logs del motor de los tests van a un temporal.
-- **El contrato de CLI tiene una puerta propia** (`cli_contract`) y cubre los
-  códigos de salida y la forma de la salida. `ropero <cmd> | head` termina con
-  código 0: un pipe roto (SIGPIPE/EPIPE) no se confunde con un error real.
-- **El valor de un `--prio` inválido aparece íntegro en el mensaje** (no se
-  recorta), `--prio` en `install engines` es error de uso, un modelo **sin vías**
-  sale con 2 y la línea de error de un modelo va a **stderr** (stdout es para los
-  datos, R-MOD-11).
-- **No hay panics en `ropero-core`**: el `unreachable!` de la resolución de un
-  modelo es un camino de error real, y el sha256 se hashea **por partes**
-  (bloques de 8 KiB), sin copiar el fichero entero en memoria.
+- **Retry port selection when an engine dies during `bind`:** choosing the
+  lowest free port and starting is a **race** — two processes using the same
+  range see and select the same port, and the loser died with “address already
+  in use”, leaving startup failed, no disk state, and the port occupied by the
+  winning engine. Ropero now tries the next free port in the range, with a loop
+  **bounded** by range size, and does not retry when the user requested the
+  port (`--port`); `--force` remains **before** the loop so a process that was
+  stopped remains stopped.
+- **A zombie engine no longer looks alive:** `kill(pid, 0)` treated an engine
+  that died during `bind` and had not been reaped by its parent as alive, so
+  startup could not distinguish a healthy engine from a dead one. `alive()` now
+  checks the state reported by the kernel, and a dead engine is reaped as soon
+  as it is observed, so retry does not leave zombies. The probe asks the engine
+  **first** and accepts the response only if the engine is still alive
+  (previously another process that acquired the port could answer); stop uses
+  the same check, so a zombie counts as stopped instead of waiting for the
+  deadline.
+- **The CLI test's fake engine no longer survives as a grandchild:** its parent
+  was Ropero, so when the test exited only Ropero was killed and the engine
+  remained listening on the port range, where the next test — or next test-suite
+  run — found it occupied. `Drop` now also stops the engine using the same
+  verified (PID + `start_time`) stop method as `ropero stop`, avoiding killing a
+  recycled PID.
+- **Catalog paths are confined to the model directory** (path traversal):
+  `Path::join` lets an absolute path replace its base and `..` ascend, so a
+  `[download].file = "../../../secret.txt"` could make the R-MOD-16.2 `mv` move
+  an outside file, and an outside `[download.aux.*].name` could overwrite it. A
+  single helper (`ropero_download::ruta_dentro`) checks the path **before**
+  joining: it rejects absolute roots and `..`, and requires the normalized path
+  to start under the base. It applies to `download.file`, `download.name`,
+  `aux.file`, `aux.name`, and `model.path`, and during execution before every
+  `join`, `rename`, and `create_dir_all`. The catalog error (exit 1) names the
+  field and received value.
+- **The GGUF is downloaded where the runtime looks for it** (R-MOD-6): the
+  destination used the `basename` of `[files].gguf`, so with
+  `[files].gguf = "folder/my.gguf"` the file landed at `…/<model>/my.gguf`,
+  while `ropero path <model>` pointed to `…/<model>/folder/my.gguf`. The model
+  was unusable and the next install downloaded it again. The full relative path
+  is now used and the subdirectory is created during download.
+- **Menu selection is consent to download** (R-MOD-27): the `ropero install
+  models` menu asked “Download X (~4 GB)? [y/N]?” and pressing Enter downloaded
+  nothing (exit 0): selecting a model did not consent to its download. Selecting
+  a model **does** consent, and the size confirmation is not repeated; the
+  command always runs unattended.
+- **The summary counts catalog TOMLs, not alias rows:** four TOMLs with
+  `[model].alias` each create an extra row, and bare `ropero` said “available
+  models: 49” for 45 TOMLs. `counts()` now counts **unique models by real name**
+  —the alias row and its source TOML are the same model—so the counts in
+  `ropero` and `ropero validate` agree. The listing is unchanged: alias rows
+  remain because the alias responds just like the name.
+- **The GGUF header is read using the format's canonical type table:** the
+  reader used the wrong types (UINT32=6, STRING=12, ARRAY=13), so it could not
+  find `general.file_type` in any real GGUF and always inferred the class from
+  the filename. Fixtures are rebuilt **from the format, not the broken code**
+  (v1, v2, v3, each value type's `file_type`, nested arrays, truncated file,
+  and invalid version).
+- **The remote imatrix hash reaches the sidecar:** it was downloaded into the
+  work cache, and cleanup (phase 5) deleted the work **before** provenance
+  (phase 6) was written. Thus sha256 was not written, and the sidecar named the
+  file and repository but not **which** matrix was used. The hash is now
+  calculated in phase 3 while the imatrix is present and stored in the
+  checkpoint.
+- **The sidecar names each output's actual state:** it said “the GGUF already
+  existed: it was not quantized” for a GGUF the converter had just created in
+  that same run. The second clause was true; the first was not.
+- **The checkpoint records which request it belongs to:** it stored only the
+  phase, so another request for the same source resumed with the wrong
+  checkpoint and exited 0 while announcing a GGUF that had not been produced.
+  A different fingerprint now discards it and restarts the run.
+- **The listing finds published GGUFs:** it searched only top-level files, so
+  GGUFs in model subdirectories were missing. It now searches the first level
+  of subdirectories and the `<model>.gguf` artifact; quant is taken from the
+  segment after the last `-` **only** if the filename belongs to that model, so
+  listings do not mix models.
+- **Digits are no longer lost from the source filename.**
+- **Messages and errors say what to do** (P-13): an invalid `--quant` exits 2
+  (usage error), like the rest of the surface, rather than 1; a report cannot
+  show a GGUF missing from disk (new `Error::SalidaFaltante`); a **local**
+  imatrix is checked and its error names the source; hints say “rebuild with
+  `--force`” without deleting weights, “check that it can be written”, “check
+  the disk and environment”, and “retry: the checkpoint resumes where it left
+  off”. The v1 false message (“files are missing from clone: download is
+  incomplete”) suggested deleting 60 GB for a problem unrelated to the
+  download.
+- **`hf` execution retries on `ETXTBSY`** (“Text file busy”): this was a
+  millisecond race while another process had the file open for writing, causing
+  `exec` to fail. With the retry, 60 consecutive runs succeed; previously 5%
+  failed.
+- **The plan does not repeat the quant suffix:** requesting NVFP4 from the
+  `acme/model-NVFP4` repository used to create `model-NVFP4-NVFP4.gguf`.
+- **The CLI test suite is hermetic:** it uses its own test catalog and does not
+  depend on the real v1 catalog. Its results therefore do not change when a
+  production TOML changes, and engine logs from tests go to a temporary
+  directory.
+- **The CLI contract has its own gate** (`cli_contract`) covering exit codes
+  and output shape. `ropero <cmd> | head` exits 0: a broken pipe (SIGPIPE/EPIPE)
+  is not confused with a real error.
+- **An invalid `--prio` value is shown in full** (not truncated), `--prio` with
+  `install engines` is a usage error, a model **with no paths** exits 2, and
+  per-model errors go to **stderr** (stdout is for data, R-MOD-11).
+- **There are no panics in `ropero-core`:** `unreachable!` in model resolution
+  was a real error path, and sha256 is hashed **in chunks** (8 KiB blocks)
+  without copying the entire file into memory.
 
-### Deuda conocida
+### Known debt
 
-- El árbol de la versión contiene **653 funciones `#[test]`, dos marcadas
-  `#[ignore = …]`**: las dos comparaciones del golden master contra la v1 real,
-  que se ejecutan de forma explícita. La batería por defecto y la CI son
-  herméticas y no dependen de `ropero-code/`.
-- **Las cuatro comprobaciones de la v1 siguen sin implementarse**: que
-  `[args.level.<n>]` esté en `[levels].list`, que `[args.flag.<f>]` y
-  `[args.option.<o>]` estén declarados y que no falten `[download]` ni `[build]`.
-  El doc B §4.1.1 las registra como deuda y es el contrato de la v2, no el
-  contrato completo de la v1.
-- **La regla de `context` múltiplo de 32 sólo aparece en el doc B §4.1.1.** La v1
-  acepta `133072`, que no es múltiplo de 32, y la v2 es más estricta (el
-  validador la aplica). Queda pendiente promover la regla a R-DATA en el doc A o
-  retirarla.
-- **La v2 sustituye `replace` en el lugar que ocupaba en el base; la v1 lo
-  aplicaba al final.** La diferencia está cubierta por tests sintéticos, pero no
-  por un caso real del catálogo, y requiere un PR propio para reconciliar el
-  comportamiento. Además, si el token replaced es el último del base, la v2 quita
-  un token y la v1 quita dos o uno (`_drop_flag_pair`).
-- Los PDF de `docs-especificacion/` están desalignados respecto de los documentos
-  Markdown normativos.
-- **Quedan las fases F7 a F9**: F7 es la puerta OpenAI-compatible (endpoint,
-  auth, streaming, enrutado), F8 es la instalación y la integración con opencode,
-  y F9 es la convivencia v1/v2, la migración y la retirada de la v1.
+- The version tree contains **653 `#[test]` functions, two marked
+  `#[ignore = …]`**: the two golden-master comparisons against real v1, which
+  run explicitly. The default test suite and CI are hermetic and do not depend
+  on `ropero-code/`.
+- **Four v1 checks are still unimplemented:** that `[args.level.<n>]` occurs in
+  `[levels].list`, that `[args.flag.<f>]` and `[args.option.<o>]` are declared,
+  and that `[download]` or `[build]` is present. Doc B §4.1.1 records them as
+  debt and is the v2 contract, not the complete v1 contract.
+- **The `context` multiple-of-32 rule appears only in doc B §4.1.1.** v1 accepts
+  `133072`, which is not a multiple of 32, while v2 is stricter (the validator
+  enforces it). It remains to be promoted to R-DATA in doc A or removed.
+- **v2 applies `replace` where it occurred in the base; v1 applied it at the
+  end.** The difference is covered by synthetic tests, but not by a real
+  catalog case, and needs its own PR to reconcile behavior. In addition, if the
+  replaced token is the last item in the base, v2 removes one token while v1
+  removes two or one (`_drop_flag_pair`).
+- The PDFs under `docs-especificacion/` are out of sync with the normative
+  Markdown documents.
+- **Phases F7 to F9 remain**: F7 is the OpenAI-compatible gateway (endpoint,
+  auth, streaming, routing), F8 is installation and OpenCode integration, and
+  F9 is v1/v2 coexistence, migration, and v1 removal.
 
-## Sin publicar
+## Unreleased
 
-<!-- Lo que se añada después de la 0.1.0 va aquí. -->
+<!-- Entries added after 0.1.0 go here. -->
 
-## Cómo leer esto junto al plan
+## How to read this alongside the plan
 
-Las entradas de la versión describen cambios comprobables, no el detalle del
-trabajo pendiente. Para saber qué tarea o fase cierra cada entrada, usa las
-referencias `R-*`, `T-*` y `F-*` del documento de construcción. Las fases **F0 a
-F6** están terminadas; **F7** (la puerta) es la siguiente.
+Version entries describe verifiable changes, not the details of outstanding
+work. To find which task or phase closes each entry, use the `R-*`, `T-*`, and
+`F-*` references in the build document. Phases **F0 to F6** are complete; **F7**
+(the gateway) is next.
+
+[Read this changelog in Spanish](CHANGELOG.es.md).
