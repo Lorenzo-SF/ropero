@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 /// Nº de modelos activos esperados en el catálogo real.
-const ACTIVOS_ESPERADOS: usize = 20;
+const ACTIVOS_ESPERADOS: usize = 24;
 /// Nº de modelos retirados (`fired/`) esperados en el catálogo real.
 const FIRED_ESPERADOS: usize = 28;
 /// Nº total de modelos del catálogo real (activos + retirados).
@@ -61,7 +61,7 @@ fn recoge(base: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
 }
 
 #[test]
-fn catalogo_real_tiene_48_modelos() {
+fn catalogo_real_tiene_52_modelos() {
     let base = base_real();
     assert!(
         base.is_dir(),
@@ -131,14 +131,14 @@ fn catalogo_real_usa_la_nomenclatura_de_adr_004() {
     }
     assert_eq!(
         por_motor.get("turbo-llama").copied(),
-        Some(30),
-        "el fork (turbo-llama) tiene 30 TOML: {:?}",
+        Some(33),
+        "el fork (turbo-llama) tiene 33 TOML: {:?}",
         por_motor
     );
     assert_eq!(
         por_motor.get("llama-server").copied(),
-        Some(5),
-        "el oficial (llama-server) tiene 5 TOML: {:?}",
+        Some(4),
+        "el oficial (llama-server) tiene 4 TOML: {:?}",
         por_motor
     );
     assert!(
@@ -173,7 +173,7 @@ fn catalogo_real_tiene_los_directorios_de_adr_004() {
 
 /// Todos los TOML del catálogo de la v2 pasan el validador.
 ///
-/// Es el mismo contrato que `ropero validate` sobre `models/`: 45 modelos
+/// Es el mismo contrato que `ropero validate` sobre `models/`: 46 modelos
 /// válidos, sin violaciones.
 #[test]
 fn catalogo_real_valida_sin_violaciones() {

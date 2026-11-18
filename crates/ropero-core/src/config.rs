@@ -275,7 +275,25 @@ impl Config {
         self.gguf_dir.clone()
     }
 
-    pub fn artifacts_dir_de(&self, _engine: EngineId) -> Ruta {
+    pub fn artifacts_dir_de(&self, engine: EngineId) -> Ruta {
+        if let Some(path) = self
+            .engines
+            .get(&engine)
+            .and_then(|engine| engine.artifacts_dir.as_ref())
+        {
+            return path.clone();
+        }
+        if engine == EngineId::Basalt
+            && (self.artifacts_dir.origen == Origen::Defecto
+                || self
+                    .artifacts_dir
+                    .valor
+                    .file_name()
+                    .is_some_and(|name| name == "ignis"))
+            && let Some(parent) = self.artifacts_dir.valor.parent()
+        {
+            return Ruta::new(parent.join("basalt"), self.artifacts_dir.origen.clone());
+        }
         self.artifacts_dir.clone()
     }
 
@@ -850,6 +868,7 @@ pub fn ejemplo_config(config: &Config) -> String {
         EngineId::AirLlm,
         EngineId::Strata,
         EngineId::Ignis,
+        EngineId::Basalt,
     ] {
         let (port_min, port_max) = valores_por_defecto_engine(id);
         out.push_str(&format!(
@@ -859,6 +878,14 @@ pub fn ejemplo_config(config: &Config) -> String {
             port_min,
             port_max,
         ));
+        if id == EngineId::Basalt
+            && let Some(parent) = config.artifacts_dir.valor.parent()
+        {
+            out.push_str(&format!(
+                "artifacts_dir = \"{}\"\n",
+                escapa_toml(&parent.join("basalt").to_string_lossy())
+            ));
+        }
     }
     out
 }
@@ -875,6 +902,7 @@ fn valores_por_defecto_engine(id: EngineId) -> (u16, u16) {
         EngineId::AirLlm => (9930, 9939),
         EngineId::Strata => (9920, 9929),
         EngineId::Ignis => (9910, 9919),
+        EngineId::Basalt => (9900, 9909),
     }
 }
 

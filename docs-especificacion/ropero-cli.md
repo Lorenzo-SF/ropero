@@ -93,7 +93,7 @@ El sistema vive en el dominio (`ropero_core::estilo`) y sus reglas son:
 | **Títulos** | El título de una sección va en el **margen** y en **mayúsculas**; su cuerpo, un nivel más dentro. La sangría es de **dos espacios** por nivel. |
 | **Color** | El color es el de la leyenda de motores ([§4](#4-leyenda-de-motores)) y **sólo** se usa en el **nombre del motor**. Ningún título, ninguna cabecera y ningún dato llevan color. |
 | **Tamaños** | El tamaño de un artefacto es el de su descarga: **aproximado** (`~`) y con **dos decimales** (`~18.90 GB`). Lo que no se sabe **no se inventa**: sale `—`. |
-| **Artefactos** | La columna del artefacto dice **qué** se baja, y lo dice el **formato** (R-MOD-6): el fichero (`gguf`), el directorio del checkpoint (`safetensors`), el **tag** del almacén (`q4nx`), el paquete del catálogo (`strata`) o el id de modelo (`ninfer`). |
+| **Artefactos** | La columna del artefacto dice **qué** se baja, y lo dice el **formato** (R-MOD-6): el fichero (`gguf`, `.basalt`), el directorio del checkpoint (`safetensors`), el **tag** del almacén (`q4nx`), el paquete del catálogo (`strata`) o el id de modelo (`ninfer`). |
 | **Final de línea** | Ninguna línea lleva **espacios al final**: rompen el diff y descolocan al copiar. |
 
 Hay **dos** excepciones, y sólo dos:
@@ -173,6 +173,7 @@ gobierna, y queda fijada en
 | `vllm` | morado | vLLM (Linux y macOS) | Safetensors (principal), .bin, GGUF (experimental), AWQ/GPTQ/BitsAndBytes |
 | `strata` | verde pálido | Strata (Linux y macOS) | GGUF (nativo); descargar/preparar/tunear/usar modelos externos con `groot.sh`, `qwen-abliterated.sh`, `qwen36.sh` de referencia |
 | `ignis` | cian | Ignis (Linux x86_64, NVIDIA RTX) | `.ninfer` (artefactos de su catálogo, incluye companions) |
+| `basalt` | gris | Basalt (Linux x86-64, NVIDIA Blackwell) | `.basalt` (pack nativo) |
 
 Notas de la tabla:
 
@@ -191,6 +192,12 @@ Notas de la tabla:
   [`qwen-abliterated.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen-abliterated.sh),
   [`qwen36.sh`](https://github.com/Lorenzo-SF/ropero/blob/main/qwen36.sh)),
   que viven en la raíz del repo.
+- `basalt` requiere preparar manualmente su release Linux x86-64 completo
+  (incluido su entorno Python) bajo `~/.local/share/ropero/engines/basalt`;
+  Ropero enlaza `bin/basalt` y gestiona la descarga del pack `.basalt` desde
+  el TOML del modelo. La integración y sus límites están descritos en
+  [ADR-014](../docs/adr/ADR-014-integracion-de-basalt.md) y en la
+  [guía de compatibilidad](../docs/engine-support.es.md#instalar-y-usar-basalt).
 
 ## 5. Decisiones de diseño fijadas
 

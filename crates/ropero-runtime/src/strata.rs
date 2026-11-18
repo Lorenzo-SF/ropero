@@ -274,9 +274,11 @@ fn profile_artifacts_present(path: &std::path::Path, env: &Environment) -> bool 
             } else {
                 resolved.is_dir()
             };
-            // MTP is optional when the profile explicitly disables it or
-            // selects DFlash. In the other modes Strata requires the folder.
-            let mtp_optional = object.get("mtp") == Some(&serde_json::Value::Bool(false))
+            // Strata treats a missing MTP drafter as optional: the base model
+            // can still serve without speculative decoding. Profiles can also
+            // explicitly disable it or select DFlash.
+            let mtp_optional = flag == "--mtp"
+                || object.get("mtp") == Some(&serde_json::Value::Bool(false))
                 || object
                     .get("drafting")
                     .and_then(serde_json::Value::as_str)
@@ -461,12 +463,13 @@ fn validate_profile_path(path: &std::path::Path) -> Result<PathBuf, String> {
 }
 
 /// Convierte la pareja familia/modelo de `[model].path` en el id que Strata
-/// asigna a sus run configs (p. ej. `gyro/Gyro-M` → `gyro-gyro-m`).
+/// asigna a sus run configs (p. ej. `gyro/Gyro-M` → `gyro-gyro-m`). Strata
+/// conserva guiones bajos en nombres como `coder-iq1_m`.
 fn profile_id(value: &str) -> String {
     value
         .chars()
         .map(|c| {
-            if c == '/' || c == '_' {
+            if c == '/' {
                 '-'
             } else {
                 c.to_ascii_lowercase()
@@ -498,6 +501,7 @@ mod tests {
     fn path_del_catalogo_corresponde_al_id_de_perfil_de_strata() {
         assert_eq!(profile_id("gyro/Gyro-M"), "gyro-gyro-m");
         assert_eq!(profile_id("gyro/Gyro-S"), "gyro-gyro-s");
+        assert_eq!(profile_id("coder/IQ1_M"), "coder-iq1_m");
     }
 
     #[test]
@@ -539,7 +543,7 @@ mod tests {
                 "exe": "component:strata-engine",
                 "cwd": root,
                 "tokenizer": "tokenizer",
-                "args": ["--pack", "pack", "--native", "model.gguf"]
+                "args": ["--pack", "pack", "--native", "model.gguf", "--mtp", "missing/rt"]
             })
             .to_string(),
         )

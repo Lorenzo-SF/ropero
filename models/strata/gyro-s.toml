@@ -1,0 +1,33 @@
+# Strata's Gyro-S profile. Strata owns the model files and serves the profile.
+[model]
+name    = "gyro-s"
+engine  = "strata"
+context = 65536
+format  = "strata"
+path    = "gyro/Gyro-S"
+
+[files]
+
+[options]
+list = ["tune", "vision", "mtp", "kv", "parallel", "drafting", "vram-reserve"]
+
+[args.option.tune]
+base = ["--tune", "${value}"]
+
+[args.option.vision]
+base = ["--vision", "${value}"]
+
+[args.option.mtp]
+base = ["--mtp", "${value}"]
+
+[args.option.kv]
+base = ["--kv", "${value}"]
+
+[args.option.parallel]
+base = ["--parallel", "${value}"]
+
+[args.option.drafting]
+base = ["--drafting", "${value}"]
+
+[args.option.vram-reserve]
+base = ["--set", "vram_reserve_mib=${value}"]

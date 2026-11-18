@@ -94,10 +94,10 @@ pub fn colorize_engine_line(
     // per-line severity. Recent Ignis builds emit OpenTelemetry JSONL, so
     // normalize those records into a compact event summary before the legacy
     // text fallback below.
-    if engine == Some(ropero_core::EngineId::Ignis) {
-        if let Some((summary, ansi)) = ignis_json_line(line, engine_color.unwrap_or(LOG_DEFAULT)) {
-            return format!("{}{summary}{rst}", ansi.foreground());
-        }
+    if engine == Some(ropero_core::EngineId::Ignis)
+        && let Some((summary, ansi)) = ignis_json_line(line, engine_color.unwrap_or(LOG_DEFAULT))
+    {
+        return format!("{}{summary}{rst}", ansi.foreground());
     }
 
     let es_error = [
@@ -158,6 +158,7 @@ pub fn colorize_engine_line(
         Some(ropero_core::EngineId::Strata) => &["strata", "model loaded", "serving"],
         Some(ropero_core::EngineId::Vllm) => &["vllm", "enginecore", "scheduler"],
         Some(ropero_core::EngineId::Ignis) => &["ignis.", "ignis-server", "model loaded"],
+        Some(ropero_core::EngineId::Basalt) => &["[server]", "basalt", "loaded"],
         Some(ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama) => {
             &["llama.cpp", "llama_server", "llama_context", "ggml_", "srv"]
         }

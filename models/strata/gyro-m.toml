@@ -58,3 +58,24 @@ list = ["tune", "vision", "mtp", "kv", "parallel", "drafting", "vram-reserve"]
 # # (RTX 5080 Laptop). El motor lo llama --vram-reserve-mib.
 # [args.option.vram-reserve]
 # base = ["--set", "vram_reserve_mib=${value}"]
+
+[args.option.tune]
+base = ["--tune", "${value}"]
+
+[args.option.vision]
+base = ["--vision", "${value}"]
+
+[args.option.mtp]
+base = ["--mtp", "${value}"]
+
+[args.option.kv]
+base = ["--kv", "${value}"]
+
+[args.option.parallel]
+base = ["--parallel", "${value}"]
+
+[args.option.drafting]
+base = ["--drafting", "${value}"]
+
+[args.option.vram-reserve]
+base = ["--set", "vram_reserve_mib=${value}"]

@@ -415,11 +415,11 @@ pub const FLAGS_TEST: &[Flag] = &[
     Flag::value(
         "model",
         "MODELO",
-        "el modelo disponible que se prueba (excluyente con --all-models)",
+        "modelo a probar; su engine se detiene al terminar (excluyente con --all-models)",
     ),
     Flag::switch(
         "all-models",
-        "prueba todos los modelos disponibles; excluyente con --model",
+        "prueba en serie todos los modelos disponibles y detiene cada engine al terminar; excluyente con --model",
     ),
     Flag::value("test-group", "A..G", "el grupo de tests que se lanza"),
     Flag::value("test", "ID|FICHERO", "un solo test (su id o su fichero)"),

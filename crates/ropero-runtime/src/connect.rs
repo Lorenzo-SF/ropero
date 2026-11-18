@@ -106,7 +106,13 @@ pub fn claude_env_instructions(
     let engine = first.model.engine.as_str();
     if !matches!(
         engine,
-        "llama-server" | "turbo-llama" | "vllm" | "strata" | "tensorrt-llm" | "mlx-serve"
+        "llama-server"
+            | "turbo-llama"
+            | "vllm"
+            | "strata"
+            | "basalt"
+            | "tensorrt-llm"
+            | "mlx-serve"
     ) {
         return Err(format!(
             "el engine '{engine}' no está documentado como compatible con Anthropic Messages"
@@ -542,8 +548,6 @@ pub fn opencode(
             .and_then(|e| e.api_key.as_ref())
         {
             settings.insert("apiKey".into(), Value::String(key.clone()));
-        } else {
-            settings.remove("apiKey");
         }
         let model_map = provider
             .entry("models")
@@ -1918,16 +1922,18 @@ fn json_array_provider(
             json!(format!("http://127.0.0.1:{port}/v1")),
         );
         provider.insert("api".into(), json!("openai-completions"));
-        provider.insert(
-            "apiKey".into(),
-            json!(
-                config
-                    .engines
-                    .get(&manifest.id)
-                    .and_then(|e| e.api_key.as_deref())
-                    .unwrap_or("not-needed")
-            ),
-        );
+        let api_key = config
+            .engines
+            .get(&manifest.id)
+            .and_then(|e| e.api_key.clone())
+            .or_else(|| {
+                provider
+                    .get("apiKey")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "not-needed".into());
+        provider.insert("apiKey".into(), json!(api_key));
         let list = provider
             .entry("models")
             .or_insert_with(|| json!([]))

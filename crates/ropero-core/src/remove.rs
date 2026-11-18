@@ -143,6 +143,17 @@ pub fn removal_plan(spec: &ModelSpec, env: &Environment) -> RemovalPlan {
         }
     }
 
+    if spec.model.format == ModelFormat::Basalt && !spec.model.path.is_empty() {
+        let root = env.engine_artifact_path(spec.model.engine, "ARTIFACTS_DIR", "models/basalt");
+        match safe_join(&root, &spec.model.path) {
+            Some(path) => plan.files.push(path),
+            None => plan.blocked.push(format!(
+                "el pack Basalt '{}' sale de ARTIFACTS_DIR y no se puede eliminar automáticamente",
+                spec.model.path
+            )),
+        }
+    }
+
     plan
 }
 

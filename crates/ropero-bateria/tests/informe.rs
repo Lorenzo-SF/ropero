@@ -6,8 +6,7 @@
 //! - lo que no se puede medir se dice como **no disponible**, no se calla;
 //! - lo que es aproximado se marca como **aproximado**;
 //! - un test pendiente de juez se marca como pendiente: nunca se le pone nota;
-//! - si ropero lanzó el motor, el informe dice que **queda en pie** y cómo
-//!   pararlo;
+//! - el informe dice que el motor se detiene al acabar la prueba;
 //! - la salida cruda del modelo va escapada, y el `--json` es JSON válido.
 
 use ropero_bateria::indice::parse_indice;
@@ -211,30 +210,30 @@ fn un_test_pendiente_se_marca_pendiente_y_no_le_pone_nota() {
 }
 
 #[test]
-fn si_ropero_lanzo_el_motor_lo_dice_y_dice_que_queda_en_pie() {
+fn si_ropero_lanzo_el_motor_dice_que_lo_detiene_al_terminar() {
     let texto = informe().a_texto();
     assert!(
         texto.contains("lanzó"),
         "dice que ropero lanzó el motor: {texto}"
     );
     assert!(
-        texto.contains("queda en pie"),
-        "dice que queda en pie: {texto}"
-    );
-    assert!(
-        texto.contains("ropero stop modelo-alpha"),
-        "dice cómo pararlo: {texto}"
+        texto.contains("lo detuvo al terminar"),
+        "dice que lo detiene al terminar: {texto}"
     );
 }
 
 #[test]
-fn si_el_motor_ya_estaba_en_pie_lo_dice() {
+fn si_el_motor_ya_estaba_en_pie_dice_que_ropero_lo_detiene() {
     let mut informe = informe();
     informe.lanzado = false;
     let texto = informe.a_texto();
     assert!(
         texto.contains("ya estaba en pie"),
         "dice que se reutilizó el motor: {texto}"
+    );
+    assert!(
+        texto.contains("ropero lo detuvo al terminar"),
+        "dice que Ropero lo detiene: {texto}"
     );
     assert!(!texto.contains("lanzó"), "no dice que lo lanzó: {texto}");
 }

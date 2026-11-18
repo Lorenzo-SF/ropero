@@ -130,6 +130,8 @@ pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
         "ARTIFACTS_DIR",
         if spec.model.engine == crate::EngineId::Ignis {
             "models/ignis"
+        } else if spec.model.engine == crate::EngineId::Basalt {
+            "models/basalt"
         } else {
             "models"
         },
@@ -160,7 +162,9 @@ pub fn resolve_context(spec: &ModelSpec, env: &Environment) -> ResolveContext {
         .chat_template
         .as_ref()
         .map(|p| gguf_dir.join(&real).join(p).to_string_lossy().to_string());
-    let model_path = if spec.model.format == ModelFormat::Ninfer && !spec.model.path.is_empty() {
+    let model_path = if matches!(spec.model.format, ModelFormat::Ninfer | ModelFormat::Basalt)
+        && !spec.model.path.is_empty()
+    {
         artifacts_dir
             .join(&spec.model.path)
             .to_string_lossy()

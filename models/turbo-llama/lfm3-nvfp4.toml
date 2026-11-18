@@ -2,7 +2,7 @@
 [model]
 alias = "lfm3-nvfp4"
 context = 262144
-engine = "llama-server"
+engine = "turbo-llama"
 format = "gguf"
 name = "lfm3-nvfp4"
 

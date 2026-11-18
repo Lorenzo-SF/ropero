@@ -166,7 +166,6 @@ fn connect_claude_emite_variables_para_endpoint_anthropic_messages_del_engine() 
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     for expected in [
         "ANTHROPIC_BASE_URL=http://127.0.0.1:9990",
-        "ANTHROPIC_AUTH_TOKEN=dummy",
         "API_TIMEOUT_MS=600000",
         "DISABLE_TELEMETRY=1",
         "ANTHROPIC_MODEL=modelo-alpha",
@@ -176,6 +175,15 @@ fn connect_claude_emite_variables_para_endpoint_anthropic_messages_del_engine() 
     ] {
         assert!(stdout.contains(expected), "falta {expected}: {stdout}");
     }
+    let auth = stdout
+        .lines()
+        .find(|line| line.starts_with("ANTHROPIC_AUTH_TOKEN="))
+        .expect("Claude Code recibe ANTHROPIC_AUTH_TOKEN");
+    assert!(
+        auth.split_once('=')
+            .is_some_and(|(_, value)| !value.is_empty()),
+        "la variable de autenticación debe tener un valor: {stdout}"
+    );
     assert!(!stdout.contains("9990/v1"), "stdout={stdout}");
 }
 

@@ -68,6 +68,7 @@ pub fn run(sub: &ArgMatches) -> i32 {
     let models = if all_models {
         ropero_core::snapshot::available_models(&crate::discovery::snapshot(&scan))
             .into_iter()
+            .filter(|entry| es_generativo(&entry.spec))
             .map(|entry| entry.spec.model.name.clone())
             .collect::<Vec<_>>()
     } else {
@@ -81,8 +82,11 @@ pub fn run(sub: &ArgMatches) -> i32 {
         })
         .informa();
     }
-    models.into_iter().fold(0, |exit, model| {
-        exit.max(tira(
+    let mut exit = 0;
+    // `tira` completes cleanup before returning; keep this loop sequential so
+    // the next model cannot claim resources held by the previous one.
+    for model in models {
+        exit = exit.max(tira(
             &scan.catalog,
             &scan.engines,
             &scan.env,
@@ -91,8 +95,9 @@ pub fn run(sub: &ArgMatches) -> i32 {
             &selection,
             &path,
             &scan.config.lang,
-        ))
-    })
+        ));
+    }
+    exit
 }
 
 fn interactive() -> Result<ropero_runtime::test_wizard::TestWizardResult, String> {
@@ -108,6 +113,7 @@ fn interactive() -> Result<ropero_runtime::test_wizard::TestWizardResult, String
     let available = ropero_core::snapshot::available_models(&snapshot);
     let models = available
         .into_iter()
+        .filter(|entry| es_generativo(&entry.spec))
         .map(|entry| {
             let engine_id = entry.spec.model.engine;
             let engine = scan
@@ -120,6 +126,12 @@ fn interactive() -> Result<ropero_runtime::test_wizard::TestWizardResult, String
         })
         .collect::<Vec<_>>();
     ropero_runtime::test_wizard::choose(&models, &scan.config.lang)
+}
+
+fn es_generativo(spec: &ropero_core::ModelSpec) -> bool {
+    !(ropero_core::flm::is_flm_model(spec)
+        && spec.model.path.trim().is_empty()
+        && spec.args.base.iter().any(|arg| arg == "--decision"))
 }
 
 fn value(matches: &ArgMatches, name: &str) -> Option<String> {

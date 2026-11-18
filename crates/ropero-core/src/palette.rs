@@ -99,6 +99,7 @@ pub const fn engine_hex(color: EngineColor) -> Option<HexColor> {
         EngineColor::Morado => Some(HexColor(0xc4b5fd)),
         EngineColor::VerdePalido => Some(HexColor(0xd9f99d)),
         EngineColor::Cian => Some(HexColor(0xa5f3fc)),
+        EngineColor::Azul => Some(HexColor(0x93c5fd)),
         EngineColor::SinColor => None,
     }
 }
@@ -114,6 +115,7 @@ pub const fn engine_color_for_id(id: EngineId) -> EngineColor {
         EngineId::AirLlm => EngineColor::Blanco,
         EngineId::Strata => EngineColor::VerdePalido,
         EngineId::Ignis => EngineColor::Cian,
+        EngineId::Basalt => EngineColor::Azul,
     }
 }
 

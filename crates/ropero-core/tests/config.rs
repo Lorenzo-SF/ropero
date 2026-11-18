@@ -31,10 +31,10 @@ fn parse_config_roundtrip_rutas_especiales() {
     assert_eq!(parseado.models_dir.valor, ruta);
     assert_eq!(parseado.gguf_dir.valor, ruta.join("gguf"));
     assert_eq!(parseado.models_dir.origen, Origen::Archivo);
-    assert_eq!(parseado.engines.len(), 9);
+    assert_eq!(parseado.engines.len(), 10);
     assert!(texto.contains("[models.paths]"));
     assert!(!texto.contains("models_toml_dir ="));
-    assert_eq!(texto.matches("models_path =").count(), 9);
+    assert_eq!(texto.matches("models_path =").count(), 10);
     assert_eq!(texto.matches("gguf_dir =").count(), 1);
     for id in [
         "llama-server",
@@ -46,6 +46,7 @@ fn parse_config_roundtrip_rutas_especiales() {
         "airllm",
         "strata",
         "ignis",
+        "basalt",
     ] {
         assert!(
             texto.contains(&format!("[engines.{id}]")),

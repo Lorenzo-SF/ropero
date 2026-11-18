@@ -498,7 +498,7 @@ fn resumen_ingles(command: &str) -> &'static str {
         "validate" => "validates catalog TOML files",
         "command" => "prints model serving arguments for copying",
         "info" => "shows model configuration, artifacts, and arguments",
-        "test" => "runs the evaluation suite against a model",
+        "test" => "runs the evaluation suite sequentially and stops each engine afterward",
         "<modelo>" => "starts the model using its configured engine",
         _ => "shows help",
     }
@@ -553,8 +553,10 @@ fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
         ("gguffer", "no-dflash") => "builds without DFlash headers",
         ("gguffer", "list-quants") => "lists available quantization types",
         ("gguffer", "diagnostico") => "shows planned actions without writing files",
-        ("test", "model") => "one available model to evaluate; exclusive with --all-models",
-        ("test", "all-models") => "evaluate every available model; exclusive with --model",
+        ("test", "model") => "one available model; its engine is stopped when testing ends",
+        ("test", "all-models") => {
+            "test every available model in sequence and stop its engine after each run"
+        }
         ("test", "test-group") => "run one test group (exclusive with --test)",
         ("test", "test") => "run one test by id or filename",
         ("test", "path") => "directory for test reports (default: current directory)",

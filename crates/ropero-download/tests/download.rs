@@ -904,3 +904,46 @@ fn un_gguf_que_se_sale_es_error() {
     assert_eq!(campo, "[files].gguf");
     assert_eq!(valor, "../../../secreto.gguf");
 }
+
+#[test]
+fn basalt_pack_se_descarga_como_fichero_de_artifacts_dir() {
+    let fake = Fake::nuevo("basalt-pack");
+    let env = fake.entorno();
+    let model = spec(
+        r#"
+[model]
+name = "qwen3.8-flash-next"
+engine = "basalt"
+format = "basalt"
+path = "qwen3.8-flash-next/Qwen3.8-FN-NVFP4-DQ6_K.basalt"
+
+[files]
+
+[download]
+repo = "jesdga/Qwen3.8-Flash-Next-Basalt"
+file = "Qwen3.8-FN-NVFP4-DQ6_K.basalt"
+size = "~122 GiB"
+"#,
+    );
+    let plan = plan_de_descarga(&model, &env).expect("plan del pack Basalt");
+    assert_eq!(plan.formato, ropero_download::plan::Formato::BasaltPack);
+    assert_eq!(
+        plan.dest,
+        env.engine_artifact_path(
+            ropero_core::EngineId::Basalt,
+            "ARTIFACTS_DIR",
+            "models/basalt"
+        )
+        .join("qwen3.8-flash-next/Qwen3.8-FN-NVFP4-DQ6_K.basalt")
+    );
+    assert_eq!(
+        plan.hf_args,
+        [
+            "download",
+            "jesdga/Qwen3.8-Flash-Next-Basalt",
+            "Qwen3.8-FN-NVFP4-DQ6_K.basalt",
+            "--local-dir",
+            STAGING,
+        ]
+    );
+}

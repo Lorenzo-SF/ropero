@@ -63,6 +63,8 @@ pub enum EngineColor {
     VerdePalido,
     #[serde(rename = "cian")]
     Cian,
+    #[serde(rename = "azul")]
+    Azul,
 }
 
 impl EngineColor {
@@ -79,6 +81,7 @@ impl EngineColor {
             Self::Morado => "morado",
             Self::VerdePalido => "verde-pálido",
             Self::Cian => "cian",
+            Self::Azul => "azul",
         }
     }
 }

@@ -8,8 +8,8 @@
 [model]
 name = "my-model"             # Must match this file name (my-model.toml).
 engine = "llama-server"       # llama-server, turbo-llama, vllm, mlx-serve,
-                              # airllm, tensorrt-llm, fastflowllm, strata, ignis.
-format = "gguf"                # gguf, safetensors, q4nx, strata, or ninfer.
+                              # airllm, tensorrt-llm, fastflowllm, strata, ignis, basalt.
+format = "gguf"                # gguf, safetensors, q4nx, strata, ninfer, or basalt.
 context = 32768                # Optional context length in tokens.
 # alias = "engine-model-id"   # Optional ID exposed by the engine/API.
 # path = "family/package"     # Main path for safetensors, q4nx, strata, ninfer.

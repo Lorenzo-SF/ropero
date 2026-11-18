@@ -25,6 +25,14 @@ pub fn launch_key(
     explicit: Option<&str>,
     disabled: bool,
 ) -> Result<Option<String>, String> {
+    if engine == EngineId::Basalt {
+        if explicit.is_some_and(|value| !value.is_empty()) {
+            return Err("Basalt sólo acepta --api-key por argv y Ropero no expone credenciales en la lista de procesos; el servidor queda ligado a 127.0.0.1".to_string());
+        }
+        clear_engine_key(state_dir, engine);
+        mark_engine_key_disabled(state_dir, engine)?;
+        return Ok(None);
+    }
     if disabled {
         clear_engine_key(state_dir, engine);
         mark_engine_key_disabled(state_dir, engine)?;
@@ -50,6 +58,9 @@ pub fn connect_key(
     env: &Environment,
     state_dir: &Path,
 ) -> Option<Option<String>> {
+    if engine == EngineId::Basalt {
+        return Some(None);
+    }
     if disabled_marker_path(state_dir, engine).exists() {
         return Some(None);
     }
@@ -160,7 +171,7 @@ fn generate_key() -> Result<String, String> {
         std::fs::File::open("/dev/urandom")
             .and_then(|mut random| random.read_exact(&mut bytes))
             .map_err(|error| format!("no se pudo generar una clave de API segura: {error}"))?;
-        return Ok(format!("sk-ropero-{}", hex(&bytes)));
+        Ok(format!("sk-ropero-{}", hex(&bytes)))
     }
     #[cfg(not(unix))]
     {

@@ -1,0 +1,39 @@
+[model]
+name = "qwen3.8-flash-next-basalt"
+engine = "basalt"
+format = "basalt"
+path = "qwen3.8-flash-next/Qwen3.8-FN-NVFP4-DQ6_K.basalt"
+context = 262144
+
+[files]
+
+[download]
+repo = "jesdga/Qwen3.8-Flash-Next-Basalt"
+file = "Qwen3.8-FN-NVFP4-DQ6_K.basalt"
+size = "~122 GiB"
+manual = true
+
+[levels]
+list = ["none", "low", "medium", "high", "xhigh", "max"]
+default = "medium"
+
+[args]
+base = ["--gpu", "auto", "--max-context", "${ctx}", "--kv", "int8", "--resident-experts"]
+
+[args.level.none]
+base = ["--reasoning-effort", "none"]
+
+[args.level.low]
+base = ["--reasoning-effort", "low"]
+
+[args.level.medium]
+base = ["--reasoning-effort", "medium"]
+
+[args.level.high]
+base = ["--reasoning-effort", "high"]
+
+[args.level.xhigh]
+base = ["--reasoning-effort", "xhigh"]
+
+[args.level.max]
+base = ["--reasoning-effort", "max"]

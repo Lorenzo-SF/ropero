@@ -44,6 +44,12 @@ el grado de soporte dependen del comando, el motor y el agente; consulta
 `ropero --help`, el changelog y la especificación antes de asumir que un flujo
 está completo.
 
+Basalt está integrado para Linux x86-64 con GPU NVIDIA Blackwell. Ropero instala
+su pack `.basalt`, lo arranca mediante su servidor OpenAI y asigna el puerto;
+el manifiesto y el TOML de Qwen3.8-Flash-Next están en `engines/basalt.toml` y
+`models/basalt/`. La [guía de compatibilidad](docs/engine-support.es.md#instalar-y-usar-basalt)
+documenta los requisitos de CUDA/Python, instalación y límites de autenticación.
+
 ## Compilar y probar
 
 Desde la raíz del repositorio:
@@ -77,7 +83,12 @@ modelo antes de registrarlo.
 
 `ropero test` permite elegir modelo, grupo y test si se ejecuta sin opciones.
 En modo automatizado, requiere `--model` y exactamente uno entre `--test` y
-`--test-group`; `--path` indica dónde guardar resultados. Ejemplos:
+`--test-group`; `--path` indica dónde guardar resultados.
+
+Los modelos y sus tests se ejecutan secuencialmente. Ropero detiene el engine
+del modelo al terminar su batería, también al usar `--all-models`.
+
+Ejemplos:
 
 ```bash
 ropero test --model qwen --test-group A --path ./resultados

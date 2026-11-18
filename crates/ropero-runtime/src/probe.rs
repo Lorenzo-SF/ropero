@@ -64,6 +64,41 @@ impl Probe for NetProbe {
     }
 }
 
+/// La salud HTTP de Basalt sube antes que el modelo; `/health` informa del
+/// progreso de carga y no basta como readiness. Esperamos al estado `loaded`
+/// publicado por `/v1/models`.
+pub struct BasaltProbe {
+    pub timeout: Duration,
+    pub model_id: String,
+}
+
+impl Probe for BasaltProbe {
+    fn ready(&self, port: u16, _model: &str) -> bool {
+        if !tcp_ready(port, self.timeout) {
+            return false;
+        }
+        let Some(body) = http_get(port, "/v1/models", self.timeout, None) else {
+            return false;
+        };
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&body) else {
+            return false;
+        };
+        basalt_model_loaded(&payload, &self.model_id)
+    }
+}
+
+fn basalt_model_loaded(payload: &serde_json::Value, model_id: &str) -> bool {
+    payload
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|models| {
+            models.iter().any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some(model_id)
+                    && entry.get("status").and_then(serde_json::Value::as_str) == Some("loaded")
+            })
+        })
+}
+
 /// Si el puerto acepta una conexión TCP.
 pub fn tcp_ready(port: u16, timeout: Duration) -> bool {
     let direccion = format!("127.0.0.1:{port}");
@@ -177,4 +212,22 @@ pub fn lee_todo(stream: &mut TcpStream) -> Vec<u8> {
         }
     }
     respuesta
+}
+
+#[cfg(test)]
+mod tests {
+    use super::basalt_model_loaded;
+
+    #[test]
+    fn basalt_solo_esta_listo_cuando_el_alias_esta_loaded() {
+        let payload = serde_json::json!({"data": [
+            {"id": "public-model", "status": "loading"}
+        ]});
+        assert!(!basalt_model_loaded(&payload, "public-model"));
+        let payload = serde_json::json!({"data": [
+            {"id": "public-model", "status": "loaded"}
+        ]});
+        assert!(basalt_model_loaded(&payload, "public-model"));
+        assert!(!basalt_model_loaded(&payload, "other-model"));
+    }
 }

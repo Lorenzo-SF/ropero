@@ -148,9 +148,9 @@ pub fn wizard_toml(
     .unwrap();
     let format = ask(
         if english {
-            "Format (gguf/safetensors/q4nx/strata/ninfer)"
+            "Format (gguf/safetensors/q4nx/strata/ninfer/basalt)"
         } else {
-            "Formato (gguf/safetensors/q4nx/strata/ninfer)"
+            "Formato (gguf/safetensors/q4nx/strata/ninfer/basalt)"
         },
         false,
     )?

@@ -223,13 +223,31 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
             ctx,
             "model.format",
         )),
+        ModelFormat::Basalt if spec.model.engine == crate::EngineId::Basalt => {
+            if spec.model.path.is_empty() {
+                errors.push(error(
+                    ValidationRule::SafetensorsRequiresPath,
+                    "model.path",
+                    "[model].format = \"basalt\" requiere [model].path",
+                    ctx,
+                    "model.path",
+                ));
+            }
+        }
+        ModelFormat::Basalt => errors.push(error(
+            ValidationRule::NonSafetensorsForbidsPath,
+            "model.format",
+            "el formato basalt sólo es válido con engine = \"basalt\"",
+            ctx,
+            "model.format",
+        )),
         _ if spec.model.path.is_empty() => {}
         _ if matches!(spec.model.format, ModelFormat::Q4nx | ModelFormat::Strata) => {}
         _ => {
             errors.push(error(
                 ValidationRule::NonSafetensorsForbidsPath,
                 "model.path",
-        "[model].path sólo se permite con [model].format = \"safetensors\", \"q4nx\" o \"strata\"; quita el campo",
+                "[model].path sólo se permite con [model].format = \"safetensors\", \"q4nx\", \"strata\" o \"basalt\"; quita el campo",
                 ctx,
                 "model.path",
             ));
@@ -262,6 +280,15 @@ pub fn validate(spec: &ModelSpec, ctx: &ValidationContext) -> Vec<ValidationErro
                 ValidationRule::DownloadRequiresRepo,
                 "download.file",
                 "[download] requiere file cuando el formato es gguf; declara el fichero",
+                ctx,
+                "download.file",
+            ));
+        }
+        if spec.model.format == ModelFormat::Basalt && download.file.trim().is_empty() {
+            errors.push(error(
+                ValidationRule::DownloadRequiresRepo,
+                "download.file",
+                "[model].format = \"basalt\" requiere [download].file con el nombre del pack del repositorio",
                 ctx,
                 "download.file",
             ));

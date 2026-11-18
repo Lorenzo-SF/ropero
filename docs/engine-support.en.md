@@ -6,7 +6,7 @@ This guide describes what Ropero implements today and separates local checks fro
 
 ## Local evidence
 
-The checkout was reviewed on a machine with `llama-server`, `turbo-llama-server`, `flm`, `ignis-server`, and `strata`; their version or help output was inspected. `vllm`, `mlx-serve`, `trtllm-serve`, and `airllm` were absent, so those four were not tested locally. These observations describe that machine and those versions, not every Ropero installation.
+The checkout was reviewed on a machine with `llama-server`, `turbo-llama-server`, `flm`, `ignis-server`, and `strata`; their version or help output was inspected. `basalt`, `vllm`, `mlx-serve`, `trtllm-serve`, and `airllm` were absent, so those engines were not tested locally. These observations describe that machine and those versions, not every Ropero installation.
 
 ## Engines and known limits
 
@@ -16,6 +16,7 @@ The checkout was reviewed on a machine with `llama-server`, `turbo-llama-server`
 | `turbo-llama` | Uses the `turbo-llama-server` fork with the same GGUF argument and alias path as `llama-server`. | Fork binary and help checked locally. Upstream llama.cpp documentation does not guarantee that every option exists in the fork; verify against the installed version's help. |
 | `fastflowllm` / FLM | Delegates `pull`, `remove`, `list`, and `serve` to `flm`. The registered tag is `[model].alias` when set; otherwise it comes from `[model].path`, or from `--decision` in `[args].base` when `path` is empty. Ropero does not download that artifact into its own model directory. | Local `flm` checked. The official CLI uses tags, with `flm pull <tag>`, `flm serve <tag>`, and `flm remove <tag>`. Format, NPU, and platform support depend on FastFlowLM/XRT. |
 | `ignis` | For `ninfer`, runs `ignis-server model download <id> --out <ARTIFACTS_DIR>/<name>` and serves the artifact from that directory. At launch it passes `--model-id <alias>` when the TOML declares `alias`. | Local `ignis-server` checked. Ignis documents catalog downloads with `--out` and the id exposed by the API. Ropero recognizes only the declared ids/artifacts for included Ignis models; this does not imply arbitrary model compatibility. |
+| `basalt` | Downloads a `.basalt` pack as a file under `ARTIFACTS_DIR`, runs `basalt serve <pack> --host 127.0.0.1 --alias <alias> ...`, and appends Ropero's allocated port. `[args]` maps native Basalt options, including GPU, KV, and context. | Integrated through manifest, download, and launch; no real launch was tested on this machine. Basalt requires Linux x86-64, NVIDIA Blackwell (sm_120), CUDA 13, Python 3.10+, and RAM for experts that do not fit in VRAM. Ropero checks Linux and NVIDIA presence only; Basalt validates the GPU model at launch. |
 | `strata` | Finds an installed profile with `strata models list --installed --output json`, maps `[model].path` to its profile id (for example, `gyro/Gyro-S` → `gyro-gyro-s`), then launches `strata serve --profile …`. Model options and flags are appended. When `[model].alias` is set, Ropero creates a private run-config copy with that id in `aliases`, leaving the source unchanged. Ropero format `strata` represents a Strata-prepared profile. | Local `strata serve` help confirms the mapped options (`--parallel`, `--batch-groups`, `--max-queue`, `--queue-timeout`, `--batch-telemetry`, `--offline`). `gyro-s` is detected as installed; Strata lists `gyro-m` but reports missing components. Ropero does not download or create profiles. |
 | `vllm` | The runtime can pass model arguments and adjusts `--log-level`; the expected binary is `vllm`. | Not installed locally; no real launch was tested. Official documentation describes `vllm serve` and its options, but the current catalog has no vLLM model example with an end-to-end verified recipe. Treat as integrated/documented, not proven. |
 | `mlx-serve` | The runtime passes `--model` with the resolved local path, pins `--host 127.0.0.1`, adds the allocated port, and appends TOML arguments. For safetensors models with `[model].alias`, it writes the alias to `~/.mlx-serve/model-settings.json`, preserving other settings. | Not installed locally; no real launch was tested. Upstream documents aliases in release v26.10.1; use that version or newer. Project requires macOS and Apple Silicon. Maturity is `integrated`, not `proven`. |
@@ -27,6 +28,23 @@ The checkout was reviewed on a machine with `llama-server`, `turbo-llama-server`
 `levels.list`, `flags.list`, and `options.list` advertise interface values. Each entry must have its matching `[args.level.<id>]`, `[args.flag.<id>]`, or `[args.option.<id>]` block; validation rejects entries without a mapping. Options must map to flags accepted by that specific engine CLI. Ropero does not automatically translate one engine's options into another engine's syntax.
 
 Common launch controls (`--port`, API key, and log level) are handled by the runtime only where a specific engine adapter exists. Do not assume that the same flag or behavior exists across all engines.
+
+## Install and use Basalt
+
+Basalt publishes prebuilt archives with each release. Extract the complete Linux x64 archive to `~/.local/share/ropero/engines/basalt/`, create the Python environment required by the archive, and use CUDA 13 with a compatible NVIDIA driver. Keep `bin/`, `serve/`, `tools/`, `data/`, and `requirements.txt` together: Ropero links `bin/basalt`, while the server needs the other components beside the executable.
+
+```sh
+cd ~/.local/share/ropero/engines/basalt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+ropero install engines basalt
+mkdir -p ~/.config/ropero/models/basalt
+cp /path/to/ropero/models/basalt/qwen3.8-flash-next-basalt.toml ~/.config/ropero/models/basalt/
+ropero install models qwen3.8-flash-next
+ropero qwen3.8-flash-next
+```
+
+The TOML uses the official Hugging Face pack `Qwen3.8-FN-NVFP4-DQ6_K.basalt` (~122 GiB). `manual = true` excludes it from bulk installs; naming it explicitly still installs it. The download needs the `hf` CLI, authenticated if Hugging Face requires it. The artifact is stored under `ARTIFACTS_DIR` (by default `~/models/basalt`). Basalt offers OpenAI and Anthropic Messages APIs; Ropero uses them for OpenAI-compatible clients and Claude Code, respectively. Basalt accepts API keys only in argv, so Ropero does not send one and forces loopback (`127.0.0.1`).
 
 ## Model aliases
 
@@ -47,3 +65,8 @@ Common launch controls (`--port`, API key, and log level) are handled by the run
 - [MLX-Serve: v26.10.1 release](https://github.com/ddalcu/mlx-serve/discussions/672)
 - [TensorRT-LLM: `trtllm-serve`](https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve/trtllm-serve.html)
 - [AirLLM: official repository](https://github.com/lyogavin/airllm)
+- [Basalt: repository and quick start](https://github.com/jesdga95/basalt)
+- [Basalt: platforms and releases](https://github.com/jesdga95/basalt/blob/main/docs/platforms.md)
+- [Basalt: server and engine options](https://github.com/jesdga95/basalt/blob/main/docs/configuration/index.md)
+- [Basalt: Qwen3.8-Flash-Next guide](https://github.com/jesdga95/basalt/blob/main/docs/models/qwen38-flash-next.md)
+- [Basalt: model packs](https://huggingface.co/jesdga/Qwen3.8-Flash-Next-Basalt)

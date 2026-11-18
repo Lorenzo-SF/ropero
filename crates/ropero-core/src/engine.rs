@@ -43,6 +43,8 @@ pub enum EngineId {
     Strata,
     #[serde(rename = "ignis")]
     Ignis,
+    #[serde(rename = "basalt")]
+    Basalt,
 }
 
 /// Deserializa el motor acepta **los ids canónicos y los alias legacy**.
@@ -74,7 +76,7 @@ impl std::fmt::Display for UnknownEngine {
         write!(
             f,
             "motor desconocido: '{}'; usa uno de: llama-server, turbo-llama, \
-             mlx-serve, fastflowllm, tensorrt-llm, vllm, airllm, strata, ignis",
+             mlx-serve, fastflowllm, tensorrt-llm, vllm, airllm, strata, ignis, basalt",
             self.0
         )
     }
@@ -102,6 +104,7 @@ pub const CANONICAL_IDS: &[&str] = &[
     "airllm",
     "strata",
     "ignis",
+    "basalt",
 ];
 
 impl EngineId {
@@ -117,6 +120,7 @@ impl EngineId {
             Self::AirLlm => "airllm",
             Self::Strata => "strata",
             Self::Ignis => "ignis",
+            Self::Basalt => "basalt",
         }
     }
 
@@ -137,6 +141,7 @@ impl EngineId {
             "airllm" => Self::AirLlm,
             "strata" => Self::Strata,
             "ignis" => Self::Ignis,
+            "basalt" => Self::Basalt,
             // Alias legacy (ADR-004): se canonicalizan CON aviso.
             //
             // `llama-server-official` y `llama-official` apuntaban al repo
@@ -189,6 +194,7 @@ impl EngineId {
             "airllm" => Some(Self::AirLlm),
             "strata" => Some(Self::Strata),
             "ignis" => Some(Self::Ignis),
+            "basalt" => Some(Self::Basalt),
             // Directorios legacy (ADR-004): el fork era `llama/` y el
             // oficial `llama-official/`.
             "llama" => Some(Self::TurboLlama),
