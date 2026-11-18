@@ -163,7 +163,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "test",
-        usage: "test [--model <id>] [--group A..G] [--test <id>] [--dimension <name>] [--all]",
+        usage: "test [--model <id> | --all-models] [--test <id> | --test-group A..G] [--path <path>]",
         summary: "lanza la batería de pruebas contra un modelo",
         phase: None,
         state: CommandState::Ready,
@@ -410,27 +410,23 @@ pub const FLAGS_RUN: &[Flag] = &[
     ),
 ];
 
-/// Los flags de `ropero test` (doc CLI v2 §13).
-///
-/// Los selectores se llaman en inglés de forma consistente con el contrato
-/// CLI: `--model`, `--group`, `--test`, `--dimension` y `--all`.
+/// Los flags de `ropero test`.
 pub const FLAGS_TEST: &[Flag] = &[
     Flag::value(
         "model",
         "MODELO",
-        "el modelo que se prueba (sin él, se elige de los disponibles)",
+        "modelo a probar; su engine se detiene al terminar (excluyente con --all-models)",
     ),
-    Flag::value("group", "A..G", "el grupo de tests que se lanza"),
+    Flag::switch(
+        "all-models",
+        "prueba en serie todos los modelos disponibles y detiene cada engine al terminar; excluyente con --model",
+    ),
+    Flag::value("test-group", "A..G", "el grupo de tests que se lanza"),
     Flag::value("test", "ID|FICHERO", "un solo test (su id o su fichero)"),
     Flag::value(
-        "dimension",
-        "NOMBRE",
-        "las tests de una dimensión del índice (prefijo único vale)",
-    ),
-    Flag::switch("all", "toda la batería"),
-    Flag::switch(
-        "json",
-        "el informe en JSON por stdout (el texto va a stderr)",
+        "path",
+        "RUTA",
+        "directorio donde guardar los resultados (por defecto: directorio actual)",
     ),
 ];
 

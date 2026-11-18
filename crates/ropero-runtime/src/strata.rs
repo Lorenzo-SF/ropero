@@ -14,6 +14,16 @@ pub fn profile_for(
     env: &Environment,
 ) -> Result<PathBuf, String> {
     let expected = profile_id(&spec.model.path);
+    // Strata's installed run configs are top-level strata-<id>.json files.
+    // Prefer the copy with present artifacts when several installs contain
+    // the same profile id.
+    if let Some(path) = direct_profile(engine, env, &expected) {
+        let path = validate_profile_path(&path)?;
+        return match spec.model.alias.as_deref() {
+            Some(alias) => profile_with_alias(&path, spec, env, alias),
+            None => Ok(path),
+        };
+    }
     let path = installed_profiles(engine, env)?
         .remove(&expected)
         .ok_or_else(|| {
@@ -27,6 +37,50 @@ pub fn profile_for(
         return Ok(path);
     };
     profile_with_alias(&path, spec, env, alias)
+}
+
+fn direct_profiles(engine: &EngineManifest, env: &Environment, expected: &str) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(install) = env.get("STRATA_INSTALL_DIR") {
+        dirs.push(PathBuf::from(install));
+    }
+    if let Some(data) = env.get("STRATA_DATA_DIR") {
+        dirs.push(PathBuf::from(data).join("install"));
+    }
+    // Strata's installed CLI prefers profiles beside its current terminal
+    // package and profiles remembered by its settings. Check the known local
+    // locations without starting its comparatively slow inventory command.
+    if let Some(binary) = crate::sys_engine::binary_of(engine, env)
+        && let Some(parent) = binary.parent()
+    {
+        dirs.push(parent.to_path_buf());
+    }
+    dirs.push(env.home.join("strata"));
+    let data = env
+        .get("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env.home.join(".local/share"));
+    dirs.push(data.join("strata/install"));
+    let mut profiles = Vec::new();
+    for path in dirs
+        .into_iter()
+        .map(|dir| dir.join(format!("strata-{expected}.json")))
+        .filter(|path| path.is_file())
+    {
+        if !profiles.contains(&path) {
+            profiles.push(path);
+        }
+    }
+    profiles
+}
+
+fn direct_profile(engine: &EngineManifest, env: &Environment, expected: &str) -> Option<PathBuf> {
+    let profiles = direct_profiles(engine, env, expected);
+    profiles
+        .iter()
+        .find(|path| profile_artifacts_present(path, env))
+        .cloned()
+        .or_else(|| profiles.into_iter().next())
 }
 
 fn profile_with_alias(
@@ -107,13 +161,233 @@ fn write_private_profile(path: &std::path::Path, bytes: &[u8]) -> Result<(), Str
         .map_err(|error| format!("no se pudo sincronizar el perfil temporal Strata: {error}"))
 }
 
-/// Comprueba si Strata tiene un perfil instalado con todos sus componentes.
-/// La consulta del CLI se cachea por ruta de ejecutable durante el proceso:
-/// `ropero models` evalúa muchos modelos en una sola invocación.
+/// Comprueba si Strata tiene un perfil instalado con sus artefactos requeridos.
 pub fn model_installed(spec: &ModelSpec, engine: &EngineManifest, env: &Environment) -> bool {
+    let expected = profile_id(&spec.model.path);
+    let profiles = direct_profiles(engine, env, &expected);
+    if !profiles.is_empty() {
+        return profiles
+            .iter()
+            .any(|profile| profile_artifacts_present(profile, env));
+    }
     installed_profiles(engine, env)
         .ok()
-        .is_some_and(|mut profiles| profiles.remove(&profile_id(&spec.model.path)).is_some())
+        .and_then(|mut profiles| profiles.remove(&expected))
+        .is_some_and(|profile| profile_artifacts_present(&profile, env))
+}
+
+/// Comprueba los ficheros del perfil sin invocar `strata models inspect`.
+/// El inventario de Strata además sondea hardware y valida kernels, lo que
+/// puede tardar varios segundos; para saber si el modelo está descargado sólo
+/// necesitamos comprobar las rutas requeridas que declara el run config.
+fn profile_artifacts_present(path: &std::path::Path, env: &Environment) -> bool {
+    const MAX_PROFILE_BYTES: u64 = 1024 * 1024;
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_PROFILE_BYTES
+    {
+        return false;
+    }
+
+    let Ok(raw) = std::fs::read(path) else {
+        return false;
+    };
+    let Ok(config) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(object) = config.as_object() else {
+        return false;
+    };
+    let Some(exe) = object.get("exe").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    if !profile_engine_present(exe, path, env) {
+        return false;
+    }
+    let Some(args) = object.get("args").and_then(serde_json::Value::as_array) else {
+        return false;
+    };
+    let base = object
+        .get("cwd")
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            path.parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .into()
+        });
+    let resolve = |raw: &str| {
+        let path = if let Some(rest) = raw.strip_prefix("~/") {
+            env.home.join(rest)
+        } else {
+            std::path::PathBuf::from(raw)
+        };
+        if path.is_absolute() {
+            path
+        } else {
+            base.join(path)
+        }
+    };
+    let Some(tokenizer) = object.get("tokenizer").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let tokenizer = resolve(tokenizer);
+    for file in ["vocab.json", "merges.txt", "token_type.json"] {
+        if !nonempty_file(&tokenizer.join(file)) {
+            return false;
+        }
+    }
+
+    let mut index = 0;
+    while index < args.len() {
+        let Some(flag) = args[index].as_str() else {
+            return false;
+        };
+        let kind = match flag {
+            "--pack" | "--mtp" => Some(false),
+            "--native" | "--ple-gguf" | "--expert-profile" => Some(true),
+            "--control-vector-scaled" => Some(true),
+            _ => None,
+        };
+        if let Some(is_file) = kind {
+            let Some(raw) = args.get(index + 1).and_then(serde_json::Value::as_str) else {
+                return false;
+            };
+            // Numeric --mtp values select draft depth and name no file.
+            if flag == "--mtp" && raw.parse::<u32>().is_ok() {
+                index += 2;
+                continue;
+            }
+            let raw = if flag == "--control-vector-scaled" {
+                raw.rsplit_once(':')
+                    .filter(|(_, scale)| scale.parse::<f32>().is_ok())
+                    .map_or(raw, |(path, _)| path)
+            } else {
+                raw
+            };
+            let resolved = resolve(raw);
+            let present = if is_file {
+                nonempty_file(&resolved)
+            } else {
+                resolved.is_dir()
+            };
+            // Strata treats a missing MTP drafter as optional: the base model
+            // can still serve without speculative decoding. Profiles can also
+            // explicitly disable it or select DFlash.
+            let mtp_optional = flag == "--mtp"
+                || object.get("mtp") == Some(&serde_json::Value::Bool(false))
+                || object
+                    .get("drafting")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|mode| {
+                        matches!(mode.to_ascii_lowercase().as_str(), "off" | "dflash2")
+                    });
+            if !present && !(flag == "--mtp" && mtp_optional) {
+                return false;
+            }
+            index += 2;
+        } else {
+            index += 1;
+        }
+    }
+    true
+}
+
+fn profile_engine_present(exe: &str, profile: &std::path::Path, env: &Environment) -> bool {
+    let Some(component) = exe.strip_prefix("component:") else {
+        let resolved = if let Some(rest) = exe.strip_prefix("~/") {
+            env.home.join(rest)
+        } else {
+            std::path::PathBuf::from(exe)
+        };
+        let resolved = if resolved.is_absolute() {
+            resolved
+        } else {
+            profile
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join(resolved)
+        };
+        return executable_file(&resolved);
+    };
+    let component_id = component.trim();
+    if component_id.is_empty() || component_id.contains(['/', '\\']) {
+        return false;
+    }
+    let root = env
+        .get("STRATA_COMPONENTS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            env.get("XDG_DATA_HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| env.home.join(".local/share"))
+                .join("strata/components")
+        });
+    let package_root = if component_id == "strata-engine" {
+        root.join("engine")
+    } else if let Some(shape) = component_id.strip_prefix("strata-") {
+        root.join("shapes")
+            .join(shape.replace('-', "_"))
+            .join("engine")
+    } else {
+        return false;
+    };
+    let Ok(entries) = std::fs::read_dir(package_root) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            return false;
+        }
+        let package = entry.path();
+        let manifest = package.join("engine-component.json");
+        let Ok(raw) = std::fs::read(manifest) else {
+            return false;
+        };
+        let Ok(manifest) = serde_json::from_slice::<serde_json::Value>(&raw) else {
+            return false;
+        };
+        if manifest.get("id").and_then(serde_json::Value::as_str) != Some(component_id) {
+            return false;
+        }
+        let Some(platform) = manifest.get("platform").and_then(serde_json::Value::as_str) else {
+            return false;
+        };
+        let expected_platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+        if !platform.starts_with(&expected_platform) {
+            return false;
+        }
+        manifest
+            .get("entrypoint")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|entrypoint| executable_file(&package.join(entrypoint)))
+    })
+}
+
+fn executable_file(path: &std::path::Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() || metadata.len() == 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn nonempty_file(path: &std::path::Path) -> bool {
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.len() > 0)
 }
 
 fn installed_profiles(
@@ -189,12 +463,13 @@ fn validate_profile_path(path: &std::path::Path) -> Result<PathBuf, String> {
 }
 
 /// Convierte la pareja familia/modelo de `[model].path` en el id que Strata
-/// asigna a sus run configs (p. ej. `gyro/Gyro-M` → `gyro-gyro-m`).
+/// asigna a sus run configs (p. ej. `gyro/Gyro-M` → `gyro-gyro-m`). Strata
+/// conserva guiones bajos en nombres como `coder-iq1_m`.
 fn profile_id(value: &str) -> String {
     value
         .chars()
         .map(|c| {
-            if c == '/' || c == '_' {
+            if c == '/' {
                 '-'
             } else {
                 c.to_ascii_lowercase()
@@ -217,7 +492,7 @@ pub fn serve_argv(profile: &std::path::Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{profile_id, profile_with_alias};
+    use super::{profile_artifacts_present, profile_id, profile_with_alias};
     use ropero_core::{Environment, parse_model};
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -226,6 +501,66 @@ mod tests {
     fn path_del_catalogo_corresponde_al_id_de_perfil_de_strata() {
         assert_eq!(profile_id("gyro/Gyro-M"), "gyro-gyro-m");
         assert_eq!(profile_id("gyro/Gyro-S"), "gyro-gyro-s");
+        assert_eq!(profile_id("coder/IQ1_M"), "coder-iq1_m");
+    }
+
+    #[test]
+    fn detecta_componentes_de_un_perfil_sin_invocar_strata() {
+        let root = std::env::temp_dir().join(format!("ropero-strata-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tokenizer = root.join("tokenizer");
+        let pack = root.join("pack");
+        let engine_dir = root.join("components/engine/test-engine");
+        std::fs::create_dir_all(&tokenizer).unwrap();
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::create_dir_all(&engine_dir).unwrap();
+        let engine = engine_dir.join("strata");
+        std::fs::write(&engine, "engine").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&engine, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::fs::write(
+            engine_dir.join("engine-component.json"),
+            serde_json::json!({
+                "id": "strata-engine",
+                "platform": format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+                "entrypoint": "strata"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        for file in ["vocab.json", "merges.txt", "token_type.json"] {
+            std::fs::write(tokenizer.join(file), "x").unwrap();
+        }
+        let model = root.join("model.gguf");
+        std::fs::write(&model, "x").unwrap();
+        let profile = root.join("strata-test.json");
+        std::fs::write(
+            &profile,
+            serde_json::json!({
+                "exe": "component:strata-engine",
+                "cwd": root,
+                "tokenizer": "tokenizer",
+                "args": ["--pack", "pack", "--native", "model.gguf", "--mtp", "missing/rt"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let env = Environment::new(
+            BTreeMap::from([(
+                "STRATA_COMPONENTS_DIR".to_string(),
+                root.join("components").to_string_lossy().into_owned(),
+            )]),
+            root.clone(),
+            root.clone(),
+        );
+
+        assert!(profile_artifacts_present(&profile, &env));
+        std::fs::remove_file(&model).unwrap();
+        assert!(!profile_artifacts_present(&profile, &env));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

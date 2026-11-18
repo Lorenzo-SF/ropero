@@ -247,7 +247,7 @@ pub fn serve_argv(
         .as_ref()
         .map(|s| s.defaults.as_slice())
         .unwrap_or(&[]);
-    argv.extend(defaults.iter().cloned());
+    argv.extend(defaults_without_model_overrides(defaults, model_argv));
     if let Some(ctx) = ctx {
         let has_ctx = defaults.iter().any(|a| a == "--ctx-len")
             || model_argv.iter().any(|a| a == "--ctx-len");
@@ -258,6 +258,43 @@ pub fn serve_argv(
     }
     argv.extend(model_argv.iter().cloned());
     Ok(argv)
+}
+
+/// Retira de los defaults las opciones que el modelo declara explícitamente.
+/// Así Ropero aplica el override antes de llamar a FLM, sin depender de cómo
+/// esa CLI resuelva dos valores para la misma opción.
+fn defaults_without_model_overrides(defaults: &[String], model_argv: &[String]) -> Vec<String> {
+    let overrides = model_argv
+        .iter()
+        .map(|argument| {
+            argument
+                .split_once('=')
+                .map_or(argument.as_str(), |(key, _)| key)
+        })
+        .filter(|argument| argument.starts_with("--"))
+        .map(str::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut kept = Vec::with_capacity(defaults.len());
+    let mut index = 0;
+    while index < defaults.len() {
+        let argument = &defaults[index];
+        let key = argument
+            .split_once('=')
+            .map_or(argument.as_str(), |(key, _)| key);
+        let replaced = overrides.contains(key);
+        let has_value = !argument.contains('=')
+            && defaults
+                .get(index + 1)
+                .is_some_and(|value| !value.starts_with("--"));
+        if !replaced {
+            kept.push(argument.clone());
+            if has_value && let Some(value) = defaults.get(index + 1) {
+                kept.push(value.clone());
+            }
+        }
+        index += if has_value { 2 } else { 1 };
+    }
+    kept
 }
 
 /// Ejecuta `flm pull` para todos los tags relevantes del modelo.
@@ -371,6 +408,36 @@ base = ["--prefill-chunk-len", "8192"]
                 "8192",
             ]
         );
+    }
+
+    #[test]
+    fn args_del_modelo_sustituyen_los_defaults_sin_repetir_la_opcion() {
+        let manifest = flm_manifest();
+        let spec = parse_model(
+            r#"
+[model]
+name = "lfm3"
+engine = "fastflowllm"
+context = 131072
+format = "q4nx"
+path = "lfm3:1.7b"
+[files]
+[args]
+base = ["--q-len", "8"]
+"#,
+            Path::new("lfm3.toml"),
+        )
+        .expect("model");
+        let argv = serve_argv(&manifest, &spec, &spec.args.base, None).expect("argv");
+        let positions = argv
+            .iter()
+            .enumerate()
+            .filter(|(_, argument)| argument.as_str() == "--q-len")
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        assert_eq!(positions.len(), 1);
+        assert_eq!(argv[positions[0] + 1], "8");
+        assert!(argv.windows(2).any(|pair| pair == ["--host", "127.0.0.1"]));
     }
 
     #[test]

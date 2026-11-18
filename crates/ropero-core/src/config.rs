@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use crate::estilo::{Celda, Columna, Seccion, Tabla, pares};
 use crate::palette::Palette;
-use crate::{EngineColor, EngineId, EngineManifest, Environment, PortRange};
+use crate::{EngineId, EngineManifest, Environment, PortRange};
 
 /// El nombre del directorio de ropero dentro del de configuración.
 pub const DIR_ROPERO: &str = "ropero";
@@ -163,7 +163,6 @@ pub struct ConfigEngine {
     pub safetensors_dir: Option<Ruta>,
     pub port_min: Option<u16>,
     pub port_max: Option<u16>,
-    pub color: Option<EngineColor>,
     /// Clave Bearer opcional que exigen los endpoints de este motor.
     /// Se redacta en todas las vistas de configuración.
     pub api_key: Option<String>,
@@ -178,7 +177,6 @@ impl std::fmt::Debug for ConfigEngine {
             .field("safetensors_dir", &self.safetensors_dir)
             .field("port_min", &self.port_min)
             .field("port_max", &self.port_max)
-            .field("color", &self.color)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
@@ -260,6 +258,13 @@ impl Config {
     }
 
     pub fn models_toml_dir(&self, engine: EngineId) -> Ruta {
+        if let Some(path) = self
+            .engines
+            .get(&engine)
+            .and_then(|engine| engine.models_toml_dir.as_ref())
+        {
+            return path.clone();
+        }
         Ruta::new(
             self.models_dir.valor.join(engine.as_str()),
             self.models_dir.origen.clone(),
@@ -270,7 +275,25 @@ impl Config {
         self.gguf_dir.clone()
     }
 
-    pub fn artifacts_dir_de(&self, _engine: EngineId) -> Ruta {
+    pub fn artifacts_dir_de(&self, engine: EngineId) -> Ruta {
+        if let Some(path) = self
+            .engines
+            .get(&engine)
+            .and_then(|engine| engine.artifacts_dir.as_ref())
+        {
+            return path.clone();
+        }
+        if engine == EngineId::Basalt
+            && (self.artifacts_dir.origen == Origen::Defecto
+                || self
+                    .artifacts_dir
+                    .valor
+                    .file_name()
+                    .is_some_and(|name| name == "ignis"))
+            && let Some(parent) = self.artifacts_dir.valor.parent()
+        {
+            return Ruta::new(parent.join("basalt"), self.artifacts_dir.origen.clone());
+        }
         self.artifacts_dir.clone()
     }
 
@@ -278,16 +301,13 @@ impl Config {
         self.safetensors_dir.clone()
     }
 
-    /// Sobrescribe color y puertos una vez cargados los manifests.
+    /// Sobrescribe los puertos una vez cargados los manifests.
     pub fn overlay_engines(&self, manifests: &mut [EngineManifest]) -> Result<(), ErrorConfig> {
         let mut effective = manifests.to_vec();
         for manifest in &mut effective {
             let Some(overrides) = self.engines.get(&manifest.id) else {
                 continue;
             };
-            if let Some(color) = overrides.color {
-                manifest.color = color;
-            }
             if overrides.port_min.is_some() || overrides.port_max.is_some() {
                 let min = overrides.port_min.unwrap_or(manifest.port_range.min);
                 let max = overrides.port_max.unwrap_or(manifest.port_range.max);
@@ -659,7 +679,8 @@ fn parse_engine_config(
     for (field, value) in fields {
         let name = format!("engines.{id}.{field}");
         match field.as_str() {
-            "models_toml_dir" | "artifacts_dir" | "gguf_dir" | "safetensors_dir" => {
+            "models_path" | "models_toml_dir" | "artifacts_dir" | "gguf_dir"
+            | "safetensors_dir" => {
                 let Some(raw) = value.as_str() else {
                     return Err(ErrorConfig::de_campo(
                         &name,
@@ -672,7 +693,7 @@ fn parse_engine_config(
                 }
                 let route = Ruta::new(env.expand_path(raw), Origen::Archivo);
                 match field.as_str() {
-                    "models_toml_dir" => result.models_toml_dir = Some(route),
+                    "models_path" | "models_toml_dir" => result.models_toml_dir = Some(route),
                     "artifacts_dir" => result.artifacts_dir = Some(route),
                     "gguf_dir" => result.gguf_dir = Some(route),
                     _ => result.safetensors_dir = Some(route),
@@ -700,20 +721,9 @@ fn parse_engine_config(
                 }
             }
             "color" => {
-                let Some(raw) = value.as_str() else {
-                    return Err(ErrorConfig::de_campo(
-                        &name,
-                        "",
-                        "debe ser un color de la leyenda",
-                    ));
-                };
-                result.color = Some(parse_engine_color(raw).ok_or_else(|| {
-                    ErrorConfig::de_campo(
-                        &name,
-                        raw,
-                        "color desconocido; usa un color de la leyenda de motores",
-                    )
-                })?);
+                // Legacy setting retained for config-file compatibility;
+                // engine colors are fixed by the built-in hexadecimal theme.
+                let _ = value;
             }
             "api_key" => {
                 let Some(raw) = value.as_str() else {
@@ -732,7 +742,7 @@ fn parse_engine_config(
                 return Err(ErrorConfig::de_campo(
                     &name,
                     value.to_string().as_str(),
-                    "campo desconocido (models_toml_dir, artifacts_dir, gguf_dir, safetensors_dir, port_min, port_max, color, api_key)",
+                    "campo desconocido (models_path, artifacts_dir, gguf_dir, safetensors_dir, port_min, port_max, api_key)",
                 ));
             }
         }
@@ -747,22 +757,6 @@ fn parse_engine_config(
         ));
     }
     Ok(result)
-}
-
-fn parse_engine_color(raw: &str) -> Option<EngineColor> {
-    Some(match raw {
-        "sin-color" => EngineColor::SinColor,
-        "naranja" => EngineColor::Naranja,
-        "amarillo" => EngineColor::Amarillo,
-        "rojo" => EngineColor::Rojo,
-        "gris" => EngineColor::Gris,
-        "blanco" => EngineColor::Blanco,
-        "verde-pistacho" => EngineColor::VerdePistacho,
-        "morado" => EngineColor::Morado,
-        "verde-pálido" => EngineColor::VerdePalido,
-        "cian" => EngineColor::Cian,
-        _ => return None,
-    })
 }
 
 /// La configuración final: el archivo de configuración (si lo hay) sobre los
@@ -874,31 +868,41 @@ pub fn ejemplo_config(config: &Config) -> String {
         EngineId::AirLlm,
         EngineId::Strata,
         EngineId::Ignis,
+        EngineId::Basalt,
     ] {
-        let (port_min, port_max, color) = valores_por_defecto_engine(id);
+        let (port_min, port_max) = valores_por_defecto_engine(id);
         out.push_str(&format!(
-            "\n[engines.{}]\nport_min = {}\nport_max = {}\ncolor = \"{}\"\n# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n",
+            "\n[engines.{}]\nmodels_path = \"{}\"\nport_min = {}\nport_max = {}\n# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n",
             id.as_str(),
+            escapa_toml(&config.models_toml_dir(id).valor.to_string_lossy()),
             port_min,
             port_max,
-            color.as_str(),
         ));
+        if id == EngineId::Basalt
+            && let Some(parent) = config.artifacts_dir.valor.parent()
+        {
+            out.push_str(&format!(
+                "artifacts_dir = \"{}\"\n",
+                escapa_toml(&parent.join("basalt").to_string_lossy())
+            ));
+        }
     }
     out
 }
 
-/// Valores base de puertos y color, alineados con los manifiestos embebidos.
-fn valores_por_defecto_engine(id: EngineId) -> (u16, u16, EngineColor) {
+/// Valores base de puertos, alineados con los manifiestos embebidos.
+fn valores_por_defecto_engine(id: EngineId) -> (u16, u16) {
     match id {
-        EngineId::LlamaServer => (9980, 9989, EngineColor::Naranja),
-        EngineId::TurboLlama => (9990, 9999, EngineColor::Amarillo),
-        EngineId::FastFlowLm => (9970, 9979, EngineColor::Rojo),
-        EngineId::MlxServe => (9960, 9969, EngineColor::Gris),
-        EngineId::TensorRtLlm => (9950, 9959, EngineColor::VerdePistacho),
-        EngineId::Vllm => (9940, 9949, EngineColor::Morado),
-        EngineId::AirLlm => (9930, 9939, EngineColor::Blanco),
-        EngineId::Strata => (9920, 9929, EngineColor::VerdePalido),
-        EngineId::Ignis => (9910, 9919, EngineColor::Cian),
+        EngineId::LlamaServer => (9980, 9989),
+        EngineId::TurboLlama => (9990, 9999),
+        EngineId::FastFlowLm => (9970, 9979),
+        EngineId::MlxServe => (9960, 9969),
+        EngineId::TensorRtLlm => (9950, 9959),
+        EngineId::Vllm => (9940, 9949),
+        EngineId::AirLlm => (9930, 9939),
+        EngineId::Strata => (9920, 9929),
+        EngineId::Ignis => (9910, 9919),
+        EngineId::Basalt => (9900, 9909),
     }
 }
 
@@ -1004,44 +1008,25 @@ pub fn lineas_config(
             .columna(Columna::texto(if english { "value" } else { "valor" }))
             .columna(Columna::texto(if english { "source" } else { "origen" }));
         for (engine, overrides) in &config.engines {
-            let mut values = vec![
-                (
-                    if english { "ports" } else { "puertos" },
-                    match (overrides.port_min, overrides.port_max) {
-                        (None, None) => "manifest".to_string(),
-                        (Some(min), Some(max)) => format!("{min}-{max}"),
-                        (Some(min), None) => format!("{min}-manifest"),
-                        (None, Some(max)) => format!("manifest-{max}"),
-                    },
-                    if overrides.port_min.is_some() || overrides.port_max.is_some() {
-                        if english {
-                            "config.toml file"
-                        } else {
-                            "archivo config.toml"
-                        }
+            let mut values = vec![(
+                if english { "ports" } else { "puertos" },
+                match (overrides.port_min, overrides.port_max) {
+                    (None, None) => "manifest".to_string(),
+                    (Some(min), Some(max)) => format!("{min}-{max}"),
+                    (Some(min), None) => format!("{min}-manifest"),
+                    (None, Some(max)) => format!("manifest-{max}"),
+                },
+                if overrides.port_min.is_some() || overrides.port_max.is_some() {
+                    if english {
+                        "config.toml file"
                     } else {
-                        "manifest"
+                        "archivo config.toml"
                     }
-                    .to_string(),
-                ),
-                (
-                    "color",
-                    overrides
-                        .color
-                        .map(|color| color.as_str().to_string())
-                        .unwrap_or_else(|| "manifest".to_string()),
-                    if overrides.color.is_some() {
-                        if english {
-                            "config.toml file"
-                        } else {
-                            "archivo config.toml"
-                        }
-                    } else {
-                        "manifest"
-                    }
-                    .to_string(),
-                ),
-            ];
+                } else {
+                    "manifest"
+                }
+                .to_string(),
+            )];
             if overrides.models_toml_dir.is_some()
                 || overrides.artifacts_dir.is_some()
                 || overrides.gguf_dir.is_some()
@@ -1130,10 +1115,9 @@ pub fn lineas_doctor_config(estado: &EstadoConfig, config: &Config) -> Vec<Strin
                 estado.archivo.display()
             ));
         }
-        if overrides.port_min.is_some() || overrides.port_max.is_some() || overrides.color.is_some()
-        {
+        if overrides.port_min.is_some() || overrides.port_max.is_some() {
             out.push(format!(
-                "    puertos: {}-{}; color: {}",
+                "    puertos: {}-{}",
                 overrides
                     .port_min
                     .map(|p| p.to_string())
@@ -1142,7 +1126,6 @@ pub fn lineas_doctor_config(estado: &EstadoConfig, config: &Config) -> Vec<Strin
                     .port_max
                     .map(|p| p.to_string())
                     .unwrap_or_else(|| "manifest".to_string()),
-                overrides.color.map(|c| c.as_str()).unwrap_or("manifest"),
             ));
         }
     }
@@ -1227,7 +1210,7 @@ pub fn config_a_json(estado: &EstadoConfig, config: &Config) -> String {
                 ","
             };
             out.push_str(&format!(
-                "    \"{}\": {{\n      \"models_toml_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"artifacts_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"gguf_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"safetensors_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"port_min\": {},\n      \"port_max\": {},\n      \"color\": \"{}\"\n    }}{comma}\n",
+                "    \"{}\": {{\n      \"models_path\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"artifacts_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"gguf_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"safetensors_dir\": {{\"valor\": \"{}\", \"origen\": \"{}\"}},\n      \"port_min\": {},\n      \"port_max\": {}\n    }}{comma}\n",
                 engine.as_str(),
                 escapa_json(&tomls.valor.to_string_lossy()),
                 escapa_json(&tomls.origen.clave()),
@@ -1239,7 +1222,6 @@ pub fn config_a_json(estado: &EstadoConfig, config: &Config) -> String {
                 escapa_json(&safetensors.origen.clave()),
                 overrides.port_min.map(|p| p.to_string()).unwrap_or_else(|| "null".to_string()),
                 overrides.port_max.map(|p| p.to_string()).unwrap_or_else(|| "null".to_string()),
-                overrides.color.map(|color| color.as_str()).unwrap_or("manifest"),
             ));
         }
         out.push_str("  ");

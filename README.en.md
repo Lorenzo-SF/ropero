@@ -40,6 +40,12 @@ agent connections, and an internal evaluation suite. Support varies by command,
 engine, and agent. Check `ropero --help`, the changelog, and the specification
 before assuming a workflow is complete.
 
+Basalt is integrated for Linux x86-64 with an NVIDIA Blackwell GPU. Ropero
+downloads its `.basalt` pack, starts Basalt's OpenAI server, and assigns its
+port; the manifest and Qwen3.8-Flash-Next TOML are in `engines/basalt.toml` and
+`models/basalt/`. The [engine compatibility guide](docs/engine-support.en.md#install-and-use-basalt)
+covers CUDA/Python requirements, setup, and authentication limits.
+
 ## Build and check
 
 From the repository root:
@@ -61,6 +67,30 @@ of the current working directory:
 ```bash
 cargo run --locked -p ropero-cli -- config
 cargo run --locked -p ropero-cli -- models --all
+```
+
+### Model setup and evaluation
+
+`ropero models add` opens an interactive model wizard. It also accepts a TOML
+file with `--path`, TOML from standard input with `--stdin`, or direct values
+and repeatable `--set` assignments. `ropero template` prints the compact schema
+guide; model creation is validated by Ropero itself.
+
+`ropero test` opens model, group, and test selectors when run without options.
+For automation, pass `--model` and exactly one of `--test` or `--test-group`;
+`--path` selects the results directory.
+
+Models and tests run sequentially. Ropero stops the tested model's engine when
+that model's run finishes, including when `--all-models` is selected.
+
+For example:
+
+```bash
+ropero test --model qwen --test-group A --path ./results
+ropero test --model qwen --test A1 --path ./results
+ropero command qwen
+ropero info qwen
+ropero status --live
 ```
 
 ### Catalog, configuration, and overrides

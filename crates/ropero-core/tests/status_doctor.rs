@@ -46,9 +46,9 @@ fn el_status_muestra_cpu_gpu_ram_y_swap() {
     assert!(texto.contains("CPU"), "texto={texto}");
     assert!(texto.contains("GPU"), "texto={texto}");
     assert!(texto.contains("RAM"), "texto={texto}");
-    assert!(texto.contains("SWAP"), "texto={texto}");
-    assert!(texto.contains("3.40 GHz"), "texto={texto}");
-    assert!(texto.contains("58.0 °C"), "texto={texto}");
+    assert!(texto.contains("SWP"), "texto={texto}");
+    assert!(texto.contains("3,40GHz"), "texto={texto}");
+    assert!(texto.contains("58,00°C"), "texto={texto}");
     assert!(texto.contains("NVIDIA GeForce RTX 5080"), "texto={texto}");
 }
 
@@ -63,11 +63,10 @@ fn la_ram_sale_en_uso_de_total() {
         .lines()
         .find(|l| l.contains("RAM"))
         .expect("debe salir la línea de la RAM");
-    let usado = linea.find("8192.0").expect("debe salir el uso de la RAM");
-    let total = linea
-        .find("32768.0")
-        .expect("debe salir el total de la RAM");
-    assert!(usado < total, "la RAM no sale en uso de total: {linea}");
+    assert!(
+        linea.contains("8,0/32,0G 25%"),
+        "RAM no sale en uso/total: {linea}"
+    );
 }
 
 /// El swap también sale en uso de total.
@@ -79,11 +78,12 @@ fn el_swap_sale_en_uso_de_total() {
     let texto = status_text(&m);
     let linea = texto
         .lines()
-        .find(|l| l.contains("SWAP"))
+        .find(|l| l.contains("SWP"))
         .expect("debe salir la línea del swap");
-    let usado = linea.find("1024.0").expect("debe salir el uso del swap");
-    let total = linea.find("8192.0").expect("debe salir el total del swap");
-    assert!(usado < total, "el swap no sale en uso de total: {linea}");
+    assert!(
+        linea.contains("SWP 12%"),
+        "debe salir el porcentaje de swap: {linea}"
+    );
 }
 
 /// Lo que no se puede leer se dice, no se inventa.
@@ -103,9 +103,9 @@ fn el_zram_se_enseña_aparte_del_swap() {
     m.memory.swap_used_mb = medida(31698.0, "MB");
     let texto = status_text(&m);
     assert!(texto.contains("zram"), "texto={texto}");
-    assert!(texto.contains("31698.0/8192.0 MB"), "texto={texto}");
+    assert!(texto.contains("SWP 387%"), "texto={texto}");
     // Y el zram se nombra con su tamaño, para que no se confunda.
-    assert!(texto.contains("zram 31186.00 MB"), "texto={texto}");
+    assert!(texto.contains("zram 30,5G"), "texto={texto}");
 }
 
 /// Sin zram, el swap es el del kernel y no se habla de zram.
@@ -115,7 +115,7 @@ fn sin_zram_no_se_mentiona_el_zram() {
     m.memory.zram_mb = None;
     let texto = status_text(&m);
     assert!(!texto.contains("zram"), "texto={texto}");
-    assert!(texto.contains("512.0/8192.0 MB"), "texto={texto}");
+    assert!(texto.contains("SWP 6%"), "texto={texto}");
 }
 
 /// La iGPU sale cuando la hay (sólo Linux).
@@ -128,8 +128,10 @@ fn la_igpu_sale_cuando_la_hay() {
         temp_c: medida(48.0, "°C"),
     });
     let texto = status_text(&m);
-    assert!(texto.contains("iGPU"), "texto={texto}");
-    assert!(texto.contains("AMD Radeon 890M"), "texto={texto}");
+    assert!(
+        !texto.contains("AMD Radeon 890M"),
+        "status compacto muestra sólo GPU principal: {texto}"
+    );
 }
 
 /// La conversión de kB a MB.
@@ -147,9 +149,12 @@ fn el_status_es_compacto_y_muestra_las_lecturas() {
         texto.lines().count() <= 7,
         "status demasiado ancho: {texto}"
     );
-    assert!(texto.contains("CPU  3.40 GHz · 58.0 °C"), "texto={texto}");
     assert!(
-        texto.contains("RAM  8192.0/32768.0 MB (25%)"),
+        texto.contains("CPU  3,40GHz 58,00°C │ GPU"),
+        "texto={texto}"
+    );
+    assert!(
+        texto.contains("RAM 8,0/32,0G 25% │ SWP 6%"),
         "texto={texto}"
     );
     assert!(

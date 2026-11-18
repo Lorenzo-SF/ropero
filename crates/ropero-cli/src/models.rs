@@ -16,6 +16,9 @@ pub fn add(matches: &ArgMatches) -> i32 {
         ropero_core::err_line("error: usa una sola vía: --path, --stdin o los flags de creación");
         return 2;
     }
+    let Ok(scan) = crate::discovery::scan() else {
+        return 1;
+    };
     let text = if let Some(path) = matches.get_one::<String>("path") {
         match std::fs::read_to_string(path) {
             Ok(text) => text,
@@ -40,7 +43,8 @@ pub fn add(matches: &ArgMatches) -> i32 {
             }
         }
     } else if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        match ropero_runtime::model_draft::wizard_toml() {
+        match ropero_runtime::model_draft::wizard_toml(&scan.engines, &scan.env, &scan.config.lang)
+        {
             Ok(text) => text,
             Err(message) => {
                 ropero_core::err_line(&format!("error: {message}"));
@@ -50,9 +54,6 @@ pub fn add(matches: &ArgMatches) -> i32 {
     } else {
         ropero_core::err_line("error: sin terminal, indica --path, --stdin o flags de creación");
         return 2;
-    };
-    let Ok(scan) = crate::discovery::scan() else {
-        return 1;
     };
     let (cleaned, discarded) = match ropero_core::model_draft::clean(&text) {
         Ok(result) => result,
@@ -75,45 +76,30 @@ pub fn add(matches: &ArgMatches) -> i32 {
             return 2;
         }
     };
-    let destination = scan
-        .root
-        .join(tentative.model.engine.as_str())
-        .join(format!("{}.toml", tentative.model.name));
     let normalized = ropero_core::model_draft::normalize_engine(root_value, &tentative);
-    let cleaned = match toml::to_string_pretty(&normalized) {
+    let mut cleaned = match toml::to_string_pretty(&normalized) {
         Ok(text) => text,
         Err(error) => {
             ropero_core::err_line(&format!("error: no se pudo normalizar el TOML: {error}"));
             return 1;
         }
     };
-    let model = match parse_model(&cleaned, &destination) {
-        Ok(model) => model,
-        Err(error) => {
-            ropero_core::err_line(&format!("error: modelo inválido: {error}"));
-            return 2;
-        }
-    };
-    let seen_names = scan
+    let seen_names: std::collections::BTreeSet<String> = scan
         .catalog
         .models
         .iter()
         .map(|model| model.model.name.clone())
         .collect();
-    let errors = ropero_core::validate(
-        &model,
-        &ValidationContext {
-            source: destination.display().to_string(),
-            source_text: Some(cleaned.clone()),
-            seen_names,
-        },
-    );
-    if !errors.is_empty() {
-        for error in errors {
-            ropero_core::err_line(&format!("error: {}", error.message()));
-        }
-        return 2;
-    }
+    let mut discarded_total = discarded;
+    let destination = match revisar_toml(
+        &mut cleaned,
+        &mut discarded_total,
+        &scan.config,
+        &seen_names,
+    ) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
     if destination.exists() {
         ropero_core::err_line(&format!("error: ya existe {}", destination.display()));
         return 2;
@@ -138,13 +124,122 @@ pub fn add(matches: &ArgMatches) -> i32 {
         return 1;
     }
     let _ = std::fs::remove_file(&temporary);
-    if discarded > 0 {
+    if discarded_total > 0 {
         ropero_core::out_line(&format!(
-            "aviso: se descartaron {discarded} campo(s) que Ropero no utiliza"
+            "aviso: se descartaron {discarded_total} campo(s) que Ropero no utiliza"
         ));
     }
     ropero_core::out_line(&format!("modelo registrado: {}", destination.display()));
     0
+}
+
+fn revisar_toml(
+    text: &mut String,
+    discarded: &mut usize,
+    config: &ropero_core::config::Config,
+    seen_names: &std::collections::BTreeSet<String>,
+) -> Result<std::path::PathBuf, i32> {
+    loop {
+        let source = std::path::Path::new("<model draft>");
+        let model = parse_model(text, source).map_err(|error| {
+            ropero_core::err_line(&format!("error: modelo inválido: {error}"));
+            2
+        })?;
+        let destination = config
+            .models_toml_dir(model.model.engine)
+            .valor
+            .join(format!("{}.toml", model.model.name));
+        let errors = ropero_core::validate(
+            &model,
+            &ValidationContext {
+                source: destination.display().to_string(),
+                source_text: Some(text.clone()),
+                seen_names: seen_names.clone(),
+            },
+        );
+        if !errors.is_empty() {
+            for error in errors {
+                ropero_core::err_line(&format!("error: {}", error.message()));
+            }
+            return Err(2);
+        }
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            return Ok(destination);
+        }
+        ropero_core::out_line("Previsualización del TOML normalizado:");
+        ropero_core::out(text, false);
+        match ropero_runtime::install::pregunta("¿Guardar el modelo? [s/n/cancelar]: ")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "s" | "si" | "sí" | "y" | "yes" => return Ok(destination),
+            "c" | "cancelar" | "q" | "quit" => return Err(0),
+            "n" | "no" => {
+                let blocks = [
+                    "model",
+                    "files",
+                    "download",
+                    "build",
+                    "levels",
+                    "flags",
+                    "options",
+                    "limits",
+                    "aliases",
+                    "description",
+                    "args",
+                ];
+                ropero_core::out_line(&format!(
+                    "Bloques editables: {}. Escribe cancelar para salir.",
+                    blocks.join(", ")
+                ));
+                let Some(block) = ropero_runtime::install::pregunta("Bloque que quieres editar: ")
+                else {
+                    return Err(0);
+                };
+                let block = block.trim();
+                if block.eq_ignore_ascii_case("cancelar") {
+                    return Err(0);
+                }
+                if !blocks.contains(&block) {
+                    ropero_core::err_line("error: bloque no reconocido");
+                    continue;
+                }
+                let Some(assignment) = ropero_runtime::install::pregunta(
+                    "Campo=valor TOML (vacío vuelve a la previsualización): ",
+                ) else {
+                    return Err(0);
+                };
+                let assignment = assignment.trim();
+                if assignment.is_empty() {
+                    continue;
+                }
+                let path = if assignment
+                    .split_once('=')
+                    .is_some_and(|(path, _)| path.contains('.'))
+                {
+                    assignment.to_string()
+                } else {
+                    format!("{block}.{assignment}")
+                };
+                match ropero_core::model_draft::apply_sets(text, &[path])
+                    .map_err(|error| error.to_string())
+                    .and_then(|updated| {
+                        ropero_core::model_draft::clean(&updated).map_err(|error| error.to_string())
+                    }) {
+                    Ok((updated, removed)) => {
+                        *text = updated;
+                        *discarded += removed;
+                    }
+                    Err(error) => {
+                        ropero_core::err_line(&format!("error: edición inválida: {error}"))
+                    }
+                }
+            }
+            _ => ropero_core::err_line("respuesta no válida; responde s, n o cancelar"),
+        }
+    }
 }
 
 fn toml_from_flags(matches: &ArgMatches) -> Result<String, String> {

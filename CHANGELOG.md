@@ -6,6 +6,21 @@
 
 ### Changes
 
+- `status` now uses a compact CPU/GPU, RAM/swap/zram layout and lists active
+  Ropero models; `stop` reads only the process state it needs.
+- Terminal colors use RGB truecolor derived from the documented hexadecimal
+  palette. The engines table no longer includes a color-name column.
+- Strata profile lookup checks the exact installed run-config first, and model
+  availability inspects only catalog-referenced profiles.
+- Interactive `models add` selects installed engines, configures common args
+  before extensions, previews the normalized TOML, and can edit a block or cancel.
+  Repositories, build routes, and multiple auxiliary files remain configurable.
+- The model template is shorter and leaves `[args].base` empty.
+- `ropero test` now accepts `--model` with exactly one of `--test` or
+  `--test-group`, and optional `--path`; interactive selection lists available
+  models, groups, and tests. Each run writes a Markdown report directory and
+  stops a server it started.
+
 - Model format declarations are checked against the selected engine manifest;
   MLX now receives its resolved model path and is bound to loopback by default.
 - MLX and TensorRT maturity labels now match the recorded evidence. The
@@ -26,11 +41,11 @@
 - Codex stores the provider and per-engine profile in `CODEX_HOME` (or
   `~/.codex`) and rejects engines without documented Responses API support.
   llama.cpp receives the public alias through `--alias`.
-- `ropero test` uses `--model`, `--group`, `--test`, `--dimension`, and `--all`.
+- `ropero test` uses `--model`, `--test`, `--test-group`, and `--path`.
 - Ignis stores and looks up each download under `ARTIFACTS_DIR/<internal-name>`;
   Codex validates optional TOML tables without panic-prone indexing.
-- `models` queries `strata models list --installed --output json` and shows
-  complete Strata profiles as available.
+- `models` checks Strata's model inventory using the upstream `models inspect`
+  command for each referenced run config.
 - `info`, `config`, help, and the `test` Markdown report follow the saved
   language. The report links subagent traces and metrics.
 - Public aliases are applied where supported, including Strata through a

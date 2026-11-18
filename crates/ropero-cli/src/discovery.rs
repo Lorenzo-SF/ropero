@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use ropero_core::config::{Config, EstadoConfig};
-use ropero_core::{Catalog, EngineManifest, Environment, ModelSpec, Snapshot};
+use ropero_core::{Catalog, EngineManifest, Environment, Snapshot};
 
 /// El escaneo del catálogo, con el entorno ya capturado.
 pub struct Scan {
@@ -107,16 +107,65 @@ fn fail(e: impl std::fmt::Display) -> i32 {
 /// - Un **motor** está instalado si su `detect` lo encuentra.
 /// - Un **modelo** está descargado si sus ficheros `[files]` existen.
 pub fn snapshot(scan: &Scan) -> Snapshot {
-    let detector = ropero_runtime::Detector {
-        env: &scan.env,
-        engines: &scan.engines,
-    };
-    let modelos: Vec<ModelSpec> = scan
-        .catalog
-        .models
-        .iter()
-        .chain(scan.catalog.fired.iter())
-        .cloned()
-        .collect();
-    ropero_core::snapshot::build_snapshot(&scan.engines, &modelos, &detector)
+    use ropero_core::snapshot::{EnginePresence, EngineState, ModelPresence, ModelState};
+
+    let engines = std::thread::scope(|scope| {
+        let checks = scan
+            .engines
+            .iter()
+            .map(|manifest| {
+                (
+                    manifest,
+                    scope.spawn(move || {
+                        ropero_runtime::engine_installed_with_env(manifest, &scan.env)
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        checks
+            .into_iter()
+            .map(|(manifest, check)| EngineState {
+                presence: if check.join().unwrap_or(false) {
+                    EnginePresence::Installed
+                } else {
+                    EnginePresence::Missing
+                },
+                manifest: manifest.clone(),
+            })
+            .collect::<Vec<_>>()
+    });
+    // Model presence checks can query delegated stores such as Strata and
+    // FLM. Run independent checks concurrently so summary and listing time
+    // follows the slowest engine query instead of the sum of all queries.
+    let models = std::thread::scope(|scope| {
+        let checks = scan
+            .catalog
+            .models
+            .iter()
+            .map(|spec| {
+                let engine = scan
+                    .engines
+                    .iter()
+                    .find(|engine| engine.id == spec.model.engine);
+                (
+                    spec,
+                    scope.spawn(move || {
+                        ropero_runtime::model_downloaded_with_engine(spec, &scan.env, engine)
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+        checks
+            .into_iter()
+            .map(|(spec, check)| ModelState {
+                presence: if check.join().unwrap_or(false) {
+                    ModelPresence::Downloaded
+                } else {
+                    ModelPresence::Missing
+                },
+                spec: spec.clone(),
+            })
+            .collect::<Vec<_>>()
+    });
+    Snapshot::new(engines, models)
 }

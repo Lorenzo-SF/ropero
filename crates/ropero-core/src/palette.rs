@@ -1,16 +1,8 @@
 //! Los **colores reales** de la leyenda de motores (doc CLI v2 §4).
 //!
-//! La leyenda del doc dice "naranja", "verde pistacho", "verde pálido": son
-//! nombres de color, no códigos ANSI. Este módulo los traduce a **ANSI
-//! de 256 colores**, que es lo que un terminal moderno puede pintar de
-//! verdad (y no un `\x1b[33m` genérico que no es ni naranja ni pistacho).
-//!
-//! ## Por qué 256 colores y no los 16 de siempre
-//!
-//! Los 16 básicos no tienen naranja ni verde pistacho: el "amarillo" de
-//! ANSI es un `#ffff00` chillón y el "verde" es `#00aa00`. Con la paleta de
-//! 256 colores se puede pedir un naranja de verdad (`208`), un pistacho
-//! (`154`) o un verde pálido (`193`).
+//! Este es el único archivo con la asignación de colores del producto:
+//! cada tono está declarado como un literal hexadecimal y se convierte a
+//! RGB truecolor sólo al escribir ANSI en el terminal.
 //!
 //! ## El color se puede apagar
 //!
@@ -18,21 +10,45 @@
 //! interruptor ([`Palette::enabled`]): cuando está apagado, el texto sale
 //! **sin** secuencias ANSI, y el listado sigue siendo el mismo.
 
-use crate::EngineColor;
+use crate::{EngineColor, EngineId};
 
-/// El prefijo de las secuencias ANSI de 256 colores.
-const INICIO: &str = "\x1b[38;5;";
-/// El sufijo que cierra una secuencia de color.
-const FIN: &str = "m";
-/// El cierre del color de primer plano: el 39 lo deja como estaba.
-///
-/// Antes se cerraba con el 49, que es un **fondo**, no un primer plano: el
-/// texto que venía detrás de un motor salía en gris. Con el 39, lo que
-/// sigue a un nombre de motor sale con el color de siempre.
-///
-/// Es el **único** reset del sistema: el recorte de una celda cierra el
-/// color con este mismo signo, para que la salida no hable dos idiomas.
-pub const CIERRE: &str = "\x1b[39m";
+/// Cierra los atributos de fondo y primer plano aplicados por la paleta.
+pub const CIERRE: &str = "\x1b[0m";
+
+/// Un color RGB declarado como un único literal hexadecimal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HexColor(pub u32);
+
+impl HexColor {
+    pub const fn rgb(self) -> (u8, u8, u8) {
+        (
+            ((self.0 >> 16) & 0xff) as u8,
+            ((self.0 >> 8) & 0xff) as u8,
+            (self.0 & 0xff) as u8,
+        )
+    }
+
+    pub fn foreground(self) -> String {
+        let (r, g, b) = self.rgb();
+        format!("\x1b[38;2;{r};{g};{b}m")
+    }
+}
+
+pub const HELP_HEADING: HexColor = HexColor(0x7dd3fc);
+pub const RAM_LOW: HexColor = HexColor(0x86efac);
+pub const RAM_MEDIUM: HexColor = HexColor(0xfde68a);
+pub const RAM_HIGH: HexColor = HexColor(0xfca5a5);
+
+// Semantic log colors also live here so CLI components share one palette.
+pub const LOG_ERROR: HexColor = HexColor(0xef4444);
+pub const LOG_WARNING: HexColor = HexColor(0xf59e0b);
+pub const LOG_INFO: HexColor = HexColor(0x22d3ee);
+pub const LOG_PERFORMANCE: HexColor = HexColor(0xd946ef);
+pub const LOG_MUTED: HexColor = HexColor(0x9ca3af);
+pub const LOG_LIGHT: HexColor = HexColor(0xd1d5db);
+pub const LOG_DEFAULT: HexColor = HexColor(0x22c55e);
+pub const LOG_LLAMA_WARN_OFFICIAL: HexColor = HexColor(0xfdba74);
+pub const LOG_LLAMA_WARN_TURBO: HexColor = HexColor(0xfde68a);
 
 /// La paleta: los colores del documento, o ninguno.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,59 +73,54 @@ impl Palette {
     /// Sin color, devuelve el texto tal cual: así el llamante no tiene que
     /// preguntar si hay que escapar.
     pub fn paint(&self, color: EngineColor, texto: &str) -> String {
-        match self.ansi(color) {
-            Some(codigo) => format!("{INICIO}{codigo}{FIN}{texto}{CIERRE}"),
-            None => texto.to_string(),
-        }
+        engine_hex(color).map_or_else(|| texto.to_string(), |hex| self.paint_hex(hex, texto))
     }
 
-    /// Pinta una lectura con un color ANSI de 256 colores elegido por umbral.
-    pub fn paint_code(&self, codigo: u8, texto: &str) -> String {
+    /// Pinta texto negro sobre el fondo hexadecimal indicado.
+    pub fn paint_hex(&self, color: HexColor, texto: &str) -> String {
         if self.enabled {
-            format!("{INICIO}{codigo}{FIN}{texto}{CIERRE}")
+            let (r, g, b) = color.rgb();
+            format!("\x1b[48;2;{r};{g};{b}m\x1b[38;2;0;0;0m{texto}{CIERRE}")
         } else {
             texto.to_string()
         }
     }
+}
 
-    /// El código ANSI de 256 colores de un color de la leyenda.
-    ///
-    /// `None` para el color "sin-color" y para el que no tiene equivalente.
-    pub fn ansi(&self, color: EngineColor) -> Option<u8> {
-        if !self.enabled {
-            return None;
-        }
-        engine_ansi(color)
+/// Hexadecimal de los colores de motores y leyendas.
+pub const fn engine_hex(color: EngineColor) -> Option<HexColor> {
+    match color {
+        EngineColor::Naranja => Some(HexColor(0xfdba74)),
+        EngineColor::Amarillo => Some(HexColor(0xfde68a)),
+        EngineColor::Rojo => Some(HexColor(0xfca5a5)),
+        EngineColor::Gris => Some(HexColor(0xd1d5db)),
+        EngineColor::Blanco => Some(HexColor(0xf3f4f6)),
+        EngineColor::VerdePistacho => Some(HexColor(0xbef264)),
+        EngineColor::Morado => Some(HexColor(0xc4b5fd)),
+        EngineColor::VerdePalido => Some(HexColor(0xd9f99d)),
+        EngineColor::Cian => Some(HexColor(0xa5f3fc)),
+        EngineColor::Azul => Some(HexColor(0x93c5fd)),
+        EngineColor::SinColor => None,
     }
 }
 
-/// El código ANSI de 256 colores de cada color de la leyenda.
-///
-/// La paleta es **fija**: el doc CLI v2 §4 dice qué color es cada motor, y
-/// el mismo motor es siempre el mismo color.
-pub fn engine_ansi(color: EngineColor) -> Option<u8> {
-    match color {
-        // 208: naranja de verdad (#ff8700).
-        EngineColor::Naranja => Some(208),
-        // 220: amarillo cálido (#ffd700).
-        EngineColor::Amarillo => Some(220),
-        // 196: rojo intenso (#ff0000).
-        EngineColor::Rojo => Some(196),
-        // 245: gris medio (#8a8a8a).
-        EngineColor::Gris => Some(245),
-        // 255: blanco puro.
-        EngineColor::Blanco => Some(255),
-        // 154: verde pistacho (#00ff00 con un punto de amarillo).
-        EngineColor::VerdePistacho => Some(154),
-        // 99: morado (#875fff).
-        EngineColor::Morado => Some(99),
-        // 193: verde pálido (#d7ff00, el "verde suave" de la paleta).
-        EngineColor::VerdePalido => Some(193),
-        // 51: cian claro para Ignis.
-        EngineColor::Cian => Some(51),
-        // Sin color: el motor no tiene color asignado.
-        EngineColor::SinColor => None,
+pub const fn engine_color_for_id(id: EngineId) -> EngineColor {
+    match id {
+        EngineId::LlamaServer => EngineColor::Naranja,
+        EngineId::TurboLlama => EngineColor::Amarillo,
+        EngineId::MlxServe => EngineColor::Gris,
+        EngineId::FastFlowLm => EngineColor::Rojo,
+        EngineId::TensorRtLlm => EngineColor::VerdePistacho,
+        EngineId::Vllm => EngineColor::Morado,
+        EngineId::AirLlm => EngineColor::Blanco,
+        EngineId::Strata => EngineColor::VerdePalido,
+        EngineId::Ignis => EngineColor::Cian,
+        EngineId::Basalt => EngineColor::Azul,
     }
+}
+
+pub fn engine_rgb(color: EngineColor) -> Option<(u8, u8, u8)> {
+    engine_hex(color).map(HexColor::rgb)
 }
 
 /// El nombre del color de la leyenda, tal y como lo escribe el manifiesto.

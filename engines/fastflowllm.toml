@@ -9,7 +9,6 @@
 
 id = "fastflowllm"
 label = "FLM (NPU)"
-color = "rojo"
 description = "FastFlowLM (sólo Linux, sólo CPU AMD compatible)"
 
 # R-CTX-3: `proven` = arrancado de verdad en la máquina del dueño.

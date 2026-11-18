@@ -31,9 +31,10 @@ fn parse_config_roundtrip_rutas_especiales() {
     assert_eq!(parseado.models_dir.valor, ruta);
     assert_eq!(parseado.gguf_dir.valor, ruta.join("gguf"));
     assert_eq!(parseado.models_dir.origen, Origen::Archivo);
-    assert_eq!(parseado.engines.len(), 9);
+    assert_eq!(parseado.engines.len(), 10);
     assert!(texto.contains("[models.paths]"));
     assert!(!texto.contains("models_toml_dir ="));
+    assert_eq!(texto.matches("models_path =").count(), 10);
     assert_eq!(texto.matches("gguf_dir =").count(), 1);
     for id in [
         "llama-server",
@@ -45,6 +46,7 @@ fn parse_config_roundtrip_rutas_especiales() {
         "airllm",
         "strata",
         "ignis",
+        "basalt",
     ] {
         assert!(
             texto.contains(&format!("[engines.{id}]")),
@@ -118,24 +120,21 @@ fn config_por_engine_resuelve_rutas_y_preserva_precedencia_global_env() {
     let home = base.join("home");
     std::fs::create_dir_all(&home).unwrap();
     let text = format!(
-        "models_dir = \"{}\"\ngguf_dir = \"{}\"\n\n[engines.llama-server]\nmodels_toml_dir = \"models/custom\"\ngguf_dir = \"~/custom-gguf\"\nsafetensors_dir = \"~/custom-safe\"\nport_min = 8110\nport_max = 8120\ncolor = \"morado\"\n",
+        "models_dir = \"{}\"\ngguf_dir = \"{}\"\n\n[engines.llama-server]\nmodels_path = \"{}\"\ngguf_dir = \"~/custom-gguf\"\nsafetensors_dir = \"~/custom-safe\"\nport_min = 8110\nport_max = 8120\ncolor = \"morado\"\n",
         base.join("catalog").display(),
-        base.join("gguf-global").display()
+        base.join("gguf-global").display(),
+        base.join("models-custom").display()
     );
     let e = env(home.to_str().unwrap(), base.to_str().unwrap(), &[]);
     let cfg = resuelve_config(&e, Some(&text)).unwrap();
     let id = ropero_core::EngineId::LlamaServer;
-    assert_eq!(
-        cfg.models_toml_dir(id).valor,
-        base.join("catalog/llama-server")
-    );
+    assert_eq!(cfg.models_toml_dir(id).valor, base.join("models-custom"));
     assert_eq!(cfg.gguf_dir_de(id).valor, base.join("gguf-global"));
     assert_eq!(
         cfg.safetensors_dir_de(id).valor,
         home.join("models/safetensors")
     );
     assert_eq!(cfg.engines[&id].port_min, Some(8110));
-    assert_eq!(cfg.engines[&id].color.unwrap().as_str(), "morado");
 
     let e = env(
         home.to_str().unwrap(),
@@ -193,7 +192,7 @@ fn config_por_engine_rechaza_id_campos_colores_y_puertos_invalidos() {
     for text in [
         "[engines.nope]\ncolor = \"rojo\"\n",
         "[engines.llama-server]\nrepo = \"owner/repo\"\n",
-        "[engines.llama-server]\ncolor = \"\\u001b[31m\"\n",
+        "[engines.llama-server]\nunknown = \"value\"\n",
         "[engines.llama-server]\nport_min = 0\n",
         "[engines.llama-server]\nport_min = 8200\nport_max = 8100\n",
     ] {
@@ -202,7 +201,7 @@ fn config_por_engine_rechaza_id_campos_colores_y_puertos_invalidos() {
 }
 
 #[test]
-fn overlay_config_aplica_color_puertos_y_rechaza_solapes() {
+fn overlay_config_aplica_puertos_y_el_color_pertenece_al_tema() {
     let e = env("/tmp/home-cfg-engine-overlay", "/tmp", &[]);
     let cfg = parse_config(
         "[engines.llama-server]\nport_min = 9990\nport_max = 9999\ncolor = \"morado\"\n",
@@ -218,7 +217,7 @@ fn overlay_config_aplica_color_puertos_y_rechaza_solapes() {
         .unwrap(),
     ];
     cfg.overlay_engines(&mut engine).unwrap();
-    assert_eq!(engine[0].color.as_str(), "morado");
+    assert_eq!(engine[0].color.as_str(), "naranja");
     assert_eq!(engine[0].port_range.min, 9990);
     assert_eq!(engine[0].port_range.max, 9999);
 

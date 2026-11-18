@@ -24,6 +24,7 @@ pub enum ArtifactLocation {
     FlmTag,
     StrataCatalog,
     NinferDir,
+    BasaltFile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Deserialize, Serialize)]
@@ -39,6 +40,8 @@ pub enum ModelFormat {
     Strata,
     #[serde(rename = "ninfer")]
     Ninfer,
+    #[serde(rename = "basalt")]
+    Basalt,
 }
 
 impl ModelFormat {
@@ -49,6 +52,7 @@ impl ModelFormat {
             Self::Q4nx => "q4nx",
             Self::Strata => "strata",
             Self::Ninfer => "ninfer",
+            Self::Basalt => "basalt",
         }
     }
 
@@ -60,6 +64,7 @@ impl ModelFormat {
             Self::Q4nx => ArtifactLocation::FlmTag,
             Self::Strata => ArtifactLocation::StrataCatalog,
             Self::Ninfer => ArtifactLocation::NinferDir,
+            Self::Basalt => ArtifactLocation::BasaltFile,
         }
     }
 
@@ -87,6 +92,18 @@ impl ModelFormat {
                 };
                 if artifact.is_empty() {
                     "$ARTIFACTS_DIR".to_string()
+                } else {
+                    format!("$ARTIFACTS_DIR/{artifact}")
+                }
+            }
+            Self::Basalt => {
+                let artifact = if path.is_empty() {
+                    file.unwrap_or("")
+                } else {
+                    path
+                };
+                if artifact.is_empty() {
+                    "$ARTIFACTS_DIR/basalt".to_string()
                 } else {
                     format!("$ARTIFACTS_DIR/{artifact}")
                 }

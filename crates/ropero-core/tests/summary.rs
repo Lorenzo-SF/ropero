@@ -352,8 +352,11 @@ fn el_listado_pinta_el_motor_con_su_color() {
         .iter()
         .find(|l| l.contains("llama-server"))
         .expect("debe salir la cabecera de llama-server");
-    // El naranja de la leyenda es el 208 de la paleta de 256.
-    assert!(cabecera.contains("\x1b[38;5;208m"), "cabecera={cabecera:?}");
+    // La leyenda usa el fondo naranja de la paleta hexadecimal del proyecto.
+    assert!(
+        cabecera.contains("\x1b[48;2;253;186;116m\x1b[38;2;0;0;0m"),
+        "cabecera={cabecera:?}"
+    );
     // Y el texto del motor sigue ahí, legible.
     assert!(cabecera.contains("llama-server"), "cabecera={cabecera:?}");
 }

@@ -230,6 +230,12 @@ pub fn artefacto_de(spec: &ModelSpec) -> String {
             spec.download.as_ref().map(|d| d.file.clone()),
         ])
         .unwrap_or_else(|| "ninfer".to_string()),
+        ArtifactLocation::BasaltFile => primero(&[
+            no_vacia(&spec.model.path),
+            spec.download.as_ref().map(|d| d.file.clone()),
+            spec.download.as_ref().map(|d| d.name.clone()),
+        ])
+        .unwrap_or_else(|| "basalt".to_string()),
     }
 }
 

@@ -34,6 +34,7 @@ const LOS_MOTORES: &[(&str, EngineId)] = &[
     ("vllm", EngineId::Vllm),
     ("strata", EngineId::Strata),
     ("ignis", EngineId::Ignis),
+    ("basalt", EngineId::Basalt),
 ];
 
 /// Carga un manifiesto del repo real.
@@ -51,7 +52,7 @@ fn carga(id: &str) -> EngineManifest {
 
 /// Los manifiestos existen en `engines/` y cargan sin errores.
 #[test]
-fn los_ocho_manifiestos_cargan() {
+fn los_diez_manifiestos_cargan() {
     for (id, motor) in LOS_MOTORES {
         let manifiesto = carga(id);
         assert_eq!(manifiesto.id, *motor, "manifiesto={id}");
@@ -61,7 +62,7 @@ fn los_ocho_manifiestos_cargan() {
 
 /// Cada manifiesto pasa la validación de su conjunto.
 #[test]
-fn los_ocho_manifiestos_validan() {
+fn los_diez_manifiestos_validan() {
     let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
     let errores = validate_engine_set(&manifiestos);
     assert!(
@@ -167,8 +168,8 @@ fn la_madurez_distingue_probados_de_no_probados() {
     let no_probados = manifiestos.len() - probados;
     assert_eq!(probados, 3, "los 3 motores probados");
     assert_eq!(
-        no_probados, 6,
-        "los 6 motores parciales, no probados o integrados"
+        no_probados, 7,
+        "los 7 motores parciales, no probados o integrados"
     );
 }
 
@@ -365,11 +366,11 @@ fn un_manifiesto_incompleto_es_un_error() {
 // El conjunto completo
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// El conjunto real de los nueve manifiestos valida entero y sin ids repetidos.
+/// El conjunto real de los diez manifiestos valida entero y sin ids repetidos.
 #[test]
 fn el_conjunto_real_de_manifiestos_es_valido() {
     let manifiestos: Vec<EngineManifest> = LOS_MOTORES.iter().map(|(id, _)| carga(id)).collect();
-    assert_eq!(manifiestos.len(), 9);
+    assert_eq!(manifiestos.len(), 10);
     let errores = validate_engine_set(&manifiestos);
     assert!(
         errores.is_empty(),
@@ -378,7 +379,7 @@ fn el_conjunto_real_de_manifiestos_es_valido() {
         errores
     );
     let ids: BTreeSet<&str> = manifiestos.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids.len(), 9, "los nueve ids son distintos");
+    assert_eq!(ids.len(), 10, "los diez ids son distintos");
 }
 
 /// El conjunto real cubre los ids canónicos, sin sobras ni faltas.

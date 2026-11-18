@@ -1,0 +1,49 @@
+
+[model]
+alias = "lfm3-nvfp4"
+context = 262144
+engine = "turbo-llama"
+format = "gguf"
+name = "lfm3-nvfp4"
+
+[files]
+gguf = "LFM3-VL-2B-NVFP4.gguf"
+mmproj = "mmproj-LFM3-VL-2B-F16.gguf"
+chat_template = "chat-template.jinja"
+
+[download]
+repo = "LiquidAI/LFM3-VL-2B-GGUF"
+file = "LFM3-VL-2B-NVFP4.gguf"
+
+[download.aux.chat_template]
+repo = "LiquidAI/LFM3-VL-2B-NVFP4"
+file = "chat_template.jinja"
+name = "chat_template.jinja"
+size = "12.1 KB"
+use  = "run"
+
+[download.aux.mmproj]
+repo = "LiquidAI/LFM3-VL-2B-GGUF"
+file = "mmproj-LFM3-VL-2B-F16.gguf"
+name = "mmproj-LFM3-VL-2B-F16.gguf"
+size = "739 MB"
+use  = "run"
+
+[args]
+base = [
+    "--temp", "0.1",
+    "--top-k", "50", 
+    "--repeat-penalty", "1.1",
+
+    "--kv-unified",
+    "--kv-offload",
+    "--cache-reuse", "512",
+
+    "--cache-type-k", "f16",
+    "--cache-type-v", "f16",
+
+    "--spec-type", "ngram-map-k4v",
+    "--spec-ngram-map-k4v-size-n", "24",
+    "--spec-ngram-map-k4v-size-m", "48",
+    "--spec-ngram-map-k4v-min-hits", "1",
+]

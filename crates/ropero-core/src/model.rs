@@ -26,7 +26,7 @@
 //!
 //! `EngineId` sólo acepta los identificadores canónicos (`llama-server`,
 //! `turbo-llama`, `mlx-serve`, `fastflowllm`, `tensorrt-llm`, `vllm`,
-//! `airllm`, `strata`). Los alias legacy (`llama-server-official`,
+//! `airllm`, `strata`, `ignis`, `basalt`). Los alias legacy (`llama-server-official`,
 //! `llama-official`, `llama`, `turbo`, `mlx_lm`, `flm`, `tensorrt`,
 //! `strata_engine`) los canonicaliza `parse_model` antes de deserializar, y
 //! dejan un aviso en [`ModelSpec::notices`] (doc B §4.2):

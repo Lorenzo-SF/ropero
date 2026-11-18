@@ -7,6 +7,7 @@ fn variants_parse() {
     let _ = ModelFormat::Safetensors;
     let _ = ModelFormat::Q4nx;
     let _ = ModelFormat::Strata;
+    let _ = ModelFormat::Basalt;
 }
 
 #[test]
@@ -26,6 +27,10 @@ fn artifact_locations() {
     assert_eq!(
         ModelFormat::Strata.artifact_path("m", None, "fam/pkg"),
         "fam/pkg"
+    );
+    assert_eq!(
+        ModelFormat::Basalt.artifact_path("m", None, "qwen/m.basalt"),
+        "$ARTIFACTS_DIR/qwen/m.basalt"
     );
 }
 

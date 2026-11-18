@@ -1,7 +1,6 @@
 # Manifiesto del motor Ignis. Release binario CUDA oficial para Linux x86_64.
 id = "ignis"
 label = "Ignis"
-color = "cian"
 description = "Ignis (Qwen3.8, NVIDIA RTX, API compatible con OpenAI)"
 maturity = "integrated"
 formats = ["ninfer"]

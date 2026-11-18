@@ -256,15 +256,15 @@ impl Informe {
         ));
         if self.lanzado {
             out.push_str(&format!(
-                "ropero lanzó el motor y **queda en pie**: páralo con \
-                 'ropero stop {}'\n",
-                self.modelo
+                "ropero lanzó el motor para la prueba y lo detuvo al terminar \
+                 (puerto {})\n",
+                self.puerto
             ));
         } else {
             out.push_str(&format!(
-                "el motor ya estaba en pie (no hizo falta ponerlo en marcha): se \
-                 puede parar con 'ropero stop {}'\n",
-                self.modelo
+                "el motor ya estaba en pie; ropero lo detuvo al terminar la prueba \
+                 (puerto {})\n",
+                self.puerto
             ));
         }
         out.push('\n');
@@ -326,12 +326,12 @@ impl Informe {
             (" · nivel ", " · level "),
             (" · puerto ", " · port "),
             (
-                "ropero lanzó el motor y **queda en pie**: páralo con",
-                "Ropero started the engine and left it running; stop it with",
+                "ropero lanzó el motor para la prueba y lo detuvo al terminar",
+                "Ropero started the engine for the test and stopped it afterward",
             ),
             (
-                "el motor ya estaba en pie (no hizo falta ponerlo en marcha): se",
-                "the engine was already running (Ropero did not start it); it can be stopped with",
+                "el motor ya estaba en pie; ropero lo detuvo al terminar la prueba",
+                "the engine was already running; Ropero stopped it after the test",
             ),
             ("recuento:", "count:"),
             ("pendiente de juez", "pending judge"),

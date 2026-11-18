@@ -6,6 +6,21 @@
 
 ### Español
 
+- `status` presenta CPU/GPU, RAM/SWP/zram en un diseño compacto y lista los
+  modelos activos de Ropero; `stop` lee sólo el estado de procesos necesario.
+- Los colores de terminal usan RGB truecolor derivados de la paleta hexadecimal.
+  La tabla de engines ya no incluye una columna con el nombre del color.
+- Strata busca primero el run config exacto y consulta sólo los perfiles
+  referenciados por el catálogo para conocer su disponibilidad.
+- El asistente de `models add` permite elegir engines instalados, configurar
+  primero los args comunes, previsualizar el TOML normalizado y editar un bloque
+  o cancelar. Admite rutas de build, repositorios y varios ficheros auxiliares.
+- La plantilla del modelo es más breve y deja `[args].base` vacío.
+- `ropero test` acepta `--model` y exactamente uno de `--test` o
+  `--test-group`, además de `--path`. El modo interactivo ofrece modelos,
+  grupos y tests disponibles; cada ejecución crea un directorio Markdown y
+  detiene el servidor que haya iniciado.
+
 - La validación compara el formato de cada modelo con el manifiesto del engine;
   MLX recibe su ruta resuelta y queda enlazado a loopback por defecto.
 - Las etiquetas de madurez de MLX y TensorRT reflejan la evidencia registrada.
@@ -26,11 +41,10 @@
 - Codex guarda el provider y el perfil por engine en `CODEX_HOME` (o
   `~/.codex`) y rechaza engines sin Responses API documentada. llama.cpp recibe
   el alias público mediante `--alias`.
-- `ropero test` usa `--model`, `--group`, `--test`, `--dimension` y `--all`.
+- `ropero test` usa `--model`, `--test`, `--test-group` y `--path`.
 - Ignis guarda y busca cada descarga bajo `ARTIFACTS_DIR/<nombre-interno>`;
   Codex valida las tablas TOML opcionales sin accesos que puedan provocar panic.
-- `models` consulta `strata models list --installed --output json` para mostrar
-  perfiles Strata completos como disponibles.
+- `models` consulta `models inspect` de Strata para cada run config del catálogo.
 - `info`, `config`, la ayuda y el informe Markdown de `test` respetan el idioma
   guardado. El informe enlaza las trazas y métricas de los subagentes.
 - Los alias públicos se aplican donde el engine lo admite, incluidos perfiles

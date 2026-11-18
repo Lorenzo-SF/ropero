@@ -228,6 +228,7 @@ fn scan_engines(dir: &Path, problems: &mut Vec<String>) -> Vec<EngineManifest> {
     // única fuente: de lo contrario un directorio vacío ocultaba todos los
     // motores instalables.
     const BUILTIN: &[(&str, &str)] = &[
+        ("basalt", include_str!("../../../engines/basalt.toml")),
         ("airllm", include_str!("../../../engines/airllm.toml")),
         ("ignis", include_str!("../../../engines/ignis.toml")),
         (

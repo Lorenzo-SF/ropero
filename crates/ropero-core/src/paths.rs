@@ -38,6 +38,8 @@ pub fn resolve_paths(spec: &ModelSpec, env: &Environment) -> ResolvedPaths {
         "ARTIFACTS_DIR",
         if spec.model.engine == crate::EngineId::Ignis {
             "models/ignis"
+        } else if spec.model.engine == crate::EngineId::Basalt {
+            "models/basalt"
         } else {
             "models"
         },
@@ -97,6 +99,10 @@ pub fn resolve_paths(spec: &ModelSpec, env: &Environment) -> ResolvedPaths {
                 spec.model.path.clone()
             }
             (crate::EngineId::Ignis, crate::ModelFormat::Ninfer) => artifacts_dir
+                .join(&spec.model.path)
+                .to_string_lossy()
+                .to_string(),
+            (crate::EngineId::Basalt, crate::ModelFormat::Basalt) => artifacts_dir
                 .join(&spec.model.path)
                 .to_string_lossy()
                 .to_string(),

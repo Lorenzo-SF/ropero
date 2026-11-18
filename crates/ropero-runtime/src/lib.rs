@@ -1,5 +1,6 @@
 // ropero-runtime: procesos, puertos y estado en disco.
 
+pub mod api_key;
 mod catalog_scan;
 pub mod colorize;
 pub mod config_bootstrap;
@@ -14,6 +15,7 @@ pub mod launch;
 mod machine;
 pub mod mlxserve;
 pub mod model_draft;
+pub mod path;
 pub mod probe;
 pub mod process;
 pub mod remove;
@@ -22,6 +24,7 @@ pub mod state;
 pub mod stop;
 pub mod strata;
 mod sys_engine;
+pub mod test_wizard;
 pub use sys_engine::binary_of;
 pub mod sysinfo;
 pub mod usage;

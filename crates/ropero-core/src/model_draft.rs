@@ -30,9 +30,11 @@ pub fn from_fields(
         "gguf" => {
             files.insert("gguf".into(), toml::Value::String(artifact.into()));
         }
-        "safetensors" | "q4nx" | "strata" | "ninfer" => model_path = Some(artifact),
+        "safetensors" | "q4nx" | "strata" | "ninfer" | "basalt" => model_path = Some(artifact),
         _ => {
-            return Err("formato desconocido; usa gguf, safetensors, q4nx, strata o ninfer".into());
+            return Err(
+                "formato desconocido; usa gguf, safetensors, q4nx, strata, ninfer o basalt".into(),
+            );
         }
     }
     if !files.is_empty() {
@@ -48,9 +50,22 @@ pub fn from_fields(
         doc.insert(
             "download".into(),
             toml::Value::try_from(
-                [("repo", repo), ("file", artifact)]
-                    .into_iter()
-                    .collect::<std::collections::BTreeMap<_, _>>(),
+                [
+                    ("repo", repo),
+                    (
+                        "file",
+                        if format == "basalt" {
+                            std::path::Path::new(artifact)
+                                .file_name()
+                                .and_then(|name| name.to_str())
+                                .unwrap_or(artifact)
+                        } else {
+                            artifact
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>(),
             )
             .map_err(|e| e.to_string())?,
         );

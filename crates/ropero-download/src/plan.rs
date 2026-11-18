@@ -66,6 +66,8 @@ pub enum Formato {
     Gguf,
     /// Un checkpoint: **un directorio**.
     Safetensors,
+    /// Pack nativo `.basalt`, descargado como un único fichero.
+    BasaltPack,
 }
 
 /// Un auxiliar que se baja junto al artefacto principal.
@@ -145,11 +147,57 @@ pub fn plan_de_descarga(spec: &ModelSpec, env: &Environment) -> Result<Plan, Err
     match spec.model.format {
         ModelFormat::Gguf => plan_gguf(download, &paths, env, modelo),
         ModelFormat::Safetensors => plan_safetensors(spec, download, env, modelo),
+        ModelFormat::Basalt if spec.model.engine == ropero_core::EngineId::Basalt => {
+            plan_basalt(spec, download, env, modelo)
+        }
         otro => Err(Error::FormatoNoDescargable {
             modelo,
             formato: otro.as_str().to_string(),
         }),
     }
+}
+
+fn plan_basalt(
+    spec: &ModelSpec,
+    download: &Download,
+    env: &Environment,
+    modelo: String,
+) -> Result<Plan, Error> {
+    if download.file.is_empty() {
+        return Err(Error::DatosIncompletos {
+            modelo,
+            falta: "file".to_string(),
+        });
+    }
+    let root = env.engine_artifact_path(spec.model.engine, "ARTIFACTS_DIR", "models/basalt");
+    let dest = ruta_dentro(&root, &spec.model.path, "[model].path", &modelo)?;
+    let dest_dir = dest
+        .parent()
+        .ok_or_else(|| Error::DatosIncompletos {
+            modelo: modelo.clone(),
+            falta: "[model].path debe nombrar un fichero .basalt".to_string(),
+        })?
+        .to_path_buf();
+    let hf_args = vec![
+        "download".to_string(),
+        download.repo.clone(),
+        download.file.clone(),
+        "--local-dir".to_string(),
+        STAGING.to_string(),
+    ];
+    Ok(Plan {
+        modelo,
+        formato: Formato::BasaltPack,
+        repo: download.repo.clone(),
+        file: download.file.clone(),
+        dest_dir: dest_dir.clone(),
+        aux_dir: dest_dir,
+        dest,
+        size: download.size.clone(),
+        excludes: Vec::new(),
+        aux: Vec::new(),
+        hf_args,
+    })
 }
 
 /// El plan de un GGUF.

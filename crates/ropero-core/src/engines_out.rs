@@ -103,14 +103,12 @@ pub fn engine_lines(
     let filas = engine_rows(manifiestos, sistema, todos);
     let mut tabla = Tabla::nivel(1)
         .columna(Columna::texto("motor").maximo(ANCHO_MAXIMO))
-        .columna(Columna::texto("color"))
         .columna(Columna::texto("madurez"))
         .columna(Columna::numero("puertos"))
         .columna(Columna::texto("formatos").maximo(ANCHO_MAXIMO));
     for fila in &filas {
         tabla.fila(vec![
             Celda::motor(fila.manifest.id.as_str(), fila.manifest.color),
-            Celda::plana(fila.manifest.color.as_str()),
             Celda::plana(fila.manifest.maturity.as_str()),
             Celda::plana(fila.manifest.port_range.to_string()),
             Celda::plana(fila.manifest.formats.join(", ")),

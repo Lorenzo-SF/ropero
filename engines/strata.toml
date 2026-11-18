@@ -10,7 +10,6 @@
 
 id = "strata"
 label = "Strata"
-color = "verde-pálido"
 description = "Strata (Linux y macOS)"
 
 # R-CTX-3: `integrated` = **integrado pero nunca arrancado**. El doc A

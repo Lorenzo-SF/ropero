@@ -158,7 +158,7 @@ pub fn descarga_con(
     // fijo (sin staging: es reanudable, R-MOD-17).
     if principal == Estado::Falta {
         match plan.formato {
-            Formato::Gguf => baja_fichero(
+            Formato::Gguf | Formato::BasaltPack => baja_fichero(
                 &hf,
                 plan,
                 &plan.file,
@@ -192,7 +192,7 @@ pub fn descarga_con(
 /// - **Checkpoint**: los pesos **y** el `config.json` (R-MOD-18).
 fn estado_principal(plan: &Plan) -> Result<Estado, Error> {
     match plan.formato {
-        Formato::Gguf => estado_fichero(
+        Formato::Gguf | Formato::BasaltPack => estado_fichero(
             &plan.dest,
             &plan.dest_dir,
             &plan.file,

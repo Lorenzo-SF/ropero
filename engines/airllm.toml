@@ -5,7 +5,6 @@
 
 id = "airllm"
 label = "AirLLM"
-color = "blanco"
 description = "AirLLM (compresión propia 4-bit y 8-bit)"
 
 # R-CTX-3: la integración está incompleta.

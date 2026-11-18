@@ -202,6 +202,11 @@ pub fn preparar(
             "Ignis requiere una GPU NVIDIA compatible y no admite '--cpu'",
         ));
     }
+    if engine.id == EngineId::Basalt && peticion.cpu {
+        return Err(RunOutcome::error(
+            "Basalt necesita una GPU NVIDIA Blackwell y no admite '--cpu'",
+        ));
+    }
 
     // 3. El argv del modelo. El `--ctx` sobrescribe el contexto del TOML.
     let mut ctx = resolve_context(spec, env);
@@ -215,7 +220,29 @@ pub fn preparar(
     };
     let model_argv = build_argv(spec, &peticion_argv, &ctx)
         .map_err(|e| RunOutcome::error(ropero_core::surface::argv_error_message(&e.to_string())))?;
-    let mut argv = if engine.id == EngineId::Strata {
+    let mut argv = if engine.id == EngineId::Basalt {
+        let model_path = &ctx.files.model_path;
+        if model_path.is_empty() {
+            return Err(RunOutcome::error(format!(
+                "Basalt necesita [model].path con el pack .basalt de '{}'",
+                spec.model.name
+            )));
+        }
+        let mut basalt = vec![
+            "serve".to_string(),
+            model_path.clone(),
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+            "--alias".to_string(),
+            spec.model
+                .alias
+                .as_deref()
+                .unwrap_or(&spec.model.name)
+                .to_string(),
+        ];
+        basalt.extend(model_argv);
+        basalt
+    } else if engine.id == EngineId::Strata {
         let profile = crate::strata::profile_for(&engine, spec, env).map_err(RunOutcome::error)?;
         let mut strata_argv = crate::strata::serve_argv(&profile);
         strata_argv.extend(model_argv);
@@ -249,6 +276,9 @@ pub fn preparar(
     if matches!(engine.id, EngineId::LlamaServer | EngineId::TurboLlama) {
         let alias = spec.model.alias.as_deref().unwrap_or(&spec.model.name);
         set_flag_value(&mut argv, "--alias", alias);
+        if !argv.iter().any(|arg| arg == "--jinja") {
+            argv.push("--jinja".into());
+        }
     }
     if let Some(alias) = spec.model.alias.as_deref() {
         match engine.id {
@@ -377,7 +407,7 @@ pub fn preflight_de(
         model_installed,
         // La VRAM y la RAM: lo que se pudo leer. Lo que no se pudo leer se
         // queda `None` y no bloquea (doc B §3.2.3).
-        vram_available_bytes: (plan.engine.id != EngineId::Ignis)
+        vram_available_bytes: (!matches!(plan.engine.id, EngineId::Ignis | EngineId::Basalt))
             .then(vram_libre)
             .flatten(),
         ram_available_bytes: ram_libre(),
@@ -386,10 +416,12 @@ pub fn preflight_de(
         // artefacto, que es lo que hay.
         // Ignis has its own load-time VRAM/host plan (Flash-Next streams
         // weights from host RAM); artifact size is not a VRAM estimate.
-        vram_required_bytes: (plan.engine.id != EngineId::Ignis)
+        vram_required_bytes: (!matches!(plan.engine.id, EngineId::Ignis | EngineId::Basalt))
             .then(|| tamano_modelo(plan, env))
             .flatten(),
-        ram_required_bytes: tamano_modelo(plan, env),
+        ram_required_bytes: (plan.engine.id != EngineId::Basalt)
+            .then(|| tamano_modelo(plan, env))
+            .flatten(),
         cpu,
     }
 }
@@ -874,29 +906,6 @@ pub fn arranca(
         return outcome;
     }
 
-    // La sonda: con clave de API si el usuario la pidió.
-    let clave = peticion
-        .api_key
-        .clone()
-        .filter(|_| peticion.quiere_api_key())
-        .or_else(|| {
-            (!peticion.no_api_key)
-                .then(|| {
-                    env.config_resuelta()
-                        .engines
-                        .get(&plan.engine.id)
-                        .and_then(|e| e.api_key.clone())
-                })
-                .flatten()
-        });
-    let server_api_key = (plan.engine.id == EngineId::Ignis)
-        .then(|| clave.clone())
-        .flatten();
-    let probe = crate::probe::NetProbe {
-        timeout: Duration::from_secs(3),
-        api_key: clave.clone(),
-    };
-
     // 2. Los puertos ocupados del rango del motor.
     let ports = if peticion.port.is_some() {
         Vec::new()
@@ -938,6 +947,44 @@ pub fn arranca(
         return outcome;
     }
 
+    // Resuelve la clave justo antes de lanzar el proceso. Así no se cambia
+    // el estado persistente si el preflight o la selección del puerto fallan.
+    let clave = match crate::api_key::launch_key(
+        plan.engine.id,
+        &env.config_resuelta(),
+        env,
+        state_dir,
+        peticion.api_key.as_deref(),
+        peticion.no_api_key,
+    ) {
+        Ok(key) => key,
+        Err(error) => {
+            let outcome = RunOutcome::error(error);
+            registra_uso(env, plan, peticion, &outcome);
+            return outcome;
+        }
+    };
+    let server_api_key = clave.clone();
+    let net_probe = crate::probe::NetProbe {
+        timeout: Duration::from_secs(3),
+        api_key: clave.clone(),
+    };
+    let basalt_probe = crate::probe::BasaltProbe {
+        timeout: Duration::from_secs(3),
+        model_id: plan
+            .spec
+            .model
+            .alias
+            .as_deref()
+            .unwrap_or(&plan.spec.model.name)
+            .to_string(),
+    };
+    let probe: &dyn crate::launch::Probe = if plan.engine.id == EngineId::Basalt {
+        &basalt_probe
+    } else {
+        &net_probe
+    };
+
     let spec = LaunchSpec {
         model: plan.spec.model.name.clone(),
         engine: plan.engine.id,
@@ -960,7 +1007,7 @@ pub fn arranca(
     let device = crate::device::StateDevice::new(state_dir.to_path_buf());
     let ctx = LaunchContext {
         engine: &engine,
-        probe: &probe,
+        probe,
         device: &device,
         preflight: &preflight,
         port: peticion.port,
@@ -978,7 +1025,7 @@ pub fn arranca(
     // terminal.
     let follower = if foreground {
         let desde = crate::colorize::line_count(&log);
-        let engine_color = ropero_core::palette::engine_ansi(plan.engine.color);
+        let engine_color = ropero_core::palette::engine_hex(plan.engine.color);
         crate::colorize::LogFollower::start(
             log.clone(),
             desde,
@@ -1074,6 +1121,56 @@ pub fn arranca(
 #[cfg(test)]
 mod tests {
     use super::{configura_mlx_argv, set_flag_value};
+
+    #[test]
+    fn basalt_se_lanza_con_pack_alias_loopback_y_argv_de_modelo() {
+        let model = ropero_core::parse_model(
+            include_str!("../../../models/basalt/qwen3.8-flash-next-basalt.toml"),
+            std::path::Path::new("qwen3.8-flash-next-basalt.toml"),
+        )
+        .expect("TOML de Basalt válido");
+        let catalog = ropero_core::build_catalog(vec![model], vec![]).expect("catálogo");
+        let engine = ropero_core::parse_engine_manifest(
+            include_str!("../../../engines/basalt.toml"),
+            std::path::Path::new("basalt.toml"),
+        )
+        .expect("manifiesto Basalt válido");
+        let env = ropero_core::Environment::new(Default::default(), "/home/test", "/tmp");
+        let plan = super::preparar(
+            &catalog,
+            &[engine],
+            &env,
+            &super::RunRequest {
+                model: "qwen3.8-flash-next-basalt".into(),
+                ..Default::default()
+            },
+        )
+        .unwrap_or_else(|_| panic!("plan Basalt"));
+
+        assert_eq!(plan.argv[0], "serve");
+        assert_eq!(
+            plan.argv[1],
+            "/home/test/models/basalt/qwen3.8-flash-next/Qwen3.8-FN-NVFP4-DQ6_K.basalt"
+        );
+        assert_eq!(
+            &plan.argv[2..6],
+            [
+                "--host",
+                "127.0.0.1",
+                "--alias",
+                "qwen3.8-flash-next-basalt"
+            ]
+        );
+        assert!(
+            plan.argv
+                .windows(2)
+                .any(|pair| pair == ["--max-context", "262144"])
+        );
+        assert_eq!(
+            plan.engine.port_range,
+            ropero_core::PortRange::new(9900, 9909)
+        );
+    }
 
     #[test]
     fn ignis_qwen27b_toml_usa_el_alias_expuesto_por_el_engine() {

@@ -1,0 +1,36 @@
+# =============================================================================
+#  QwenFlashNext-Coder  — Qwen3.8-Flash-Next (coder)
+# =============================================================================
+
+[model]
+name    = "qwenflashnext-coder"
+engine  = "strata"
+context = 65536
+format  = "strata"
+path    = "coder/IQ1_M"
+
+[files]
+
+[options]
+list = ["tune", "vision", "mtp", "kv", "parallel", "drafting", "vram-reserve"]
+
+[args.option.tune]
+base = ["--tune", "${value}"]
+
+[args.option.vision]
+base = ["--vision", "${value}"]
+
+[args.option.mtp]
+base = ["--mtp", "${value}"]
+
+[args.option.kv]
+base = ["--kv", "${value}"]
+
+[args.option.parallel]
+base = ["--parallel", "${value}"]
+
+[args.option.drafting]
+base = ["--drafting", "${value}"]
+
+[args.option.vram-reserve]
+base = ["--set", "vram_reserve_mib=${value}"]

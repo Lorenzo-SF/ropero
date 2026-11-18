@@ -270,14 +270,19 @@ fn ayuda_de_comando(cmd: &str) -> String {
         return surface::help_text();
     };
     let english = idioma() == "EN";
+    let palette = ropero_core::Palette::color();
+    let title = if english {
+        resumen_ingles(cmd)
+    } else {
+        comando.summary
+    };
     let mut out = format!(
-        "{}\n\n{}:  ropero {}\n",
-        if english {
-            resumen_ingles(cmd)
-        } else {
-            comando.summary
-        },
-        if english { "USAGE" } else { "USO" },
+        "{}\n\n{}  ropero {}\n",
+        palette.paint_hex(ropero_core::palette::HELP_HEADING, title),
+        palette.paint_hex(
+            ropero_core::palette::HELP_HEADING,
+            if english { "USAGE:" } else { "USO:" }
+        ),
         if english {
             uso_ingles(comando.usage)
         } else {
@@ -286,11 +291,13 @@ fn ayuda_de_comando(cmd: &str) -> String {
     );
     let flags = surface::flags_de(cmd);
     if !flags.is_empty() {
-        out.push_str(if english {
-            "\nOPTIONS\n"
-        } else {
-            "\nOPCIONES\n"
-        });
+        out.push_str(&format!(
+            "\n{}\n",
+            palette.paint_hex(
+                ropero_core::palette::HELP_HEADING,
+                if english { "OPTIONS" } else { "OPCIONES" }
+            )
+        ));
         for flag in flags {
             let nombre = match flag.kind {
                 surface::FlagKind::Switch => format!("--{}", flag.name),
@@ -304,7 +311,8 @@ fn ayuda_de_comando(cmd: &str) -> String {
                 }
             };
             out.push_str(&format!(
-                "  {nombre}:  {}\n",
+                "  {}:  {}\n",
+                palette.paint_hex(ropero_core::palette::HELP_HEADING, &nombre),
                 if english {
                     ayuda_flag_ingles(cmd, flag.name)
                 } else {
@@ -431,7 +439,7 @@ fn ayuda_del_binario() -> String {
     out
 }
 
-fn idioma() -> String {
+pub(crate) fn idioma() -> String {
     let env = crate::discovery::capture_environment();
     ropero_runtime::carga_config(&env)
         .map(|(_, config, _)| config.lang)
@@ -449,6 +457,7 @@ fn valor_ingles(value: &str) -> &'static str {
         "NOMBRE" => "NAME",
         "SEGUNDOS" => "SECONDS",
         "NIVEL" => "LEVEL",
+        "RUTA" => "PATH",
         "VIA" => "METHOD",
         "ID|FICHERO" => "ID|FILE",
         _ => "VALUE",
@@ -489,7 +498,7 @@ fn resumen_ingles(command: &str) -> &'static str {
         "validate" => "validates catalog TOML files",
         "command" => "prints model serving arguments for copying",
         "info" => "shows model configuration, artifacts, and arguments",
-        "test" => "runs the evaluation suite against a model",
+        "test" => "runs the evaluation suite sequentially and stops each engine afterward",
         "<modelo>" => "starts the model using its configured engine",
         _ => "shows help",
     }
@@ -544,12 +553,13 @@ fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
         ("gguffer", "no-dflash") => "builds without DFlash headers",
         ("gguffer", "list-quants") => "lists available quantization types",
         ("gguffer", "diagnostico") => "shows planned actions without writing files",
-        ("test", "model") => "model to evaluate; prompts when omitted",
-        ("test", "group") => "run one test group",
+        ("test", "model") => "one available model; its engine is stopped when testing ends",
+        ("test", "all-models") => {
+            "test every available model in sequence and stop its engine after each run"
+        }
+        ("test", "test-group") => "run one test group (exclusive with --test)",
         ("test", "test") => "run one test by id or filename",
-        ("test", "dimension") => "run tests for one named dimension",
-        ("test", "all") => "run the complete test suite",
-        ("test", "json") => "prints the JSON report to stdout",
+        ("test", "path") => "directory for test reports (default: current directory)",
         _ => "see the command documentation",
     }
 }
@@ -597,7 +607,13 @@ fn comandos() -> Vec<ClapCommand> {
                         .help(flag.help),
                 );
             } else {
-                clap = clap.arg(flag_de(flag));
+                let mut arg = flag_de(flag);
+                if comando.name == "test" && flag.name == "model" {
+                    arg = arg.conflicts_with("all-models");
+                } else if comando.name == "test" && flag.name == "all-models" {
+                    arg = arg.conflicts_with("model");
+                }
+                clap = clap.arg(arg);
             }
         }
         clap = clap.args(posicionales(comando.name));

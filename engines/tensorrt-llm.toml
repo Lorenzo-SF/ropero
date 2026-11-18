@@ -5,7 +5,6 @@
 
 id = "tensorrt-llm"
 label = "TensorRT-LLM (RTX)"
-color = "verde-pistacho"
 description = "TensorRT-LLM (sólo Linux, sólo dGPU RTX)"
 
 # R-CTX-3: integrado según upstream, todavía no probado en esta máquina.

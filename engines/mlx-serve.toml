@@ -5,7 +5,6 @@
 
 id = "mlx-serve"
 label = "MLX (Apple Silicon)"
-color = "gris"
 description = "MLX-Serve (sólo macOS ARM)"
 
 # R-CTX-3: integrado según upstream, todavía no probado en esta máquina.

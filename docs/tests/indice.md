@@ -587,7 +587,7 @@ fortalezas distintas.
 
 ## Cómo ejecutar
 
-`ropero test --modelo <id> [--grupo A..G | --test <id> | --dimension <nombre>]`
+`ropero test --model <id> (--test <id> | --test-group A..G) [--path <ruta>]`
 reutiliza el servidor del modelo o lo arranca mediante el engine declarado en
 su TOML. Cada archivo se ejecuta como una sesión independiente y la respuesta
 se guarda con el resumen y la transcripción Markdown bajo el directorio de

@@ -27,7 +27,7 @@ const COMANDOS: &[(&str, &str)] = &[
     ("info", "info <modelo>"),
     (
         "test",
-        "test [--model <id>] [--group A..G] [--test <id>] [--dimension <name>] [--all]",
+        "test [--model <id> | --all-models] [--test <id> | --test-group A..G] [--path <path>]",
     ),
 ];
 

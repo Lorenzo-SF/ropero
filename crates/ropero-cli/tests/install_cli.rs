@@ -359,6 +359,7 @@ impl Fake {
             .env("SAFETENSORS_DIR", &self.safetensors)
             .env("LOG_DIR", self.base.join("logs"))
             .env("HOME", &self.base)
+            .env("XDG_CONFIG_HOME", self.base.join("xdg"))
             .env("PATH", &self.path)
             .output()
             .expect("correr ropero");

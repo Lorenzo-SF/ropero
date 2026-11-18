@@ -1,0 +1,15 @@
+# Manifiesto de Basalt. El binario y el pack se distribuyen por separado.
+# Ropero enlaza un Basalt instalado desde su release o build local.
+id = "basalt"
+label = "Basalt"
+description = "Basalt (Linux x86-64, NVIDIA Blackwell, API OpenAI y Anthropic)"
+maturity = "integrated"
+formats = ["basalt"]
+port_min = 9900
+port_max = 9909
+deps = ["nvidia-smi", "python3"]
+compat = [{ os = ["linux", "windows"], nvidia_smi = true }]
+
+[detect]
+binaries = ["basalt"]
+paths = ["~/.local/share/ropero/engines/basalt/bin/basalt"]

@@ -14,6 +14,8 @@
 //!    nunca se inventa una cifra.
 //! 4. **Guarda** la salida de cada test bajo el estado de ropero
 //!    (`<estado>/tests/<marca>/<id>.json`) para que un juez la revise.
+//! 5. **Detiene** el engine del modelo al acabar su batería para liberar
+//!    recursos antes de procesar el siguiente modelo.
 //!
 //! ## La clave de API
 //!
@@ -40,6 +42,9 @@ use crate::state::read_state;
 
 /// Cuánto se espera a cada lectura del motor.
 const TIMEOUT_DE_LECTURA: Duration = Duration::from_secs(600);
+/// Evita que una única respuesta del modelo monopolice minutos o crezca hasta
+/// el contexto completo durante una batería automatizada.
+const MAX_TOKENS_POR_RESPUESTA: u32 = 2048;
 
 /// Un error de la tirada: qué pasó y qué código de salida lleva.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,7 +168,7 @@ pub fn pregunta(
     prompt: &str,
     api_key: Option<&str>,
 ) -> Result<Respuesta, ErrorInferencia> {
-    let cuerpo = json::cuerpo_inferencia(modelo, prompt, true);
+    let cuerpo = cuerpo_test(modelo, prompt, true);
     let (estado, texto, primer_token_ms, latencia_ms) = manda(puerto, &cuerpo, api_key)?;
     if estado == 401 || estado == 403 {
         return Err(ErrorInferencia::ejecucion(
@@ -204,6 +209,16 @@ pub fn pregunta(
         traza: Vec::new(),
         subagentes: Vec::new(),
     })
+}
+
+fn cuerpo_test(modelo: &str, prompt: &str, stream: bool) -> String {
+    serde_json::json!({
+        "model": modelo,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": stream,
+        "max_tokens": MAX_TOKENS_POR_RESPUESTA,
+    })
+    .to_string()
 }
 
 /// Ejecuta un agente interno con herramientas locales y acotadas.
@@ -258,7 +273,7 @@ fn pregunta_agente(
     let mut cache_completa = true;
     let mut llamadas = 0usize;
     for ronda in 0..=MAX_RONDAS {
-        let body = json!({"model":modelo,"messages":mensajes,"tools":definiciones,"tool_choice":"auto","stream":false}).to_string();
+        let body = json!({"model":modelo,"messages":mensajes,"tools":definiciones,"tool_choice":"auto","stream":false,"max_tokens":MAX_TOKENS_POR_RESPUESTA}).to_string();
         let (estado, cuerpo, _, ms) = manda(puerto, &body, api_key)?;
         total_ms += ms;
         if estado == 401 || estado == 403 {
@@ -754,7 +769,7 @@ pub fn tira(
     root: &Path,
     modelo: Option<String>,
     seleccion: &Seleccion,
-    json: bool,
+    resultados: &Path,
     lang: &str,
 ) -> i32 {
     let bateria = match lee_indice(root) {
@@ -769,7 +784,34 @@ pub fn tira(
         Ok(modelo) => modelo,
         Err(e) => return e.informa(),
     };
-    match tira_la_bateria(catalogo, motores, env, root, &bateria, &ids, &modelo, lang) {
+    ropero_core::out_line(&if lang.eq_ignore_ascii_case("EN") {
+        format!("Testing model {modelo}: {} tests", ids.len())
+    } else {
+        format!("Probando modelo {modelo}: {} pruebas", ids.len())
+    });
+    let run_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let resultados = resultados.join(format!("{run_id}-{}", std::process::id()));
+    if let Err(error) = std::fs::create_dir_all(&resultados) {
+        return ErrorInferencia::ejecucion(format!(
+            "no se pudo crear el directorio de resultados {}: {error}",
+            resultados.display()
+        ))
+        .informa();
+    }
+    match tira_la_bateria(
+        catalogo,
+        motores,
+        env,
+        root,
+        &bateria,
+        &ids,
+        &modelo,
+        &resultados,
+        lang,
+    ) {
         Ok(informe) => {
             let hubo_error = informe.respuestas.iter().any(|r| {
                 matches!(
@@ -777,10 +819,40 @@ pub fn tira(
                     ropero_bateria::puntuadores::Puntuacion::ErrorEjecucion { .. }
                 )
             });
-            imprime(&informe, json, lang);
+            imprime(&informe, false, lang);
             if hubo_error { 1 } else { 0 }
         }
-        Err(e) => e.informa(),
+        Err(e) => {
+            guarda_informe_de_error(&resultados, &modelo, &ids, &e.mensaje, lang);
+            e.informa()
+        }
+    }
+}
+
+fn guarda_informe_de_error(
+    resultados: &Path,
+    modelo: &str,
+    ids: &[String],
+    error: &str,
+    lang: &str,
+) {
+    let (estado, no_ejecutados, titulo) = if lang.eq_ignore_ascii_case("EN") {
+        ("Startup failed", "Not run", "Test run")
+    } else {
+        ("Falló el arranque", "No ejecutado", "Ejecución de tests")
+    };
+    let tests = ids
+        .iter()
+        .map(|id| format!("- `{id}`: {no_ejecutados}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let contenido = format!(
+        "# {titulo}: {modelo}\n\n## Statistics / Estadísticas\n\n- Status / Estado: {estado}\n- Tests: {}\n- Error: {error}\n\n## Engine log / Registro del engine\n\nNo log available for this run / No hay registro disponible para esta ejecución.\n\n## Model output / Salida del modelo\n\n{tests}\n",
+        ids.len()
+    );
+    let path = resultados.join("informe.md");
+    if std::fs::write(&path, contenido).is_ok() {
+        ropero_core::err_line(&format!("informe Markdown: {}", path.display()));
     }
 }
 
@@ -798,6 +870,7 @@ pub fn tira_la_bateria(
     bateria: &Bateria,
     ids: &[String],
     modelo: &str,
+    resultados: &Path,
     lang: &str,
 ) -> Result<Informe, ErrorInferencia> {
     if let Some(spec) = ropero_core::find_spec(catalogo, modelo)
@@ -813,6 +886,11 @@ pub fn tira_la_bateria(
     let motor = match motor_de(modelo, &state_dir) {
         Some(motor) => motor,
         None => arranca_motor(catalogo, motores, env, &state_dir, modelo)?,
+    };
+    let mut stop_after_test = DetenerAlTerminar {
+        env,
+        modelo,
+        detener: true,
     };
     let memoria_inicio = crate::machine::capture_machine_state();
 
@@ -839,7 +917,8 @@ pub fn tira_la_bateria(
         .unwrap_or(modelo);
     let mut respuestas = Vec::with_capacity(ids.len());
     let mut transcript: Vec<TestTranscriptEntry> = Vec::with_capacity(ids.len());
-    for id in ids {
+    for (index, id) in ids.iter().enumerate() {
+        ropero_core::out_line(&format!("  [{}/{}] {}", index + 1, ids.len(), id));
         let test = bateria
             .test(id.as_str())
             .ok_or_else(|| ErrorInferencia::uso(format!("el test '{id}' no está en la batería")))?;
@@ -919,9 +998,15 @@ pub fn tira_la_bateria(
     let engine_log = ropero_core::find_spec(catalogo, modelo)
         .map(|spec| crate::run::log_de(spec, env))
         .and_then(|path| std::fs::read_to_string(path).ok());
+    let stop_code = crate::para_todo(modelo, env);
+    stop_after_test.detener = false;
+    if stop_code != 0 {
+        return Err(ErrorInferencia::ejecucion(format!(
+            "no se pudo detener el engine del modelo '{modelo}' al terminar el test"
+        )));
+    }
     if let Some(path) = guarda_transcripcion(
-        &state_dir,
-        &marca,
+        resultados,
         &informe,
         &transcript,
         &memoria_inicio,
@@ -932,6 +1017,20 @@ pub fn tira_la_bateria(
         ropero_core::err_line(&format!("transcripción Markdown: {}", path.display()));
     }
     Ok(informe)
+}
+
+struct DetenerAlTerminar<'a> {
+    env: &'a Environment,
+    modelo: &'a str,
+    detener: bool,
+}
+
+impl Drop for DetenerAlTerminar<'_> {
+    fn drop(&mut self) {
+        if self.detener {
+            let _ = crate::para_todo(self.modelo, self.env);
+        }
+    }
 }
 
 fn respuesta_fallida(id: &str, mensaje: &str) -> RespuestaTest {
@@ -969,8 +1068,7 @@ type TestTranscriptEntry = (String, String, String, Vec<String>, Vec<SubagentTra
 
 #[allow(clippy::too_many_arguments)] // Mantiene juntas las entradas de informe, recursos y localización.
 fn guarda_transcripcion(
-    state_dir: &Path,
-    marca: &str,
+    results_dir: &Path,
     informe: &Informe,
     transcript: &[TestTranscriptEntry],
     memoria_inicio: &ropero_core::status::MachineState,
@@ -980,7 +1078,7 @@ fn guarda_transcripcion(
 ) -> Option<std::path::PathBuf> {
     use std::fmt::Write as _;
 
-    let dir = state_dir.join("tests").join(marca);
+    let dir = results_dir.to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
     let mut md = String::new();
     let en = lang.eq_ignore_ascii_case("EN");
