@@ -21,6 +21,10 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+[licenses.private]
+# Workspace crates are internal and are not published to crates.io.
+ignore = true
+
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"

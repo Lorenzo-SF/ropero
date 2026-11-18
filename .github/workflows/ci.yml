@@ -32,6 +32,8 @@ jobs:
       - name: clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - name: cargo-deny
+        # cargo-deny-action is a Docker action, so run it on Linux only.
+        if: matrix.os == 'ubuntu-latest'
         uses: EmbarkStudios/cargo-deny-action@v2
       - name: tests
         run: cargo test --locked --workspace --all-features
