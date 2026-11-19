@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ropero_core::{Environment, ModelSpec, parse_model};
 use ropero_download::Error;
@@ -170,8 +171,23 @@ struct Fake {
 impl Fake {
     /// Monta la máquina de pruebas en un temporal.
     fn nuevo(nombre: &str) -> Self {
-        let base = std::env::temp_dir().join(format!("ropero-download-{nombre}"));
-        let _ = std::fs::remove_dir_all(&base);
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let marca_tiempo = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let candidata = std::env::temp_dir().join(format!(
+                "ropero-download-{}-{nombre}-{marca_tiempo}-{id}",
+                std::process::id(),
+            ));
+            match std::fs::create_dir(&candidata) {
+                Ok(()) => break candidata,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("crear el temporal {}: {error}", candidata.display()),
+            }
+        };
         let path = base.join("bin");
         std::fs::create_dir_all(&path).expect("crear el temporal");
         let hf = path.join("hf");
@@ -234,6 +250,12 @@ impl Fake {
         }
         out.sort();
         out
+    }
+}
+
+impl Drop for Fake {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
     }
 }
 

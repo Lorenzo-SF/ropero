@@ -23,7 +23,13 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+/// Los tests que levantan el motor falso comparten el mismo rango de puertos.
+/// Mantener el bloqueo durante la vida del proceso evita que dos tests elijan
+/// a la vez el mismo puerto libre.
+static MOTOR_FALSO_LOCK: Mutex<()> = Mutex::new(());
 
 /// El directorio del fixture.
 fn fixture_root() -> PathBuf {
@@ -35,15 +41,23 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn nuevo(nombre: &str) -> Self {
-        let base = std::env::temp_dir().join(format!(
-            "ropero-cli-{nombre}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&base).expect("crear el temporal");
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let marca_tiempo = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let candidata = std::env::temp_dir().join(format!(
+                "ropero-cli-{nombre}-{}-{marca_tiempo}-{id}",
+                std::process::id(),
+            ));
+            match std::fs::create_dir(&candidata) {
+                Ok(()) => break candidata,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("crear el temporal {}: {error}", candidata.display()),
+            }
+        };
         Self(base)
     }
 
@@ -193,11 +207,16 @@ struct Arranque {
     estado: PathBuf,
     /// El puerto en el que sirve el motor.
     puerto: u16,
+    /// Serializa el uso del rango de puertos hasta parar el motor.
+    _motor_lock: MutexGuard<'static, ()>,
 }
 
 impl Arranque {
     /// Lanza el modelo en segundo plano y espera al `ROPERO_PORT=`.
     fn nuevo(estado: &Path, path: &Path, gguf: &Path, args: &[&str]) -> (Self, u16) {
+        let motor_lock = MOTOR_FALSO_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut cmd = bin(estado, path, gguf);
         cmd.args(args);
         cmd.stdout(Stdio::piped());
@@ -261,6 +280,7 @@ impl Arranque {
             stderr: errores,
             estado: estado.to_path_buf(),
             puerto,
+            _motor_lock: motor_lock,
         };
         (arranque, puerto)
     }
@@ -804,6 +824,9 @@ fn foreground_muestra_salida_del_motor_y_genera_log_y_uso() {
 
 #[test]
 fn background_es_silencioso_guarda_logs_y_uso_redactado() {
+    let _motor_lock = MOTOR_FALSO_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let motor = MotorFalsoConSalida::nuevo();
     let modelo = prepara_modelo_descargado();
     let estado = TempDir::nuevo("bg");

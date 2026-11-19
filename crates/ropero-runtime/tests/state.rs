@@ -355,4 +355,8 @@ fn la_identidad_de_este_proceso_se_puede_leer() {
         "start_time={}",
         identidad.start_time
     );
+    assert!(
+        ropero_runtime::estado_del_proceso(pid).is_some_and(|estado| estado != 'Z'),
+        "el proceso de prueba está en ejecución"
+    );
 }

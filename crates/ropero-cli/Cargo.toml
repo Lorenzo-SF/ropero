@@ -22,3 +22,6 @@ ropero-forge = { path = "../ropero-forge" }
 ropero-download = { path = "../ropero-download" }
 # ropero-runtime: la capa de E/S que captura los datos de la máquina.
 ropero-runtime = { path = "../ropero-runtime" }
+
+[dev-dependencies]
+libc = "0.2"

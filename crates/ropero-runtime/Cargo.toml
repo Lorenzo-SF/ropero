@@ -21,3 +21,4 @@ toml = "1.2"
 signal-hook = "0.4.5"
 serde_yaml = "0.9.34"
 jsonc-parser = { version = "0.34", features = ["cst", "serde", "serde_json"] }
+libc = "0.2"

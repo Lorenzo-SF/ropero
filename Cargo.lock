@@ -203,6 +203,7 @@ name = "ropero-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libc",
  "ropero-bateria",
  "ropero-core",
  "ropero-download",
@@ -238,6 +239,7 @@ name = "ropero-runtime"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "libc",
  "ropero-bateria",
  "ropero-core",
  "serde_json",

@@ -147,6 +147,17 @@ fn config_por_engine_resuelve_rutas_y_preserva_precedencia_global_env() {
             .engine_artifact_path(id, "GGUF_DIR", "models/gguf"),
         std::path::PathBuf::from("/global/from-env")
     );
+
+    let e = env(
+        home.to_str().unwrap(),
+        base.to_str().unwrap(),
+        &[("ROPERO_MODELS_DIR", "/global/models-from-env")],
+    );
+    let cfg = resuelve_config(&e, Some(&text)).unwrap();
+    assert_eq!(
+        cfg.models_toml_dir(id).valor,
+        std::path::PathBuf::from("/global/models-from-env/llama-server")
+    );
     let _ = std::fs::remove_dir_all(&base);
 }
 

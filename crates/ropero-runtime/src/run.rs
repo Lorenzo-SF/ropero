@@ -24,6 +24,7 @@
 //! | `2` | Uso (argumento o comando inválido) |
 //! | `130` | Ctrl-C |
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -33,6 +34,54 @@ use ropero_core::{
 };
 
 use crate::launch::{LaunchContext, LaunchOptions, LaunchSpec, ProbePlan};
+
+fn basalt_runtime_env(env: &Environment) -> BTreeMap<String, String> {
+    let mut roots = env
+        .get("ROPERO_CUDA_PATH")
+        .map(PathBuf::from)
+        .into_iter()
+        .collect::<Vec<_>>();
+    roots.push(PathBuf::from("/usr/local/cuda"));
+    if let Ok(entries) = std::fs::read_dir("/usr/local") {
+        roots.extend(entries.flatten().filter_map(|entry| {
+            let name = entry.file_name();
+            (name.to_string_lossy().starts_with("cuda-13") && entry.path().is_dir())
+                .then(|| entry.path())
+        }));
+    }
+    let mut paths = env
+        .get("LD_LIBRARY_PATH")
+        .map(std::env::split_paths)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let original_len = paths.len();
+    let basalt_root = env.home.join(".local/share/ropero/engines/basalt");
+    for path in crate::install::cuda_wheel_library_dirs(&basalt_root) {
+        if !paths.contains(&path) {
+            paths.insert(0, path);
+        }
+    }
+    for root in roots {
+        for path in [root.join("lib64"), root.join("targets/x86_64-linux/lib")] {
+            if path.is_dir() && !paths.contains(&path) {
+                paths.insert(0, path);
+            }
+        }
+    }
+    if paths.len() == original_len {
+        return BTreeMap::new();
+    }
+    std::env::join_paths(paths)
+        .ok()
+        .map(|value| {
+            BTreeMap::from([(
+                "LD_LIBRARY_PATH".to_string(),
+                value.to_string_lossy().into_owned(),
+            )])
+        })
+        .unwrap_or_default()
+}
 use crate::state::PortState;
 
 /// Lo que el usuario pidió en la línea de órdenes.
@@ -990,10 +1039,10 @@ pub fn arranca(
         engine: plan.engine.id,
         engine_name: plan.engine.id.as_str().to_string(),
         server_api_key,
-        runtime_env: if plan.engine.id == EngineId::FastFlowLm {
-            crate::flm::xrt_environment(&env.vars)
-        } else {
-            std::collections::BTreeMap::new()
+        runtime_env: match plan.engine.id {
+            EngineId::FastFlowLm => crate::flm::xrt_environment(&env.vars),
+            EngineId::Basalt => basalt_runtime_env(env),
+            _ => BTreeMap::new(),
         },
         program: binario,
         argv: plan.argv.clone(),
@@ -1120,7 +1169,39 @@ pub fn arranca(
 
 #[cfg(test)]
 mod tests {
-    use super::{configura_mlx_argv, set_flag_value};
+    use super::{basalt_runtime_env, configura_mlx_argv, set_flag_value};
+
+    #[test]
+    fn basalt_anade_las_bibliotecas_cuda_al_entorno_del_lanzamiento() {
+        let base = std::env::temp_dir().join(format!("ropero-basalt-env-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let cuda_lib = base.join("cuda/lib64");
+        std::fs::create_dir_all(&cuda_lib).unwrap();
+        let inherited = base.join("other-libs");
+        std::fs::create_dir_all(&inherited).unwrap();
+        let env = ropero_core::Environment::new(
+            std::collections::BTreeMap::from([
+                (
+                    "ROPERO_CUDA_PATH".to_string(),
+                    base.join("cuda").display().to_string(),
+                ),
+                (
+                    "LD_LIBRARY_PATH".to_string(),
+                    inherited.display().to_string(),
+                ),
+            ]),
+            &base,
+            &base,
+        );
+        let runtime = basalt_runtime_env(&env);
+        let paths = std::env::split_paths(std::ffi::OsStr::new(
+            runtime.get("LD_LIBRARY_PATH").unwrap(),
+        ))
+        .collect::<Vec<_>>();
+        assert_eq!(paths[0], cuda_lib);
+        assert!(paths.contains(&inherited));
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     #[test]
     fn basalt_se_lanza_con_pack_alias_loopback_y_argv_de_modelo() {

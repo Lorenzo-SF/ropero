@@ -31,8 +31,8 @@ pub struct ProcIdentity {
 
     /// Los segundos desde epoch del inicio del proceso.
     ///
-    /// En Linux, el campo 22 de `/proc/<pid>/stat`. En macOS, el `start
-    /// time` de `sysctl KERN_PROC_PID`.
+    /// En Linux, el campo 22 de `/proc/<pid>/stat`. En macOS, `pbi_start_tvsec`
+    /// de `proc_pidinfo(PROC_PIDTBSDINFO)`.
     pub start_time: u64,
 
     /// El hash del binario ejecutado, si se pudo resolver.
@@ -114,6 +114,7 @@ impl ProcIdentity {
 /// después del `comm`, que va entre paréntesis y **puede contener
 /// espacios y paréntesis**, así que no se parte el campo por espacios:
 /// se busca el **último** `)` y se parte a partir de ahí.
+#[cfg(target_os = "linux")]
 pub fn start_time_of(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // El `comm` va entre paréntesis: `pid (comm) state ppid ...`.
@@ -127,6 +128,102 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
     // `resto` empieza por el estado (campo 3), así que el campo 22 es el
     // índice 19 (22 - 3).
     campos.get(19)?.parse::<u64>().ok()
+}
+
+/// Lee la hora de inicio del proceso mediante la API de procesos de macOS.
+#[cfg(target_os = "macos")]
+pub fn start_time_of(pid: u32) -> Option<u64> {
+    proceso_mac(pid).map(|info| info.pbi_start_tvsec)
+}
+
+/// Lee el estado del proceso mediante la API de procesos de macOS.
+#[cfg(target_os = "macos")]
+pub fn estado_del_proceso(pid: u32) -> Option<char> {
+    use std::mem::{MaybeUninit, size_of};
+
+    let pid_nativo = libc::pid_t::try_from(pid).ok()?;
+    let mut info = MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    // SAFETY: proc_pidinfo writes at most `buffersize` bytes to the valid
+    // buffer. The result is read only when the API reports a full structure.
+    let bytes = unsafe {
+        proc_pidinfo(
+            pid_nativo,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size_of::<libc::proc_bsdshortinfo>() as libc::c_int,
+        )
+    };
+    if bytes != size_of::<libc::proc_bsdshortinfo>() as libc::c_int {
+        return estado_proceso_ps(pid);
+    }
+
+    // SAFETY: the successful return above confirms the full structure.
+    let info = unsafe { info.assume_init() };
+    if info.pbsi_pid != pid {
+        return estado_proceso_ps(pid);
+    }
+    let estado = info.pbsi_status;
+    match estado {
+        libc::SIDL => Some('I'),
+        libc::SRUN => Some('R'),
+        libc::SSLEEP => Some('S'),
+        libc::SSTOP => Some('T'),
+        libc::SZOMB => Some('Z'),
+        _ => None,
+    }
+}
+
+/// `proc_pidinfo` no siempre incluye los procesos zombis. `ps` sí los enumera;
+/// se consulta únicamente como fallback, sin pasar por un shell.
+#[cfg(target_os = "macos")]
+fn estado_proceso_ps(pid: u32) -> Option<char> {
+    let salida = std::process::Command::new("/bin/ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !salida.status.success() {
+        return None;
+    }
+    String::from_utf8(salida.stdout).ok()?.trim().chars().next()
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_pidinfo(
+        pid: libc::c_int,
+        flavor: libc::c_int,
+        arg: u64,
+        buffer: *mut libc::c_void,
+        buffersize: libc::c_int,
+    ) -> libc::c_int;
+}
+
+#[cfg(target_os = "macos")]
+fn proceso_mac(pid: u32) -> Option<libc::proc_bsdinfo> {
+    use std::mem::{MaybeUninit, size_of};
+
+    let mut info = MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    // SAFETY: proc_pidinfo writes at most `buffersize` bytes to the valid
+    // buffer. The result is read only when the API reports a full structure.
+    let bytes = unsafe {
+        proc_pidinfo(
+            libc::pid_t::try_from(pid).ok()?,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size_of::<libc::proc_bsdinfo>() as libc::c_int,
+        )
+    };
+    if bytes != size_of::<libc::proc_bsdinfo>() as libc::c_int {
+        return None;
+    }
+
+    // SAFETY: the successful return above confirms that the full struct was
+    // initialized by proc_pidinfo.
+    let info = unsafe { info.assume_init() };
+    (info.pbi_pid == pid).then_some(info)
 }
 
 /// El estado de un proceso, tal y como lo dice el kernel.
@@ -145,6 +242,7 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
 /// dice que está vivo. El motor que muere al hacer bind es exactamente
 /// eso: un zombi durante el arranque, y sin mirar su estado parecería un
 /// motor sano.
+#[cfg(target_os = "linux")]
 pub fn estado_del_proceso(pid: u32) -> Option<char> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // El `comm` va entre paréntesis y puede contener espacios y
@@ -152,6 +250,18 @@ pub fn estado_del_proceso(pid: u32) -> Option<char> {
     let fin_comm = stat.rfind(')')?;
     let resto = stat.get(fin_comm + 1..)?;
     resto.split_whitespace().next()?.chars().next()
+}
+
+/// Sin una implementación nativa, no se inventan datos de proceso.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn start_time_of(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// Sin una implementación nativa, no se inventan datos de proceso.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn estado_del_proceso(_pid: u32) -> Option<char> {
+    None
 }
 
 /// El SHA-256 del binario de un proceso, si se puede resolver.

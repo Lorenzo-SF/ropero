@@ -207,6 +207,9 @@ pub fn instala_motor(
     if manifest.id == ropero_core::EngineId::Ignis {
         return instala_ignis(manifest, env, force, &dir);
     }
+    if manifest.id == ropero_core::EngineId::Basalt {
+        return instala_basalt(manifest, env, force, &dir);
+    }
     let (origen, source_dir) =
         if let Some(install) = manifest.install.as_ref().filter(|i| i.source.is_some()) {
             compila_motor(manifest, install, env, force)?
@@ -380,6 +383,386 @@ fn instala_ignis(
     })();
     let _ = std::fs::remove_dir_all(&scratch);
     result
+}
+
+/// Descarga el release Linux oficial de Basalt y deja su servidor Python listo.
+/// El pack del modelo permanece en el almacén de modelos de Ropero.
+fn instala_basalt(
+    manifest: &EngineManifest,
+    env: &Environment,
+    force: bool,
+    bin_dir: &Path,
+) -> Result<EstadoMotor, String> {
+    if !cfg!(target_os = "linux") || !cfg!(target_arch = "x86_64") {
+        return Err("Basalt sólo se instala desde Ropero en Linux x86-64".to_string());
+    }
+    if !cpu_avx2_available() {
+        return Err("Basalt requiere una CPU x86-64 con AVX2".to_string());
+    }
+    valida_hardware_basalt(env)?;
+    if let Some(install) = manifest.install.as_ref()
+        && gestor_paquetes_disponible(install, env).is_some()
+    {
+        prepara_dependencias_sistema(install, env)?;
+    }
+    let python = which_en(env, "python3")
+        .ok_or_else(|| "falta python3 (Basalt requiere Python 3.10 o posterior)".to_string())?;
+    valida_python_basalt(&python)?;
+
+    let root = env.home.join(".local/share/ropero/engines/basalt");
+    if root.exists() {
+        let meta = std::fs::symlink_metadata(&root)
+            .map_err(|e| format!("no se pudo inspeccionar {}: {e}", root.display()))?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(format!(
+                "la instalación Basalt existente no es un directorio real: {}",
+                root.display()
+            ));
+        }
+        if force {
+            std::fs::remove_dir_all(&root).map_err(|e| {
+                format!(
+                    "no se pudo reemplazar la instalación Basalt {}: {e}",
+                    root.display()
+                )
+            })?;
+        } else if !root.join("bin/basalt").is_file() {
+            return Err(format!(
+                "{} ya existe pero no parece un release Basalt; mueve o elimina ese directorio y vuelve a instalar",
+                root.display()
+            ));
+        }
+    }
+
+    if !root.join("bin/basalt").is_file() {
+        instala_release_basalt(&python, &root)?;
+    }
+    prepara_python_basalt(&python, &root, env)?;
+    if !cuda13_runtime_disponible(env, &root) {
+        return Err(
+            "no se pudieron preparar libcudart.so.13 y libcublas.so.13 en el entorno de Basalt"
+                .to_string(),
+        );
+    }
+    let executable = root.join("bin/basalt");
+    if !es_ejecutable(&executable) {
+        return Err(format!(
+            "el release Basalt no contiene un bin/basalt ejecutable: {}",
+            executable.display()
+        ));
+    }
+    enlaza_ejecutables(manifest, &executable, None, false, bin_dir)
+}
+
+fn valida_python_basalt(python: &Path) -> Result<(), String> {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ])
+        .output()
+        .map_err(|e| format!("no se pudo ejecutar Python para Basalt: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Python no pudo comprobar su versión: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let version = String::from_utf8_lossy(&output.stdout);
+    let mut parts = version
+        .trim()
+        .split('.')
+        .filter_map(|part| part.parse::<u32>().ok());
+    let major = parts.next().unwrap_or_default();
+    let minor = parts.next().unwrap_or_default();
+    if (major, minor) < (3, 10) {
+        return Err(format!(
+            "Basalt requiere Python 3.10 o posterior; se encontró {}",
+            version.trim()
+        ));
+    }
+    Ok(())
+}
+
+fn valida_hardware_basalt(env: &Environment) -> Result<(), String> {
+    let nvidia_smi = which_en(env, "nvidia-smi")
+        .ok_or_else(|| "Basalt requiere nvidia-smi y una GPU NVIDIA Blackwell".to_string())?;
+    let output = Command::new(nvidia_smi)
+        .args([
+            "--query-gpu=compute_cap,driver_version",
+            "--format=csv,noheader",
+        ])
+        .output()
+        .map_err(|e| format!("no se pudo consultar la GPU para Basalt: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "nvidia-smi no pudo consultar la GPU: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let rows = String::from_utf8_lossy(&output.stdout);
+    let compatible = rows.lines().any(|row| {
+        let mut columns = row.split(',').map(str::trim);
+        let capability = columns.next().and_then(|s| s.parse::<f32>().ok());
+        let driver = columns.next().and_then(version_tuple);
+        capability.is_some_and(|value| (value - 12.0).abs() < f32::EPSILON)
+            && driver.is_some_and(|value| value >= (580, 95, 5))
+    });
+    if !compatible {
+        return Err(format!(
+            "Basalt requiere NVIDIA Blackwell (compute capability 12.0) y driver Linux 580.95.05 o posterior; nvidia-smi informó: {}",
+            rows.trim()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn cpu_avx2_available() -> bool {
+    std::is_x86_feature_detected!("avx2")
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn cpu_avx2_available() -> bool {
+    false
+}
+
+fn version_tuple(raw: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = raw.trim().split('.').map(str::parse::<u32>);
+    Some((
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+        parts.next()?.ok()?,
+    ))
+}
+
+fn cuda13_runtime_disponible(env: &Environment, root: &Path) -> bool {
+    let mut dirs = Vec::new();
+    if let Some(path) = env.get("ROPERO_CUDA_PATH") {
+        let root = PathBuf::from(path);
+        dirs.extend([root.join("lib64"), root.join("targets/x86_64-linux/lib")]);
+    }
+    if let Some(paths) = env.get("LD_LIBRARY_PATH") {
+        dirs.extend(std::env::split_paths(paths));
+    }
+    dirs.extend([
+        PathBuf::from("/usr/local/cuda/lib64"),
+        PathBuf::from("/usr/local/cuda/targets/x86_64-linux/lib"),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
+    ]);
+    if let Ok(entries) = std::fs::read_dir("/usr/local") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if name.to_string_lossy().starts_with("cuda-13") && entry.path().is_dir() {
+                dirs.extend([
+                    entry.path().join("lib64"),
+                    entry.path().join("targets/x86_64-linux/lib"),
+                ]);
+            }
+        }
+    }
+    dirs.extend(cuda_wheel_library_dirs(root));
+    ["libcudart.so.13", "libcublas.so.13"]
+        .iter()
+        .all(|name| dirs.iter().any(|dir| dir.join(name).exists()))
+}
+
+pub(crate) fn cuda_wheel_library_dirs(root: &Path) -> Vec<PathBuf> {
+    let packages = root.join(".venv/lib");
+    let Ok(versions) = std::fs::read_dir(packages) else {
+        return Vec::new();
+    };
+    versions
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("python"))
+        .map(|entry| entry.path().join("site-packages/nvidia"))
+        .flat_map(|nvidia| {
+            std::fs::read_dir(nvidia)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|package| package.path().join("lib"))
+                .collect::<Vec<_>>()
+        })
+        .filter(|path| path.is_dir())
+        .collect()
+}
+
+fn instala_release_basalt(python: &Path, root: &Path) -> Result<(), String> {
+    const DESCARGA: &str = r#"
+import hashlib, json, pathlib, sys, urllib.request
+api = 'https://api.github.com/repos/jesdga95/basalt/releases/latest'
+request = urllib.request.Request(api, headers={'User-Agent': 'ropero-engine-installer', 'Accept': 'application/vnd.github+json'})
+try:
+    with urllib.request.urlopen(request, timeout=60) as response:
+        release = json.load(response)
+    assets = [item for item in release.get('assets', []) if item.get('name', '').startswith('basalt-v') and item.get('name', '').endswith('-linux-x64.tar.gz')]
+    if len(assets) != 1:
+        raise RuntimeError('el último release no contiene un único archivo basalt-v*-linux-x64.tar.gz')
+    asset = assets[0]
+    url = asset.get('browser_download_url', '')
+    if not url.startswith('https://github.com/jesdga95/basalt/releases/download/'):
+        raise RuntimeError('la URL del archivo no pertenece al release oficial de Basalt')
+    digest = asset.get('digest', '')
+    if not digest.startswith('sha256:'):
+        raise RuntimeError('GitHub no publicó el SHA-256 del release; no se instala un archivo sin verificar')
+    destination = pathlib.Path(sys.argv[1])
+    request = urllib.request.Request(url, headers={'User-Agent': 'ropero-engine-installer'})
+    checksum = hashlib.sha256()
+    with urllib.request.urlopen(request, timeout=120) as response, destination.open('wb') as output:
+        while True:
+            chunk = response.read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            output.write(chunk)
+            checksum.update(chunk)
+    actual = checksum.hexdigest()
+    if actual != digest.removeprefix('sha256:'):
+        destination.unlink(missing_ok=True)
+        raise RuntimeError('el SHA-256 del release Basalt no coincide con el digest publicado por GitHub')
+    print('Basalt ' + asset['name'] + ' descargado')
+except Exception as error:
+    print('error al descargar Basalt: ' + str(error), file=sys.stderr)
+    sys.exit(1)
+"#;
+    const EXTRAE: &str = r#"
+import pathlib, sys, tarfile
+archive = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+try:
+    with tarfile.open(archive, 'r:gz') as bundle:
+        members = bundle.getmembers()
+        roots = set()
+        for member in members:
+            path = pathlib.PurePosixPath(member.name)
+            if path.is_absolute() or '..' in path.parts or not path.parts:
+                raise RuntimeError('ruta insegura en el archivo: ' + member.name)
+            if not (member.isfile() or member.isdir()):
+                raise RuntimeError('tipo de entrada no permitido: ' + member.name)
+            roots.add(path.parts[0])
+        if len(roots) != 1 or not next(iter(roots)).startswith('basalt-v'):
+            raise RuntimeError('el archivo no tiene una única carpeta raíz de release Basalt')
+        bundle.extractall(destination, members=members)
+except Exception as error:
+    print('error al extraer Basalt: ' + str(error), file=sys.stderr)
+    sys.exit(1)
+"#;
+    let scratch = std::env::temp_dir().join(format!("ropero-basalt-{}", std::process::id()));
+    if scratch.exists() {
+        return Err(format!(
+            "el directorio temporal ya existe y no se modificará: {}",
+            scratch.display()
+        ));
+    }
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("no se pudo crear {}: {e}", scratch.display()))?;
+    let result = (|| {
+        let archive = scratch.join("basalt-release.tar.gz");
+        let output = Command::new(python)
+            .arg("-c")
+            .arg(DESCARGA)
+            .arg(&archive)
+            .status()
+            .map_err(|e| format!("no se pudo iniciar el instalador Python de Basalt: {e}"))?;
+        if !output.success() {
+            return Err(format!(
+                "la descarga del release Basalt terminó con {output}"
+            ));
+        }
+        let extracted = scratch.join("unpacked");
+        std::fs::create_dir_all(&extracted)
+            .map_err(|e| format!("no se pudo crear {}: {e}", extracted.display()))?;
+        let output = Command::new(python)
+            .arg("-c")
+            .arg(EXTRAE)
+            .arg(&archive)
+            .arg(&extracted)
+            .status()
+            .map_err(|e| format!("no se pudo iniciar la extracción de Basalt: {e}"))?;
+        if !output.success() {
+            return Err(format!(
+                "la extracción del release Basalt terminó con {output}"
+            ));
+        }
+        let entries = std::fs::read_dir(&extracted)
+            .map_err(|e| format!("no se pudo leer {}: {e}", extracted.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("no se pudo inspeccionar el release Basalt: {e}"))?;
+        if entries.len() != 1 || !entries[0].path().join("bin/basalt").is_file() {
+            return Err("el release descargado no tiene la estructura esperada de Basalt".into());
+        }
+        let release_root = entries[0].path();
+        if root.exists() {
+            return Err(format!(
+                "no se reemplaza la instalación existente de Basalt en {}",
+                root.display()
+            ));
+        }
+        if let Some(parent) = root.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
+        }
+        std::fs::rename(&release_root, root).map_err(|e| {
+            format!(
+                "no se pudo instalar el release Basalt en {}: {e}",
+                root.display()
+            )
+        })?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn prepara_python_basalt(python: &Path, root: &Path, env: &Environment) -> Result<(), String> {
+    let requirements = root.join("requirements.txt");
+    if !requirements.is_file() {
+        return Err(format!(
+            "el release Basalt no contiene requirements.txt: {}",
+            requirements.display()
+        ));
+    }
+    let venv = root.join(".venv");
+    if !venv.join("bin/python").is_file() {
+        let status = Command::new(python)
+            .args(["-m", "venv"])
+            .arg(&venv)
+            .status()
+            .map_err(|e| format!("no se pudo crear el entorno Python de Basalt: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "python3 -m venv terminó con {status}; en Debian/Ubuntu instala python3-venv"
+            ));
+        }
+    }
+    let venv_python = venv.join("bin/python");
+    let status = Command::new(&venv_python)
+        .args(["-m", "pip", "install", "--disable-pip-version-check", "-r"])
+        .arg(requirements)
+        .status()
+        .map_err(|e| format!("no se pudo instalar los requisitos Python de Basalt: {e}"))?;
+    if !status.success() {
+        return Err(format!("pip install de Basalt terminó con {status}"));
+    }
+    if !cuda13_runtime_disponible(env, root) {
+        let status = Command::new(&venv_python)
+            .args([
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "nvidia-cuda-runtime<14",
+                "nvidia-cublas<14",
+            ])
+            .status()
+            .map_err(|e| format!("no se pudo instalar CUDA 13 para Basalt: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "pip no pudo instalar CUDA 13 para Basalt: {status}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn busca_archivo(root: &Path, nombre: &str) -> Option<PathBuf> {
@@ -1425,8 +1808,9 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compila_motor, enlaza_ejecutables, escribe_wrapper_flm, gestor_paquetes_disponible,
-        prepara_dependencias_sistema, valida_runtime_flm, wrapper_flm_propio,
+        compila_motor, cpu_avx2_available, cuda13_runtime_disponible, enlaza_ejecutables,
+        escribe_wrapper_flm, gestor_paquetes_disponible, prepara_dependencias_sistema,
+        valida_hardware_basalt, valida_runtime_flm, version_tuple, wrapper_flm_propio,
     };
     use ropero_core::{
         DetectSpec, EngineColor, EngineId, EngineInstallSpec, EngineManifest, Environment,
@@ -1470,9 +1854,25 @@ mod tests {
 
     #[test]
     fn dependencias_sistema_no_piden_privilegios_si_ya_estan_instaladas() {
-        let base = std::env::temp_dir().join(format!("ropero-pkg-ok-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let marca_tiempo = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let candidata = std::env::temp_dir().join(format!(
+                "ropero-pkg-ok-{}-{marca_tiempo}-{id}",
+                std::process::id(),
+            ));
+            match std::fs::create_dir(&candidata) {
+                Ok(()) => break candidata,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("crear el temporal {}: {error}", candidata.display()),
+            }
+        };
         executable(&base.join("pacman"), "#!/bin/sh\nexit 0\n");
         let mut vars = BTreeMap::new();
         vars.insert("PATH".to_string(), base.display().to_string());
@@ -1484,7 +1884,7 @@ mod tests {
             )]),
             ..EngineInstallSpec::default()
         };
-        assert!(prepara_dependencias_sistema(&install, &env).is_ok());
+        assert_eq!(prepara_dependencias_sistema(&install, &env), Ok(()));
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -1502,6 +1902,53 @@ mod tests {
             ..EngineInstallSpec::default()
         };
         assert_eq!(gestor_paquetes_disponible(&install, &env), Some("apt"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn basalt_exige_blackwell_y_driver_580_95_05() {
+        let base =
+            std::env::temp_dir().join(format!("ropero-basalt-preflight-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let libs = base.join("cuda/lib64");
+        std::fs::create_dir_all(&libs).unwrap();
+        std::fs::write(libs.join("libcudart.so.13"), "").unwrap();
+        std::fs::write(libs.join("libcublas.so.13"), "").unwrap();
+        executable(
+            &base.join("nvidia-smi"),
+            "#!/bin/sh\nprintf '12.0, 590.48.01\\n'\n",
+        );
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".to_string(), base.display().to_string());
+        vars.insert("LD_LIBRARY_PATH".to_string(), libs.display().to_string());
+        let env = Environment::new(vars, &base, &base);
+        if cpu_avx2_available() {
+            let valid = valida_hardware_basalt(&env);
+            assert!(valid.is_ok(), "{valid:?}");
+            executable(
+                &base.join("nvidia-smi"),
+                "#!/bin/sh\nprintf '8.6, 590.48.01\\n'\n",
+            );
+            let error = valida_hardware_basalt(&env).unwrap_err();
+            assert!(error.contains("compute capability 12.0"));
+        }
+        assert_eq!(version_tuple("580.95.05"), Some((580, 95, 5)));
+        assert!(version_tuple("580.94.99").unwrap() < (580, 95, 5));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn cuda13_en_el_venv_de_basalt_cuenta_como_runtime_disponible() {
+        let base = std::env::temp_dir().join(format!("ropero-basalt-cuda-{}", std::process::id()));
+        let libs = base.join(".venv/lib/python3.12/site-packages/nvidia");
+        let runtime = libs.join("cuda_runtime/lib");
+        let cublas = libs.join("cublas/lib");
+        std::fs::create_dir_all(&runtime).unwrap();
+        std::fs::create_dir_all(&cublas).unwrap();
+        std::fs::write(runtime.join("libcudart.so.13"), "").unwrap();
+        std::fs::write(cublas.join("libcublas.so.13"), "").unwrap();
+        let env = Environment::new(BTreeMap::new(), &base, &base);
+        assert!(cuda13_runtime_disponible(&env, &base));
         let _ = std::fs::remove_dir_all(base);
     }
 
