@@ -133,6 +133,25 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
 /// Lee la hora de inicio del proceso mediante la API de procesos de macOS.
 #[cfg(target_os = "macos")]
 pub fn start_time_of(pid: u32) -> Option<u64> {
+    proceso_mac(pid).map(|info| info.pbi_start_tvsec)
+}
+
+/// Lee el estado del proceso mediante la API de procesos de macOS.
+#[cfg(target_os = "macos")]
+pub fn estado_del_proceso(pid: u32) -> Option<char> {
+    let estado = proceso_mac(pid)?.pbi_status;
+    match estado {
+        libc::SIDL => Some('I'),
+        libc::SRUN => Some('R'),
+        libc::SSLEEP => Some('S'),
+        libc::SSTOP => Some('T'),
+        libc::SZOMB => Some('Z'),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn proceso_mac(pid: u32) -> Option<libc::proc_bsdinfo> {
     use std::mem::{MaybeUninit, size_of};
 
     #[link(name = "proc")]
@@ -151,7 +170,7 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
     // buffer. The result is read only when the API reports a full structure.
     let bytes = unsafe {
         proc_pidinfo(
-            pid as libc::c_int,
+            libc::pid_t::try_from(pid).ok()?,
             libc::PROC_PIDTBSDINFO,
             0,
             info.as_mut_ptr().cast(),
@@ -165,7 +184,7 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
     // SAFETY: the successful return above confirms that the full struct was
     // initialized by proc_pidinfo.
     let info = unsafe { info.assume_init() };
-    (info.pbi_pid == pid).then_some(info.pbi_start_tvsec)
+    (info.pbi_pid == pid).then_some(info)
 }
 
 /// El estado de un proceso, tal y como lo dice el kernel.
@@ -184,6 +203,7 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
 /// dice que está vivo. El motor que muere al hacer bind es exactamente
 /// eso: un zombi durante el arranque, y sin mirar su estado parecería un
 /// motor sano.
+#[cfg(target_os = "linux")]
 pub fn estado_del_proceso(pid: u32) -> Option<char> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // El `comm` va entre paréntesis y puede contener espacios y
@@ -191,6 +211,18 @@ pub fn estado_del_proceso(pid: u32) -> Option<char> {
     let fin_comm = stat.rfind(')')?;
     let resto = stat.get(fin_comm + 1..)?;
     resto.split_whitespace().next()?.chars().next()
+}
+
+/// Sin una implementación nativa, no se inventan datos de proceso.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn start_time_of(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// Sin una implementación nativa, no se inventan datos de proceso.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn estado_del_proceso(_pid: u32) -> Option<char> {
+    None
 }
 
 /// El SHA-256 del binario de un proceso, si se puede resolver.
