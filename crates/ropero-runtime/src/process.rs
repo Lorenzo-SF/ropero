@@ -139,7 +139,31 @@ pub fn start_time_of(pid: u32) -> Option<u64> {
 /// Lee el estado del proceso mediante la API de procesos de macOS.
 #[cfg(target_os = "macos")]
 pub fn estado_del_proceso(pid: u32) -> Option<char> {
-    let estado = proceso_mac(pid)?.pbi_status;
+    use std::mem::{MaybeUninit, size_of};
+
+    let pid_nativo = libc::pid_t::try_from(pid).ok()?;
+    let mut info = MaybeUninit::<libc::proc_bsdshortinfo>::zeroed();
+    // SAFETY: proc_pidinfo writes at most `buffersize` bytes to the valid
+    // buffer. The result is read only when the API reports a full structure.
+    let bytes = unsafe {
+        proc_pidinfo(
+            pid_nativo,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size_of::<libc::proc_bsdshortinfo>() as libc::c_int,
+        )
+    };
+    if bytes != size_of::<libc::proc_bsdshortinfo>() as libc::c_int {
+        return None;
+    }
+
+    // SAFETY: the successful return above confirms the full structure.
+    let info = unsafe { info.assume_init() };
+    if info.pbsi_pid != pid {
+        return None;
+    }
+    let estado = info.pbsi_status;
     match estado {
         libc::SIDL => Some('I'),
         libc::SRUN => Some('R'),
@@ -151,19 +175,20 @@ pub fn estado_del_proceso(pid: u32) -> Option<char> {
 }
 
 #[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_pidinfo(
+        pid: libc::c_int,
+        flavor: libc::c_int,
+        arg: u64,
+        buffer: *mut libc::c_void,
+        buffersize: libc::c_int,
+    ) -> libc::c_int;
+}
+
+#[cfg(target_os = "macos")]
 fn proceso_mac(pid: u32) -> Option<libc::proc_bsdinfo> {
     use std::mem::{MaybeUninit, size_of};
-
-    #[link(name = "proc")]
-    unsafe extern "C" {
-        fn proc_pidinfo(
-            pid: libc::c_int,
-            flavor: libc::c_int,
-            arg: u64,
-            buffer: *mut libc::c_void,
-            buffersize: libc::c_int,
-        ) -> libc::c_int;
-    }
 
     let mut info = MaybeUninit::<libc::proc_bsdinfo>::zeroed();
     // SAFETY: proc_pidinfo writes at most `buffersize` bytes to the valid
