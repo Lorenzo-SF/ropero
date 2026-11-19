@@ -23,7 +23,12 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
+
+/// Los tests que levantan el motor falso comparten el mismo rango de puertos.
+/// Mantener el bloqueo durante la vida del proceso evita que dos tests elijan
+/// a la vez el mismo puerto libre.
+static MOTOR_FALSO_LOCK: Mutex<()> = Mutex::new(());
 
 /// El directorio del fixture.
 fn fixture_root() -> PathBuf {
@@ -193,11 +198,14 @@ struct Arranque {
     estado: PathBuf,
     /// El puerto en el que sirve el motor.
     puerto: u16,
+    /// Serializa el uso del rango de puertos hasta parar el motor.
+    _motor_lock: MutexGuard<'static, ()>,
 }
 
 impl Arranque {
     /// Lanza el modelo en segundo plano y espera al `ROPERO_PORT=`.
     fn nuevo(estado: &Path, path: &Path, gguf: &Path, args: &[&str]) -> (Self, u16) {
+        let motor_lock = MOTOR_FALSO_LOCK.lock().expect("serializar motor falso");
         let mut cmd = bin(estado, path, gguf);
         cmd.args(args);
         cmd.stdout(Stdio::piped());
@@ -261,6 +269,7 @@ impl Arranque {
             stderr: errores,
             estado: estado.to_path_buf(),
             puerto,
+            _motor_lock: motor_lock,
         };
         (arranque, puerto)
     }
@@ -804,6 +813,7 @@ fn foreground_muestra_salida_del_motor_y_genera_log_y_uso() {
 
 #[test]
 fn background_es_silencioso_guarda_logs_y_uso_redactado() {
+    let _motor_lock = MOTOR_FALSO_LOCK.lock().expect("serializar motor falso");
     let motor = MotorFalsoConSalida::nuevo();
     let modelo = prepara_modelo_descargado();
     let estado = TempDir::nuevo("bg");
