@@ -194,7 +194,9 @@ fn zram_mb() -> Option<f64> {
         let Ok(disksize) = std::fs::read_to_string(entrada.path().join("disksize")) else {
             continue;
         };
-        if let Some(mb) = sysinfo::zram_mb(&disksize) {
+        if let Some(mb) = sysinfo::zram_mb(&disksize)
+            && mb > 0.0
+        {
             total += mb;
             hay = true;
         }
