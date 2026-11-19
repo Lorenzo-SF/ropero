@@ -24,6 +24,7 @@ fn parse_config_roundtrip_rutas_especiales() {
     let ruta = base.join("con \"comillas\" y \\ barra y ñ ü 🚀");
     let e = env(home.to_str().unwrap(), base.to_str().unwrap(), &[]);
     let mut cfg = config::config_defectos(&e.vars, &e.home, &e.cwd);
+    assert_eq!(cfg.lang, "EN");
     cfg.models_dir.valor = ruta.clone();
     cfg.gguf_dir.valor = ruta.join("gguf");
     let texto = ejemplo_config(&cfg);

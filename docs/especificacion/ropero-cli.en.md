@@ -23,7 +23,8 @@ Exit codes used by the CLI are `0` for success, `1` for execution/configuration 
 | `ropero config [--lang ES\|EN]` | Shows resolved paths and sources, and optionally saves the interface language. |
 | `ropero connect --list` | Lists supported coding-agent integrations. |
 | `ropero connect --model models --agent agent [--remove]` | Adds or removes model connections for an agent. Model names may be comma- or semicolon-separated. |
-| `ropero models [--all]` | Lists models grouped by engine. Without `--all`, includes installed engines and available models; with it, includes unavailable catalog entries and their state. |
+| `ropero models [--all | --fired]` | Lists available models from installed engines by default; an installed engine with no available models is shown with a note. `--all` includes every engine and active catalog model, including unavailable entries; `--fired` lists deactivated models. These options are mutually exclusive. |
+| `ropero model <model> --fired` / `--hired` | Deactivates or reactivates a model by moving its TOML into or out of `fired/`; it does not delete the TOML or artifacts. Repeating a transition or selecting a nonexistent model is rejected. If the name is already active when hiring, Ropero asks for a new name that is unique among active models; cancelling leaves the model fired. |
 | `ropero models add [creation options]` | Registers a normalized, validated model TOML. |
 | `ropero engines [--all]` | Lists engines and compatibility; `--all` includes incompatible engines. |
 | `ropero validate` | Validates the active model and engine catalog. |

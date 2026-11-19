@@ -19,7 +19,8 @@ const COMANDOS: &[(&str, &str)] = &[
         "connect",
         "connect (--list | --model MODELOS --agent AGENTE [--remove])",
     ),
-    ("models", "models [--all] [add]"),
+    ("models", "models [--all | --fired] [add]"),
+    ("model", "model <modelo> (--fired | --hired)"),
     ("template", "template"),
     ("engines", "engines [--all]"),
     ("validate", "validate"),
@@ -166,7 +167,7 @@ fn los_comandos_listos_estan_marcados() {
     }
 }
 
-/// La ayuda completa anuncia los once comandos **y** el arranque de un
+/// La ayuda completa anuncia los comandos **y** el arranque de un
 /// modelo, y termina sugieriendo `ropero <comando> --help`.
 #[test]
 fn la_ayuda_anuncia_todo_y_sugiere_el_uso_de_cada_comando() {

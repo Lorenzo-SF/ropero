@@ -4,7 +4,7 @@
 **Fecha**: 2026-11-14
 
 ## Contexto
-La v1 nombraba los motores con ids que ya no describían lo que eran: `llama-server` era el **fork** turboquant del dueño, y el repo **oficial** de llama.cpp se llamaba `llama-server-official`. Los ids se confundían con los binarios (`mlx-serve` era una app, no el motor; `fastflowlm` frente al id corto `flm`), y no había ni color ni puerto por motor. El CLI v2 parte de cero ([`docs-especificacion/ropero-cli.md`](../../docs-especificacion/ropero-cli.md)) y necesita una nomenclatura canónica antes de escribir una sola línea de listados, colores o asignación de puertos.
+La v1 nombraba los motores con ids que ya no describían lo que eran: `llama-server` era el **fork** turboquant del dueño, y el repo **oficial** de llama.cpp se llamaba `llama-server-official`. Los ids se confundían con los binarios (`mlx-serve` era una app, no el motor; `fastflowlm` frente al id corto `flm`), y no había ni color ni puerto por motor. El CLI v2 parte de cero ([`docs/especificacion/ropero-cli.md`](../especificacion/ropero-cli.md)) y necesita una nomenclatura canónica antes de escribir una sola línea de listados, colores o asignación de puertos.
 
 ## Decisión
 La nomenclatura canónica de motores pasa a ser la **leyenda del dueño**: `llama-server` (oficial, naranja), `turbo-llama` (fork privado, amarillo), `flm` (rojo), `mlx` (gris), `airllm` (blanco), `tensorrt-llm` (verde pistacho), `vllm` (morado), `strata` (verde pálido). Los rangos siguen las bases del ropero viejo en bloques de diez: `llama-server` 9980-9989, `turbo-llama` 9990-9999, `fastflowlm` 9970-9979, `mlx-serve` 9960-9969, `tensorrt-llm` 9950-9959, `vllm` 9940-9949, `airllm` 9930-9939 y `strata` 9920-9929.

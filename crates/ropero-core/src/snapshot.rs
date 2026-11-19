@@ -188,7 +188,9 @@ pub fn available_models(snapshot: &Snapshot) -> Vec<&ModelState> {
 /// Los grupos del listado: un motor y los modelos que le sirven.
 ///
 /// Los grupos salen en el **orden canónico** de la leyenda (ADR-004), no en
-/// el orden del disco: el listado es estable.
+/// el orden del disco: el listado es estable. Sin `todos`, sólo se incluyen
+/// motores instalados; los instalados sin modelos disponibles permanecen
+/// como grupos vacíos para que la presentación pueda indicarlo.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EngineGroup {
     /// El motor del grupo.
@@ -207,10 +209,8 @@ pub struct EngineGroup {
 
 /// Los grupos del listado, con los modelos **disponibles**.
 ///
-/// `todos` incluye también los modelos que **no** están disponibles (el
-/// `--all`), marcados con su estado. Un motor que no está instalado no
-/// aporta modelos disponibles: su grupo sale **plegado** (vacío), y el
-/// listado dice por qué.
+/// `todos` incluye también motores no instalados y modelos que **no** están
+/// disponibles (el `--all`), marcados con su estado.
 ///
 /// `razones` son las incompatibilidades conocidas (F2): si un motor no
 /// encaja con esta máquina, su grupo plegado dice por qué, y no sólo que no
@@ -224,6 +224,9 @@ pub fn engine_groups(
     let mut grupos: Vec<EngineGroup> = Vec::new();
     for engine in &snapshot.engines {
         let installed = engine.presence == EnginePresence::Installed;
+        if !todos && !installed {
+            continue;
+        }
         let mut models: Vec<ModelState> = disponibles
             .iter()
             .filter(|m| m.spec.model.engine == engine.manifest.id)
@@ -240,15 +243,15 @@ pub fn engine_groups(
                 }
             }
         }
-        let reason = if installed {
-            None
-        } else {
+        let reason = if !installed {
             Some(
                 razones
                     .get(&engine.manifest.id)
                     .cloned()
                     .unwrap_or_else(|| "no está instalado".to_string()),
             )
+        } else {
+            None
         };
         grupos.push(EngineGroup {
             manifest: engine.manifest.clone(),

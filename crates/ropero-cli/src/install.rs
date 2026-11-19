@@ -110,6 +110,31 @@ fn enlaza_motor(
 ) -> i32 {
     match ropero_runtime::install::instala_motor(manifest, env, force) {
         Ok(estado) => {
+            if manifest.id == EngineId::Basalt {
+                let espanol = env.config_resuelta().lang == "ES";
+                match ropero_runtime::install::registra_modelo_basalt(env) {
+                    Ok(created) => ropero_core::out_line(if espanol {
+                        if created {
+                            "Basalt: modelo Qwen3.8-Flash-Next registrado"
+                        } else {
+                            "Basalt: se conserva el TOML existente"
+                        }
+                    } else if created {
+                        "Basalt: registered the Qwen3.8-Flash-Next model"
+                    } else {
+                        "Basalt: keeping the existing model TOML"
+                    }),
+                    Err(error) => {
+                        let prefix = if espanol {
+                            "error: Basalt se instaló, pero falló el registro del modelo"
+                        } else {
+                            "error: Basalt installed, but model registration failed"
+                        };
+                        ropero_core::err_line(&format!("{prefix}: {error}"));
+                        return 1;
+                    }
+                };
+            }
             let (mensaje, codigo) = install::mensaje_motor(manifest.id.as_str(), &estado);
             if codigo == 0 {
                 ropero_core::out_line(&mensaje);

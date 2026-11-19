@@ -39,6 +39,7 @@ pub fn run(matches: &ArgMatches) -> i32 {
         "claude"
             | "opencode"
             | "openclaw"
+            | "picoclaw"
             | "claw"
             | "pi"
             | "codex"
@@ -247,6 +248,14 @@ pub fn run(matches: &ArgMatches) -> i32 {
         )
     } else if agent == "pi" {
         ropero_runtime::connect::pi(
+            &scan.env.home,
+            &connect_config,
+            &scan.engines,
+            &owned,
+            matches.get_flag("remove"),
+        )
+    } else if agent == "picoclaw" {
+        ropero_runtime::connect::picoclaw(
             &scan.env.home,
             &connect_config,
             &scan.engines,

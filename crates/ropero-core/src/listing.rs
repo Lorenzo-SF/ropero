@@ -24,8 +24,8 @@
 //!
 //! ## Los grupos plegados
 //!
-//! Un motor que no está instalado no aporta modelos: su grupo sale
-//! **plegado**, con el motivo **debajo**, como una nota (doc CLI v2 §2.1).
+//! Un motor instalado sin modelos disponibles sale **plegado**, con esa nota
+//! debajo. Los motores no instalados sólo se incluyen con `--all`.
 //!
 //! ```text
 //!   airllm
@@ -85,15 +85,28 @@ pub fn list_lines(
     palette: &Palette,
     razones: &BTreeMap<EngineId, String>,
 ) -> Vec<String> {
+    list_lines_lang(snapshot, todos, palette, razones, false)
+}
+
+/// Variante localizada para la salida del CLI.
+pub fn list_lines_lang(
+    snapshot: &Snapshot,
+    todos: bool,
+    palette: &Palette,
+    razones: &BTreeMap<EngineId, String>,
+    english: bool,
+) -> Vec<String> {
     let grupos = engine_groups(snapshot, todos, razones);
     // Una tabla para todo el listado: el motor es una fila de grupo y una
     // regla separa un grupo del siguiente.
     let mut tabla = Tabla::nivel(1)
-        .columna(Columna::texto("modelo").maximo(ANCHO_MAXIMO))
-        .columna(Columna::numero("tamaño"))
-        .columna(Columna::texto("artefacto").maximo(ANCHO_MAXIMO));
+        .columna(Columna::texto(if english { "model" } else { "modelo" }).maximo(ANCHO_MAXIMO))
+        .columna(Columna::numero(if english { "size" } else { "tamaño" }))
+        .columna(
+            Columna::texto(if english { "artifact" } else { "artefacto" }).maximo(ANCHO_MAXIMO),
+        );
     if todos {
-        tabla = tabla.columna(Columna::texto("estado"));
+        tabla = tabla.columna(Columna::texto(if english { "status" } else { "estado" }));
     }
     for grupo in &grupos {
         if grupo.models.is_empty() {
@@ -109,6 +122,7 @@ pub fn list_lines(
                 todos,
                 grupo.installed,
                 grupo.manifest.maturity == crate::Maturity::Partial,
+                english,
             ));
         }
     }
@@ -118,13 +132,13 @@ pub fn list_lines(
     if tabla.esta_vacia() && plegados.is_empty() {
         return Vec::new();
     }
-    let mut seccion = Seccion::nueva(TITULO);
+    let mut seccion = Seccion::nueva(if english { "MODELS" } else { TITULO });
     seccion.cuerpo(tabla.lineas(palette));
     if !plegados.is_empty() && !tabla.esta_vacia() {
         // Una línea en blanco: los motores plegados no son parte de la tabla.
         seccion.linea("");
     }
-    seccion.cuerpo(lineas_de_plegados(&plegados, palette));
+    seccion.cuerpo(lineas_de_plegados(&plegados, palette, english));
     let mut out = seccion.lineas();
     while out.last().is_some_and(|l| l.is_empty()) {
         out.pop();
@@ -138,6 +152,7 @@ fn celdas_de_modelo(
     con_estado: bool,
     engine_instalado: bool,
     engine_parcial: bool,
+    english: bool,
 ) -> Vec<Celda> {
     let spec = &modelo.spec;
     let mut celdas = vec![
@@ -151,9 +166,19 @@ fn celdas_de_modelo(
         let estado = if disponible {
             String::new()
         } else if engine_parcial {
-            "integración parcial".to_string()
+            if english {
+                "partial integration"
+            } else {
+                "integración parcial"
+            }
+            .to_string()
         } else {
-            NO_DISPONIBLE.to_string()
+            if english {
+                "unavailable"
+            } else {
+                NO_DISPONIBLE
+            }
+            .to_string()
         };
         celdas.push(Celda::plana(estado));
     }
@@ -276,34 +301,104 @@ fn tag_de_decision(spec: &ModelSpec) -> Option<String> {
 
 /// Las líneas de los grupos **plegados**: el motor y el motivo.
 ///
-/// Un grupo plegado es un motor que no está instalado: no aporta modelos,
-/// pero **dice por qué** (el motivo lo aporta el informe de compatibilidad,
-/// F2; si el motor sí es compatible, el motivo es que no está instalado).
+/// Un grupo plegado es un motor sin modelos disponibles. Si está instalado,
+/// lo indica; si no, el motivo viene del informe de compatibilidad (F2) o
+/// aclara que falta instalarlo.
 ///
 /// El motivo va **debajo** del motor, como una **nota** (doc CLI v2 §2.1):
 /// es lo que va debajo de una fila, y no rompe la rejilla. Así los motivos
 /// de todos los grupos caen en la misma columna y se leen como una columna.
-fn lineas_de_plegados(plegados: &[&EngineGroup], paleta: &Palette) -> Vec<String> {
+fn lineas_de_plegados(plegados: &[&EngineGroup], paleta: &Palette, english: bool) -> Vec<String> {
     let mut tabla = Tabla::nivel(1);
     for grupo in plegados {
         tabla.grupo(Celda::motor(
             grupo.manifest.id.as_str(),
             grupo.manifest.color,
         ));
-        tabla.nota(Celda::plana(motivo_de(grupo)));
+        tabla.nota(Celda::plana(motivo_de(grupo, english)));
     }
     tabla.lineas(paleta)
 }
 
 /// El motivo de un grupo plegado: por qué no se puede usar.
-fn motivo_de(grupo: &EngineGroup) -> String {
+fn motivo_de(grupo: &EngineGroup, english: bool) -> String {
+    if grupo.installed {
+        return if english {
+            "no available models"
+        } else {
+            "sin modelos disponibles"
+        }
+        .to_string();
+    }
     match &grupo.reason {
         Some(r) => r.clone(),
-        None => "no está instalado".to_string(),
+        None => if english {
+            "not installed"
+        } else {
+            "no está instalado"
+        }
+        .to_string(),
     }
+}
+
+/// Lista los modelos de `fired/`, sin depender del estado de instalación del engine.
+pub fn fired_lines(
+    catalog: &crate::Catalog,
+    engines: &[crate::EngineManifest],
+    palette: &Palette,
+    english: bool,
+) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut seen = BTreeSet::new();
+    let mut by_engine = BTreeMap::<crate::EngineId, Vec<&ModelSpec>>::new();
+    for model in &catalog.fired {
+        if seen.insert(model.source.clone()) {
+            by_engine.entry(model.model.engine).or_default().push(model);
+        }
+    }
+    if by_engine.is_empty() {
+        return Vec::new();
+    }
+    let mut table = Tabla::nivel(1)
+        .columna(Columna::texto(if english { "model" } else { "modelo" }).maximo(ANCHO_MAXIMO))
+        .columna(Columna::numero(if english { "size" } else { "tamaño" }))
+        .columna(
+            Columna::texto(if english { "artifact" } else { "artefacto" }).maximo(ANCHO_MAXIMO),
+        );
+    for engine in engines {
+        let Some(models) = by_engine.get_mut(&engine.id) else {
+            continue;
+        };
+        models.sort_by_key(|model| model.model.name.as_str());
+        table.grupo(Celda::motor(engine.id.as_str(), engine.color));
+        for model in models.iter() {
+            table.fila(vec![
+                Celda::plana(nombre_de_modelo(model)),
+                Celda::plana(tamano_de(model)),
+                Celda::plana(artefacto_de(model)),
+            ]);
+        }
+    }
+    let mut section = Seccion::nueva(if english {
+        "FIRED MODELS"
+    } else {
+        "MODELOS DESPEDIDOS"
+    });
+    section.cuerpo(table.lineas(palette));
+    section.lineas()
 }
 
 /// El resumen de una línea de `ropero models` cuando no hay nada que listar.
 pub fn empty_notice() -> String {
     "aviso: no hay modelos disponibles (instala motores y descarga modelos)".to_string()
+}
+
+pub fn empty_notice_lang(english: bool, fired: bool) -> String {
+    match (english, fired) {
+        (true, true) => "no fired models".to_string(),
+        (true, false) => "no available models (install engines and download models)".to_string(),
+        (false, true) => "no hay modelos despedidos".to_string(),
+        (false, false) => empty_notice(),
+    }
 }

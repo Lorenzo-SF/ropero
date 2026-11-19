@@ -20,7 +20,7 @@
 //! `external_subcommand`: lo que no reconoce como comando se devuelve tal
 //! cual, y es el arranque de un modelo (doc CLI v2 §8).
 //!
-//! ## El parser habla español
+//! ## Idioma de la interfaz
 //!
 //! `clap` trae sus mensajes en inglés («Usage:», «unexpected argument»,
 //! «For more information») y su ayuda descuadra las descripciones: los
@@ -69,7 +69,7 @@ enum Ayuda {
     Arranque,
 }
 
-/// El parser del CLI, con la salida **en español**.
+/// El parser del CLI, con la salida en inglés por defecto y español configurable.
 ///
 /// Es el mismo `clap` de siempre, envuelto: parsea igual, pero la ayuda y
 /// los errores de uso los pone el dominio. Así el CLI habla **un** idioma
@@ -85,7 +85,7 @@ impl Parser {
     /// Parsea los argumentos.
     ///
     /// Si se pide la ayuda o la versión, las imprime y sale con `0`; si el
-    /// uso está mal, el error sale **en español** y se sale con `2`.
+    /// uso está mal, el error se presenta en el idioma configurado y se sale con `2`.
     pub fn get_matches_from<I, T>(&self, itr: I) -> ArgMatches
     where
         I: IntoIterator<Item = T>,
@@ -492,7 +492,8 @@ fn resumen_ingles(command: &str) -> &'static str {
         "doctor" => "checks ropero and engine dependencies",
         "config" => "shows configuration, paths, and their source",
         "connect" => "connects or removes models from coding agents",
-        "models" => "lists models grouped by engine",
+        "models" => "lists available models grouped by installed engine",
+        "model" => "fires or hires a model without deleting its TOML",
         "template" => "prints the model template and suggested location",
         "engines" => "lists engines and their compatibility",
         "validate" => "validates catalog TOML files",
@@ -513,6 +514,9 @@ fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
         ("connect", "agent") => "target agent",
         ("connect", "remove") => "removes the selected connections",
         ("models", "all") | ("engines", "all") => "also shows unavailable engines and models",
+        ("models", "fired") => "shows only fired models",
+        ("model", "fired") => "deactivates the model and keeps its TOML",
+        ("model", "hired") => "reactivates the model from fired/",
         ("models", "path") => "reads a model TOML file",
         ("models", "stdin") => "reads the complete TOML from standard input",
         ("models", "name") => "internal model name and filename",
@@ -612,6 +616,14 @@ fn comandos() -> Vec<ClapCommand> {
                     arg = arg.conflicts_with("all-models");
                 } else if comando.name == "test" && flag.name == "all-models" {
                     arg = arg.conflicts_with("model");
+                } else if comando.name == "models" && flag.name == "all" {
+                    arg = arg.conflicts_with("fired");
+                } else if comando.name == "models" && flag.name == "fired" {
+                    arg = arg.conflicts_with("all");
+                } else if comando.name == "model" && flag.name == "fired" {
+                    arg = arg.conflicts_with("hired").required_unless_present("hired");
+                } else if comando.name == "model" && flag.name == "hired" {
+                    arg = arg.conflicts_with("fired").required_unless_present("fired");
                 }
                 clap = clap.arg(arg);
             }
@@ -652,7 +664,12 @@ pub fn arranque() -> Parser {
 /// `stop`, `info` y `command` reciben un modelo.
 fn posicionales(cmd: &str) -> Vec<Arg> {
     match cmd {
-        "models" => vec![Arg::new("action").value_name("ACCIÓN").num_args(0..=1)],
+        "models" => vec![
+            Arg::new("action")
+                .value_name("ACCIÓN")
+                .num_args(0..=1)
+                .conflicts_with_all(["all", "fired"]),
+        ],
         "install" => vec![
             Arg::new("que")
                 .value_name("QUE")
@@ -667,7 +684,7 @@ fn posicionales(cmd: &str) -> Vec<Arg> {
                 .value_name("MODELO")
                 .help("el modelo cuyo motor se detiene"),
         ],
-        "info" | "command" => vec![
+        "info" | "command" | "model" => vec![
             Arg::new("modelo")
                 .value_name("MODELO")
                 .required(true)

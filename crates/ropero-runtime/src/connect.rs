@@ -79,6 +79,10 @@ pub const AGENTS: &[(&str, &str)] = &[
         "openclaw",
         "compatible: models.json por agente con providers custom",
     ),
+    (
+        "picoclaw",
+        "compatible: config.json v2 y credenciales protegidas en .security.yml",
+    ),
 ];
 
 /// Engines whose documented HTTP surface includes OpenAI's Responses API,
@@ -159,13 +163,17 @@ pub fn claude_env_instructions(
         ]);
     }
     let primary = aliases[0];
-    let auth = config
+    let has_api_key = config
         .engines
         .get(&first.model.engine)
         .and_then(|engine| engine.api_key.as_deref())
-        .map(|_| "<clave-api-configurada-en-ropero>")
-        .unwrap_or("dummy");
-    Ok(vec![
+        .is_some();
+    let auth = if has_api_key {
+        "<clave-api-configurada-en-ropero>"
+    } else {
+        "dummy"
+    };
+    let mut lines = vec![
         format!("Claude Code — engine {engine}, API Anthropic Messages"),
         format!("ANTHROPIC_BASE_URL=http://127.0.0.1:{port}"),
         format!("ANTHROPIC_AUTH_TOKEN={auth}"),
@@ -177,7 +185,11 @@ pub fn claude_env_instructions(
         format!("ANTHROPIC_DEFAULT_SONNET_MODEL={primary}"),
         format!("modelos seleccionados: {}", aliases.join(", ")),
         "Ejecuta `claude` con estas variables exportadas. La URL no lleva `/v1`: Claude solicita `/v1/messages`.".into(),
-    ])
+    ];
+    if has_api_key {
+        lines.push("Sustituye `<clave-api-configurada-en-ropero>` por la clave del engine antes de exportar; Ropero no imprime credenciales en la terminal.".into());
+    }
+    Ok(lines)
 }
 
 /// Values for registering Ropero models through TRAE's documented UI. This
@@ -657,6 +669,219 @@ pub fn pi(
         models,
         uninstall,
     )
+}
+
+/// Registra modelos OpenAI-compatible en el formato versionado de PicoClaw.
+/// Las claves se guardan en `.security.yml`, que PicoClaw indexa mediante
+/// `<model_name>:0`; nunca se escriben en `config.json`.
+pub fn picoclaw(
+    home: &Path,
+    config: &Config,
+    engines: &[EngineManifest],
+    models: &[ModelSpec],
+    uninstall: bool,
+) -> Result<PathBuf, String> {
+    let dir = home.join(".picoclaw");
+    let path = dir.join("config.json");
+    let security_path = dir.join(".security.yml");
+    let marker = home.join(".config/ropero/connect/picoclaw.json");
+    let original_marker = match std::fs::read(&marker) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "no se pudo leer el registro de PicoClaw {}: {error}",
+                marker.display()
+            ));
+        }
+    };
+    let mut managed = if let Some(bytes) = &original_marker {
+        serde_json::from_slice::<Vec<String>>(bytes)
+            .map_err(|e| format!("registro de PicoClaw inválido ({e}); no se ha alterado"))?
+    } else {
+        Vec::new()
+    };
+    let mut root: Value = if path.exists() {
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?;
+        serde_json::from_str(&text).map_err(|e| {
+            format!(
+                "{} no es JSON válido ({e}); no se ha alterado",
+                path.display()
+            )
+        })?
+    } else {
+        json!({"version": 2, "model_list": []})
+    };
+    let object = root
+        .as_object_mut()
+        .ok_or_else(|| "la raíz de config.json de PicoClaw debe ser un objeto".to_string())?;
+    if object.get("version").and_then(Value::as_u64) != Some(2) {
+        return Err(format!(
+            "{} debe usar el esquema de PicoClaw v2; no se ha alterado",
+            path.display()
+        ));
+    }
+    let entries = object
+        .entry("model_list")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or_else(|| "`model_list` de PicoClaw debe ser una lista".to_string())?;
+    let original_security = match std::fs::read(&security_path) {
+        Ok(bytes) => Some(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "no se pudo leer {}: {error}",
+                security_path.display()
+            ));
+        }
+    };
+    let mut security: serde_yaml::Value = if let Some(bytes) = &original_security {
+        serde_yaml::from_slice(bytes).map_err(|e| {
+            format!(
+                "{} no es YAML válido ({e}); no se ha alterado",
+                security_path.display()
+            )
+        })?
+    } else {
+        serde_yaml::Value::Mapping(serde_yaml::Mapping::new())
+    };
+    let security_root = security.as_mapping_mut().ok_or_else(|| {
+        format!(
+            "{} debe contener un mapa YAML; no se ha alterado",
+            security_path.display()
+        )
+    })?;
+    let model_list_key = serde_yaml::Value::String("model_list".into());
+    let model_secrets = security_root
+        .entry(model_list_key)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+        .as_mapping_mut()
+        .ok_or_else(|| {
+            format!(
+                "`model_list` de {} debe ser un mapa YAML; no se ha alterado",
+                security_path.display()
+            )
+        })?;
+
+    for model in models {
+        let manifest = engines
+            .iter()
+            .find(|e| e.id == model.model.engine)
+            .ok_or_else(|| format!("no hay manifiesto para {}", model.model.engine.as_str()))?;
+        let served = served_model_id(model);
+        let model_name = format!("ropero-{}-{served}", manifest.id.as_str());
+        let security_key = format!("{model_name}:0");
+        if uninstall {
+            if !managed.iter().any(|owned| owned == &model_name) {
+                continue;
+            }
+            entries.retain(|entry| {
+                entry.get("model_name").and_then(Value::as_str) != Some(model_name.as_str())
+            });
+            model_secrets.remove(serde_yaml::Value::String(security_key));
+            managed.retain(|owned| owned != &model_name);
+            continue;
+        }
+        if entries.iter().any(|entry| {
+            entry.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
+                && !managed.iter().any(|owned| owned == &model_name)
+        }) {
+            return Err(format!(
+                "PicoClaw ya tiene `{model_name}` sin registro de Ropero; no se ha alterado"
+            ));
+        }
+        let port = model
+            .model
+            .port
+            .map(|p| p.0)
+            .unwrap_or(manifest.port_range.min);
+        let entry = json!({
+            "model_name": model_name.clone(),
+            "model": format!("openai/{served}"),
+            "api_base": format!("http://127.0.0.1:{port}/v1"),
+        });
+        if let Some(existing) = entries.iter_mut().find(|entry| {
+            entry.get("model_name").and_then(Value::as_str) == Some(model_name.as_str())
+        }) {
+            *existing = entry;
+        } else {
+            entries.push(entry);
+        }
+        if !managed.iter().any(|owned| owned == &model_name) {
+            managed.push(model_name);
+        }
+        if let Some(key) = config
+            .engines
+            .get(&manifest.id)
+            .and_then(|engine| engine.api_key.as_deref())
+        {
+            let key_yaml = serde_yaml::Value::String(security_key);
+            model_secrets.insert(
+                key_yaml,
+                serde_yaml::to_value(json!({"api_keys": [key]}))
+                    .map_err(|e| format!("no se pudo serializar credencial de PicoClaw: {e}"))?,
+            );
+        } else {
+            model_secrets.remove(serde_yaml::Value::String(security_key));
+        }
+    }
+    if model_secrets.is_empty() {
+        security_root.remove(serde_yaml::Value::String("model_list".into()));
+    }
+    let next_security = if security_root.is_empty() {
+        None
+    } else {
+        Some(
+            serde_yaml::to_string(&security)
+                .map_err(|e| format!("no se pudo serializar .security.yml: {e}"))?
+                .into_bytes(),
+        )
+    };
+    managed.sort();
+    managed.dedup();
+    let next_marker = if managed.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_vec_pretty(&managed)
+                .map_err(|e| format!("no se pudo serializar el registro de PicoClaw: {e}"))?,
+        )
+    };
+    let marker_result = match &next_marker {
+        Some(bytes) => write_private_atomic(&marker, bytes),
+        None => remove_if_exists(&marker),
+    };
+    if let Err(error) = marker_result {
+        return Err(format!(
+            "no se pudo actualizar el registro de PicoClaw: {error}"
+        ));
+    }
+    let security_result = match &next_security {
+        Some(bytes) => write_private_atomic(&security_path, bytes),
+        None => remove_if_exists(&security_path),
+    };
+    if let Err(error) = security_result {
+        let rollback = restore_optional_private(&marker, &original_marker);
+        return match rollback {
+            Ok(()) => Err(error),
+            Err(rollback) => Err(format!(
+                "{error}; además falló la restauración del registro: {rollback}"
+            )),
+        };
+    }
+    if let Err(error) = write_json_atomic(&path, &root) {
+        let security_rollback = restore_optional_private(&security_path, &original_security);
+        let marker_rollback = restore_optional_private(&marker, &original_marker);
+        return match (security_rollback, marker_rollback) {
+            (Ok(()), Ok(())) => Err(error),
+            (security, marker) => Err(format!(
+                "{error}; falló la restauración: .security.yml={security:?}, registro={marker:?}"
+            )),
+        };
+    }
+    Ok(path)
 }
 
 /// Registra providers utilizables desde Codex CLI.
@@ -1268,11 +1493,11 @@ pub fn codebuddy(
     Ok(path)
 }
 
-/// Registra un provider Custom Endpoint en VS Code. Copilot consume este
-/// mismo catálogo BYOK; su Agent Host puede requerir habilitación explícita.
+/// Registra un provider Custom Endpoint en VS Code. Las credenciales se
+/// gestionan en VS Code: nunca se copian a chatLanguageModels.json.
 pub fn vscode(
     home: &Path,
-    config: &Config,
+    _config: &Config,
     engines: &[EngineManifest],
     models: &[ModelSpec],
     uninstall: bool,
@@ -1323,6 +1548,9 @@ pub fn vscode(
                 "VS Code ya tiene el grupo `{group_name}` con otro provider; no se ha alterado"
             ));
         }
+        // Earlier versions copied the engine key into this JSON file. Remove
+        // that legacy value; VS Code manages API credentials through its UI.
+        provider.remove("apiKey");
         let model_list = provider
             .entry("models")
             .or_insert_with(|| json!([]))
@@ -1373,15 +1601,6 @@ pub fn vscode(
             *existing = entry;
         } else {
             model_list.push(entry);
-        }
-        if let Some(key) = config
-            .engines
-            .get(&manifest.id)
-            .and_then(|engine| engine.api_key.as_ref())
-        {
-            provider.insert("apiKey".into(), json!(key));
-        } else {
-            provider.remove("apiKey");
         }
     }
     write_json_atomic(&path, &root)?;
@@ -1560,6 +1779,26 @@ pub fn hermes(
     models: &[ModelSpec],
     uninstall: bool,
 ) -> Result<(), String> {
+    hermes_with_binary(
+        Path::new("hermes"),
+        home,
+        hermes_home,
+        config,
+        engines,
+        models,
+        uninstall,
+    )
+}
+
+fn hermes_with_binary(
+    binary: &Path,
+    home: &Path,
+    hermes_home: &Path,
+    config: &Config,
+    engines: &[EngineManifest],
+    models: &[ModelSpec],
+    uninstall: bool,
+) -> Result<(), String> {
     let mut groups: std::collections::BTreeMap<String, Vec<&ModelSpec>> =
         std::collections::BTreeMap::new();
     for model in models {
@@ -1589,7 +1828,11 @@ pub fn hermes(
                 format!("manifiesto de Hermes inválido ({e}); no se ha tocado su config")
             })?
         } else {
-            let existing = hermes_config(hermes_home, &["get", &format!("providers.{provider}")])?;
+            let existing = hermes_config(
+                binary,
+                hermes_home,
+                &["get", &format!("providers.{provider}")],
+            )?;
             if !String::from_utf8_lossy(&existing.stdout).trim().is_empty() {
                 return Err(format!(
                     "Hermes ya tiene `providers.{provider}` y Ropero no lo registró; no se ha alterado"
@@ -1609,15 +1852,24 @@ pub fn hermes(
             }
             installed.retain(|name| !requested.contains(name));
             if installed.is_empty() {
-                hermes_config(hermes_home, &["unset", &format!("providers.{provider}")])?;
+                hermes_config(
+                    binary,
+                    hermes_home,
+                    &["unset", &format!("providers.{provider}")],
+                )?;
                 dotenv_set(hermes_home, &env_key, None, true)?;
                 std::fs::remove_file(&marker)
                     .map_err(|e| format!("se retiró el provider, pero no el manifiesto ({e})"))?;
             } else {
-                let list = serde_json::to_string(&installed).map_err(|e| e.to_string())?;
+                let model_map = installed
+                    .iter()
+                    .map(|name| (name.clone(), json!({})))
+                    .collect::<serde_json::Map<String, Value>>();
+                let models = serde_json::to_string(&model_map).map_err(|e| e.to_string())?;
                 hermes_config(
+                    binary,
                     hermes_home,
-                    &["set", &format!("providers.{provider}.models"), &list],
+                    &["set", &format!("providers.{provider}.models"), &models],
                 )?;
                 write_json_atomic(&marker, &json!(installed))?;
             }
@@ -1642,14 +1894,20 @@ pub fn hermes(
         installed.extend(requested);
         installed.sort();
         installed.dedup();
-        let list = serde_json::to_string(&installed).map_err(|e| e.to_string())?;
+        let model_map = installed
+            .iter()
+            .map(|name| (name.clone(), json!({})))
+            .collect::<serde_json::Map<String, Value>>();
+        let models_json = serde_json::to_string(&model_map).map_err(|e| e.to_string())?;
         let changes = (|| {
-            hermes_config(hermes_home, &["set", &api_path, &url])?;
+            hermes_config(binary, hermes_home, &["set", &api_path, &url])?;
             hermes_config(
+                binary,
                 hermes_home,
                 &["set", &format!("providers.{provider}.key_env"), &env_key],
             )?;
             hermes_config(
+                binary,
                 hermes_home,
                 &[
                     "set",
@@ -1658,8 +1916,9 @@ pub fn hermes(
                 ],
             )?;
             hermes_config(
+                binary,
                 hermes_home,
-                &["set", &format!("providers.{provider}.models"), &list],
+                &["set", &format!("providers.{provider}.models"), &models_json],
             )?;
             Ok::<(), String>(())
         })();
@@ -1721,8 +1980,12 @@ fn restore_hermes_snapshot(
     restore(marker, &snapshot.marker)
 }
 
-fn hermes_config(home: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let output = std::process::Command::new("hermes")
+fn hermes_config(
+    binary: &Path,
+    home: &Path,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let output = std::process::Command::new(binary)
         .env("HERMES_HOME", home)
         .arg("config")
         .args(args)
@@ -1801,6 +2064,22 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         format!("no se pudo reemplazar {}: {e}", path.display())
     })
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("no se pudo retirar {}: {error}", path.display())),
+    }
+}
+
+fn restore_optional_private(path: &Path, previous: &Option<Vec<u8>>) -> Result<(), String> {
+    if let Some(bytes) = previous {
+        write_private_atomic(path, bytes)
+    } else {
+        remove_if_exists(path)
+    }
 }
 
 /// Crea el temporal ya con permisos privados, antes de escribir cualquier secreto.
@@ -2092,8 +2371,8 @@ fn cst_value(value: &Value) -> CstInputValue {
 #[cfg(test)]
 mod tests {
     use super::{
-        claude_env_instructions, codex, codex_in_dir, codex_responses_supported, opencode,
-        opencode_reasoning_variant,
+        claude_env_instructions, codex, codex_in_dir, codex_responses_supported,
+        hermes_with_binary, openclaw, opencode, opencode_reasoning_variant, pi, picoclaw, vscode,
     };
     use jsonc_parser::ParseOptions;
     use ropero_core::config::Config;
@@ -2276,7 +2555,7 @@ mod tests {
         .unwrap();
         model.model.alias = Some("groot-publico".into());
         model.model.port = Some(ropero_core::Port(9984));
-        let lines = claude_env_instructions(&Config::default(), &[model], false).unwrap();
+        let lines = claude_env_instructions(&Config::default(), &[model.clone()], false).unwrap();
         let text = lines.join("\n");
         for expected in [
             "ANTHROPIC_BASE_URL=http://127.0.0.1:9984",
@@ -2294,6 +2573,18 @@ mod tests {
             !text.contains(":9984/v1"),
             "Claude añade /v1/messages: {text}"
         );
+        let mut configured = Config::default();
+        configured
+            .engines
+            .entry(model.model.engine)
+            .or_default()
+            .api_key = Some("must-not-print-this".into());
+        let keyed = claude_env_instructions(&configured, &[model], false)
+            .unwrap()
+            .join("\n");
+        assert!(keyed.contains("<clave-api-configurada-en-ropero>"));
+        assert!(keyed.contains("Sustituye `<clave-api-configurada-en-ropero>`"));
+        assert!(!keyed.contains("must-not-print-this"));
     }
 
     #[test]
@@ -2319,6 +2610,325 @@ mod tests {
                 .unwrap_err()
                 .contains("no está documentado")
         );
+    }
+
+    #[test]
+    fn picoclaw_v2_guarda_clave_separada_preserva_config_y_desinstala_solo_su_modelo() {
+        let home = std::env::temp_dir().join(format!("ropero-picoclaw-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let dir = home.join(".picoclaw");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"version":2,"model_list":[{"model_name":"user-model","model":"openai/user","api_base":"http://example/v1"}],"agents":{"defaults":{"model":{"primary":"user-model"}}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join(".security.yml"),
+            "model_list:\n  user-model:0:\n    api_keys:\n      - keep-me\n",
+        )
+        .unwrap();
+        let mut model = parse_model(
+            include_str!("../../../models/llama-server/groot-o.toml"),
+            Path::new("models/llama-server/groot-o.toml"),
+        )
+        .unwrap();
+        model.model.alias = Some("groot-local".into());
+        model.model.port = Some(ropero_core::Port(9984));
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/llama-server.toml"),
+            Path::new("engines/llama-server.toml"),
+        )
+        .unwrap();
+        let mut configured = Config::default();
+        configured.engines.entry(engine.id).or_default().api_key = Some("picoclaw-secret".into());
+
+        let path = picoclaw(
+            &home,
+            &configured,
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            false,
+        )
+        .unwrap();
+        assert!(home.join(".config/ropero/connect/picoclaw.json").exists());
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["version"], 2);
+        assert_eq!(
+            saved["agents"]["defaults"]["model"]["primary"],
+            "user-model"
+        );
+        assert_eq!(saved["model_list"][0]["model_name"], "user-model");
+        assert_eq!(
+            saved["model_list"][1]["model_name"],
+            "ropero-llama-server-groot-local"
+        );
+        assert_eq!(saved["model_list"][1]["model"], "openai/groot-local");
+        assert_eq!(
+            saved["model_list"][1]["api_base"],
+            "http://127.0.0.1:9984/v1"
+        );
+        assert!(saved["model_list"][1].get("api_key").is_none());
+        let secrets: serde_yaml::Value =
+            serde_yaml::from_slice(&std::fs::read(dir.join(".security.yml")).unwrap()).unwrap();
+        assert_eq!(
+            secrets["model_list"]["user-model:0"]["api_keys"][0].as_str(),
+            Some("keep-me")
+        );
+        assert_eq!(
+            secrets["model_list"]["ropero-llama-server-groot-local:0"]["api_keys"][0].as_str(),
+            Some("picoclaw-secret")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(dir.join(".security.yml"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+
+        picoclaw(
+            &home,
+            &Config::default(),
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            true,
+        )
+        .unwrap();
+        let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(after["model_list"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            after["agents"]["defaults"]["model"]["primary"],
+            "user-model"
+        );
+        let secrets: serde_yaml::Value =
+            serde_yaml::from_slice(&std::fs::read(dir.join(".security.yml")).unwrap()).unwrap();
+        assert_eq!(
+            secrets["model_list"]["user-model:0"]["api_keys"][0].as_str(),
+            Some("keep-me")
+        );
+        assert!(
+            secrets["model_list"]
+                .get("ropero-llama-server-groot-local:0")
+                .is_none()
+        );
+        assert!(!home.join(".config/ropero/connect/picoclaw.json").exists());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn openclaw_y_pi_escriben_sus_archivos_oficiales_y_preservan_campos_ajenos() {
+        let home = std::env::temp_dir().join(format!("ropero-agent-json-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let model = parse_model(
+            include_str!("../../../models/llama-server/groot-o.toml"),
+            Path::new("models/llama-server/groot-o.toml"),
+        )
+        .unwrap();
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/llama-server.toml"),
+            Path::new("engines/llama-server.toml"),
+        )
+        .unwrap();
+        let mut configured = Config::default();
+        configured.engines.entry(engine.id).or_default().api_key = Some("agent-json-secret".into());
+        type Connector = fn(
+            &Path,
+            &Config,
+            &[ropero_core::EngineManifest],
+            &[ropero_core::ModelSpec],
+            bool,
+        ) -> Result<std::path::PathBuf, String>;
+        let cases: [(&str, Connector); 2] = [("openclaw", openclaw), ("pi", pi)];
+        for (name, connector) in cases {
+            let isolated = home.join(name);
+            std::fs::create_dir_all(&isolated).unwrap();
+            let path = if name == "openclaw" {
+                isolated.join(".openclaw/agents/main/agent/models.json")
+            } else {
+                isolated.join(".pi/agent/models.json")
+            };
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&path, r#"{"keep":"untouched","providers":{}}"#).unwrap();
+            let actual = connector(
+                &isolated,
+                &configured,
+                std::slice::from_ref(&engine),
+                std::slice::from_ref(&model),
+                false,
+            )
+            .unwrap();
+            assert_eq!(actual, path);
+            let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(saved["keep"], "untouched");
+            assert_eq!(
+                saved["providers"]["ropero-llama-server"]["baseUrl"],
+                format!("http://127.0.0.1:{}/v1", engine.port_range.min)
+            );
+            assert_eq!(
+                saved["providers"]["ropero-llama-server"]["apiKey"],
+                "agent-json-secret"
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+            connector(
+                &isolated,
+                &Config::default(),
+                std::slice::from_ref(&engine),
+                std::slice::from_ref(&model),
+                true,
+            )
+            .unwrap();
+            let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(after["keep"], "untouched");
+            assert!(after["providers"].get("ropero-llama-server").is_none());
+        }
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn vscode_custom_endpoint_no_persiste_claves_del_engine() {
+        let home = std::env::temp_dir().join(format!("ropero-vscode-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let model = parse_model(
+            include_str!("../../../models/llama-server/groot-o.toml"),
+            Path::new("models/llama-server/groot-o.toml"),
+        )
+        .unwrap();
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/llama-server.toml"),
+            Path::new("engines/llama-server.toml"),
+        )
+        .unwrap();
+        let config_path = home.join(".config/Code/User/chatLanguageModels.json");
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &config_path,
+            r#"[{"name":"ROPERO (llama-server)","vendor":"customendpoint","apiKey":"legacy-secret","models":[]}]"#,
+        )
+        .unwrap();
+        let mut configured = Config::default();
+        configured.engines.entry(engine.id).or_default().api_key = Some("vscode-secret".into());
+        let path = vscode(
+            &home,
+            &configured,
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            false,
+        )
+        .unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let provider = &saved[0];
+        assert_eq!(provider["vendor"], "customendpoint");
+        assert_eq!(
+            provider["models"][0]["url"],
+            format!(
+                "http://127.0.0.1:{}/v1/chat/completions",
+                engine.port_range.min
+            )
+        );
+        assert!(provider.get("apiKey").is_none());
+        assert!(!saved.to_string().contains("vscode-secret"));
+        assert!(!saved.to_string().contains("legacy-secret"));
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hermes_usa_cli_registra_clave_en_env_y_retirada_sigue_registro_de_propiedad() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = std::env::temp_dir().join(format!("ropero-hermes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let hermes_home = home.join("hermes");
+        let binary = home.join("fake-hermes");
+        let log = home.join("calls.log");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(
+            &binary,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::create_dir_all(&hermes_home).unwrap();
+        std::fs::write(hermes_home.join(".env"), "KEEP_ME=untouched\n").unwrap();
+        let mut model = parse_model(
+            include_str!("../../../models/llama-server/groot-o.toml"),
+            Path::new("models/llama-server/groot-o.toml"),
+        )
+        .unwrap();
+        model.model.port = Some(ropero_core::Port(9984));
+        let engine = parse_engine_manifest(
+            include_str!("../../../engines/llama-server.toml"),
+            Path::new("engines/llama-server.toml"),
+        )
+        .unwrap();
+        let mut configured = Config::default();
+        configured.engines.entry(engine.id).or_default().api_key = Some("hermes-secret".into());
+        hermes_with_binary(
+            &binary,
+            &home,
+            &hermes_home,
+            &configured,
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            false,
+        )
+        .unwrap();
+        let env = std::fs::read_to_string(hermes_home.join(".env")).unwrap();
+        assert!(env.contains("KEEP_ME=untouched"));
+        assert!(env.contains("ROPERO_HERMES_LLAMA_SERVER_API_KEY=\"hermes-secret\""));
+        assert_eq!(
+            std::fs::metadata(hermes_home.join(".env"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let calls = std::fs::read_to_string(&log).unwrap();
+        for expected in [
+            "config set providers.ropero-llama-server.api http://127.0.0.1:9984/v1",
+            "config set providers.ropero-llama-server.key_env ROPERO_HERMES_LLAMA_SERVER_API_KEY",
+            "config set providers.ropero-llama-server.discover_models false",
+            "config set providers.ropero-llama-server.models {\"groot-o\":{}}",
+        ] {
+            assert!(calls.contains(expected), "falta {expected} en {calls}");
+        }
+        let marker = home.join(".config/ropero/connect/hermes/llama-server.json");
+        assert!(marker.exists());
+        hermes_with_binary(
+            &binary,
+            &home,
+            &hermes_home,
+            &Config::default(),
+            std::slice::from_ref(&engine),
+            std::slice::from_ref(&model),
+            true,
+        )
+        .unwrap();
+        assert!(!marker.exists());
+        let env = std::fs::read_to_string(hermes_home.join(".env")).unwrap();
+        assert!(env.contains("KEEP_ME=untouched"));
+        assert!(!env.contains("hermes-secret"));
+        assert!(
+            std::fs::read_to_string(log)
+                .unwrap()
+                .contains("config unset providers.ropero-llama-server")
+        );
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

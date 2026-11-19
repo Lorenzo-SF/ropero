@@ -8,21 +8,38 @@
 
 use ropero_core::Catalog;
 
-/// `ropero models [--all]`: los modelos **disponibles**, agrupados por motor.
+/// `ropero models`: motores instalados y sus modelos disponibles.
 ///
 /// "Disponible" son las dos cosas a la vez (doc CLI v2 §15): el motor está
 /// instalado y el modelo está descargado.
-pub fn list(all: bool) -> i32 {
+pub fn list(all: bool, fired: bool) -> i32 {
     let Ok(s) = crate::discovery::scan() else {
         return 1;
     };
+    let english = s.config.lang == "EN";
     let foto = crate::discovery::snapshot(&s);
+    if fired {
+        let lineas = ropero_core::listing::fired_lines(
+            &s.catalog,
+            &s.engines,
+            &ropero_core::Palette::color(),
+            english,
+        );
+        if lineas.is_empty() {
+            ropero_core::out_line(&ropero_core::listing::empty_notice_lang(english, true));
+            return 0;
+        }
+        for linea in &lineas {
+            ropero_core::out_line(linea);
+        }
+        return 0;
+    }
     let sistema = ropero_runtime::capture_system_info();
     let razones = ropero_core::snapshot::razones_por_motor(&s.engines, &sistema);
     let paleta = ropero_core::Palette::color();
-    let lineas = ropero_core::listing::list_lines(&foto, all, &paleta, &razones);
+    let lineas = ropero_core::listing::list_lines_lang(&foto, all, &paleta, &razones, english);
     if lineas.is_empty() {
-        ropero_core::err_line(&ropero_core::listing::empty_notice());
+        ropero_core::err_line(&ropero_core::listing::empty_notice_lang(english, false));
         return 0;
     }
     for linea in &lineas {
@@ -87,31 +104,11 @@ fn tabla_engines_activos() -> String {
     for (engine, port, _pid, model) in active {
         let real = config
             .as_ref()
-            .and_then(|config| engine_model_name(config, &engine, &model))
+            .and_then(|config| ropero_runtime::model_state::serving_name(config, &engine, &model))
             .unwrap_or_else(|| model.clone());
         out.push_str(&format!("LLM\t{model} :{port} {real}\n"));
     }
     out
-}
-
-fn engine_model_name(
-    config: &ropero_core::config::Config,
-    engine: &str,
-    model: &str,
-) -> Option<String> {
-    let (engine, _) = ropero_core::EngineId::from_str_legacy(engine).ok()?;
-    let path = config
-        .models_toml_dir(engine)
-        .valor
-        .join(format!("{model}.toml"));
-    let source = std::fs::read_to_string(path).ok()?;
-    let value = source.parse::<toml::Table>().ok()?;
-    let model_table = value.get("model")?.as_table()?;
-    model_table
-        .get("alias")
-        .or_else(|| model_table.get("path"))?
-        .as_str()
-        .map(str::to_owned)
 }
 
 /// `ropero engines [--all]`: la lista de motores con su color, su madurez
