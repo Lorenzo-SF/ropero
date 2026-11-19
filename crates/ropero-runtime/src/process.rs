@@ -155,13 +155,13 @@ pub fn estado_del_proceso(pid: u32) -> Option<char> {
         )
     };
     if bytes != size_of::<libc::proc_bsdshortinfo>() as libc::c_int {
-        return None;
+        return estado_proceso_ps(pid);
     }
 
     // SAFETY: the successful return above confirms the full structure.
     let info = unsafe { info.assume_init() };
     if info.pbsi_pid != pid {
-        return None;
+        return estado_proceso_ps(pid);
     }
     let estado = info.pbsi_status;
     match estado {
@@ -172,6 +172,20 @@ pub fn estado_del_proceso(pid: u32) -> Option<char> {
         libc::SZOMB => Some('Z'),
         _ => None,
     }
+}
+
+/// `proc_pidinfo` no siempre incluye los procesos zombis. `ps` sí los enumera;
+/// se consulta únicamente como fallback, sin pasar por un shell.
+#[cfg(target_os = "macos")]
+fn estado_proceso_ps(pid: u32) -> Option<char> {
+    let salida = std::process::Command::new("/bin/ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !salida.status.success() {
+        return None;
+    }
+    String::from_utf8(salida.stdout).ok()?.trim().chars().next()
 }
 
 #[cfg(target_os = "macos")]
