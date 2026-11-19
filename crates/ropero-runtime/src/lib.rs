@@ -15,6 +15,7 @@ pub mod launch;
 mod machine;
 pub mod mlxserve;
 pub mod model_draft;
+pub mod model_state;
 pub mod path;
 pub mod probe;
 pub mod process;

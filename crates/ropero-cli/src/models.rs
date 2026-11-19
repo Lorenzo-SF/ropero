@@ -133,6 +133,17 @@ pub fn add(matches: &ArgMatches) -> i32 {
     0
 }
 
+/// `ropero model <id> --fired|--hired`: cambia el estado sin borrar el TOML.
+pub fn state(matches: &ArgMatches) -> i32 {
+    let Ok(scan) = crate::discovery::scan() else {
+        return 1;
+    };
+    let name = crate::parser::modelo(matches);
+    let fired = matches.get_flag("fired");
+    let english = scan.config.lang != "ES";
+    ropero_runtime::model_state::run(&scan.catalog, &scan.base, &name, fired, english)
+}
+
 fn revisar_toml(
     text: &mut String,
     discarded: &mut usize,

@@ -214,7 +214,7 @@ fn la_cabecera_de_la_lista_sale_una_sola_vez() {
             modelo(TOML_TAG, true),
         ],
     );
-    let lineas = listar(&snapshot, false);
+    let lineas = listar(&snapshot, true);
     let cabeceras = lineas.iter().filter(|l| es_cabecera(l)).count();
     assert_eq!(cabeceras, 1, "{lineas:#?}");
     let reglas = lineas.iter().filter(|l| es_regla(l)).count();
@@ -281,7 +281,7 @@ fn el_artefacto_de_un_tag_es_el_tag() {
 #[test]
 fn la_lista_normaliza_el_tamano() {
     let snapshot = Snapshot::new(vec![motor_llama()], vec![modelo(TOML_GGUF, true)]);
-    let lineas = listar(&snapshot, false);
+    let lineas = listar(&snapshot, true);
     let fila = lineas
         .iter()
         .find(|l| l.contains("llama-coder"))
@@ -401,7 +401,7 @@ fn los_grupos_plegados_dicen_el_motivo_alineado() {
         ],
         vec![],
     );
-    let lineas = listar(&snapshot, false);
+    let lineas = listar(&snapshot, true);
     // El motor plegado sale con su nombre y, debajo, el motivo.
     let indice = lineas
         .iter()

@@ -31,12 +31,12 @@ Common launch controls (`--port`, API key, and log level) are handled by the run
 
 ## Install and use Basalt
 
-`ropero install engines basalt` installs the latest Linux x64 release under `~/.local/share/ropero/engines/basalt/`, verifies its SHA-256 digest published by GitHub, extracts `bin/`, `serve/`, `tools/`, `data/`, and `requirements.txt`, creates `.venv`, and installs the Python requirements. If `libcudart.so.13` and `libcublas.so.13` are not available on the system, it installs NVIDIA's CUDA 13 packages into that virtual environment and adds their library directories to Basalt's launch environment. It then links `bin/basalt` into Ropero's binary directory. Choosing Basalt from `ropero install engines` runs the same flow. Ropero checks for an AVX2 CPU, an NVIDIA Blackwell GPU (compute capability 12.0), and Linux driver 580.95.05 or newer; it also prepares Python 3.10+ (`python3` and `python3-venv` with apt, or `python` with pacman). The NVIDIA driver must be installed and operational. Releases do not include CUDA or a Python environment.
+`ropero install engines basalt` installs Basalt's prebuilt Linux x64 release under `~/.local/share/ropero/engines/basalt/`, verifies its SHA-256 digest published by GitHub, extracts `bin/`, `serve/`, `tools/`, `data/`, and `requirements.txt`, creates `.venv`, and installs the Python requirements. This follows Basalt's upstream quick-start preference for a release archive; it does not clone or compile Basalt. If `libcudart.so.13` and `libcublas.so.13` are not available on the system, Ropero installs NVIDIA's CUDA 13 packages into that virtual environment and adds their library directories to Basalt's launch environment. It then links `bin/basalt` into Ropero's binary directory. Choosing Basalt from `ropero install engines` runs the same flow. Ropero checks for an AVX2 CPU, an NVIDIA Blackwell GPU (compute capability 12.0), and Linux driver 580.95.05 or newer; it also prepares Python 3.10+ (`python3` and `python3-venv` with apt, or `python` with pacman). The NVIDIA driver must be installed and operational. Releases do not include CUDA or a Python environment. Ropero supports this Basalt integration only on Linux x86-64, even though upstream also publishes a Windows archive.
+
+After the engine installs successfully, Ropero registers the bundled Qwen3.8-Flash-Next TOML in the active user catalog if that file is absent. It never overwrites an existing TOML. The model pack remains a separate download.
 
 ```sh
 ropero install engines basalt
-mkdir -p ~/.config/ropero/models/basalt
-cp /path/to/ropero/models/basalt/qwen3.8-flash-next-basalt.toml ~/.config/ropero/models/basalt/
 ropero install models qwen3.8-flash-next
 ropero qwen3.8-flash-next
 ```

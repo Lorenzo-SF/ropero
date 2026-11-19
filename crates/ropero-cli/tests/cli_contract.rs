@@ -136,6 +136,9 @@ fn connect_lista_integraciones_y_da_instrucciones_de_trae_sin_editar_archivos_pr
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     assert!(stdout.contains("opencode"), "stdout={stdout}");
     assert!(stdout.contains("trae-cn"), "stdout={stdout}");
+    for integrated in ["codex", "claude", "pi", "hermes", "openclaw", "picoclaw"] {
+        assert!(stdout.contains(integrated), "falta {integrated}: {stdout}");
+    }
     for unsupported in ["gemini", "cursor", "kiro", "antigravity", "devin"] {
         assert!(
             !stdout.contains(unsupported),
@@ -303,14 +306,14 @@ fn un_argumento_de_mas_sale_con_dos() {
 /// Los comandos que se parsean pero todavía no se ejecutan dicen **qué
 /// falta** y salen con 1 (no con 2: el uso es correcto).
 ///
-/// Ya **no queda ninguno**: `gguffer` fue el último (F6), y los once
+/// Ya **no queda ninguno**: `gguffer` fue el último (F6), y los comandos
 /// comandos del contrato están **listos**. Lo que se comprueba ahora es
 /// lo contrario: que ninguno diga «todavía no está implementado», que es
 /// la respuesta de un comando pendiente.
 #[test]
 fn ningun_comando_dice_que_todavia_no_esta_implementado() {
     for cmd in [
-        "install", "stop", "gguffer", "status", "doctor", "models", "template", "engines",
+        "install", "stop", "gguffer", "status", "doctor", "models", "model", "template", "engines",
         "validate", "command", "info",
     ] {
         let (code, _stdout, stderr) = run(&[cmd]);
@@ -804,6 +807,11 @@ fn help_usa_el_idioma_guardado_en_config() {
     assert!(english_help.contains("--model MODELS"));
     assert!(english_help.contains("--agent AGENT"));
     assert!(english_help.contains("<model> [--force]"));
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("lang = \"EN\"")
+    );
 
     std::fs::write(&config, "lang = \"ES\"\n").unwrap();
     let spanish = bin()

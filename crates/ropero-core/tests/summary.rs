@@ -278,12 +278,24 @@ fn el_listado_agrupa_por_motor_y_solo_enseña_lo_disponible() {
         .find(|g| g.manifest.id == EngineId::Vllm)
         .expect("debe estar vllm");
     assert_eq!(vllm.models.len(), 1);
-    // AirLLM no está instalado: su grupo no trae modelos disponibles.
-    let air = grupos
-        .iter()
-        .find(|g| g.manifest.id == EngineId::AirLlm)
-        .expect("debe estar airllm");
-    assert!(air.models.is_empty());
+    // AirLLM no está instalado y, por defecto, no se muestra.
+    assert!(!grupos.iter().any(|g| g.manifest.id == EngineId::AirLlm));
+}
+
+#[test]
+fn motor_instalado_sin_modelos_disponibles_se_indica() {
+    let mut foto = todo_instalado();
+    for model in &mut foto.models {
+        if model.spec.model.engine == EngineId::LlamaServer {
+            model.presence = ModelPresence::Missing;
+        }
+    }
+    let lineas =
+        ropero_core::listing::list_lines(&foto, false, &Palette::plain(), &BTreeMap::new());
+    let texto = lineas.join("\n");
+    assert!(texto.contains("llama-server"), "{texto}");
+    assert!(texto.contains("sin modelos disponibles"), "{texto}");
+    assert!(!texto.contains("faltante"), "{texto}");
 }
 
 /// Con `--all` salen también los que no están disponibles, marcados.
@@ -315,7 +327,7 @@ fn el_grupo_plegado_dice_la_razon() {
         EngineId::AirLlm,
         "sólo funciona en Linux; necesita una NPU AMD XDNA".to_string(),
     );
-    let grupos = engine_groups(&foto, false, &razones);
+    let grupos = engine_groups(&foto, true, &razones);
     let air = grupos
         .iter()
         .find(|g| g.manifest.id == EngineId::AirLlm)
@@ -329,7 +341,7 @@ fn el_grupo_plegado_dice_la_razon() {
 fn el_grupo_plegado_sin_razon_dice_que_no_esta_instalado() {
     let foto = todo_instalado();
     let razones = BTreeMap::new();
-    let grupos = engine_groups(&foto, false, &razones);
+    let grupos = engine_groups(&foto, true, &razones);
     let air = grupos
         .iter()
         .find(|g| g.manifest.id == EngineId::AirLlm)

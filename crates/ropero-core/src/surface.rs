@@ -1,6 +1,6 @@
-//! La **superficie** del CLI v2: los once comandos, sus flags y sus frases.
+//! La **superficie** del CLI v2: sus comandos, flags y frases.
 //!
-//! El doc normativo ([`docs-especificacion/ropero-cli.md`](../../docs-especificacion/ropero-cli.md))
+//! El doc normativo ([`docs/especificacion/ropero-cli.md`](../../../docs/especificacion/ropero-cli.md))
 //! fija once invocaciones, sus opciones y sus códigos de salida. Este módulo
 //! es la **única** traducción de ese contrato al código: los nombres, las
 //! frases de ayuda, la forma de cada flag y los mensajes de "todavía no"
@@ -65,7 +65,7 @@ impl Command {
     }
 }
 
-/// Los once comandos del contrato del CLI v2.
+/// Los comandos del contrato del CLI v2.
 ///
 /// La lista es la verdad: la ayuda se genera a partir de ella, así que no
 /// puede anunciar un comando que no exista, ni dejar de anunciar uno que sí.
@@ -121,8 +121,15 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "models",
-        usage: "models [--all] [add]",
+        usage: "models [--all | --fired] [add]",
         summary: "modelos disponibles, agrupados por motor",
+        phase: None,
+        state: CommandState::Ready,
+    },
+    Command {
+        name: "model",
+        usage: "model <modelo> (--fired | --hired)",
+        summary: "despide o reactiva un modelo sin borrar su TOML",
         phase: None,
         state: CommandState::Ready,
     },
@@ -343,10 +350,10 @@ pub const FLAGS_GGUFFER: &[Flag] = &[
     ),
 ];
 
-/// Los flags de `ropero models` y `ropero engines`.
+/// Los flags compartidos por `ropero models` y `ropero engines`.
 pub const FLAGS_ALL: &[Flag] = &[Flag::switch(
     "all",
-    "muestra también lo que no está disponible",
+    "muestra también engines no instalados y modelos no disponibles",
 )];
 pub const FLAGS_CONFIG: &[Flag] = &[Flag::value("lang", "ES|EN", "idioma de la interfaz")];
 pub const FLAGS_STATUS: &[Flag] = &[Flag::value(
@@ -372,6 +379,7 @@ pub const FLAGS_MODELS_ADD: &[Flag] = &[
 ];
 pub const FLAGS_MODELS: &[Flag] = &[
     Flag::switch("all", "muestra también lo que no está disponible"),
+    Flag::switch("fired", "muestra sólo los modelos despedidos"),
     Flag::value("path", "TOML", "lee el TOML desde un fichero"),
     Flag::switch("stdin", "lee el TOML completo desde la entrada estándar"),
     Flag::value("name", "ID", "nombre interno y nombre del fichero"),
@@ -386,6 +394,10 @@ pub const FLAGS_MODELS: &[Flag] = &[
         "CAMPO=VALOR",
         "valor TOML adicional; repetible y con rutas por bloques",
     ),
+];
+pub const FLAGS_MODEL: &[Flag] = &[
+    Flag::switch("fired", "desactiva el modelo y conserva su TOML"),
+    Flag::switch("hired", "reactiva el modelo desde fired/"),
 ];
 
 /// Los flags de `ropero <modelo>` (doc CLI v2 §8.2).
@@ -441,6 +453,7 @@ pub fn flags_de(cmd: &str) -> &'static [Flag] {
         "connect" => FLAGS_CONNECT,
         "gguffer" => FLAGS_GGUFFER,
         "models" => FLAGS_MODELS,
+        "model" => FLAGS_MODEL,
         "engines" => FLAGS_ALL,
         "config" => FLAGS_CONFIG,
         "status" => FLAGS_STATUS,

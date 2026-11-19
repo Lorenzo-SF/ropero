@@ -19,7 +19,7 @@ El umbral se fijó cuando el CLI v2 tenía **siete** comandos y un parser
 | F3 (después de este ciclo) | 12 | 770 |
 
 El contrato normativo del CLI v2
-([`docs-especificacion/ropero-cli.md`](../../docs-especificacion/ropero-cli.md))
+([`docs/especificacion/ropero-cli.md`](../especificacion/ropero-cli.md))
 amplía la superficie de **siete** invocaciones a **doce**: los once
 comandos de §6-§16 más la invocación `ropero <modelo>` de §8, que trae
 **seis** flags propios (`--force`, `--cpu`, `--port`, `--api-key`,

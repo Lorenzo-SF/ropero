@@ -18,7 +18,8 @@ en las secciones históricas de este documento:
 
 | Comando | Contrato vigente |
 |---|---|
-| `ropero models [--all]` | Sustituye `list`; no existe alias `list`. Sin `--all` muestra engines instalados y modelos disponibles; con `--all` añade el catálogo instalable y distingue su estado. `models add` admite asistente, flags, `--path` y `--stdin`. |
+| `ropero models [--all | --fired]` | Sustituye `list`; no existe alias `list`. Por defecto muestra sólo engines instalados y modelos disponibles; un engine instalado sin modelos disponibles se indica. `--all` muestra todos los engines y modelos activos, incluidos los no disponibles; `--fired` muestra los modelos desactivados. Las opciones son excluyentes. `models add` admite asistente, flags, `--path` y `--stdin`. |
+| `ropero model <modelo> --fired` / `--hired` | Desactiva o reactiva un modelo moviendo su TOML a/desde `fired/`; no borra el TOML ni los artefactos. No permite repetir una transición ni operar sobre un modelo inexistente. Si al reactivar el nombre ya está activo, solicita un nombre nuevo, único entre los modelos activos; cancelar mantiene el modelo despedido. |
 | `ropero command <modelo>` | Imprime el comando completo de serving, con cada opción y valor en una línea, continuaciones `\` sin espacios finales y listo para copiar. |
 | `ropero info <modelo>` | Sustituye `args`, `levels` y `path`; muestra la ruta efectiva, download/build, alias, niveles, flags, opciones, valores y argumentos. |
 | `ropero connect --agent <agent> --model <id> [--remove]` | Usa `--remove`; `--uninstall` no forma parte de la interfaz vigente. |

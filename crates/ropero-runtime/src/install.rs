@@ -454,6 +454,34 @@ fn instala_basalt(
     enlaza_ejecutables(manifest, &executable, None, false, bin_dir)
 }
 
+const MODELO_BASALT: &str = include_str!("../../../models/basalt/qwen3.8-flash-next-basalt.toml");
+
+/// Registra el TOML de Basalt sin reemplazar una definición del usuario.
+pub fn registra_modelo_basalt(env: &Environment) -> Result<bool, String> {
+    let dir = env
+        .config_resuelta()
+        .models_toml_dir(ropero_core::EngineId::Basalt)
+        .valor;
+    std::fs::create_dir_all(&dir)
+        .map_err(|error| format!("no se pudo crear {}: {error}", dir.display()))?;
+    let path = dir.join("qwen3.8-flash-next-basalt.toml");
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(format!("no se pudo crear {}: {error}", path.display())),
+    };
+    if let Err(error) = file.write_all(MODELO_BASALT.as_bytes()) {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("no se pudo escribir {}: {error}", path.display()));
+    }
+    Ok(true)
+}
+
 fn valida_python_basalt(python: &Path) -> Result<(), String> {
     let output = Command::new(python)
         .args([
@@ -656,6 +684,13 @@ except Exception as error:
     }
     std::fs::create_dir_all(&scratch)
         .map_err(|e| format!("no se pudo crear {}: {e}", scratch.display()))?;
+    let staging = match directorio_staging_basalt(root) {
+        Ok(staging) => staging,
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&scratch);
+            return Err(error);
+        }
+    };
     let result = (|| {
         let archive = scratch.join("basalt-release.tar.gz");
         let output = Command::new(python)
@@ -669,7 +704,9 @@ except Exception as error:
                 "la descarga del release Basalt terminó con {output}"
             ));
         }
-        let extracted = scratch.join("unpacked");
+        // Extract beside the final install path. Renaming a release from the
+        // system temp directory can cross filesystems and fail with EXDEV.
+        let extracted = staging.join("unpacked");
         std::fs::create_dir_all(&extracted)
             .map_err(|e| format!("no se pudo crear {}: {e}", extracted.display()))?;
         let output = Command::new(python)
@@ -698,10 +735,6 @@ except Exception as error:
                 root.display()
             ));
         }
-        if let Some(parent) = root.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
-        }
         std::fs::rename(&release_root, root).map_err(|e| {
             format!(
                 "no se pudo instalar el release Basalt en {}: {e}",
@@ -710,8 +743,41 @@ except Exception as error:
         })?;
         Ok(())
     })();
+    let _ = std::fs::remove_dir_all(&staging);
     let _ = std::fs::remove_dir_all(&scratch);
     result
+}
+
+fn directorio_staging_basalt(root: &Path) -> Result<PathBuf, String> {
+    let parent = root
+        .parent()
+        .ok_or_else(|| "la ruta de instalación Basalt no tiene directorio padre".to_string())?;
+    let nombre = root
+        .file_name()
+        .ok_or_else(|| "la ruta de instalación Basalt no tiene nombre".to_string())?
+        .to_string_lossy();
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("no se pudo crear {}: {e}", parent.display()))?;
+    for intento in 0..100 {
+        let staging = parent.join(format!(
+            ".{nombre}.staging-{}-{intento}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&staging) {
+            Ok(()) => return Ok(staging),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "no se pudo crear el staging de Basalt {}: {error}",
+                    staging.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "no se pudo reservar un directorio staging junto a {}",
+        root.display()
+    ))
 }
 
 fn prepara_python_basalt(python: &Path, root: &Path, env: &Environment) -> Result<(), String> {
@@ -1808,8 +1874,9 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compila_motor, cpu_avx2_available, cuda13_runtime_disponible, enlaza_ejecutables,
-        escribe_wrapper_flm, gestor_paquetes_disponible, prepara_dependencias_sistema,
+        MODELO_BASALT, compila_motor, cpu_avx2_available, cuda13_runtime_disponible,
+        directorio_staging_basalt, enlaza_ejecutables, escribe_wrapper_flm,
+        gestor_paquetes_disponible, prepara_dependencias_sistema, registra_modelo_basalt,
         valida_hardware_basalt, valida_runtime_flm, version_tuple, wrapper_flm_propio,
     };
     use ropero_core::{
@@ -1829,9 +1896,58 @@ mod tests {
         }
     }
 
+    fn test_dir(name: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "{name}-{}-{timestamp}-{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    #[test]
+    fn registra_toml_basalt_en_catalogo_de_usuario_sin_pisar_existente() {
+        let base = test_dir("ropero-basalt-model");
+        let env = Environment::new(BTreeMap::new(), base.join("home"), &base);
+        let path = base.join("home/.config/ropero/models/basalt/qwen3.8-flash-next-basalt.toml");
+
+        assert!(registra_modelo_basalt(&env).unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), MODELO_BASALT);
+
+        std::fs::write(&path, "# configuración personalizada\n").unwrap();
+        assert!(!registra_modelo_basalt(&env).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# configuración personalizada\n"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn basalt_instala_desde_staging_en_el_directorio_del_destino() {
+        let base = test_dir("ropero-basalt-staging");
+        let root = base.join("home/.local/share/ropero/engines/basalt");
+        let staging = directorio_staging_basalt(&root).unwrap();
+        assert_eq!(staging.parent(), root.parent());
+
+        let release = staging.join("unpacked/basalt-v0.4.1");
+        std::fs::create_dir_all(release.join("bin")).unwrap();
+        std::fs::write(release.join("bin/basalt"), "test executable").unwrap();
+        std::fs::rename(&release, &root).unwrap();
+        assert!(root.join("bin/basalt").is_file());
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
     #[test]
     fn flm_preflight_exige_que_xrt_enumere_una_npu() {
-        let base = std::env::temp_dir().join(format!("ropero-flm-xrt-{}", std::process::id()));
+        let base = test_dir("ropero-flm-xrt");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let mut vars = BTreeMap::new();
@@ -1841,14 +1957,15 @@ mod tests {
             &base.join("xrt-smi"),
             "#!/bin/sh\necho 'Device(s) Present'\necho '|[0000:66:00.1]|NPU Strix|'\n",
         );
-        assert!(valida_runtime_flm(&env).is_ok());
+        let valid = valida_runtime_flm(&env);
+        assert!(valid.is_ok(), "{valid:?}");
 
         executable(
             &base.join("xrt-smi"),
             "#!/bin/sh\necho 'Device(s) Present'\necho '0 devices found'\n",
         );
         let error = valida_runtime_flm(&env).unwrap_err();
-        assert!(error.contains("XRT no puede usar la NPU"));
+        assert!(error.contains("XRT no puede usar la NPU"), "{error}");
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -1890,7 +2007,7 @@ mod tests {
 
     #[test]
     fn apt_sin_apt_get_cuenta_como_gestor_debian() {
-        let base = std::env::temp_dir().join(format!("ropero-apt-only-{}", std::process::id()));
+        let base = test_dir("ropero-apt-only");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         executable(&base.join("apt"), "#!/bin/sh\nexit 0\n");
@@ -1907,8 +2024,7 @@ mod tests {
 
     #[test]
     fn basalt_exige_blackwell_y_driver_580_95_05() {
-        let base =
-            std::env::temp_dir().join(format!("ropero-basalt-preflight-{}", std::process::id()));
+        let base = test_dir("ropero-basalt-preflight");
         let _ = std::fs::remove_dir_all(&base);
         let libs = base.join("cuda/lib64");
         std::fs::create_dir_all(&libs).unwrap();
@@ -1939,7 +2055,7 @@ mod tests {
 
     #[test]
     fn cuda13_en_el_venv_de_basalt_cuenta_como_runtime_disponible() {
-        let base = std::env::temp_dir().join(format!("ropero-basalt-cuda-{}", std::process::id()));
+        let base = test_dir("ropero-basalt-cuda");
         let libs = base.join(".venv/lib/python3.12/site-packages/nvidia");
         let runtime = libs.join("cuda_runtime/lib");
         let cublas = libs.join("cublas/lib");
@@ -1954,7 +2070,7 @@ mod tests {
 
     #[test]
     fn dependencias_sistema_informa_si_hacen_falta_privilegios_y_terminal() {
-        let base = std::env::temp_dir().join(format!("ropero-pkg-missing-{}", std::process::id()));
+        let base = test_dir("ropero-pkg-missing");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         executable(&base.join("pacman"), "#!/bin/sh\nexit 1\n");
@@ -1974,7 +2090,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn el_lanzador_flm_es_reconocible_y_prepara_xrt_para_la_shell() {
-        let base = std::env::temp_dir().join(format!("ropero-flm-wrapper-{}", std::process::id()));
+        let base = test_dir("ropero-flm-wrapper");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         let binary = base.join("build/install/bin/flm");
@@ -1992,7 +2108,7 @@ mod tests {
 
     #[test]
     fn receta_manifestada_clona_configura_compila_y_resuelve_binario() {
-        let base = std::env::temp_dir().join(format!("ropero-build-engine-{}", std::process::id()));
+        let base = test_dir("ropero-build-engine");
         let _ = std::fs::remove_dir_all(&base);
         let path = base.join("path");
         let home = base.join("home");
@@ -2073,7 +2189,7 @@ mod tests {
     fn turbo_enlaza_todos_los_bins_prefiere_install_y_poda_links_propios() {
         use std::os::unix::fs::symlink;
 
-        let base = std::env::temp_dir().join(format!("ropero-link-turbo-{}", std::process::id()));
+        let base = test_dir("ropero-link-turbo");
         let _ = std::fs::remove_dir_all(&base);
         let source = base.join("source");
         let build_bin = source.join("build-ropero/bin");
@@ -2121,7 +2237,7 @@ mod tests {
     fn no_pisa_symlink_ajeno_aunque_destino_tenga_el_mismo_nombre() {
         use std::os::unix::fs::symlink;
 
-        let base = std::env::temp_dir().join(format!("ropero-link-owned-{}", std::process::id()));
+        let base = test_dir("ropero-link-owned");
         let _ = std::fs::remove_dir_all(&base);
         let source = base.join("source");
         let build_bin = source.join("build-ropero/bin");
@@ -2154,8 +2270,7 @@ mod tests {
 
     #[test]
     fn force_falla_preflight_cuda_sin_borrar_el_checkout() {
-        let base =
-            std::env::temp_dir().join(format!("ropero-force-preflight-{}", std::process::id()));
+        let base = test_dir("ropero-force-preflight");
         let _ = std::fs::remove_dir_all(&base);
         let path = base.join("path");
         let home = base.join("home");
@@ -2186,7 +2301,7 @@ mod tests {
 
     #[test]
     fn force_rechaza_source_dir_fuera_de_raiz_sin_borrarlo() {
-        let base = std::env::temp_dir().join(format!("ropero-force-root-{}", std::process::id()));
+        let base = test_dir("ropero-force-root");
         let _ = std::fs::remove_dir_all(&base);
         let path = base.join("path");
         let home = base.join("home");
@@ -2217,8 +2332,7 @@ mod tests {
     fn force_rechaza_source_dir_symlink_a_fuera_de_raiz() {
         use std::os::unix::fs::symlink;
 
-        let base =
-            std::env::temp_dir().join(format!("ropero-force-symlink-{}", std::process::id()));
+        let base = test_dir("ropero-force-symlink");
         let _ = std::fs::remove_dir_all(&base);
         let path = base.join("path");
         let home = base.join("home");

@@ -86,7 +86,8 @@ fn comando(matches: &ArgMatches) -> i32 {
         {
             models::add(sub)
         }
-        "models" => commands::list(tiene_all(sub)),
+        "models" => commands::list(tiene_all(sub), sub.get_flag("fired")),
+        "model" => models::state(sub),
         "engines" => commands::engines(tiene_all(sub)),
         "template" => commands::template(),
         "validate" => commands::validate(),
