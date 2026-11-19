@@ -146,7 +146,7 @@ fn el_motor_que_pide_clave_dice_donde_ponerla() {
     let error = pregunta(puerto, "modelo", "pregunta", None).expect_err("el motor pide clave");
     assert_eq!(error.codigo, 1);
     assert!(
-        error.mensaje.contains("ROPERO_API_KEY"),
+        error.mensaje.contains("ropero config keys"),
         "dice dónde poner la clave: {}",
         error.mensaje
     );

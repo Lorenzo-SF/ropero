@@ -31,11 +31,11 @@ ropero install engines
 
 ## Модели и использование
 
-Манифесты в `engines/` описывают движки и их установку; в `models/<движок>/` находятся TOML-описания моделей. При обычном использовании активный каталог хранится в `~/.config/ropero/models/`. TOML-файлы репозитория — это примеры, они не загружаются автоматически.
+Манифесты в `engines/` описывают движки и их установку; в [`models/<движок>/`](models/) находятся TOML-описания моделей. При обычном использовании активный каталог хранится в `~/.config/ropero/models/`. TOML-файлы репозитория — это примеры, они не загружаются автоматически.
 
 ```bash
 ropero models add
-ropero models add --path model.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <модель>
 ropero status --live
 ```

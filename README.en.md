@@ -42,6 +42,22 @@ in the active catalog if it is missing. Only the model pack remains to be
 downloaded with `ropero install models qwen3.8-flash-next`. See the [getting
 started guide](docs/quickstart.en.md) for the full workflow and requirements.
 
+## Choosing a model definition
+
+Browse the [model catalog](models/) by engine. Each TOML file describes the
+model files, download source and launch options. For example, the
+[groot-o definition](models/llama-server/groot-o.toml) lists the GGUF file
+and its download size. From the repository root, add it to your active
+catalog (by default `~/.config/ropero/models/`) and download the weights:
+
+```bash
+ropero models add --path models/llama-server/groot-o.toml
+ropero install models groot-o
+```
+
+The `fired/` folders hold retired definitions. To write a definition for a
+different model, start with the [model template](models/_template.toml).
+
 ## Documentation
 
 | Guide | Contents |

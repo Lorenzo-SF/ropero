@@ -31,11 +31,11 @@ La commande des moteurs affiche les options disponibles. Vous pouvez en sélecti
 
 ## Modèles et utilisation
 
-Les manifestes de `engines/` décrivent les moteurs et leur installation ; `models/<moteur>/` contient les définitions TOML des modèles. En usage normal, le catalogue se trouve dans `~/.config/ropero/models/`. Les fichiers TOML de ce dépôt sont des exemples et ne sont pas chargés automatiquement.
+Les manifestes de `engines/` décrivent les moteurs et leur installation ; [`models/<moteur>/`](models/) contient les définitions TOML des modèles. En usage normal, le catalogue se trouve dans `~/.config/ropero/models/`. Les fichiers TOML de ce dépôt sont des exemples et ne sont pas chargés automatiquement.
 
 ```bash
 ropero models add
-ropero models add --path modele.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <modèle>
 ropero status --live
 ```

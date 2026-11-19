@@ -31,11 +31,11 @@ ropero install engines
 
 ## モデルと使い方
 
-`engines/`のマニフェストはエンジンとインストール方法を記述し、`models/<engine>/`にはモデルのTOML定義があります。通常のカタログは`~/.config/ropero/models/`です。このリポジトリ内のTOMLは参考例であり、自動では読み込まれません。
+`engines/`のマニフェストはエンジンとインストール方法を記述し、[`models/<engine>/`](models/)にはモデルのTOML定義があります。通常のカタログは`~/.config/ropero/models/`です。このリポジトリ内のTOMLは参考例であり、自動では読み込まれません。
 
 ```bash
 ropero models add
-ropero models add --path model.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <モデル名>
 ropero status --live
 ```

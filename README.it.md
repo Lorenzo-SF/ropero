@@ -31,11 +31,11 @@ Il comando degli engine elenca quelli disponibili; puoi sceglierne uno, ad esemp
 
 ## Modelli e utilizzo
 
-I manifesti in `engines/` descrivono gli engine e l’installazione; `models/<engine>/` contiene definizioni TOML dei modelli. Nell’uso normale il catalogo attivo si trova in `~/.config/ropero/models/`. I file TOML del repository sono esempi e non vengono caricati automaticamente.
+I manifesti in `engines/` descrivono gli engine e l’installazione; [`models/<engine>/`](models/) contiene definizioni TOML dei modelli. Nell’uso normale il catalogo attivo si trova in `~/.config/ropero/models/`. I file TOML del repository sono esempi e non vengono caricati automaticamente.
 
 ```bash
 ropero models add
-ropero models add --path modello.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <modello>
 ropero status --live
 ```

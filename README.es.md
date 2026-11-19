@@ -43,6 +43,23 @@ descargar el pack con `ropero install models qwen3.8-flash-next`.
 La interfaz del CLI empieza en inglés. Para guardar español, ejecuta
 `ropero config --lang ES`; `ropero config --lang EN` vuelve al inglés.
 
+## Elegir una definición de modelo
+
+En el [catálogo de modelos](models/) puedes explorar los ejemplos por motor.
+Cada TOML indica qué archivos necesita el modelo, dónde descargarlos y con
+qué parámetros arrancarlo. Por ejemplo, la [ficha de groot-o](models/llama-server/groot-o.toml)
+incluye el nombre del GGUF y el tamaño de la descarga. Desde la raíz del
+repositorio, añade la ficha a tu catálogo activo (por defecto en
+`~/.config/ropero/models/`) y descarga los pesos:
+
+```bash
+ropero models add --path models/llama-server/groot-o.toml
+ropero install models groot-o
+```
+
+Las carpetas `fired/` contienen definiciones retiradas. Para crear una ficha
+propia puedes partir de la [plantilla de modelo](models/_template.toml).
+
 ## Documentación
 
 | Guía | Contenido |

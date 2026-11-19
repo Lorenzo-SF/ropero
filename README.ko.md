@@ -31,11 +31,11 @@ ropero install engines
 
 ## 모델과 사용법
 
-`engines/`의 매니페스트는 엔진과 설치 방법을 설명하고, `models/<엔진>/`에는 모델 TOML 정의가 있습니다. 일반적인 사용에서 활성 카탈로그는 `~/.config/ropero/models/`에 있습니다. 저장소의 TOML 파일은 예제이며 자동으로 로드되지 않습니다.
+`engines/`의 매니페스트는 엔진과 설치 방법을 설명하고, [`models/<엔진>/`](models/)에는 모델 TOML 정의가 있습니다. 일반적인 사용에서 활성 카탈로그는 `~/.config/ropero/models/`에 있습니다. 저장소의 TOML 파일은 예제이며 자동으로 로드되지 않습니다.
 
 ```bash
 ropero models add
-ropero models add --path model.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <모델>
 ropero status --live
 ```

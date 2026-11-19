@@ -31,11 +31,11 @@ ropero install engines
 
 ## 模型与使用
 
-`engines/` 中的清单描述引擎及安装方式；`models/<引擎>/` 存放模型 TOML 定义。常规使用时，活动目录位于 `~/.config/ropero/models/`。仓库中的 TOML 文件是示例，不会自动加载。
+`engines/` 中的清单描述引擎及安装方式；[`models/<引擎>/`](models/) 存放模型 TOML 定义。常规使用时，活动目录位于 `~/.config/ropero/models/`。仓库中的 TOML 文件是示例，不会自动加载。
 
 ```bash
 ropero models add
-ropero models add --path model.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <模型名>
 ropero status --live
 ```
