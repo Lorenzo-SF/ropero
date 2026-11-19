@@ -258,6 +258,12 @@ impl Config {
     }
 
     pub fn models_toml_dir(&self, engine: EngineId) -> Ruta {
+        if matches!(self.models_dir.origen, Origen::Variable(_)) {
+            return Ruta::new(
+                self.models_dir.valor.join(engine.as_str()),
+                self.models_dir.origen.clone(),
+            );
+        }
         if let Some(path) = self
             .engines
             .get(&engine)

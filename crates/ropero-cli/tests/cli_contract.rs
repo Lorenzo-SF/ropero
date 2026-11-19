@@ -629,6 +629,9 @@ fn models_add_valida_normaliza_y_descarta_campos_desconocidos() {
     let root = std::env::temp_dir().join(format!("ropero-model-add-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
+    let home = std::env::temp_dir().join(format!("ropero-model-add-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
     let input = root.join("input.toml");
     std::fs::write(
         &input,
@@ -652,6 +655,8 @@ private_note = "discard me"
     let output = bin()
         .args(["models", "add", "--path", input.to_str().unwrap()])
         .env("ROPERO_MODELS_DIR", &root)
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -666,16 +671,27 @@ private_note = "discard me"
         "stdout={stdout}"
     );
     let stored = root.join("turbo-llama/new-model.toml");
-    let text = std::fs::read_to_string(stored).unwrap();
+    let text = std::fs::read_to_string(&stored).unwrap_or_else(|error| {
+        panic!(
+            "no se creó {}: {error}; stdout={} stderr={}",
+            stored.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
     assert!(text.contains("name = \"new-model\""), "{text}");
     assert!(!text.contains("private_note"), "{text}");
     let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]
 fn models_add_permite_configuracion_completa_con_asignaciones_toml() {
     let root = std::env::temp_dir().join(format!("ropero-model-set-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
+    let home = std::env::temp_dir().join(format!("ropero-model-set-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
     let output = bin()
         .args([
             "models",
@@ -698,6 +714,8 @@ fn models_add_permite_configuracion_completa_con_asignaciones_toml() {
             "args.base=[\"--ctx-size\",\"${ctx}\"]",
         ])
         .env("ROPERO_MODELS_DIR", &root)
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
         .output()
         .unwrap();
     assert_eq!(
@@ -707,11 +725,20 @@ fn models_add_permite_configuracion_completa_con_asignaciones_toml() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let text = std::fs::read_to_string(root.join("turbo-llama/advanced-model.toml")).unwrap();
+    let stored = root.join("turbo-llama/advanced-model.toml");
+    let text = std::fs::read_to_string(&stored).unwrap_or_else(|error| {
+        panic!(
+            "no se creó {}: {error}; stdout={} stderr={}",
+            stored.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    });
     let value: toml::Value = toml::from_str(&text).unwrap();
     assert_eq!(value["levels"]["list"][1].as_str(), Some("high"));
     assert_eq!(value["args"]["base"][0].as_str(), Some("--ctx-size"));
     let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]
