@@ -205,7 +205,9 @@ struct Arranque {
 impl Arranque {
     /// Lanza el modelo en segundo plano y espera al `ROPERO_PORT=`.
     fn nuevo(estado: &Path, path: &Path, gguf: &Path, args: &[&str]) -> (Self, u16) {
-        let motor_lock = MOTOR_FALSO_LOCK.lock().expect("serializar motor falso");
+        let motor_lock = MOTOR_FALSO_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut cmd = bin(estado, path, gguf);
         cmd.args(args);
         cmd.stdout(Stdio::piped());
@@ -813,7 +815,9 @@ fn foreground_muestra_salida_del_motor_y_genera_log_y_uso() {
 
 #[test]
 fn background_es_silencioso_guarda_logs_y_uso_redactado() {
-    let _motor_lock = MOTOR_FALSO_LOCK.lock().expect("serializar motor falso");
+    let _motor_lock = MOTOR_FALSO_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let motor = MotorFalsoConSalida::nuevo();
     let modelo = prepara_modelo_descargado();
     let estado = TempDir::nuevo("bg");

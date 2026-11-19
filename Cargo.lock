@@ -239,6 +239,7 @@ name = "ropero-runtime"
 version = "0.1.0"
 dependencies = [
  "jsonc-parser",
+ "libc",
  "ropero-bateria",
  "ropero-core",
  "serde_json",
