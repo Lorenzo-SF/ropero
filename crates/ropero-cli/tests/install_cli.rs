@@ -380,7 +380,7 @@ impl Fake {
         let mut cmd = Command::new(script());
         #[cfg(target_os = "macos")]
         {
-            cmd.arg("-q").arg("/dev/null").arg(exe).args(args);
+            cmd.arg("-qr").arg("/dev/null").arg(exe).args(args);
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -394,6 +394,7 @@ impl Fake {
             .env("SAFETENSORS_DIR", &self.safetensors)
             .env("LOG_DIR", self.base.join("logs"))
             .env("HOME", &self.base)
+            .env("XDG_CONFIG_HOME", self.base.join("xdg"))
             .env("PATH", &self.path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
