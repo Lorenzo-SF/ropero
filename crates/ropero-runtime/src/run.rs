@@ -549,7 +549,7 @@ pub fn estado_de(state_dir: &std::path::Path, port: u16) -> Option<PortState> {
 
 /// Estados de procesos de Ropero cuya identidad sigue viva. Nunca se usa
 /// sólo el PID: también debe coincidir `start_time` para evitar PIDs reciclados.
-fn procesos_gestionados(
+pub(crate) fn procesos_gestionados(
     state_dir: &std::path::Path,
 ) -> Vec<(crate::process::ProcIdentity, PortState)> {
     use crate::launch::Device;
@@ -998,10 +998,12 @@ pub fn arranca(
 
     // Resuelve la clave justo antes de lanzar el proceso. Así no se cambia
     // el estado persistente si el preflight o la selección del puerto fallan.
+    let key_lock = match crate::api_key::lock_engine(state_dir, plan.engine.id) {
+        Ok(lock) => lock,
+        Err(error) => return RunOutcome::error(error),
+    };
     let clave = match crate::api_key::launch_key(
         plan.engine.id,
-        &env.config_resuelta(),
-        env,
         state_dir,
         peticion.api_key.as_deref(),
         peticion.no_api_key,
@@ -1094,6 +1096,8 @@ pub fn arranca(
             return outcome;
         }
     };
+
+    drop(key_lock);
 
     // El motor está listo: se comunica el puerto (sólo en foreground).
     al_arrancar(resultado.port, resultado.pid);

@@ -42,6 +42,12 @@ fn main() {
 
 /// Despacha los argumentos de la línea de comandos.
 fn dispatch(argumentos: &[String]) -> i32 {
+    if let [config, keys, rest @ ..] = argumentos
+        && config == "config"
+        && keys == "keys"
+    {
+        return commands::config_keys(rest);
+    }
     match argumentos.first() {
         None => summary::run(),
         // Los flags de la ayuda y de la versión son del **binario**, no de

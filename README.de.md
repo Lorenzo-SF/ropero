@@ -31,11 +31,11 @@ Der Engine-Befehl listet verfügbare Optionen auf. Eine Engine lässt sich direk
 
 ## Modelle und Nutzung
 
-Manifeste in `engines/` beschreiben Engines und Installation; `models/<engine>/` enthält TOML-Definitionen der Modelle. Im normalen Betrieb liegt der aktive Katalog unter `~/.config/ropero/models/`. Die TOML-Dateien in diesem Repository sind Beispiele und werden nicht automatisch geladen.
+Manifeste in `engines/` beschreiben Engines und Installation; [`models/<engine>/`](models/) enthält TOML-Definitionen der Modelle. Im normalen Betrieb liegt der aktive Katalog unter `~/.config/ropero/models/`. Die TOML-Dateien in diesem Repository sind Beispiele und werden nicht automatisch geladen.
 
 ```bash
 ropero models add
-ropero models add --path modell.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <modell>
 ropero status --live
 ```

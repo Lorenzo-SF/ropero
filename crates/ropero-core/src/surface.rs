@@ -621,3 +621,65 @@ impl fmt::Display for CommandState {
         write!(f, "{texto}")
     }
 }
+
+/// Interactive key administration for the engine serving the selected model.
+pub const CONFIG_KEYS_USAGE: &str = "sudo ropero config keys --model <MODEL> [--set]";
+
+pub fn valor_ingles(value: &str) -> &'static str {
+    match value {
+        "VALOR" => "VALUE",
+        "MODELO" => "MODEL",
+        "MODELOS" => "MODELS",
+        "AGENTE" => "AGENT",
+        "FICHERO" => "FILE",
+        "FORMATO" => "FORMAT",
+        "NOMBRE" => "NAME",
+        "SEGUNDOS" => "SECONDS",
+        "NIVEL" => "LEVEL",
+        "RUTA" => "PATH",
+        "VIA" => "METHOD",
+        "ID|FICHERO" => "ID|FILE",
+        _ => "VALUE",
+    }
+}
+
+pub fn uso_ingles(usage: &str) -> String {
+    usage
+        .replace("<MODELOS>", "<MODELS>")
+        .replace("<MODELO>", "<MODEL>")
+        .replace("<AGENTE>", "<AGENT>")
+        .replace("<FICHERO>", "<FILE>")
+        .replace("<FORMATO>", "<FORMAT>")
+        .replace("<NOMBRE>", "<NAME>")
+        .replace("MODELOS", "MODELS")
+        .replace("AGENTE", "AGENT")
+        .replace("CLAVE", "KEY")
+        .replace("NIVEL", "LEVEL")
+        .replace("<modelo>", "<model>")
+        .replace("[modelo]", "[model]")
+        .replace("<comando>", "<command>")
+        .replace("[modelo... ]", "[model...]")
+        .replace("[modelo...]", "[model...]")
+}
+
+pub fn resumen_ingles(command: &str) -> &'static str {
+    match command {
+        "install" => "installs engines and models",
+        "stop" => "stops engines launched by ropero",
+        "gguffer" => "builds a GGUF from weights or a repository",
+        "status" => "machine status: CPU, GPU, RAM, swap, and zram",
+        "doctor" => "checks ropero and engine dependencies",
+        "config" => "shows configuration, paths, and their source",
+        "connect" => "connects or removes models from coding agents",
+        "models" => "lists available models grouped by installed engine",
+        "model" => "fires or hires a model without deleting its TOML",
+        "template" => "prints the model template and suggested location",
+        "engines" => "lists engines and their compatibility",
+        "validate" => "validates catalog TOML files",
+        "command" => "prints model serving arguments for copying",
+        "info" => "shows model configuration, artifacts, and arguments",
+        "test" => "runs the evaluation suite sequentially and stops each engine afterward",
+        "<modelo>" => "starts the model using its configured engine",
+        _ => "shows help",
+    }
+}

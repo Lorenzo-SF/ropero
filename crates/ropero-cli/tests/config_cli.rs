@@ -192,3 +192,39 @@ fn override_no_impide_bootstrap_xdg_y_no_persiste_override() {
     );
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[test]
+fn keys_help_and_invalid_arguments_do_not_bootstrap_or_echo_a_positional_secret() {
+    let out = bin().args(["config", "keys", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("--set"));
+    for args in [
+        vec!["config", "keys", "--set"],
+        vec![
+            "config",
+            "keys",
+            "--model",
+            "test",
+            "sensitive-positional-value",
+        ],
+    ] {
+        let out = bin().args(args).output().unwrap();
+        assert_eq!(out.status.code(), Some(2));
+        assert!(!String::from_utf8_lossy(&out.stderr).contains("sensitive-positional-value"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn keys_requires_sudo_even_with_a_spoofed_sudo_uid() {
+    // SAFETY: geteuid only reads the process credentials.
+    if unsafe { libc::geteuid() } != 0 {
+        let out = bin()
+            .env("SUDO_UID", "1000")
+            .args(["config", "keys", "--model", "example"])
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&out.stderr).contains("sudo ropero"));
+    }
+}

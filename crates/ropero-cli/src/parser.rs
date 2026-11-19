@@ -37,7 +37,7 @@ use std::ffi::OsString;
 use clap::error::{ContextKind, ErrorKind};
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 
-use ropero_core::surface::{self, FlagKind};
+use ropero_core::surface::{self, FlagKind, resumen_ingles, uso_ingles, valor_ingles};
 
 /// La versión, con el build y el autor.
 ///
@@ -326,6 +326,11 @@ fn ayuda_de_comando(cmd: &str) -> String {
             "  -h, --help:  esta ayuda\n"
         });
     }
+    if cmd == "config" {
+        out.push('\n');
+        out.push_str(surface::CONFIG_KEYS_USAGE);
+        out.push('\n');
+    }
     if cmd == "run" {
         out.push_str(if english {
             "\nModel-specific levels, flags, and options come from the model TOML.\nUse `ropero info <model>` to inspect them; undeclared options are ignored.\n"
@@ -444,65 +449,6 @@ pub(crate) fn idioma() -> String {
     ropero_runtime::carga_config(&env)
         .map(|(_, config, _)| config.lang)
         .unwrap_or_else(|_| "EN".into())
-}
-
-fn valor_ingles(value: &str) -> &'static str {
-    match value {
-        "VALOR" => "VALUE",
-        "MODELO" => "MODEL",
-        "MODELOS" => "MODELS",
-        "AGENTE" => "AGENT",
-        "FICHERO" => "FILE",
-        "FORMATO" => "FORMAT",
-        "NOMBRE" => "NAME",
-        "SEGUNDOS" => "SECONDS",
-        "NIVEL" => "LEVEL",
-        "RUTA" => "PATH",
-        "VIA" => "METHOD",
-        "ID|FICHERO" => "ID|FILE",
-        _ => "VALUE",
-    }
-}
-
-fn uso_ingles(usage: &str) -> String {
-    usage
-        .replace("<MODELOS>", "<MODELS>")
-        .replace("<MODELO>", "<MODEL>")
-        .replace("<AGENTE>", "<AGENT>")
-        .replace("<FICHERO>", "<FILE>")
-        .replace("<FORMATO>", "<FORMAT>")
-        .replace("<NOMBRE>", "<NAME>")
-        .replace("MODELOS", "MODELS")
-        .replace("AGENTE", "AGENT")
-        .replace("CLAVE", "KEY")
-        .replace("NIVEL", "LEVEL")
-        .replace("<modelo>", "<model>")
-        .replace("[modelo]", "[model]")
-        .replace("<comando>", "<command>")
-        .replace("[modelo... ]", "[model...]")
-        .replace("[modelo...]", "[model...]")
-}
-
-fn resumen_ingles(command: &str) -> &'static str {
-    match command {
-        "install" => "installs engines and models",
-        "stop" => "stops engines launched by ropero",
-        "gguffer" => "builds a GGUF from weights or a repository",
-        "status" => "machine status: CPU, GPU, RAM, swap, and zram",
-        "doctor" => "checks ropero and engine dependencies",
-        "config" => "shows configuration, paths, and their source",
-        "connect" => "connects or removes models from coding agents",
-        "models" => "lists available models grouped by installed engine",
-        "model" => "fires or hires a model without deleting its TOML",
-        "template" => "prints the model template and suggested location",
-        "engines" => "lists engines and their compatibility",
-        "validate" => "validates catalog TOML files",
-        "command" => "prints model serving arguments for copying",
-        "info" => "shows model configuration, artifacts, and arguments",
-        "test" => "runs the evaluation suite sequentially and stops each engine afterward",
-        "<modelo>" => "starts the model using its configured engine",
-        _ => "shows help",
-    }
 }
 
 fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {

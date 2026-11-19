@@ -31,11 +31,11 @@ O comando de mecanismos lista as opções disponíveis. Também é possível esc
 
 ## Modelos e uso
 
-Os manifestos em `engines/` descrevem mecanismos e instalação; `models/<mecanismo>/` contém definições TOML de modelos. No uso normal, o catálogo fica em `~/.config/ropero/models/`. Os TOML deste repositório são referências e não são carregados automaticamente.
+Os manifestos em `engines/` descrevem mecanismos e instalação; [`models/<mecanismo>/`](models/) contém definições TOML de modelos. No uso normal, o catálogo fica em `~/.config/ropero/models/`. Os TOML deste repositório são referências e não são carregados automaticamente.
 
 ```bash
 ropero models add
-ropero models add --path modelo.toml
+ropero models add --path models/llama-server/groot-o.toml
 ropero <modelo>
 ropero status --live
 ```

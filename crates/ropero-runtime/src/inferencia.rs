@@ -172,8 +172,7 @@ pub fn pregunta(
     let (estado, texto, primer_token_ms, latencia_ms) = manda(puerto, &cuerpo, api_key)?;
     if estado == 401 || estado == 403 {
         return Err(ErrorInferencia::ejecucion(
-            "el motor pide una clave de API: configúrala en engines.<id>.api_key \
-             o en la variable del engine; ROPERO_API_KEY sirve como valor genérico",
+            "el motor rechazó la clave de API; revísala con sudo ropero config keys --model <modelo>",
         ));
     }
     if !(200..300).contains(&estado) {
@@ -278,8 +277,7 @@ fn pregunta_agente(
         total_ms += ms;
         if estado == 401 || estado == 403 {
             return Err(ErrorInferencia::ejecucion(
-                "el motor pide una clave de API: configúrala en engines.<id>.api_key \
-                 o en la variable del engine; ROPERO_API_KEY sirve como valor genérico",
+                "el motor rechazó la clave de API; revísala con sudo ropero config keys --model <modelo>",
             ));
         }
         if !(200..300).contains(&estado) {
@@ -894,23 +892,11 @@ pub fn tira_la_bateria(
     };
     let memoria_inicio = crate::machine::capture_machine_state();
 
-    let engine_id = ropero_core::EngineId::from_str_legacy(&motor.motor)
-        .ok()
-        .map(|(id, _)| id);
-    let config = env.config_resuelta();
-    let engine_key = engine_id.and_then(|id| match id {
-        ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama => {
-            env.get("LLAMA_API_KEY")
-        }
-        ropero_core::EngineId::Ignis => env.get("IGNIS_SERVER_API_KEY"),
-        ropero_core::EngineId::MlxServe => env.get("MLX_API_KEY"),
-        _ => None,
-    });
-    let api_key = engine_id
-        .and_then(|id| config.engines.get(&id))
-        .and_then(|config| config.api_key.as_deref())
-        .or(engine_key)
-        .or_else(|| env.get("ROPERO_API_KEY"));
+    let (engine_id, _) = ropero_core::EngineId::from_str_legacy(&motor.motor)
+        .map_err(|_| ErrorInferencia::ejecucion(format!("engine desconocido: {}", motor.motor)))?;
+    let key = crate::api_key::connect_key(engine_id, &state_dir).map_err(ErrorInferencia::ejecucion)?;
+    let api_key = key.flatten();
+    let api_key = api_key.as_deref();
     let marca = now_epoch().to_string();
     let served_model = ropero_core::find_spec(catalogo, modelo)
         .and_then(|spec| spec.model.alias.as_deref())

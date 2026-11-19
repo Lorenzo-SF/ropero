@@ -485,3 +485,62 @@ fn unknown_model(cmd: &str, modelo: &str) -> i32 {
     ropero_core::err_line(&ropero_core::surface::usage_message(cmd, &msg));
     2
 }
+
+/// Parse before privilege changes without loading the caller's configuration.
+pub fn config_keys(args: &[String]) -> i32 {
+    use clap::{Arg, ArgAction, Command};
+    let command = Command::new("sudo ropero config keys")
+        .about("Show the engine key after confirmation, or replace it with --set")
+        .arg(
+            Arg::new("model")
+                .long("model")
+                .value_name("MODEL")
+                .required(true),
+        )
+        .arg(
+            Arg::new("set")
+                .long("set")
+                .action(ArgAction::SetTrue)
+                .help("Read a new engine key from the terminal without echo"),
+        );
+    let matches = match command
+        .try_get_matches_from(std::iter::once("keys").chain(args.iter().map(String::as_str)))
+    {
+        Ok(matches) => matches,
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            ropero_core::out(&error.to_string(), false);
+            return 0;
+        }
+        Err(_) => {
+            ropero_core::err_line(ropero_core::surface::CONFIG_KEYS_USAGE);
+            return 2;
+        }
+    };
+    // SAFETY: this command branches from main before discovery or worker threads.
+    if let Err(error) = unsafe { ropero_runtime::key_admin::assume_invoking_user() } {
+        ropero_core::err_line(&error);
+        return 1;
+    }
+    let Ok(scan) = crate::discovery::scan() else {
+        return 1;
+    };
+    let Some(spec) = matches
+        .get_one::<String>("model")
+        .and_then(|name| ropero_core::find_spec(&scan.catalog, name))
+    else {
+        ropero_core::err_line("Unknown model / modelo desconocido");
+        return 2;
+    };
+    let state_dir =
+        ropero_runtime::state::state_dir(&scan.env.home, scan.env.get("ROPERO_STATE_DIR"));
+    if let Err(error) = ropero_runtime::key_admin::manage(
+        &state_dir,
+        spec.model.engine,
+        matches.get_flag("set"),
+        &scan.config.lang,
+    ) {
+        ropero_core::err_line(&error);
+        return 1;
+    }
+    0
+}

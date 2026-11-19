@@ -177,18 +177,18 @@ pub fn run(matches: &ArgMatches) -> i32 {
     // engine (config, entorno o estado privado). No escribimos secretos en
     // config.toml; cada integración los guarda donde su agente los necesita.
     let mut connect_config = scan.config.clone();
-    for model in &owned {
-        if let Some(key_state) = ropero_runtime::api_key::connect_key(
-            model.model.engine,
-            &scan.config,
-            &scan.env,
-            &state_dir,
-        ) {
-            connect_config
-                .engines
-                .entry(model.model.engine)
-                .or_default()
-                .api_key = key_state;
+    let mut api_keys = std::collections::BTreeMap::new();
+    for engine in owned.iter().map(|m| m.model.engine).collect::<std::collections::BTreeSet<_>>() {
+        let key = match ropero_runtime::api_key::connect_key(engine, &state_dir) {
+            Ok(key) => key,
+            Err(error) => {
+                ropero_core::err_line(&format!("error: {error}"));
+                return 1;
+            }
+        };
+        if let Some(value) = key {
+            connect_config.engines.entry(engine).or_default().api_key.clone_from(&value);
+            api_keys.insert(engine, value);
         }
     }
     if agent == "claude" {
@@ -268,18 +268,6 @@ pub fn run(matches: &ArgMatches) -> i32 {
             .get("CODEX_HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| scan.env.home.join(".codex"));
-        let api_keys = owned
-            .iter()
-            .filter_map(|model| {
-                ropero_runtime::api_key::connect_key(
-                    model.model.engine,
-                    &connect_config,
-                    &scan.env,
-                    &state_dir,
-                )
-                .map(|key| (model.model.engine, key))
-            })
-            .collect::<std::collections::BTreeMap<_, _>>();
         ropero_runtime::connect::codex_in_dir_with_api_keys(
             &scan.env.home,
             &codex_home,
