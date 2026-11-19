@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use ropero_runtime::process::ProcIdentity;
@@ -32,15 +33,23 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn nuevo() -> Self {
-        let base = std::env::temp_dir().join(format!(
-            "ropero-stop-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&base).expect("crear el temporal");
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let marca_tiempo = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let candidata = std::env::temp_dir().join(format!(
+                "ropero-stop-{}-{marca_tiempo}-{id}",
+                std::process::id(),
+            ));
+            match std::fs::create_dir(&candidata) {
+                Ok(()) => break candidata,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("crear el temporal {}: {error}", candidata.display()),
+            }
+        };
         Self(base)
     }
 
