@@ -1,6 +1,6 @@
 # Ropero
 
-**Instala y sirve modelos locales con el motor adecuado.**
+**Instala y ejecuta modelos de IA en local.**
 
 [English](README.en.md) · **Español**
 

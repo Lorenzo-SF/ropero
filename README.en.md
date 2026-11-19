@@ -1,6 +1,6 @@
 # Ropero
 
-**Install and serve local models with the right engine.**
+**Install and run AI models locally.**
 
 **English** · [Español](README.md)
 

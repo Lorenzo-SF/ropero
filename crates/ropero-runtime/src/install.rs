@@ -1854,9 +1854,25 @@ mod tests {
 
     #[test]
     fn dependencias_sistema_no_piden_privilegios_si_ya_estan_instaladas() {
-        let base = std::env::temp_dir().join(format!("ropero-pkg-ok-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let marca_tiempo = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = loop {
+            let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+            let candidata = std::env::temp_dir().join(format!(
+                "ropero-pkg-ok-{}-{marca_tiempo}-{id}",
+                std::process::id(),
+            ));
+            match std::fs::create_dir(&candidata) {
+                Ok(()) => break candidata,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("crear el temporal {}: {error}", candidata.display()),
+            }
+        };
         executable(&base.join("pacman"), "#!/bin/sh\nexit 0\n");
         let mut vars = BTreeMap::new();
         vars.insert("PATH".to_string(), base.display().to_string());
@@ -1868,7 +1884,7 @@ mod tests {
             )]),
             ..EngineInstallSpec::default()
         };
-        assert!(prepara_dependencias_sistema(&install, &env).is_ok());
+        assert_eq!(prepara_dependencias_sistema(&install, &env), Ok(()));
         let _ = std::fs::remove_dir_all(base);
     }
 
