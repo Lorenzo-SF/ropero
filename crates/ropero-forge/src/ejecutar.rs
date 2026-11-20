@@ -786,9 +786,11 @@ fn fase_conversion(
     let linea = format!("python3 {} {}", convert.to_string_lossy(), args.join(" "));
     let mut argv = vec![convert.to_string_lossy().into_owned()];
     argv.extend(args);
-    ejecuta(&python3(env)?, &argv, &log).map_err(|cola| Error::Conversion {
-        cola,
-        reintento: linea.clone(),
+    ejecuta(&python_para_conversion(env, toolchain)?, &argv, &log).map_err(|cola| {
+        Error::Conversion {
+            cola,
+            reintento: linea.clone(),
+        }
     })?;
     Ok(Conversion::Convertido(destino))
 }
@@ -1270,6 +1272,17 @@ fn con_reintento<T>(mut accion: impl FnMut() -> std::io::Result<T>) -> std::io::
         intento += 1;
         std::thread::sleep(PAUSA_EXEC * intento as u32);
     }
+}
+
+/// Usa el entorno instalado junto al checkout del engine cuando existe.
+fn python_para_conversion(env: &Environment, toolchain: &Toolchain) -> Result<PathBuf, Error> {
+    if let Some(dir) = toolchain.motor.dir() {
+        let preparado = dir.join(".venv-ropero/bin/python");
+        if preparado.is_file() {
+            return Ok(preparado);
+        }
+    }
+    python3(env)
 }
 
 /// El `python3` del `PATH`, con el que corre el conversor.

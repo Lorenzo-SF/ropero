@@ -1112,6 +1112,39 @@ fn normaliza_ruta(path: &Path) -> PathBuf {
 
 /// Clona y compila una receta declarada. Reutilizar o borrar un checkout
 /// existente requiere decisión explícita; no ejecuta comandos de shell.
+fn prepara_python_llama(source_dir: &Path, env: &Environment) -> Result<(), String> {
+    let python = which_en(env, "python3")
+        .ok_or_else(|| "falta python3 para preparar el conversor GGUF".to_string())?;
+    let venv = source_dir.join(".venv-ropero");
+    let venv_python = venv.join("bin/python");
+    if !venv_python.is_file() {
+        let status = Command::new(&python)
+            .args(["-m", "venv"])
+            .arg(&venv)
+            .status()
+            .map_err(|e| format!("no se pudo crear el entorno Python de llama.cpp: {e}"))?;
+        if !status.success() {
+            return Err(format!("python3 -m venv terminó con {status}"));
+        }
+    }
+    let requirements = source_dir.join("requirements/requirements-convert_hf_to_gguf.txt");
+    if !requirements.is_file() {
+        return Err(format!("no se encontró {}", requirements.display()));
+    }
+    let status = Command::new(&venv_python)
+        .args(["-m", "pip", "install", "--disable-pip-version-check", "-r"])
+        .arg(requirements)
+        .current_dir(source_dir)
+        .status()
+        .map_err(|e| format!("no se pudieron instalar dependencias de conversión: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "pip install de dependencias de conversión terminó con {status}"
+        ));
+    }
+    Ok(())
+}
+
 fn compila_motor(
     manifest: &EngineManifest,
     install: &ropero_core::EngineInstallSpec,
@@ -1319,6 +1352,12 @@ fn compila_motor(
         .map_err(|e| format!("no se pudo ejecutar cmake --install: {e}"))?;
     if !status.success() {
         return Err(format!("cmake --install terminó con {status}"));
+    }
+    if matches!(
+        manifest.id,
+        ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama
+    ) {
+        prepara_python_llama(&source_dir, env)?;
     }
     let binary = install.binary.as_deref().unwrap_or("bin/llama-server");
     let executable = install_dir.join(binary);
@@ -2117,7 +2156,11 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
         executable(
             &path.join("git"),
-            "#!/bin/sh\nfor last do :; done\nmkdir -p \"$last\"\nprintf '# project' > \"$last/CMakeLists.txt\"\n",
+            "#!/bin/sh\nfor last do :; done\nmkdir -p \"$last/requirements\"\nprintf '# project' > \"$last/CMakeLists.txt\"\nprintf '# converter deps' > \"$last/requirements/requirements-convert_hf_to_gguf.txt\"\n",
+        );
+        executable(
+            &path.join("python3"),
+            "#!/bin/sh\nif [ \"$1\" = -m ] && [ \"$2\" = venv ]; then mkdir -p \"$3/bin\"; cp \"$0\" \"$3/bin/python\"; fi\nexit 0\n",
         );
         executable(
             &path.join("cmake"),
@@ -2161,6 +2204,7 @@ mod tests {
         assert_eq!(binary, source.join("build-ropero/install/bin/llama-server"));
         assert_eq!(compiled_source.as_deref(), Some(source.as_path()));
         assert!(binary.is_file());
+        assert!(source.join(".venv-ropero/bin/python").is_file());
         let _ = std::fs::remove_dir_all(base);
     }
 

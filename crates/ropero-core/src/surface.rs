@@ -170,7 +170,7 @@ pub const COMMANDS: &[Command] = &[
     },
     Command {
         name: "test",
-        usage: "test [--model <id> | --all-models] [--test <id> | --test-group A..G] [--path <path>]",
+        usage: "test [--model <ids> | --all-models] [--test <ids>] [--test-group <groups>] [--all-tests | --all-test] [--path <path>]",
         summary: "lanza la batería de pruebas contra un modelo",
         phase: None,
         state: CommandState::Ready,
@@ -426,15 +426,24 @@ pub const FLAGS_RUN: &[Flag] = &[
 pub const FLAGS_TEST: &[Flag] = &[
     Flag::value(
         "model",
-        "MODELO",
-        "modelo a probar; su engine se detiene al terminar (excluyente con --all-models)",
+        "MODELOS",
+        "modelos separados por comas; se prueban en serie",
+    ),
+    Flag::switch("all-tests", "ejecuta todos los tests por modelo"),
+    Flag::switch(
+        "all-test",
+        "ejecuta todos los tests en todos los modelos disponibles",
     ),
     Flag::switch(
         "all-models",
         "prueba en serie todos los modelos disponibles y detiene cada engine al terminar; excluyente con --model",
     ),
-    Flag::value("test-group", "A..G", "el grupo de tests que se lanza"),
-    Flag::value("test", "ID|FICHERO", "un solo test (su id o su fichero)"),
+    Flag::value("test-group", "GRUPOS", "grupos separados por comas"),
+    Flag::value(
+        "test",
+        "IDS",
+        "tests separados por comas (se combinan con grupos)",
+    ),
     Flag::value(
         "path",
         "RUTA",

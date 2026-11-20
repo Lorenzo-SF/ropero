@@ -1,18 +1,21 @@
-//! Interactive and headless `ropero test` execution.
-
 use clap::ArgMatches;
 use ropero_bateria::seleccion::seleccion_de;
 use ropero_runtime::inferencia::{ErrorInferencia, tira};
 use std::path::PathBuf;
-
 pub fn run(sub: &ArgMatches) -> i32 {
     let model = value(sub, "model");
-    let all_models = sub.get_flag("all-models");
+    let all = sub.get_flag("all-test");
+    let all_models = all || sub.get_flag("all-models");
+    let all_tests = all || sub.get_flag("all-tests");
     let test = value(sub, "test");
     let group = value(sub, "test-group");
     let path = value(sub, "path");
-    let has_args =
-        model.is_some() || all_models || test.is_some() || group.is_some() || path.is_some();
+    let has_args = model.is_some()
+        || all_models
+        || all_tests
+        || test.is_some()
+        || group.is_some()
+        || path.is_some();
     let (model, all_models, selection, path) = if !has_args {
         match interactive() {
             Ok(result) => (
@@ -28,13 +31,14 @@ pub fn run(sub: &ArgMatches) -> i32 {
             return ErrorInferencia::uso("indica exactamente uno de --model o --all-models")
                 .informa();
         }
-        if test.is_none() && group.is_none() {
+        if !all_tests && test.is_none() && group.is_none() {
             return ErrorInferencia::uso("indica exactamente una opción: --test o --test-group")
                 .informa();
         }
         let selection = match seleccion_de(ropero_bateria::seleccion::Opciones {
             grupo: group,
             test,
+            todos: all_tests,
             ..Default::default()
         }) {
             Ok(selection) => selection,
@@ -72,7 +76,9 @@ pub fn run(sub: &ArgMatches) -> i32 {
             .map(|entry| entry.spec.model.name.clone())
             .collect::<Vec<_>>()
     } else {
-        model.into_iter().collect()
+        model
+            .map(|v| v.split(',').map(str::trim).map(str::to_owned).collect())
+            .unwrap_or_default()
     };
     if models.is_empty() {
         return ErrorInferencia::uso(if scan.config.lang == "EN" {
@@ -83,8 +89,6 @@ pub fn run(sub: &ArgMatches) -> i32 {
         .informa();
     }
     let mut exit = 0;
-    // `tira` completes cleanup before returning; keep this loop sequential so
-    // the next model cannot claim resources held by the previous one.
     for model in models {
         exit = exit.max(tira(
             &scan.catalog,

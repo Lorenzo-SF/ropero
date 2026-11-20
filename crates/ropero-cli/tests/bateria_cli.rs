@@ -42,14 +42,20 @@ fn un_grupo_que_no_existe_sale_con_dos_y_nombra_el_valor() {
     assert!(stderr.contains('F'), "dice qué grupos hay: {stderr}");
 }
 
-/// Dos selecciones a la vez son un error de uso.
+/// Un grupo y una lista de tests se combinan; el modelo inexistente falla antes del engine.
 #[test]
-fn dos_selecciones_a_la_vez_salen_con_dos() {
-    let (code, _stdout, stderr) =
-        run(&["test", "--model", "m", "--test-group", "D", "--test", "F2"]);
+fn grupos_y_tests_se_combinan_antes_de_validar_modelo() {
+    let (code, _stdout, stderr) = run(&[
+        "test",
+        "--model",
+        "no-existe",
+        "--test-group",
+        "D",
+        "--test",
+        "F2,A1",
+    ]);
     assert_eq!(code, 2, "stderr={stderr}");
-    assert!(stderr.contains("D"), "nombra el grupo: {stderr}");
-    assert!(stderr.contains("F2"), "nombra el test: {stderr}");
+    assert!(stderr.contains("no-existe"), "{stderr}");
 }
 
 /// Sin terminal no se puede elegir el modelo: es un error de uso que dice
@@ -77,4 +83,21 @@ fn la_ayuda_enseña_los_flags_de_la_bateria() {
     for flag in ["--model", "--test", "--test-group", "--path"] {
         assert!(stdout.contains(flag), "la ayuda no enseña {flag}: {stdout}");
     }
+}
+
+#[test]
+fn all_tests_y_listas_combinadas_se_aceptan_y_validan() {
+    let (code, _, stderr) = run(&[
+        "test",
+        "--model",
+        "no-existe,otro",
+        "--test",
+        "A1,B2",
+        "--test-group",
+        "C,D",
+    ]);
+    assert_eq!(code, 2, "stderr={stderr}");
+    assert!(stderr.contains("no-existe"), "{stderr}");
+    let (code, _, stderr) = run(&["test", "--model", "no-existe", "--all-tests"]);
+    assert_eq!(code, 2, "stderr={stderr}");
 }
