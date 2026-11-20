@@ -12,18 +12,27 @@ use crate::key_store;
 pub(crate) fn lock_engine(state_dir: &Path, engine: EngineId) -> Result<File, String> {
     std::fs::create_dir_all(state_dir).map_err(|e| e.to_string())?;
     let path = state_dir.join(format!(".{}.launch.lock", engine.as_str()));
-    let file = File::options().create(true).truncate(false).write(true).open(path)
+    let file = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
         .map_err(|e| format!("no se pudo abrir el bloqueo del engine: {e}"))?;
-    file.lock().map_err(|e| format!("no se pudo bloquear el engine: {e}"))?;
+    file.lock()
+        .map_err(|e| format!("no se pudo bloquear el engine: {e}"))?;
     Ok(file)
 }
 
 fn disabled_path(state_dir: &Path, engine: EngineId) -> PathBuf {
-    state_dir.join("api_keys").join(format!("{}.disabled", engine.as_str()))
+    state_dir
+        .join("api_keys")
+        .join(format!("{}.disabled", engine.as_str()))
 }
 
 fn active(state_dir: &Path, engine: EngineId) -> bool {
-    crate::run::procesos_gestionados(state_dir).iter().any(|(_, s)| s.engine == engine.as_str())
+    crate::run::procesos_gestionados(state_dir)
+        .iter()
+        .any(|(_, s)| s.engine == engine.as_str())
 }
 
 fn clear_marker(state_dir: &Path, engine: EngineId) -> Result<(), String> {
@@ -60,7 +69,10 @@ fn validate_key(key: &str) -> Result<(), String> {
 
 /// Called under the startup lock. A disabled launch retains the user's saved key.
 pub(crate) fn launch_key(
-    engine: EngineId, state_dir: &Path, explicit: Option<&str>, disabled: bool,
+    engine: EngineId,
+    state_dir: &Path,
+    explicit: Option<&str>,
+    disabled: bool,
 ) -> Result<Option<String>, String> {
     if engine == EngineId::Basalt && explicit.is_some() {
         return Err("Basalt sólo admite un servidor local sin clave de API".into());
@@ -69,10 +81,13 @@ pub(crate) fn launch_key(
     let marker = disabled_path(state_dir, engine);
     let running = active(state_dir, engine);
     if running && marker.try_exists().map_err(|e| e.to_string())? != disabled {
-        return Err("detén los modelos activos antes de cambiar la autenticación del engine".into());
+        return Err(
+            "detén los modelos activos antes de cambiar la autenticación del engine".into(),
+        );
     }
     if disabled {
-        std::fs::create_dir_all(marker.parent().expect("marker parent")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(marker.parent().expect("marker parent"))
+            .map_err(|e| e.to_string())?;
         std::fs::write(marker, []).map_err(|e| e.to_string())?;
         return Ok(None);
     }
@@ -107,7 +122,11 @@ pub(crate) fn launch_key(
 
 /// Outer None means no stored credential. Some(None) means explicitly disabled.
 pub fn connect_key(engine: EngineId, state_dir: &Path) -> Result<Option<Option<String>>, String> {
-    if engine == EngineId::Basalt || disabled_path(state_dir, engine).try_exists().map_err(|e| e.to_string())? {
+    if engine == EngineId::Basalt
+        || disabled_path(state_dir, engine)
+            .try_exists()
+            .map_err(|e| e.to_string())?
+    {
         return Ok(Some(None));
     }
     let key = key_store::read(state_dir, engine)?;

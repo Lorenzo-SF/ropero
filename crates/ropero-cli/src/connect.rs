@@ -178,7 +178,11 @@ pub fn run(matches: &ArgMatches) -> i32 {
     // config.toml; cada integración los guarda donde su agente los necesita.
     let mut connect_config = scan.config.clone();
     let mut api_keys = std::collections::BTreeMap::new();
-    for engine in owned.iter().map(|m| m.model.engine).collect::<std::collections::BTreeSet<_>>() {
+    for engine in owned
+        .iter()
+        .map(|m| m.model.engine)
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         let key = match ropero_runtime::api_key::connect_key(engine, &state_dir) {
             Ok(key) => key,
             Err(error) => {
@@ -187,7 +191,12 @@ pub fn run(matches: &ArgMatches) -> i32 {
             }
         };
         if let Some(value) = key {
-            connect_config.engines.entry(engine).or_default().api_key.clone_from(&value);
+            connect_config
+                .engines
+                .entry(engine)
+                .or_default()
+                .api_key
+                .clone_from(&value);
             api_keys.insert(engine, value);
         }
     }

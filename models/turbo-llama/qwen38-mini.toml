@@ -5,6 +5,7 @@
 name    = "qwen38-mini"
 engine  = "turbo-llama"
 context = 65536
+format = "gguf"
 
 [files]
 gguf = "Qwen3.8-9B-Distill-Heretic-Uncensored-Q8_0.gguf"
@@ -26,7 +27,7 @@ base = [
 
     "--n-predict", "16384",
     "--reasoning-preserve",
-    "--checkpoint-min-step", "1024",
+    "--checkpoint-min-step", "8192",
 
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "4" ,

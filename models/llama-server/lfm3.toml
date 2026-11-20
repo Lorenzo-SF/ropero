@@ -1,10 +1,10 @@
 
 [model]
-alias = "lfm3-nvfp4"
+alias = "lfm3-o"
 context = 262144
-engine = "turbo-llama"
+engine  = "llama-server"
 format = "gguf"
-name = "lfm3-nvfp4"
+name = "lfm3-o"
 
 [files]
 gguf = "LFM3-VL-2B-NVFP4.gguf"

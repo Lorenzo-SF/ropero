@@ -286,7 +286,7 @@ const ARGV_QWEN38: &[&str] = &[
     "16384",
     "--reasoning-preserve",
     "--checkpoint-min-step",
-    "1024",
+    "8192",
     "--spec-type",
     "nextn",
     "--spec-draft-n-max",

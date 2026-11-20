@@ -6,6 +6,7 @@
 name    = "ornith-o"
 engine  = "llama-server"
 context = 65536
+format = "gguf"
 
 [files]
 gguf = "Ornith-1.5-35B-A3B-MXFP4_MOE-Only-Imatrix.gguf"

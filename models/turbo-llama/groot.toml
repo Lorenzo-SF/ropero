@@ -2,6 +2,7 @@
 name    = "groot"
 engine  = "turbo-llama"
 context = 65536 
+format = "gguf"
 
 [files]
 gguf = "Groot-19B-A3B-261023-Q4_K_M.gguf"

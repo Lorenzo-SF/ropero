@@ -2,6 +2,7 @@
 name    = "groot-o"
 engine  = "llama-server"
 context = 65536 
+format = "gguf"
 
 [files]
 gguf = "Groot-19B-A3B-261023-Q4_K_M.gguf"
