@@ -35,7 +35,6 @@ use ropero_bateria::puntuadores::puntua_con_traza;
 use ropero_bateria::seleccion::{Seleccion, selecciona};
 use ropero_core::{Catalog, EngineManifest, Environment};
 
-use crate::launch::now_epoch;
 use crate::probe::abre_peticion;
 use crate::run::{RunOutcome, RunRequest};
 use crate::state::read_state;
@@ -894,10 +893,15 @@ pub fn tira_la_bateria(
 
     let (engine_id, _) = ropero_core::EngineId::from_str_legacy(&motor.motor)
         .map_err(|_| ErrorInferencia::ejecucion(format!("engine desconocido: {}", motor.motor)))?;
-    let key = crate::api_key::connect_key(engine_id, &state_dir).map_err(ErrorInferencia::ejecucion)?;
+    let key =
+        crate::api_key::connect_key(engine_id, &state_dir).map_err(ErrorInferencia::ejecucion)?;
     let api_key = key.flatten();
     let api_key = api_key.as_deref();
-    let marca = now_epoch().to_string();
+    let marca = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .to_string();
     let served_model = ropero_core::find_spec(catalogo, modelo)
         .and_then(|spec| spec.model.alias.as_deref())
         .unwrap_or(modelo);
@@ -1383,7 +1387,27 @@ fn arranca_motor(
         .map_err(|o: RunOutcome| ErrorInferencia::ejecucion(mensaje_de(&o)))?;
     let outcome = crate::run::arranca(&plan, &peticion, env, state_dir, false, |_puerto, _pid| {});
     if outcome.code != 0 {
-        return Err(ErrorInferencia::ejecucion(mensaje_de(&outcome)));
+        let mensaje = mensaje_de(&outcome);
+        let log = crate::run::log_de(&plan.spec, env);
+        let detalle = std::fs::read_to_string(&log)
+            .ok()
+            .map(|texto| {
+                texto
+                    .lines()
+                    .rev()
+                    .take(24)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|texto| !texto.trim().is_empty());
+        let mensaje = match detalle {
+            Some(detalle) => format!("{mensaje}\nlog {}:\n{detalle}", log.display()),
+            None => mensaje,
+        };
+        return Err(ErrorInferencia::ejecucion(mensaje));
     }
     let Some(puerto) = outcome.port else {
         return Err(ErrorInferencia::ejecucion(format!(

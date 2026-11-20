@@ -150,20 +150,17 @@ fn el_alias_y_su_forma_larga_no_van_juntos() {
 }
 
 #[test]
-fn las_selecciones_no_se_combinan() {
-    let error = seleccion_de(Opciones {
+fn grupos_y_tests_se_combinan_sin_duplicar() {
+    let bateria = bateria_real();
+    let seleccion = seleccion_de(Opciones {
         grupo: Some("D".to_string()),
-        test: Some("F2".to_string()),
+        test: Some("F2,D2".to_string()),
         ..nadie()
     })
-    .expect_err("grupo y test son dos cosas a la vez");
-    assert!(
-        error.mensaje.contains("D"),
-        "nombra el grupo recibido: {error}"
-    );
-    assert!(
-        error.mensaje.contains("F2"),
-        "nombra el test recibido: {error}"
+    .expect("grupo y tests se combinan");
+    assert_eq!(
+        selecciona(&bateria, &seleccion).expect("selección"),
+        ["D1", "D2", "D3", "F2"]
     );
 }
 

@@ -39,15 +39,6 @@ use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 
 use ropero_core::surface::{self, FlagKind, resumen_ingles, uso_ingles, valor_ingles};
 
-/// La versión, con el build y el autor.
-///
-/// El doc pide que la versión, la fecha de compilación y el autor sean
-/// accesibles desde `--version`: por eso la cadena del flag lleva las tres,
-/// no sólo el número de la versión.
-///
-/// `clap` quiere un `&'static str`: la cadena se construye una vez (la
-/// primera vez que se llama) y se guarda en un [`OnceLock`], así que no se
-/// fuga memoria en un programa de una sola vida.
 pub fn version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     VERSION.get_or_init(|| {
@@ -63,9 +54,7 @@ pub fn version() -> &'static str {
 /// Qué ayuda se enseña cuando el usuario la pide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ayuda {
-    /// La del binario: `ropero --help`.
     Binario,
-    /// La del arranque de un modelo: `ropero <modelo> --help`.
     Arranque,
 }
 
@@ -75,9 +64,7 @@ enum Ayuda {
 /// los errores de uso los pone el dominio. Así el CLI habla **un** idioma
 /// (doc CLI v2 §2).
 pub struct Parser {
-    /// El comando de `clap`, que sólo parsea.
     comando: ClapCommand,
-    /// Qué ayuda se enseña cuando se pide.
     ayuda: Ayuda,
 }
 
@@ -504,6 +491,8 @@ fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
         ("gguffer", "list-quants") => "lists available quantization types",
         ("gguffer", "diagnostico") => "shows planned actions without writing files",
         ("test", "model") => "one available model; its engine is stopped when testing ends",
+        ("test", "all-tests") => "run every test for the selected model(s)",
+        ("test", "all-test") => "run every test for every available model",
         ("test", "all-models") => {
             "test every available model in sequence and stop its engine after each run"
         }
@@ -559,9 +548,13 @@ fn comandos() -> Vec<ClapCommand> {
             } else {
                 let mut arg = flag_de(flag);
                 if comando.name == "test" && flag.name == "model" {
-                    arg = arg.conflicts_with("all-models");
+                    arg = arg.conflicts_with("all-models").value_delimiter(',');
                 } else if comando.name == "test" && flag.name == "all-models" {
                     arg = arg.conflicts_with("model");
+                } else if comando.name == "test"
+                    && (flag.name == "test" || flag.name == "test-group")
+                {
+                    arg = arg.value_delimiter(',');
                 } else if comando.name == "models" && flag.name == "all" {
                     arg = arg.conflicts_with("fired");
                 } else if comando.name == "models" && flag.name == "fired" {

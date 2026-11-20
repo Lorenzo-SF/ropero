@@ -81,6 +81,7 @@ pub enum Seleccion {
 
     /// Un test por su id o por su fichero.
     Test(String),
+    Union(Vec<Seleccion>),
 
     /// Una dimensión por su nombre (o por su prefijo único).
     Dimension(String),
@@ -128,39 +129,47 @@ pub fn seleccion_de(opciones: Opciones) -> Result<Seleccion, ErrorUso> {
         }
     }
 
-    // Cuántas cosas se piden: sólo se puede pedir una.
-    let mut pedidas: Vec<String> = Vec::new();
-    if todos {
-        pedidas.push("todos".to_string());
+    if todos && (grupo.is_some() || test.is_some() || dimension.is_some()) {
+        return Err(ErrorUso::nuevo(
+            "todos los tests no admite otros selectores",
+        ));
     }
-    if let Some(grupo) = &grupo {
-        pedidas.push(format!("grupo '{grupo}'"));
-    }
-    if let Some(test) = &test {
-        pedidas.push(format!("test '{test}'"));
-    }
-    if let Some(dimension) = &dimension {
-        pedidas.push(format!("dimensión '{dimension}'"));
-    }
-    if pedidas.len() > 1 {
-        return Err(ErrorUso::nuevo(format!(
-            "no se pueden pedir dos cosas a la vez: {} (elige una: --grupo, \
-             --test, --dimension/--tipo o --todos)",
-            pedidas.join(" y ")
-        )));
+    if dimension.is_some() && (grupo.is_some() || test.is_some()) {
+        return Err(ErrorUso::nuevo("--dimension no admite --test ni --grupo"));
     }
 
-    if let Some(grupo) = grupo {
-        let letra = grupo.trim().chars().next();
-        let es_letra =
-            grupo.trim().chars().count() == 1 && letra.is_some_and(|c| c.is_ascii_alphabetic());
-        return Ok(match (es_letra, letra) {
-            (true, Some(c)) => Seleccion::Grupo(c.to_ascii_uppercase()),
-            _ => Seleccion::GrupoIlegible(grupo.trim().to_string()),
-        });
+    let mut partes = Vec::new();
+    if let Some(grupos) = grupo {
+        for valor in grupos.split(',').map(str::trim) {
+            if valor.is_empty() {
+                return Err(ErrorUso::nuevo(
+                    "la lista de grupos contiene un elemento vacío",
+                ));
+            }
+            let letra = valor.chars().next();
+            let es_letra =
+                valor.chars().count() == 1 && letra.is_some_and(|c| c.is_ascii_alphabetic());
+            partes.push(match (es_letra, letra) {
+                (true, Some(c)) => Seleccion::Grupo(c.to_ascii_uppercase()),
+                _ => Seleccion::GrupoIlegible(valor.to_string()),
+            });
+        }
     }
-    if let Some(test) = test {
-        return Ok(Seleccion::Test(test.trim().to_string()));
+    if let Some(tests) = test {
+        for valor in tests.split(',').map(str::trim) {
+            if valor.is_empty() {
+                return Err(ErrorUso::nuevo(
+                    "la lista de tests contiene un elemento vacío",
+                ));
+            }
+            partes.push(Seleccion::Test(valor.to_string()));
+        }
+    }
+    if partes.len() > 1 {
+        return Ok(Seleccion::Union(partes));
+    }
+    if let Some(parte) = partes.pop() {
+        return Ok(parte);
     }
     if let Some(dimension) = dimension {
         return Ok(Seleccion::Dimension(dimension.trim().to_string()));
@@ -186,6 +195,17 @@ pub fn selecciona(bateria: &Bateria, seleccion: &Seleccion) -> Result<Vec<String
             "'{valor}' no es un grupo: un grupo es una sola letra ({})",
             letras(bateria).join(", ")
         ))),
+        Seleccion::Union(partes) => {
+            let mut ids = Vec::new();
+            for parte in partes {
+                for id in selecciona(bateria, parte)? {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+            Ok(ids)
+        }
         Seleccion::Test(valor) => match test_de(bateria, valor) {
             Some(id) => Ok(vec![id]),
             None => Err(ErrorUso::nuevo(format!(
