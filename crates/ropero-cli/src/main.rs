@@ -48,6 +48,27 @@ fn dispatch(argumentos: &[String]) -> i32 {
     {
         return commands::config_keys(rest);
     }
+    // Sintaxis explícita de arranque e instalación. Se traduce al contrato
+    // de instalación existente para mantener una única implementación.
+    if argumentos.first().map(String::as_str) == Some("run") {
+        return summary::run_modelo(&argumentos[1..]);
+    }
+    if argumentos.len() >= 2
+        && matches!(argumentos[0].as_str(), "models" | "engines")
+        && argumentos[1] == "install"
+    {
+        let que = if argumentos[0] == "models" {
+            "models"
+        } else {
+            "engines"
+        };
+        let traducidos = std::iter::once("ropero".to_string())
+            .chain(std::iter::once("install".to_string()))
+            .chain(std::iter::once(que.to_string()))
+            .chain(argumentos[2..].iter().cloned());
+        let matches = parser::build().get_matches_from(traducidos);
+        return comando(&matches);
+    }
     match argumentos.first() {
         None => summary::run(),
         // Los flags de la ayuda y de la versión son del **binario**, no de
@@ -92,9 +113,17 @@ fn comando(matches: &ArgMatches) -> i32 {
         {
             models::add(sub)
         }
-        "models" => commands::list(tiene_all(sub), sub.get_flag("fired")),
+        "models" => commands::list(
+            tiene_all(sub),
+            sub.get_flag("fired"),
+            sub.get_one::<String>("engine").map(String::as_str),
+        ),
         "model" => models::state(sub),
         "engines" => commands::engines(tiene_all(sub)),
+        "engine" => commands::engine_params(
+            sub.get_one::<String>("engine").map(String::as_str),
+            sub.get_flag("params"),
+        ),
         "template" => commands::template(),
         "validate" => commands::validate(),
         "command" => commands::args(&parser::modelo(sub)),

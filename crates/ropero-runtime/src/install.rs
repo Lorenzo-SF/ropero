@@ -210,6 +210,9 @@ pub fn instala_motor(
     if manifest.id == ropero_core::EngineId::Basalt {
         return instala_basalt(manifest, env, force, &dir);
     }
+    if manifest.id == ropero_core::EngineId::Colibri {
+        return instala_colibri(manifest, env, force, &dir);
+    }
     let (origen, source_dir) =
         if let Some(install) = manifest.install.as_ref().filter(|i| i.source.is_some()) {
             compila_motor(manifest, install, env, force)?
@@ -225,6 +228,192 @@ pub fn instala_motor(
         source_dir.is_some(),
         &dir,
     )
+}
+
+/// Instala una distribución oficial de Colibri, valida su checksum y enlaza
+/// el dispatcher `coli`. Los modelos siguen en el almacén que administra
+/// Colibri, sin duplicar descargas en el catálogo de Ropero.
+fn instala_colibri(
+    manifest: &EngineManifest,
+    env: &Environment,
+    force: bool,
+    bin_dir: &Path,
+) -> Result<EstadoMotor, String> {
+    if let Some(binary) = resolve_binario(manifest, env)
+        && !force
+    {
+        return enlaza_ejecutables(manifest, &binary, None, false, bin_dir);
+    }
+    let asset = colibri_asset(std::env::consts::OS, std::env::consts::ARCH)?;
+    let gh =
+        which_en(env, "gh").ok_or_else(|| "falta la dependencia de Colibri: gh".to_string())?;
+    let tar =
+        which_en(env, "tar").ok_or_else(|| "falta la dependencia de Colibri: tar".to_string())?;
+    let checksum_tool = which_en(env, "sha256sum")
+        .map(|path| (path, false))
+        .or_else(|| which_en(env, "shasum").map(|path| (path, true)))
+        .ok_or_else(|| "falta sha256sum o shasum para validar Colibri".to_string())?;
+    let release = Command::new(&gh)
+        .args([
+            "release",
+            "view",
+            "--repo",
+            "JustVugg/colibri",
+            "--json",
+            "tagName",
+            "--jq",
+            ".tagName",
+        ])
+        .output()
+        .map_err(|error| format!("no se pudo consultar el release de Colibri: {error}"))?;
+    if !release.status.success() {
+        return Err(format!(
+            "gh release view de JustVugg/colibri terminó con {}: {}",
+            release.status,
+            String::from_utf8_lossy(&release.stderr).trim()
+        ));
+    }
+    let version = String::from_utf8_lossy(&release.stdout).trim().to_string();
+    if version.is_empty()
+        || !version.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return Err(format!("tag de release de Colibri no válido: {version:?}"));
+    }
+    let archive = asset.replace("{version}", &version);
+    let root = env.home.join(".local/share/ropero/engines/colibri");
+    let version_dir = root.join(&version);
+    if version_dir.exists() && !force {
+        let metadata = std::fs::symlink_metadata(&version_dir).map_err(|error| {
+            format!("no se pudo inspeccionar {}: {error}", version_dir.display())
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!(
+                "la ruta de instalación de Colibri no es un directorio real: {}",
+                version_dir.display()
+            ));
+        }
+        if let Some(executable) =
+            busca_archivo(&version_dir, "coli").filter(|path| es_ejecutable(path))
+        {
+            return enlaza_ejecutables(manifest, &executable, None, false, bin_dir);
+        }
+        return Err(format!(
+            "la instalación existente de Colibri está incompleta: {}",
+            version_dir.display()
+        ));
+    }
+    let scratch =
+        std::env::temp_dir().join(format!("ropero-colibri-{}-{version}", std::process::id()));
+    if scratch.exists() {
+        return Err(format!(
+            "el directorio temporal ya existe y no se modificará: {}",
+            scratch.display()
+        ));
+    }
+    std::fs::create_dir_all(&scratch)
+        .map_err(|error| format!("no se pudo crear {}: {error}", scratch.display()))?;
+    let result = (|| {
+        let status = Command::new(&gh)
+            .args([
+                "release",
+                "download",
+                &version,
+                "--repo",
+                "JustVugg/colibri",
+                "--pattern",
+                &archive,
+                "--pattern",
+                "SHA256SUMS.txt",
+                "--dir",
+            ])
+            .arg(&scratch)
+            .status()
+            .map_err(|error| format!("no se pudo descargar el release de Colibri: {error}"))?;
+        if !status.success() {
+            return Err(format!(
+                "gh release download de Colibri terminó con {status}"
+            ));
+        }
+        let checksum = scratch.join("SHA256SUMS.txt");
+        if !checksum.is_file() || !scratch.join(&archive).is_file() {
+            return Err("el release de Colibri no contiene el archivo o SHA256SUMS.txt".into());
+        }
+        let checksum_text = std::fs::read_to_string(&checksum)
+            .map_err(|error| format!("no se pudo leer SHA256SUMS.txt de Colibri: {error}"))?;
+        let checksum_line = checksum_text
+            .lines()
+            .find(|line| {
+                line.split_whitespace()
+                    .last()
+                    .is_some_and(|name| name.trim_start_matches('*') == archive)
+            })
+            .ok_or_else(|| format!("SHA256SUMS.txt no contiene un checksum para {archive}"))?;
+        let selected_checksum = scratch.join("colibri.sha256");
+        std::fs::write(&selected_checksum, format!("{checksum_line}\n"))
+            .map_err(|error| format!("no se pudo preparar el checksum de Colibri: {error}"))?;
+        let mut checksum_command = Command::new(&checksum_tool.0);
+        if checksum_tool.1 {
+            checksum_command.args(["-a", "256", "-c", "colibri.sha256"]);
+        } else {
+            checksum_command.args(["-c", "colibri.sha256"]);
+        }
+        let status = checksum_command
+            .current_dir(&scratch)
+            .status()
+            .map_err(|error| format!("no se pudo validar SHA-256 de Colibri: {error}"))?;
+        if !status.success() {
+            return Err("la verificación SHA-256 del release de Colibri falló".into());
+        }
+        if version_dir.exists() && force {
+            let metadata = std::fs::symlink_metadata(&version_dir).map_err(|error| {
+                format!("no se pudo inspeccionar {}: {error}", version_dir.display())
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "no se limpia una ruta de instalación que no sea un directorio real: {}",
+                    version_dir.display()
+                ));
+            }
+            std::fs::remove_dir_all(&version_dir).map_err(|error| {
+                format!("no se pudo limpiar {}: {error}", version_dir.display())
+            })?;
+        }
+        std::fs::create_dir_all(&version_dir)
+            .map_err(|error| format!("no se pudo crear {}: {error}", version_dir.display()))?;
+        let status = Command::new(&tar)
+            .args(["-xzf"])
+            .arg(scratch.join(&archive))
+            .arg("-C")
+            .arg(&version_dir)
+            .status()
+            .map_err(|error| format!("no se pudo extraer Colibri: {error}"))?;
+        if !status.success() {
+            return Err(format!("tar de Colibri terminó con {status}"));
+        }
+        let executable = busca_archivo(&version_dir, "coli")
+            .filter(|path| es_ejecutable(path))
+            .ok_or_else(|| {
+                format!(
+                    "el release no contiene `coli` ejecutable bajo {}",
+                    version_dir.display()
+                )
+            })?;
+        enlaza_ejecutables(manifest, &executable, None, false, bin_dir)
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
+fn colibri_asset(os: &str, arch: &str) -> Result<&'static str, String> {
+    match (os, arch) {
+        ("linux", "x86_64") => Ok("colibri-{version}-linux-x86_64.tar.gz"),
+        ("macos", "aarch64") => Ok("colibri-{version}-macos-arm64.tar.gz"),
+        _ => Err(format!(
+            "Colibri no publica aquí un engine para {os}/{arch}"
+        )),
+    }
 }
 
 /// Instala el release oficial de Ignis en el almacén de motores de Ropero.
@@ -1913,7 +2102,7 @@ pub fn pregunta_via(texto: &str) -> Result<ropero_core::install::Via, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MODELO_BASALT, compila_motor, cpu_avx2_available, cuda13_runtime_disponible,
+        MODELO_BASALT, colibri_asset, compila_motor, cpu_avx2_available, cuda13_runtime_disponible,
         directorio_staging_basalt, enlaza_ejecutables, escribe_wrapper_flm,
         gestor_paquetes_disponible, prepara_dependencias_sistema, registra_modelo_basalt,
         valida_hardware_basalt, valida_runtime_flm, version_tuple, wrapper_flm_propio,
@@ -1948,6 +2137,19 @@ mod tests {
             std::process::id(),
             NEXT_ID.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    #[test]
+    fn colibri_selecciona_archivos_oficiales_por_plataforma() {
+        assert_eq!(
+            colibri_asset("linux", "x86_64").unwrap(),
+            "colibri-{version}-linux-x86_64.tar.gz"
+        );
+        assert_eq!(
+            colibri_asset("macos", "aarch64").unwrap(),
+            "colibri-{version}-macos-arm64.tar.gz"
+        );
+        assert!(colibri_asset("linux", "aarch64").is_err());
     }
 
     #[test]

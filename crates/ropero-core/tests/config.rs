@@ -32,10 +32,23 @@ fn parse_config_roundtrip_rutas_especiales() {
     assert_eq!(parseado.models_dir.valor, ruta);
     assert_eq!(parseado.gguf_dir.valor, ruta.join("gguf"));
     assert_eq!(parseado.models_dir.origen, Origen::Archivo);
-    assert_eq!(parseado.engines.len(), 10);
+    assert_eq!(parseado.engines.len(), 11);
+    assert!(
+        parseado.engines[&ropero_core::EngineId::LlamaServer]
+            .args
+            .contains(&"--threads".to_string())
+    );
+    assert_eq!(
+        parseado.engines[&ropero_core::EngineId::TurboLlama]
+            .args
+            .last()
+            .map(String::as_str),
+        Some("-1")
+    );
+    assert!(texto.contains("args = [\"--threads\", \"12\""));
     assert!(texto.contains("[models.paths]"));
     assert!(!texto.contains("models_toml_dir ="));
-    assert_eq!(texto.matches("models_path =").count(), 10);
+    assert_eq!(texto.matches("models_path =").count(), 11);
     assert_eq!(texto.matches("gguf_dir =").count(), 1);
     for id in [
         "llama-server",
@@ -48,6 +61,7 @@ fn parse_config_roundtrip_rutas_especiales() {
         "strata",
         "ignis",
         "basalt",
+        "colibri",
     ] {
         assert!(
             texto.contains(&format!("[engines.{id}]")),
@@ -55,6 +69,27 @@ fn parse_config_roundtrip_rutas_especiales() {
         );
     }
     let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn args_del_engine_se_parsean_y_rechazan_valores_no_string() {
+    let e = env("/tmp/home", "/tmp", &[]);
+    let parsed = parse_config(
+        "[engines.llama-server]\nargs = [\"--threads\", \"8\"]\n",
+        &e,
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.engines[&ropero_core::EngineId::LlamaServer].args,
+        ["--threads", "8"]
+    );
+    let error =
+        parse_config("[engines.llama-server]\nargs = [\"--threads\", 8]\n", &e).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("todos los argumentos deben ser cadenas")
+    );
 }
 
 #[test]

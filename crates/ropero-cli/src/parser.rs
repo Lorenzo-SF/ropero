@@ -379,9 +379,9 @@ fn ayuda_de_arranque() -> String {
         ));
     }
     out.push_str(if english {
-        "  -h, --help:  show this help\n\nModel-specific levels, flags, and options are read from the model TOML.\nUse `ropero info <model>` to inspect them; undeclared options are ignored.\n\n  more: ropero <model> --help\n"
+        "  -h, --help:  show this help\n\nModel-specific levels, flags, and options are read from the model TOML.\nUse `ropero info <model>` to inspect them; undeclared options are ignored.\n\n  more: ropero run <model> --help\n"
     } else {
-        "  -h, --help:  esta ayuda\n\nLos niveles, flags y opciones propios del modelo salen de su TOML.\nUsa `ropero info <modelo>` para consultarlos; los no declarados se ignoran.\n\n  más: ropero <modelo> --help\n"
+        "  -h, --help:  esta ayuda\n\nLos niveles, flags y opciones propios del modelo salen de su TOML.\nUsa `ropero info <modelo>` para consultarlos; los no declarados se ignoran.\n\n  más: ropero run <modelo> --help\n"
     });
     out
 }
@@ -447,6 +447,7 @@ fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
         ("connect", "agent") => "target agent",
         ("connect", "remove") => "removes the selected connections",
         ("models", "all") | ("engines", "all") => "also shows unavailable engines and models",
+        ("engine", "params") => "shows common arguments configured for engines",
         ("models", "fired") => "shows only fired models",
         ("model", "fired") => "deactivates the model and keeps its TOML",
         ("model", "hired") => "reactivates the model from fired/",
@@ -468,7 +469,7 @@ fn ayuda_flag_ingles(command: &str, name: &str) -> &'static str {
         ("run", "ctx") => "overrides the context window",
         ("run", "log-level") => "log level: error, warn, info, debug, or trace",
         ("run", "background") => "detaches and saves engine logs",
-        ("install", "prio") => "installation method: download or build (repeatable)",
+        ("install", "prio") => "installation method: download, build, or tool (repeatable)",
         ("install", "force") => "removes and reinstalls the selected engine sources",
         ("gguffer", "repo") => "Hugging Face source repository",
         ("gguffer", "path") => "local source weights directory",
@@ -547,6 +548,9 @@ fn comandos() -> Vec<ClapCommand> {
                 );
             } else {
                 let mut arg = flag_de(flag);
+                if comando.name == "gguffer" && flag.name == "turbo-llama" {
+                    arg = arg.visible_alias("turbo");
+                }
                 if comando.name == "test" && flag.name == "model" {
                     arg = arg.conflicts_with("all-models").value_delimiter(',');
                 } else if comando.name == "test" && flag.name == "all-models" {
@@ -555,10 +559,6 @@ fn comandos() -> Vec<ClapCommand> {
                     && (flag.name == "test" || flag.name == "test-group")
                 {
                     arg = arg.value_delimiter(',');
-                } else if comando.name == "models" && flag.name == "all" {
-                    arg = arg.conflicts_with("fired");
-                } else if comando.name == "models" && flag.name == "fired" {
-                    arg = arg.conflicts_with("all");
                 } else if comando.name == "model" && flag.name == "fired" {
                     arg = arg.conflicts_with("hired").required_unless_present("hired");
                 } else if comando.name == "model" && flag.name == "hired" {
@@ -623,6 +623,7 @@ fn posicionales(cmd: &str) -> Vec<Arg> {
                 .value_name("MODELO")
                 .help("el modelo cuyo motor se detiene"),
         ],
+        "engine" => vec![Arg::new("engine").value_name("ENGINE")],
         "info" | "command" | "model" => vec![
             Arg::new("modelo")
                 .value_name("MODELO")

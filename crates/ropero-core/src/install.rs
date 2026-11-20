@@ -49,6 +49,8 @@ pub enum Via {
     Download,
     /// La vía de **fabricación**: se construye el GGUF desde los pesos.
     Build,
+    /// Descarga mediante el comando propio del engine.
+    Tool,
 }
 
 impl Via {
@@ -57,6 +59,7 @@ impl Via {
         match self {
             Self::Download => "download",
             Self::Build => "build",
+            Self::Tool => "tool",
         }
     }
 
@@ -69,6 +72,7 @@ impl Via {
         match texto.trim() {
             "download" => Ok(Self::Download),
             "build" => Ok(Self::Build),
+            "tool" => Ok(Self::Tool),
             _ => Err(Error::PrioInvalido {
                 valor: texto.to_string(),
             }),
@@ -79,11 +83,12 @@ impl Via {
 impl Via {
     /// La vía que dice una **respuesta** del menú.
     ///
-    /// Se acepta la primera letra: `d` (download) o `b` (build).
+    /// Se acepta la primera letra: `d`, `b` o `t`.
     pub fn de_respuesta(texto: &str) -> Option<Self> {
         match texto.trim().chars().next() {
             Some('d') | Some('D') => Some(Self::Download),
             Some('b') | Some('B') => Some(Self::Build),
+            Some('t') | Some('T') => Some(Self::Tool),
             _ => None,
         }
     }
@@ -105,12 +110,13 @@ pub struct Vias {
     pub download: bool,
     /// El modelo declara `[build]`.
     pub build: bool,
+    pub tool: bool,
 }
 
 impl Vias {
     /// Si el modelo no declara ninguna vía.
     pub const fn ninguna(self) -> bool {
-        !self.download && !self.build
+        !self.download && !self.build && !self.tool
     }
 
     /// Si el modelo declara esa vía.
@@ -118,14 +124,16 @@ impl Vias {
         match via {
             Via::Download => self.download,
             Via::Build => self.build,
+            Via::Tool => self.tool,
         }
     }
 
     /// La **única** vía del modelo, si tiene exactamente una.
     pub const fn unica(self) -> Option<Via> {
-        match (self.download, self.build) {
-            (true, false) => Some(Via::Download),
-            (false, true) => Some(Via::Build),
+        match (self.download, self.build, self.tool) {
+            (true, false, false) => Some(Via::Download),
+            (false, true, false) => Some(Via::Build),
+            (false, false, true) => Some(Via::Tool),
             _ => None,
         }
     }
@@ -136,6 +144,7 @@ pub fn vias_de(spec: &ModelSpec) -> Vias {
     Vias {
         download: spec.download.is_some(),
         build: spec.build.is_some(),
+        tool: spec.tool.is_some(),
     }
 }
 
@@ -745,14 +754,14 @@ pub fn falta_tty_models() -> String {
 pub fn falta_prio(modelo: &str) -> String {
     format!(
         "el modelo '{modelo}' declara las dos vías y no hay terminal para preguntar\n  \
-         (pasa --prio=download o --prio=build, o usa una lista de modelos en la que \
+         (pasa --prio=download, --prio=build o --prio=tool, o usa una lista de modelos en la que \
          ninguno tenga las dos vías)"
     )
 }
 
 /// La pregunta de qué vía se usa para un modelo.
 pub fn pregunta_de_via(modelo: &str) -> String {
-    format!("'{modelo}' se puede descargar o fabricar. ¿Cuál? [d]ownload / [b]uild: ")
+    format!("'{modelo}' tiene varias vías de instalación. ¿Cuál? [d]ownload / [b]uild / [t]ool: ")
 }
 
 /// El aviso de un `--prio` **ignorado**.
@@ -851,12 +860,12 @@ pub fn motor_ocupado(motor: &str, destino: &str) -> String {
 /// Los errores del contrato de instalación.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// El valor de un `--prio` no es `download` ni `build`.
+    /// El valor de un `--prio` no es una vía reconocida.
     PrioInvalido {
         /// El valor recibido.
         valor: String,
     },
-    /// El modelo no declara ni `[download]` ni `[build]`.
+    /// El modelo no declara ninguna vía de instalación.
     SinVias {
         /// El modelo que no declara ninguna vía.
         modelo: String,
@@ -909,11 +918,11 @@ impl fmt::Display for Error {
         match self {
             Error::PrioInvalido { valor } => write!(
                 f,
-                "valor de --prio desconocido: '{valor}' (usa download o build)"
+                "valor de --prio desconocido: '{valor}' (usa download, build o tool)"
             ),
             Error::SinVias { modelo } => write!(
                 f,
-                "el modelo '{modelo}' no declara ni [download] ni [build]: \
+                "el modelo '{modelo}' no declara [download], [build] ni [tool]: \
                  no hay forma de instalarlo (su artefacto se consigue a mano)"
             ),
             Error::ModeloDesconocido { nombre } => {

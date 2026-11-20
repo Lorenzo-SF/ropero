@@ -28,6 +28,7 @@ pub mod stop;
 pub mod strata;
 mod sys_engine;
 pub mod test_wizard;
+pub mod tool;
 pub use sys_engine::binary_of;
 pub mod sysinfo;
 pub mod usage;

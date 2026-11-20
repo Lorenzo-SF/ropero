@@ -38,6 +38,11 @@ pub const HELP_HEADING: HexColor = HexColor(0x7dd3fc);
 pub const RAM_LOW: HexColor = HexColor(0x86efac);
 pub const RAM_MEDIUM: HexColor = HexColor(0xfde68a);
 pub const RAM_HIGH: HexColor = HexColor(0xfca5a5);
+pub const INTEL: HexColor = HexColor(0x0071c5);
+pub const AMD: HexColor = HexColor(0xed1c24);
+pub const APPLE_SILICON: HexColor = HexColor(0x1d1d1f);
+pub const SNAPDRAGON: HexColor = HexColor(0xd22630);
+pub const NVIDIA: HexColor = HexColor(0x76b900);
 
 // Semantic log colors also live here so CLI components share one palette.
 pub const LOG_ERROR: HexColor = HexColor(0xef4444);
@@ -85,6 +90,15 @@ impl Palette {
             texto.to_string()
         }
     }
+
+    /// Pinta texto en primer plano para conservar el fondo de la terminal.
+    pub fn paint_fg(&self, color: HexColor, texto: &str) -> String {
+        if self.enabled {
+            format!("{}{}{}", color.foreground(), texto, CIERRE)
+        } else {
+            texto.to_string()
+        }
+    }
 }
 
 /// Hexadecimal de los colores de motores y leyendas.
@@ -116,6 +130,7 @@ pub const fn engine_color_for_id(id: EngineId) -> EngineColor {
         EngineId::Strata => EngineColor::VerdePalido,
         EngineId::Ignis => EngineColor::Cian,
         EngineId::Basalt => EngineColor::Azul,
+        EngineId::Colibri => EngineColor::VerdePistacho,
     }
 }
 

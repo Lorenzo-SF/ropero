@@ -21,10 +21,25 @@ pub fn capture_machine_state() -> MachineState {
     MachineState {
         cpu_ghz: cpu_ghz(),
         cpu_temp_c: cpu_temp_c(),
+        cpu_brand: cpu_brand().unwrap_or_else(|| "desconocido".to_string()),
         dgpu: dgpu(),
         igpu: igpu(),
         memory: memory(),
     }
+}
+
+fn cpu_brand() -> Option<String> {
+    std::fs::read_to_string("/proc/cpuinfo")
+        .ok()
+        .and_then(|text| {
+            text.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                matches!(key.trim(), "model name" | "Hardware" | "Processor")
+                    .then(|| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+        })
+        .or_else(|| run_capture("sysctl", &["-n", "machdep.cpu.brand_string"]))
 }
 
 /// La frecuencia de la CPU, en GHz.
@@ -77,7 +92,8 @@ fn cpu_temp_c() -> Option<Reading> {
 fn dgpu() -> Option<GpuState> {
     match sysinfo::detect_os(std::env::consts::OS) {
         Os::Macos => macos_gpu(),
-        _ => nvidia_gpu(),
+        Os::Linux => nvidia_gpu().or_else(|| linux_gpu(false)),
+        _ => None,
     }
 }
 
@@ -90,29 +106,55 @@ fn igpu() -> Option<GpuState> {
     if sysinfo::detect_os(std::env::consts::OS) != Os::Linux {
         return None;
     }
-    let salida = run_capture("lspci", &["--mm", "--names"])?;
+    linux_gpu(true)
+}
+
+/// Identifica una GPU PCI dedicada (boot_vga=0) o primaria/integrada
+/// (boot_vga=1). Los valores dinámicos quedan ausentes si el driver no los
+/// publica con una interfaz que podamos consultar de forma portable.
+fn linux_gpu(primary: bool) -> Option<GpuState> {
+    let salida = run_capture("lspci", &["-D", "-mm", "-nn"])?;
     for linea in salida.lines() {
-        let minuscula = linea.to_lowercase();
-        if !minuscula.contains("vga compatible controller")
-            && !minuscula.contains("display controller")
-        {
+        let Some((address, name)) = parse_lspci_gpu(linea) else {
+            continue;
+        };
+        let Some(boot_vga) =
+            std::fs::read_to_string(format!("/sys/bus/pci/devices/{address}/boot_vga"))
+                .ok()
+                .map(|value| value.trim() == "1")
+        else {
+            continue;
+        };
+        if boot_vga != primary {
             continue;
         }
-        // Una GPU NVIDIA es la dGPU, no la iGPU.
-        if minuscula.contains("nvidia") {
-            return None;
-        }
-        let nombre = linea
-            .split_once(':')
-            .map(|(_, r)| r.trim().to_string())
-            .unwrap_or_else(|| linea.trim().to_string());
         return Some(GpuState {
-            name: nombre,
+            name,
             ghz: None,
             temp_c: None,
+            vram_used_mb: None,
+            vram_total_mb: None,
         });
     }
     None
+}
+
+fn parse_lspci_gpu(line: &str) -> Option<(String, String)> {
+    let mut quoted = line.split('"');
+    let address = line.split_whitespace().next()?.to_string();
+    let _class = quoted.next()?;
+    let class = quoted.next()?;
+    if !class.to_ascii_lowercase().contains("controller")
+        || !(class.to_ascii_lowercase().contains("vga")
+            || class.to_ascii_lowercase().contains("display"))
+    {
+        return None;
+    }
+    let _separator = quoted.next()?;
+    let vendor = quoted.next()?.trim();
+    let _separator = quoted.next()?;
+    let device = quoted.next()?.trim();
+    Some((address, format!("{vendor} {device}")))
 }
 
 /// La GPU de NVIDIA, según `nvidia-smi`.
@@ -120,16 +162,26 @@ fn nvidia_gpu() -> Option<GpuState> {
     let salida = run_capture(
         "nvidia-smi",
         &[
-            "--query-gpu=name,clocks.gr,temperature.gpu",
+            "--query-gpu=name,clocks.gr,temperature.gpu,memory.used,memory.total",
             "--format=csv,noheader,nounits",
         ],
     )?;
-    let gpus = sysinfo::nvidia_gpus(&salida);
-    let (nombre, ghz, temp) = gpus.into_iter().next()?;
+    let row = salida.lines().next()?;
+    let mut fields = row.split(',').map(str::trim);
+    let nombre = fields.next()?.to_string();
+    let ghz = fields
+        .next()
+        .and_then(|v| v.parse::<f64>().ok())
+        .map(|v| v / 1000.0);
+    let temp = fields.next().and_then(|v| v.parse::<f64>().ok());
+    let used = fields.next().and_then(|v| v.parse::<f64>().ok());
+    let total = fields.next().and_then(|v| v.parse::<f64>().ok());
     Some(GpuState {
         name: nombre,
         ghz: ghz.map(|value| Reading { value, unit: "GHz" }),
         temp_c: temp.map(|value| Reading { value, unit: "°C" }),
+        vram_used_mb: used.map(|value| Reading { value, unit: "MB" }),
+        vram_total_mb: total.map(|value| Reading { value, unit: "MB" }),
     })
 }
 
@@ -151,6 +203,8 @@ fn macos_gpu() -> Option<GpuState> {
         name: nombre?,
         ghz: None,
         temp_c: None,
+        vram_used_mb: None,
+        vram_total_mb: None,
     })
 }
 
@@ -217,4 +271,23 @@ fn run_capture(programa: &str, args: &[&str]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(&salida.stdout).into_owned())
+}
+
+#[cfg(test)]
+mod gpu_tests {
+    use super::parse_lspci_gpu;
+
+    #[test]
+    fn parsea_nombre_y_bus_pci_de_tarjeta_grafica() {
+        assert_eq!(
+            parse_lspci_gpu(
+                "0000:03:00.0 \"VGA compatible controller\" \"Advanced Micro Devices, Inc.\" \"Navi 31 [Radeon RX 7900 XTX]\" \"[0300]\""
+            ),
+            Some((
+                "0000:03:00.0".into(),
+                "Advanced Micro Devices, Inc. Navi 31 [Radeon RX 7900 XTX]".into()
+            ))
+        );
+        assert!(parse_lspci_gpu("0000:00:1f.3 \"Audio device\" \"Intel\" \"Audio\"").is_none());
+    }
 }

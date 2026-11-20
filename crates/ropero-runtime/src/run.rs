@@ -271,8 +271,16 @@ pub fn preparar(
         flags: peticion.model_flags.clone(),
         options: peticion.model_options.clone(),
     };
-    let model_argv = build_argv(spec, &peticion_argv, &ctx)
+    let mut model_argv = build_argv(spec, &peticion_argv, &ctx)
         .map_err(|e| RunOutcome::error(ropero_core::surface::argv_error_message(&e.to_string())))?;
+    let engine_config = env.config_resuelta();
+    let common_args = engine_config
+        .engines
+        .get(&engine.id)
+        .map(|config| config.args.as_slice())
+        .unwrap_or_default();
+    let (effective_engine_args, _, _) = ropero_core::engine_args(common_args, spec);
+    model_argv.splice(0..0, effective_engine_args);
     let mut argv = if engine.id == EngineId::Basalt {
         let model_path = &ctx.files.model_path;
         if model_path.is_empty() {

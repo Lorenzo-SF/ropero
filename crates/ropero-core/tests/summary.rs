@@ -74,6 +74,7 @@ fn modelo(nombre: &str, motor: EngineId, descargado: bool) -> ModelState {
                 aux: BTreeMap::new(),
             }),
             build: None,
+            tool: None,
             levels: ropero_core::LevelSpec::default(),
             flags: ropero_core::FlagsSpec::default(),
             options: ropero_core::OptionsSpec::default(),

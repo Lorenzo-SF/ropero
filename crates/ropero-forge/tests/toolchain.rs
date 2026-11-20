@@ -69,6 +69,44 @@ fn el_oficial_sirve_cuando_el_fork_no_esta() {
     ));
 }
 
+/// Un build de un modelo llama-server usa el oficial aunque estén ambos.
+#[test]
+fn un_build_dirigido_a_llama_server_usa_el_oficial() {
+    let busqueda = Busqueda {
+        required_engine: Some(ropero_core::EngineId::LlamaServer),
+        dir_fork: Some(PathBuf::from("/turbo")),
+        convert_fork: Some(PathBuf::from("/turbo/convert.py")),
+        quantize_fork: Some(PathBuf::from("/turbo/build/bin/llama-quantize")),
+        dir_oficial: Some(PathBuf::from("/oficial")),
+        convert_oficial: Some(PathBuf::from("/oficial/convert.py")),
+        quantize_oficial: Some(PathBuf::from("/oficial/build/bin/llama-quantize")),
+        ..Busqueda::default()
+    };
+    let toolchain = toolchain::ensure_toolchain(&busqueda, true).unwrap();
+    assert!(matches!(
+        toolchain.motor,
+        ropero_forge::Motor::Oficial { .. }
+    ));
+    assert_eq!(
+        toolchain.quantize,
+        PathBuf::from("/oficial/build/bin/llama-quantize")
+    );
+}
+
+/// Un build dirigido a Turbo-Llama no sustituye herramientas oficiales.
+#[test]
+fn un_build_dirigido_a_turbo_falla_si_solo_hay_herramientas_oficiales() {
+    let busqueda = Busqueda {
+        required_engine: Some(ropero_core::EngineId::TurboLlama),
+        dir_oficial: Some(PathBuf::from("/oficial")),
+        convert_oficial: Some(PathBuf::from("/oficial/convert.py")),
+        quantize_oficial: Some(PathBuf::from("/oficial/build/bin/llama-quantize")),
+        ..Busqueda::default()
+    };
+    let error = toolchain::ensure_toolchain(&busqueda, true).unwrap_err();
+    assert!(matches!(error, Error::SinMotor { .. }));
+}
+
 /// Con conversor pero sin cuantizador: el error dice qué herramienta
 /// falta y dónde se buscó.
 #[test]

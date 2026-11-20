@@ -11,6 +11,57 @@ pub struct LaunchRequest {
     pub options: Vec<(String, String)>,
 }
 
+/// Aplica los argumentos comunes de un motor y las excepciones del modelo.
+/// El resultado de argv empieza por los comunes, para que después vayan los
+/// argumentos específicos del modelo y los valores calculados para el arranque.
+pub fn engine_args(common: &[String], spec: &ModelSpec) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let overridden: Vec<String> = spec
+        .args
+        .r#override
+        .list
+        .iter()
+        .filter(|arg| arg.starts_with('-'))
+        .map(|arg| arg_key(arg).to_string())
+        .collect();
+    let avoided: Vec<String> = spec
+        .args
+        .avoid
+        .list
+        .iter()
+        .map(|arg| arg_key(arg).to_string())
+        .collect();
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < common.len() {
+        let token = &common[index];
+        let key = arg_key(token);
+        let width = if !token.contains('=')
+            && index + 1 < common.len()
+            && (!common[index + 1].starts_with('-') || common[index + 1].parse::<f64>().is_ok())
+        {
+            2
+        } else {
+            1
+        };
+        if avoided.iter().any(|item| item == key) {
+            index += width;
+            continue;
+        }
+        if overridden.iter().any(|item| item == key) {
+            index += width;
+            continue;
+        }
+        result.extend_from_slice(&common[index..index + width]);
+        index += width;
+    }
+    result.extend(spec.args.r#override.list.iter().cloned());
+    (result, overridden, avoided)
+}
+
+fn arg_key(value: &str) -> &str {
+    value.split_once('=').map_or(value, |(key, _)| key)
+}
+
 /// Petición de lanzamiento interpretada desde los tokens de la línea de
 /// órdenes (`--nivel`, `--flag`, `--opcion=valor`).
 #[derive(Debug, Clone, Default, PartialEq)]

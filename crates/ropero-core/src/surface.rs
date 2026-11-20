@@ -148,6 +148,13 @@ pub const COMMANDS: &[Command] = &[
         state: CommandState::Ready,
     },
     Command {
+        name: "engine",
+        usage: "engine --params [ENGINE]",
+        summary: "muestra los parámetros comunes configurados de un motor",
+        phase: None,
+        state: CommandState::Ready,
+    },
+    Command {
         name: "validate",
         usage: "validate",
         summary: "valida los TOML del catálogo",
@@ -182,7 +189,7 @@ pub const COMMANDS: &[Command] = &[
 /// No es un comando del [`COMMANDS`] porque **no** es una palabra fija: lo
 /// que sigue al binario es el **nombre del modelo**. Aun así es parte del
 /// contrato (doc CLI v2 §8) y por eso tiene su propia entrada.
-pub const RUN_USAGE: &str = "<modelo> [--force] [--cpu] [--port N] [--api-key CLAVE] [--no-api-key] [--ctx N] [--log-level NIVEL] [--background]";
+pub const RUN_USAGE: &str = "run <modelo> [--force] [--cpu] [--port N] [--api-key CLAVE] [--no-api-key] [--ctx N] [--log-level NIVEL] [--background]";
 
 /// La frase de `ropero <modelo>` en la ayuda.
 pub const RUN_SUMMARY: &str = "arranca el modelo en su motor";
@@ -275,7 +282,7 @@ pub const FLAGS_INSTALL: &[Flag] = &[
     Flag::many(
         "prio",
         "VIA",
-        "la vía de instalación: download o build (repetible)",
+        "la vía de instalación: download, build o tool (repetible)",
     ),
     Flag::switch(
         "force",
@@ -300,7 +307,7 @@ pub const FLAGS_CONNECT: &[Flag] = &[
 pub const FLAGS_GGUFFER: &[Flag] = &[
     Flag::switch(
         "turbo-llama",
-        "usa las herramientas compiladas del fork Turbo-Llama",
+        "usa las herramientas compiladas del motor Turbo-Llama (alias --turbo)",
     ),
     Flag::value("repo", "OWNER/NAME", "repo de HuggingFace de origen"),
     Flag::value("path", "DIR", "directorio de pesos locales de origen"),
@@ -354,6 +361,10 @@ pub const FLAGS_GGUFFER: &[Flag] = &[
 pub const FLAGS_ALL: &[Flag] = &[Flag::switch(
     "all",
     "muestra también engines no instalados y modelos no disponibles",
+)];
+pub const FLAGS_ENGINE: &[Flag] = &[Flag::switch(
+    "params",
+    "muestra los argumentos comunes configurados",
 )];
 pub const FLAGS_CONFIG: &[Flag] = &[Flag::value("lang", "ES|EN", "idioma de la interfaz")];
 pub const FLAGS_STATUS: &[Flag] = &[Flag::value(
@@ -464,6 +475,7 @@ pub fn flags_de(cmd: &str) -> &'static [Flag] {
         "models" => FLAGS_MODELS,
         "model" => FLAGS_MODEL,
         "engines" => FLAGS_ALL,
+        "engine" => FLAGS_ENGINE,
         "config" => FLAGS_CONFIG,
         "status" => FLAGS_STATUS,
         "run" => FLAGS_RUN,
@@ -684,6 +696,7 @@ pub fn resumen_ingles(command: &str) -> &'static str {
         "model" => "fires or hires a model without deleting its TOML",
         "template" => "prints the model template and suggested location",
         "engines" => "lists engines and their compatibility",
+        "engine" => "shows an engine's configured common parameters",
         "validate" => "validates catalog TOML files",
         "command" => "prints model serving arguments for copying",
         "info" => "shows model configuration, artifacts, and arguments",

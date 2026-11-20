@@ -44,8 +44,8 @@ fn escanea_tomls_desde_ruta_por_engine_y_aplica_overlay() {
     let scan = ropero_runtime::scan(&root, &env).unwrap();
     assert_eq!(
         scan.engines.len(),
-        10,
-        "los motores soportados vienen integrados, incluidos Strata y Basalt"
+        11,
+        "los motores soportados vienen integrados, incluidos Colibri, Strata y Basalt"
     );
     assert_eq!(
         scan.files, 1,

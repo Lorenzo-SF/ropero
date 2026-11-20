@@ -9,6 +9,7 @@ format  = "gguf"
 
 [files]
 gguf = "Ternary-Bonsai-2-27B-Q2_0.gguf"
+chat_template = "chat_template.jinja"
 
 [download]
 repo = "prism-ml/Ternary-Bonsai-2-27B-gguf"

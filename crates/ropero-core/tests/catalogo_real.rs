@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 /// Nº de modelos activos esperados en el catálogo real.
-const ACTIVOS_ESPERADOS: usize = 25;
+const ACTIVOS_ESPERADOS: usize = 24;
 /// Nº de modelos retirados (`fired/`) esperados en el catálogo real.
 const FIRED_ESPERADOS: usize = 28;
 /// Nº total de modelos del catálogo real (activos + retirados).
@@ -61,7 +61,7 @@ fn recoge(base: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
 }
 
 #[test]
-fn catalogo_real_tiene_53_modelos() {
+fn catalogo_real_tiene_52_modelos() {
     let base = base_real();
     assert!(
         base.is_dir(),
@@ -107,9 +107,7 @@ fn catalogo_real_tiene_plantilla() {
 /// El catálogo real usa la nomenclatura canónica de ADR-004: el fork es
 /// `turbo-llama` y el oficial es `llama-server`.
 ///
-/// Antes del renombrado, `models/llama/` (el fork) declaraba `llama-server`
-/// y `models/llama-official/` (el oficial) declaraba `llama-server-official`.
-/// Este test fija la cuenta: 30 TOML del fork y 4 del oficial.
+/// El test fija la cuenta actual por engine para detectar modelos mal ubicados.
 #[test]
 fn catalogo_real_usa_la_nomenclatura_de_adr_004() {
     let base = base_real();
@@ -137,8 +135,8 @@ fn catalogo_real_usa_la_nomenclatura_de_adr_004() {
     );
     assert_eq!(
         por_motor.get("llama-server").copied(),
-        Some(7),
-        "el oficial (llama-server) tiene 7 TOML: {:?}",
+        Some(6),
+        "el oficial (llama-server) tiene 6 TOML: {:?}",
         por_motor
     );
     assert!(

@@ -193,6 +193,7 @@ fn revisar_toml(
                     "files",
                     "download",
                     "build",
+                    "tool",
                     "levels",
                     "flags",
                     "options",
