@@ -5,19 +5,15 @@
 name    = "qwen38-o"
 engine  = "llama-server"
 context = 65536
+format = "gguf"
 
 [files]
 gguf = "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"
-# gguf = "Qwen3.8-27B-UD-IQ3_S.gguf"
 
 [download]
 repo = "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF" 
 file = "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf"
 size = "12.1 GB"
-
-# repo = "unsloth/Qwen3.8-27B-GGUF" 
-# file = "Qwen3.8-27B-UD-IQ3_S.gguf"
-# size = "12 GB"
 
 [levels]
 list    = ["low", "medium", "high", "xhigh"]
@@ -26,19 +22,22 @@ default = "low"
 [args]
 base = [
     "--n-gpu-layers", "66",
-    "--cache-type-k", "q8_0",
-    "--cache-type-v", "q4_0",
+    "--cache-type-k", "turbo3",
+    "--cache-type-v", "turbo3",
 
     "--n-predict", "16384",
     "--reasoning-preserve",
     "--checkpoint-min-step", "8192",
 
-
-    "--spec-type", "draft-mtp",
+    "--spec-type", "nextn",
     "--spec-draft-n-max", "4" ,
-    "--spec-draft-n-min", "1",
-    "--spec-draft-type-k", "q8_0",  
-    "--spec-draft-type-v", "q4_0",  
+    "--spec-draft-n-min", "1"
+
+    # "--spec-type", "nextn", 
+    # "--spec-draft-n-min", "1",     
+    # "--spec-draft-p-min", "0.6",     
+    # "--spec-draft-type-k", "turbo3",  
+    # "--spec-draft-type-v", "turbo3",  
 ]
 
 [args.level.low]

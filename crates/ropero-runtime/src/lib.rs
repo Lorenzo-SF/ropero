@@ -1,8 +1,6 @@
 // ropero-runtime: procesos, puertos y estado en disco.
 
 pub mod api_key;
-pub mod key_store;
-pub mod key_admin;
 mod catalog_scan;
 pub mod colorize;
 pub mod config_bootstrap;
@@ -13,6 +11,8 @@ pub mod foreground;
 pub mod ignis;
 pub mod inferencia;
 pub mod install;
+pub mod key_admin;
+pub mod key_store;
 pub mod launch;
 mod machine;
 pub mod mlxserve;

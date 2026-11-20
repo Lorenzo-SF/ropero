@@ -6,6 +6,7 @@
 name    = "nemotron-o"
 engine  = "llama-server"
 context = 65536
+format = "gguf"
 
 [files]
 gguf = "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-MTP.gguf"

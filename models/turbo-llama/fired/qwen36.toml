@@ -37,7 +37,7 @@ base = [
     "--n-predict", "8192",
     "--reasoning-preserve",         
     "--reasoning-budget", "12288",
-    "--checkpoint-min-step","256",
+    "--checkpoint-min-step", "8192",
     "--spec-default",
     "--spec-type", "draft-mtp",
     "--spec-draft-n-max", "2",
