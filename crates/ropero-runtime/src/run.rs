@@ -82,6 +82,10 @@ fn basalt_runtime_env(env: &Environment) -> BTreeMap<String, String> {
         })
         .unwrap_or_default()
 }
+
+fn turbo_llama_runtime_env() -> BTreeMap<String, String> {
+    BTreeMap::from([("TURBO_AUTO_ASYMMETRIC".to_string(), "0".to_string())])
+}
 use crate::state::PortState;
 
 /// Lo que el usuario pidió en la línea de órdenes.
@@ -1044,6 +1048,7 @@ pub fn arranca(
         runtime_env: match plan.engine.id {
             EngineId::FastFlowLm => crate::flm::xrt_environment(&env.vars),
             EngineId::Basalt => basalt_runtime_env(env),
+            EngineId::TurboLlama => turbo_llama_runtime_env(),
             _ => BTreeMap::new(),
         },
         program: binario,
@@ -1173,7 +1178,17 @@ pub fn arranca(
 
 #[cfg(test)]
 mod tests {
-    use super::{basalt_runtime_env, configura_mlx_argv, set_flag_value};
+    use super::{basalt_runtime_env, configura_mlx_argv, set_flag_value, turbo_llama_runtime_env};
+
+    #[test]
+    fn turbo_llama_desactiva_el_modo_asimetrico_automatico() {
+        assert_eq!(
+            turbo_llama_runtime_env()
+                .get("TURBO_AUTO_ASYMMETRIC")
+                .map(String::as_str),
+            Some("0")
+        );
+    }
 
     #[test]
     fn basalt_anade_las_bibliotecas_cuda_al_entorno_del_lanzamiento() {

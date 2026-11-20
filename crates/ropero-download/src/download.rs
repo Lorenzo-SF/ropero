@@ -423,6 +423,7 @@ fn crea_staging(dest_dir: &Path, modelo: &str) -> Result<PathBuf, Error> {
 fn hf_descarga(hf: &Path, args: &[String], modelo: &str) -> Result<(), Error> {
     let mut cmd = Command::new(hf);
     cmd.args(args);
+    cmd.env("HF_XET_HIGH_PERFORMANCE", "1");
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::inherit());
     let mut hijo = cmd.spawn().map_err(|e| Error::Disco {

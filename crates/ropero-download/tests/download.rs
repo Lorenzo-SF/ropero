@@ -30,6 +30,7 @@ if [ -f "$base/modo" ]; then
   while IFS= read -r linea || [ -n "$linea" ]; do modo="$linea"; done < "$base/modo"
 fi
 printf '%s\n' "$@" > "$base/args.log"
+printf '%s\n' "$HF_XET_HIGH_PERFORMANCE" > "$base/xet.log"
 
 dir=""
 prev=""
@@ -215,6 +216,13 @@ impl Fake {
         }
     }
 
+    /// Valor de `HF_XET_HIGH_PERFORMANCE` recibido por el `hf` falso.
+    fn hf_xet_high_performance(&self) -> Option<String> {
+        std::fs::read_to_string(self.path.join("xet.log"))
+            .ok()
+            .map(|valor| valor.trim().to_string())
+    }
+
     /// El entorno con el `PATH` del `hf` falso.
     fn entorno(&self) -> Environment {
         self.entorno_con_path(&self.path)
@@ -289,6 +297,7 @@ fn los_argumentos_de_hf_en_gguf_son_los_exactos() {
 
     let resultado = descarga(&plan, &env, Modo::Desatendido).expect("descarga");
     assert_eq!(resultado, Resultado::Descargado);
+    assert_eq!(fake.hf_xet_high_performance().as_deref(), Some("1"));
 
     let args = fake.argumentos();
     assert_eq!(
