@@ -120,6 +120,10 @@ pub struct Peticion {
 pub struct Flags {
     /// Fuerza las herramientas compiladas del fork Turbo-Llama.
     pub turbo_llama: bool,
+    /// Engine cuya toolchain debe usar un build iniciado desde un modelo.
+    /// El comando interactivo `gguffer` deja este campo vacío y conserva su
+    /// selección automática.
+    pub engine: Option<ropero_core::EngineId>,
     /// `--repo OWNER/NAME`.
     pub repo: Option<String>,
     /// `--path DIR`.
@@ -231,6 +235,7 @@ impl Peticion {
     pub fn de_flags(flags: Flags) -> Result<Peticion, Error> {
         let Flags {
             turbo_llama: _,
+            engine: _,
             repo,
             path,
             gguf,

@@ -14,6 +14,9 @@ compat = [{ os = ["linux"], nvidia_smi = true }]
 binaries = ["basalt"]
 paths = ["~/.local/share/ropero/engines/basalt/bin/basalt"]
 
+[install]
+pull = ["hf", "download"]
+
 [install.system_packages]
 "apt-get" = ["python3", "python3-venv"]
 pacman = ["python"]

@@ -1,0 +1,17 @@
+# Manifiesto del engine Colibri. Ropero instala el CLI oficial y deja que
+# Colibri administre sus propios modelos y backends.
+id = "colibri"
+label = "Colibri"
+description = "Colibri (servidor local compatible con OpenAI y Anthropic)"
+maturity = "partial"
+formats = ["gguf"]
+port_min = 9890
+port_max = 9899
+deps = ["gh", "tar"]
+compat = [
+  { os = ["linux"] },
+  { os = ["macos"] },
+]
+
+[detect]
+binaries = ["coli"]

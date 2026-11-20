@@ -110,6 +110,15 @@ pub fn run_command(
     extra_arg: Option<&str>,
     env: &ropero_core::Environment,
 ) -> Result<CommandResult, String> {
+    run_command_args(cmd, extra_arg, env)
+}
+
+/// Ejecuta un comando delegado con una secuencia de argumentos adicionales.
+pub fn run_command_args<'a>(
+    cmd: &[String],
+    extra_args: impl IntoIterator<Item = &'a str>,
+    env: &ropero_core::Environment,
+) -> Result<CommandResult, String> {
     let Some((program, args)) = cmd.split_first() else {
         return Err("comando delegado vacío".to_string());
     };
@@ -127,9 +136,7 @@ pub fn run_command(
         command.env("PATH", path);
     }
     command.envs(xrt_environment(&env.vars));
-    if let Some(arg) = extra_arg {
-        command.arg(arg);
-    }
+    command.args(extra_args);
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
     let output = command

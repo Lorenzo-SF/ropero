@@ -23,6 +23,7 @@ const COMANDOS: &[(&str, &str)] = &[
     ("model", "model <modelo> (--fired | --hired)"),
     ("template", "template"),
     ("engines", "engines [--all]"),
+    ("engine", "engine --params [ENGINE]"),
     ("validate", "validate"),
     ("command", "command <modelo>"),
     ("info", "info <modelo>"),

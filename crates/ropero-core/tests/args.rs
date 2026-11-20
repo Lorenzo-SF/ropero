@@ -48,6 +48,44 @@ fn request(level: Option<&str>, flags: &[&str], options: &[(&str, &str)]) -> Lau
     }
 }
 
+#[test]
+fn argumentos_comunes_se_pueden_sobrescribir_o_evitar_por_modelo() {
+    let mut model = spec(
+        r#"
+[model]
+name = "modelo"
+engine = "llama-server"
+[files]
+gguf = "modelo.gguf"
+[args]
+base = ["--temp", "0.6"]
+[args.override]
+list = ["--batch-size", "2048"]
+[args.avoid]
+list = ["--flash-attn"]
+"#,
+    );
+    let common = [
+        "--threads",
+        "12",
+        "--batch-size",
+        "4096",
+        "--flash-attn",
+        "on",
+        "--seed",
+        "-1",
+    ]
+    .map(str::to_string);
+    let (effective, overridden, avoided) = ropero_core::engine_args(&common, &model);
+    assert_eq!(overridden, ["--batch-size"]);
+    assert_eq!(avoided, ["--flash-attn"]);
+    assert_eq!(
+        effective,
+        ["--threads", "12", "--seed", "-1", "--batch-size", "2048"]
+    );
+    model.args.avoid.list.clear();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // `replace`
 // ─────────────────────────────────────────────────────────────────────────────

@@ -184,6 +184,15 @@ pub struct Build {
     pub size: String,
 }
 
+/// Descarga delegada a las herramientas propias del engine.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tool {
+    /// Argumentos adicionales que recibe el ejecutable de descarga.
+    #[serde(default)]
+    pub params: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Level {
@@ -278,6 +287,20 @@ pub struct OptionArg {
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ArgsOverride {
+    #[serde(default)]
+    pub list: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArgsAvoid {
+    #[serde(default)]
+    pub list: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Args {
     #[serde(default)]
     pub base: Vec<String>,
@@ -290,6 +313,14 @@ pub struct Args {
 
     #[serde(default)]
     pub option: BTreeMap<String, OptionArg>,
+
+    /// Argumentos que sustituyen los comunes del motor para este modelo.
+    #[serde(default)]
+    pub r#override: ArgsOverride,
+
+    /// Flags/parámetros comunes del motor que no se envían para este modelo.
+    #[serde(default)]
+    pub avoid: ArgsAvoid,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -333,6 +364,9 @@ pub struct ModelSpec {
     #[serde(default)]
     #[serde(rename = "build")]
     pub build: Option<Build>,
+
+    #[serde(default, rename = "tool")]
+    pub tool: Option<Tool>,
 
     #[serde(default)]
     #[serde(rename = "levels")]

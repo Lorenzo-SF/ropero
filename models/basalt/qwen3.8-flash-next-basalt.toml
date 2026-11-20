@@ -13,6 +13,9 @@ file = "Qwen3.8-FN-NVFP4-DQ6_K.basalt"
 size = "~122 GiB"
 manual = true
 
+[tool]
+params = []
+
 [levels]
 list = ["none", "low", "medium", "high", "xhigh", "max"]
 default = "medium"

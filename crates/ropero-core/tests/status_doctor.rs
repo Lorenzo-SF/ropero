@@ -23,10 +23,13 @@ fn maquina() -> MachineState {
     MachineState {
         cpu_ghz: medida(3.4, "GHz"),
         cpu_temp_c: medida(58.0, "°C"),
+        cpu_brand: "Intel Core i9".into(),
         dgpu: Some(GpuState {
             name: "NVIDIA GeForce RTX 5080".to_string(),
             ghz: medida(2.1, "GHz"),
             temp_c: medida(45.0, "°C"),
+            vram_used_mb: medida(8192.0, "MB"),
+            vram_total_mb: medida(16384.0, "MB"),
         }),
         igpu: None,
         memory: MemoryState {
@@ -44,12 +47,13 @@ fn maquina() -> MachineState {
 fn el_status_muestra_cpu_gpu_ram_y_swap() {
     let texto = status_text(&maquina());
     assert!(texto.contains("CPU"), "texto={texto}");
-    assert!(texto.contains("GPU"), "texto={texto}");
+    assert!(texto.contains("dGPU"), "texto={texto}");
     assert!(texto.contains("RAM"), "texto={texto}");
     assert!(texto.contains("SWP"), "texto={texto}");
     assert!(texto.contains("3,40GHz"), "texto={texto}");
-    assert!(texto.contains("58,00°C"), "texto={texto}");
+    assert!(texto.contains("58,0°C"), "texto={texto}");
     assert!(texto.contains("NVIDIA GeForce RTX 5080"), "texto={texto}");
+    assert!(texto.contains("iGPU no disponible"), "texto={texto}");
 }
 
 /// La RAM sale **en uso de total**: el número primero es el usado.
@@ -91,7 +95,7 @@ fn el_swap_sale_en_uso_de_total() {
 fn lo_que_no_existe_dice_no_disponible() {
     let texto = status_text(&MachineState::default());
     assert!(texto.contains("no disponible"), "texto={texto}");
-    assert!(texto.contains("GPU  no disponible"), "texto={texto}");
+    assert!(texto.contains("CPU desconocido"), "texto={texto}");
 }
 
 /// El zram se enseña **aparte**: el swap lo incluye, pero no se confunde con
@@ -126,11 +130,13 @@ fn la_igpu_sale_cuando_la_hay() {
         name: "AMD Radeon 890M".to_string(),
         ghz: medida(1.2, "GHz"),
         temp_c: medida(48.0, "°C"),
+        vram_used_mb: None,
+        vram_total_mb: None,
     });
     let texto = status_text(&m);
     assert!(
-        !texto.contains("AMD Radeon 890M"),
-        "status compacto muestra sólo GPU principal: {texto}"
+        texto.contains("AMD Radeon 890M"),
+        "status compacto incluye también la iGPU: {texto}"
     );
 }
 
@@ -146,11 +152,11 @@ fn los_kb_se_convierten_en_mb() {
 fn el_status_es_compacto_y_muestra_las_lecturas() {
     let texto = status_text(&maquina());
     assert!(
-        texto.lines().count() <= 7,
+        texto.lines().count() <= 6,
         "status demasiado ancho: {texto}"
     );
     assert!(
-        texto.contains("CPU  3,40GHz 58,00°C │ GPU"),
+        texto.contains("CPU Intel 3,40GHz 58,0°C │ RAM"),
         "texto={texto}"
     );
     assert!(

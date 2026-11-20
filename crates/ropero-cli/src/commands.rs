@@ -12,12 +12,55 @@ use ropero_core::Catalog;
 ///
 /// "Disponible" son las dos cosas a la vez (doc CLI v2 §15): el motor está
 /// instalado y el modelo está descargado.
-pub fn list(all: bool, fired: bool) -> i32 {
+pub fn list(all: bool, fired: bool, engine_filter: Option<&str>) -> i32 {
     let Ok(s) = crate::discovery::scan() else {
         return 1;
     };
     let english = s.config.lang == "EN";
     let foto = crate::discovery::snapshot(&s);
+    if let Some(engine_name) = engine_filter {
+        let Ok((engine_id, _)) = ropero_core::EngineId::from_str_legacy(engine_name) else {
+            ropero_core::err_line(&format!("error: engine desconocido: '{engine_name}'"));
+            return 2;
+        };
+        let active = if fired {
+            Vec::new()
+        } else {
+            s.catalog
+                .models
+                .iter()
+                .filter(|m| m.model.engine == engine_id)
+                .collect()
+        };
+        let retired = s
+            .catalog
+            .fired
+            .iter()
+            .filter(|m| m.model.engine == engine_id)
+            .collect::<Vec<_>>();
+        if active.is_empty() && (!fired && retired.is_empty()) || (fired && retired.is_empty()) {
+            ropero_core::out_line(&ropero_core::listing::empty_notice_lang(english, fired));
+            return 0;
+        }
+        ropero_core::out_line(&format!(
+            "{} {engine_name}",
+            if english { "MODELS" } else { "MODELOS" }
+        ));
+        for model in active {
+            ropero_core::out_line(&format!(
+                "  {}",
+                ropero_core::listing::nombre_de_modelo(model)
+            ));
+        }
+        for model in retired {
+            ropero_core::out_line(&format!(
+                "  {} [{}]",
+                ropero_core::listing::nombre_de_modelo(model),
+                if english { "fired" } else { "despedido" }
+            ));
+        }
+        return 0;
+    }
     if fired {
         let lineas = ropero_core::listing::fired_lines(
             &s.catalog,
@@ -45,6 +88,12 @@ pub fn list(all: bool, fired: bool) -> i32 {
     for linea in &lineas {
         ropero_core::out_line(linea);
     }
+    if all {
+        let retired = ropero_core::listing::fired_lines(&s.catalog, &s.engines, &paleta, english);
+        for line in retired {
+            ropero_core::out_line(&line);
+        }
+    }
     0
 }
 
@@ -66,7 +115,7 @@ pub fn status(live: Option<f64>) -> i32 {
             ropero_core::status::status_text_color(&maquina, &ropero_core::Palette::color());
         let activos = tabla_engines_activos();
         if activos.is_empty() {
-            texto.push_str("LLM  Sin modelos arrancados\n");
+            texto.push_str("LLM\tSin modelos arrancados\n");
         } else {
             texto.push_str(&activos);
         }
@@ -126,6 +175,35 @@ pub fn engines(all: bool) -> i32 {
     }
     for linea in &lineas {
         ropero_core::out_line(linea);
+    }
+    0
+}
+
+/// `ropero engine --params [ENGINE]`: muestra los argumentos comunes efectivos.
+pub fn engine_params(engine: Option<&str>, params: bool) -> i32 {
+    if !params {
+        ropero_core::err_line("error: usa 'ropero engine --params [ENGINE]'");
+        return 2;
+    }
+    let Ok(scan) = crate::discovery::scan() else {
+        return 1;
+    };
+    if let Some(name) = engine {
+        let Ok((id, _)) = ropero_core::EngineId::from_str_legacy(name) else {
+            ropero_core::err_line(&format!("error: engine desconocido: '{name}'"));
+            return 2;
+        };
+        let args = scan
+            .config
+            .engines
+            .get(&id)
+            .map(|entry| entry.args.as_slice())
+            .unwrap_or_default();
+        ropero_core::out_line(&format!("{}: {}", id.as_str(), args.join(" ")));
+        return 0;
+    }
+    for (id, config) in &scan.config.engines {
+        ropero_core::out_line(&format!("{}: {}", id.as_str(), config.args.join(" ")));
     }
     0
 }
@@ -269,6 +347,22 @@ pub fn args(modelo: &str) -> i32 {
         })
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(|| plan.engine.id.as_str().to_string());
+    let common_args = s
+        .config
+        .engines
+        .get(&plan.engine.id)
+        .map(|config| config.args.as_slice())
+        .unwrap_or_default();
+    let (_, overridden, avoided) = ropero_core::engine_args(common_args, &plan.spec);
+    if !overridden.is_empty() {
+        ropero_core::out_line(&format!(
+            "sobreescritos para el modelo: {}",
+            overridden.join(", ")
+        ));
+    }
+    if !avoided.is_empty() {
+        ropero_core::out_line(&format!("ignorados para el modelo: {}", avoided.join(", ")));
+    }
     let mut argv = plan.argv;
     if plan.engine.id == ropero_core::EngineId::Ignis {
         let mut cleaned = Vec::with_capacity(argv.len() + 2);

@@ -220,7 +220,8 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
             ropero_core::err_line(aviso);
         }
         let engine_manifest = s.engines.iter().find(|m| m.id == elegido.spec.model.engine);
-        if elegido.spec.model.format == ropero_core::ModelFormat::Ninfer
+        if elegido.spec.tool.is_none()
+            && elegido.spec.model.format == ropero_core::ModelFormat::Ninfer
             && elegido.spec.model.engine == ropero_core::EngineId::Ignis
         {
             let Some(manifest) = engine_manifest else {
@@ -246,7 +247,8 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
             }
             continue;
         }
-        let flm_delegado = ropero_core::flm::is_flm_model(elegido.spec)
+        let flm_delegado = elegido.spec.tool.is_none()
+            && ropero_core::flm::is_flm_model(elegido.spec)
             && engine_manifest.is_some_and(ropero_runtime::flm::delegated);
         if flm_delegado {
             let manifest = engine_manifest.expect("comprobado");
@@ -277,6 +279,43 @@ fn models(s: &crate::discovery::Scan, tokens: &[Token]) -> i32 {
                     codigo = 1;
                 }
             }
+            Via::Tool => {
+                let Some(manifest) = engine_manifest else {
+                    ropero_core::err_line(
+                        "error: falta el manifiesto del engine para ejecutar tool",
+                    );
+                    codigo = 1;
+                    continue;
+                };
+                match ropero_runtime::tool::pull_model(manifest, elegido.spec, &s.env) {
+                    Ok(results) => {
+                        let failed = results.iter().any(|result| result.status != 0);
+                        for result in results {
+                            if !result.stdout.is_empty() {
+                                ropero_core::out(&result.stdout, false);
+                            }
+                            if !result.stderr.is_empty() {
+                                ropero_core::err_line(&result.stderr);
+                            }
+                        }
+                        if failed {
+                            ropero_core::err_line(
+                                "error: la herramienta del engine terminó con error",
+                            );
+                            codigo = 1;
+                        } else {
+                            ropero_core::out_line(&format!(
+                                "{}: instalado con tool",
+                                elegido.nombre
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        ropero_core::err_line(&format!("error: {error}"));
+                        codigo = 1;
+                    }
+                }
+            }
         }
     }
     codigo
@@ -295,6 +334,11 @@ fn fabrica_modelo(
     };
     let mut flags = ropero_forge::peticion::Flags {
         turbo_llama: spec.model.engine == ropero_core::EngineId::TurboLlama,
+        engine: matches!(
+            spec.model.engine,
+            ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama
+        )
+        .then_some(spec.model.engine),
         keep_source: build.keep_source,
         keep_intermedio: build.keep_intermedio,
         no_mtp: build.no_mtp,

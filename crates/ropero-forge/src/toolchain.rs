@@ -86,6 +86,8 @@ pub struct Toolchain {
 pub struct Busqueda {
     /// El usuario eligió explícitamente el fork.
     pub preferir_fork: bool,
+    /// Engine que debe aportar las herramientas para una instalación por modelo.
+    pub required_engine: Option<ropero_core::EngineId>,
     /// El directorio del fork (`$LLAMA_DIR`), si está.
     pub dir_fork: Option<PathBuf>,
     /// El directorio del oficial (`$LLAMA_OFFICIAL_DIR`), si está.
@@ -116,6 +118,9 @@ pub fn ensure_toolchain(
     busqueda: &Busqueda,
     hace_falta_conversor: bool,
 ) -> Result<Toolchain, Error> {
+    if let Some(engine) = busqueda.required_engine {
+        return toolchain_requerida(busqueda, engine, hace_falta_conversor);
+    }
     // ── el motor, y el conversor sólo si hay que convertir ─────────────
     // Ropero usa llama.cpp oficial por defecto; el fork se conserva como
     // alternativa si el oficial no está disponible.
@@ -259,6 +264,10 @@ pub fn buscar(
 
     let mut busqueda = Busqueda {
         preferir_fork: env.get("ROPERO_GGUFFER_ENGINE") == Some("turbo-llama"),
+        required_engine: env
+            .get("ROPERO_GGUFFER_ENGINE_REQUIRED")
+            .and_then(|name| ropero_core::EngineId::from_str_legacy(name).ok())
+            .map(|(engine, _)| engine),
         dir_fork: dir_fork.clone(),
         dir_oficial: dir_oficial.clone(),
         convert_fork: dir_fork
@@ -300,6 +309,58 @@ pub fn buscar(
         });
 
     ensure_toolchain(&busqueda, hace_falta_conversor)
+}
+
+fn toolchain_requerida(
+    busqueda: &Busqueda,
+    engine: ropero_core::EngineId,
+    hace_falta_conversor: bool,
+) -> Result<Toolchain, Error> {
+    let (dir, convert, quantize, motor, env_name) = match engine {
+        ropero_core::EngineId::LlamaServer => (
+            busqueda.dir_oficial.as_ref(),
+            busqueda.convert_oficial.as_ref(),
+            busqueda.quantize_oficial.as_ref(),
+            Motor::Oficial {
+                dir: busqueda.dir_oficial.clone().unwrap_or_default(),
+            },
+            "LLAMA_OFFICIAL_DIR",
+        ),
+        ropero_core::EngineId::TurboLlama => (
+            busqueda.dir_fork.as_ref(),
+            busqueda.convert_fork.as_ref(),
+            busqueda.quantize_fork.as_ref(),
+            Motor::Fork {
+                dir: busqueda.dir_fork.clone().unwrap_or_default(),
+            },
+            "LLAMA_DIR",
+        ),
+        _ => return ensure_toolchain(&Busqueda::default(), hace_falta_conversor),
+    };
+    if dir.is_none() || (hace_falta_conversor && convert.is_none()) {
+        return Err(Error::SinMotor {
+            falta: if hace_falta_conversor {
+                "convert_hf_to_gguf.py".into()
+            } else {
+                "herramientas del engine seleccionado".into()
+            },
+            donde: format!("configura ${env_name} con el build de {}", engine.as_str()),
+        });
+    }
+    let quantize = quantize.ok_or_else(|| Error::MotorIncompleto {
+        falta: format!("llama-quantize de {}", engine.as_str()),
+        donde: format!("se buscó en ${env_name}/build/bin"),
+    })?;
+    let split = busqueda
+        .split_en_build
+        .clone()
+        .or_else(|| busqueda.split_en_path.clone());
+    Ok(Toolchain {
+        motor,
+        convert: convert.cloned(),
+        quantize: quantize.clone(),
+        split,
+    })
 }
 
 /// El directorio de un motor: la variable de entorno, o el default bajo

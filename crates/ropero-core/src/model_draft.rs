@@ -123,7 +123,7 @@ pub fn clean(text: &str) -> Result<(String, usize), toml::de::Error> {
     discarded += retain_keys(
         root,
         &[
-            "model", "files", "download", "build", "levels", "flags", "options", "aliases",
+            "model", "files", "download", "build", "tool", "levels", "flags", "options", "aliases",
             "limits", "args",
         ],
     );
@@ -164,11 +164,15 @@ pub fn clean(text: &str) -> Result<(String, usize), toml::de::Error> {
                 "size",
             ][..],
         ),
+        ("tool", &["params"][..]),
         ("levels", &["list", "default"][..]),
         ("flags", &["list"][..]),
         ("options", &["list", "default"][..]),
         ("limits", &["min_ram_gb", "min_ram_note"][..]),
-        ("args", &["base", "level", "flag", "option"][..]),
+        (
+            "args",
+            &["base", "level", "flag", "option", "override", "avoid"][..],
+        ),
     ] {
         if let Some(table) = root.get_mut(table).and_then(toml::Value::as_table_mut) {
             discarded += retain_keys(table, allowed);
@@ -186,7 +190,7 @@ pub fn clean(text: &str) -> Result<(String, usize), toml::de::Error> {
         }
     }
     if let Some(args) = root.get_mut("args").and_then(toml::Value::as_table_mut) {
-        for section in ["level", "flag", "option"] {
+        for section in ["level", "flag", "option", "override", "avoid"] {
             if let Some(groups) = args.get_mut(section).and_then(toml::Value::as_table_mut) {
                 for entry in groups
                     .iter_mut()
@@ -196,7 +200,8 @@ pub fn clean(text: &str) -> Result<(String, usize), toml::de::Error> {
                     let allowed: &[&str] = match section {
                         "level" => &["base", "chat_template_kwargs", "reasoning_effort"],
                         "flag" => &["base", "requires"],
-                        _ => &["base", "values", "replace"],
+                        "option" => &["base", "values", "replace"],
+                        _ => &["list"],
                     };
                     discarded += retain_keys(entry, allowed);
                 }

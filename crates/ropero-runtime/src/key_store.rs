@@ -40,10 +40,7 @@ pub fn read(dir: &Path, engine: EngineId) -> Result<Option<String>, String> {
     }
     let key = match secret_tool("lookup", engine)? {
         Some(key) => key,
-        None => {
-            let pass = prompt_secret("Almacén cifrado. Frase de paso: ")?;
-            pass
-        }
+        None => prompt_secret("Almacén cifrado. Frase de paso: ")?,
     };
     decrypt(&bytes, &key).map(Some)
 }

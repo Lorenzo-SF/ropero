@@ -166,6 +166,8 @@ pub struct ConfigEngine {
     /// Clave Bearer opcional que exigen los endpoints de este motor.
     /// Se redacta en todas las vistas de configuración.
     pub api_key: Option<String>,
+    /// Argumentos comunes que se añaden a todos los modelos del motor.
+    pub args: Vec<String>,
 }
 
 impl std::fmt::Debug for ConfigEngine {
@@ -178,6 +180,7 @@ impl std::fmt::Debug for ConfigEngine {
             .field("port_min", &self.port_min)
             .field("port_max", &self.port_max)
             .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .field("args", &self.args)
             .finish()
     }
 }
@@ -744,11 +747,39 @@ fn parse_engine_config(
                 }
                 result.api_key = Some(raw.to_string());
             }
+            "args" => {
+                let Some(args) = value.as_array() else {
+                    return Err(ErrorConfig::de_campo(
+                        &name,
+                        &value.to_string(),
+                        "debe ser una lista de argumentos",
+                    ));
+                };
+                let mut parsed = Vec::with_capacity(args.len());
+                for arg in args {
+                    let Some(arg) = arg.as_str() else {
+                        return Err(ErrorConfig::de_campo(
+                            &name,
+                            &value.to_string(),
+                            "todos los argumentos deben ser cadenas",
+                        ));
+                    };
+                    if arg.is_empty() || arg.contains(['\n', '\r', '\0']) {
+                        return Err(ErrorConfig::de_campo(
+                            &name,
+                            arg,
+                            "los argumentos no pueden estar vacíos ni contener caracteres de control",
+                        ));
+                    }
+                    parsed.push(arg.to_string());
+                }
+                result.args = parsed;
+            }
             _ => {
                 return Err(ErrorConfig::de_campo(
                     &name,
                     value.to_string().as_str(),
-                    "campo desconocido (models_path, artifacts_dir, gguf_dir, safetensors_dir, port_min, port_max, api_key)",
+                    "campo desconocido (models_path, artifacts_dir, gguf_dir, safetensors_dir, port_min, port_max, api_key, args)",
                 ));
             }
         }
@@ -875,15 +906,51 @@ pub fn ejemplo_config(config: &Config) -> String {
         EngineId::Strata,
         EngineId::Ignis,
         EngineId::Basalt,
+        EngineId::Colibri,
     ] {
         let (port_min, port_max) = valores_por_defecto_engine(id);
         out.push_str(&format!(
-            "\n[engines.{}]\nmodels_path = \"{}\"\nport_min = {}\nport_max = {}\n# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n",
+            "\n[engines.{}]\nmodels_path = \"{}\"\nport_min = {}\nport_max = {}\n",
             id.as_str(),
             escapa_toml(&config.models_toml_dir(id).valor.to_string_lossy()),
             port_min,
             port_max,
         ));
+        if matches!(id, EngineId::LlamaServer | EngineId::TurboLlama) {
+            let args = [
+                "--threads",
+                "12",
+                "--threads-batch",
+                "12",
+                "--flash-attn",
+                "on",
+                "--jinja",
+                "--parallel",
+                "1",
+                "--load-mode",
+                "none",
+                "--batch-size",
+                "4096",
+                "--ubatch-size",
+                "1024",
+                "--cache-prompt",
+                "--context-shift",
+                "--cont-batching",
+                "--poll",
+                "60",
+                "--metrics",
+                "--perf",
+                "--seed",
+                "-1",
+            ];
+            let encoded = args
+                .iter()
+                .map(|arg| format!("\"{}\"", escapa_toml(arg)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("args = [{}]\n", encoded));
+        }
+        out.push_str("# api_key = \"\" # opcional; se envía como Bearer al endpoint local\n");
         if id == EngineId::Basalt
             && let Some(parent) = config.artifacts_dir.valor.parent()
         {
@@ -909,6 +976,7 @@ fn valores_por_defecto_engine(id: EngineId) -> (u16, u16) {
         EngineId::Strata => (9920, 9929),
         EngineId::Ignis => (9910, 9919),
         EngineId::Basalt => (9900, 9909),
+        EngineId::Colibri => (9890, 9899),
     }
 }
 

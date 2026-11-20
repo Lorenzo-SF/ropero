@@ -4,10 +4,9 @@
 //!
 //! | Recurso | Qué |
 //! |---|---|
-//! | CPU | GHz y temperatura |
-//! | dGPU | GHz y temperatura (en macOS, la única GPU) |
-//! | iGPU | GHz y temperatura (sólo Linux, si la hay) |
-//! | RAM/SWAP | MB en uso, **contando zram** |
+//! | CPU | marca, GHz y temperatura |
+//! | dGPU/iGPU | marca, GHz, temperatura y VRAM si el driver la publica |
+//! | RAM/SWAP | GB usados/total y porcentaje de swap |
 //!
 //! ## Lo que no está, se dice
 //!
@@ -18,27 +17,13 @@
 //!
 //! ```text
 //! ESTADO DE LA MÁQUINA
-//!   recurso          reloj  temperatura
-//!   ───────────────────────────────────
-//!   CPU           3.40 GHz     58.00 °C
-//!   dGPU          2.10 GHz     45.00 °C
-//!     NVIDIA GeForce RTX 5080
-//!   iGPU     no disponible
-//!
-//!   recurso          uso        total
-//!   ─────────────────────────────────
-//!   RAM       8192.00 MB  32768.00 MB
-//!   SWAP     31698.00 MB   8192.00 MB
-//!     (incluye 31186.00 MB de zram)
+//! CPU Intel 3,40GHz 58,0°C │ RAM 8,0/32,0G 25% │ SWP 12% · zram 4,0G
+//! dGPU NVIDIA GeForce RTX 5080 2,10GHz 45,0°C │ VRAM 8,0/16,0G 50%
+//! iGPU Intel UHD 770 no disponible no disponible │ VRAM no disponible
+//! LLM Sin modelos arrancados
 //! ```
 //!
-//! Son dos tablas (la de los procesadores y la de la memoria) con el
-//! **mismo** sistema de formato del resto de la salida (doc CLI v2 §2):
-//! los números a la derecha, el texto a la izquierda y el nombre de la
-//! GPU y el zram como notas de su fila.
-//!
-//! La sección usa **un** criterio: el reloj y la temperatura son números,
-//! como el uso y el total de la memoria, y van a la derecha.
+//! La salida es compacta para consultarla mientras un modelo está corriendo.
 //!
 //! ## La captura
 //!
@@ -70,6 +55,9 @@ pub struct GpuState {
     pub ghz: Option<Reading>,
     /// La temperatura de la GPU, en grados.
     pub temp_c: Option<Reading>,
+    /// Memoria de vídeo usada y total, en MB.
+    pub vram_used_mb: Option<Reading>,
+    pub vram_total_mb: Option<Reading>,
 }
 
 /// La memoria de la máquina.
@@ -94,6 +82,8 @@ pub struct MachineState {
     pub cpu_ghz: Option<Reading>,
     /// La temperatura de la CPU, en grados.
     pub cpu_temp_c: Option<Reading>,
+    /// Marca comercial identificada a partir del nombre de la CPU.
+    pub cpu_brand: String,
     /// La GPU **dedicada** (en macOS, la única GPU).
     pub dgpu: Option<GpuState>,
     /// La GPU **integrada** (sólo Linux).
@@ -124,21 +114,12 @@ pub fn status_text(maquina: &MachineState) -> String {
 
 /// Salida compacta y coloreada: temperatura y saturación de memoria por umbral.
 pub fn status_text_color(maquina: &MachineState, paleta: &Palette) -> String {
+    let brand = machine_brand(&maquina.cpu_brand);
+    let cpu_label = paleta.paint_fg(brand_color(&brand), &format!("CPU {brand}"));
     let cpu = format!(
-        "CPU  {} {}",
+        "{cpu_label} {} {}",
         medida(&maquina.cpu_ghz),
         medida(&maquina.cpu_temp_c)
-    );
-    let gpu = maquina.dgpu.as_ref().map_or_else(
-        || format!("GPU  {NO_DISPONIBLE}"),
-        |gpu| {
-            format!(
-                "GPU  {} {} {}",
-                gpu.name,
-                medida(&gpu.ghz),
-                medida(&gpu.temp_c)
-            )
-        },
     );
     let mem = &maquina.memory;
     let ram = memoria(&mem.ram_used_mb, &mem.ram_total_mb, paleta);
@@ -147,14 +128,78 @@ pub fn status_text_color(maquina: &MachineState, paleta: &Palette) -> String {
         .zram_mb
         .as_ref()
         .map_or_else(String::new, |z| format!(" · zram {:.1}G", z.value / 1024.0));
-    format!(
-        "{} │ {}\nRAM {} │ SWP {}{}\n",
+    let mut lines = vec![format!(
+        "{} │ RAM {} │ SWP {}{}",
         decimal(&cpu),
-        decimal(&gpu),
         decimal(&ram),
         swap_pct,
         decimal(&zram)
-    )
+    )];
+    for (kind, gpu) in [
+        ("dGPU", maquina.dgpu.as_ref()),
+        ("iGPU", maquina.igpu.as_ref()),
+    ] {
+        let (name, ghz, temp, vram) = match gpu {
+            Some(gpu) => (
+                gpu.name.as_str(),
+                medida(&gpu.ghz),
+                medida(&gpu.temp_c),
+                memoria(&gpu.vram_used_mb, &gpu.vram_total_mb, paleta),
+            ),
+            None => (
+                NO_DISPONIBLE,
+                NO_DISPONIBLE.to_string(),
+                NO_DISPONIBLE.to_string(),
+                NO_DISPONIBLE.to_string(),
+            ),
+        };
+        let name = paleta.paint_fg(brand_color(name), name);
+        lines.push(decimal(&format!(
+            "{kind} {name} {ghz} {temp} │ VRAM {vram}"
+        )));
+    }
+    lines.join("\n") + "\n"
+}
+
+fn machine_brand(name: &str) -> String {
+    if name.trim().is_empty() || name == "desconocido" {
+        return "desconocido".into();
+    }
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("apple")
+        || lower.contains("m1")
+        || lower.contains("m2")
+        || lower.contains("m3")
+        || lower.contains("m4")
+        || lower.contains("m5")
+    {
+        "AppleSilicon".into()
+    } else if lower.contains("snapdragon") || lower.contains("qualcomm") {
+        "Snapdragon".into()
+    } else if lower.contains("amd") || lower.contains("ryzen") {
+        "AMD".into()
+    } else if lower.contains("intel") || lower.contains("xeon") || lower.contains("core") {
+        "Intel".into()
+    } else {
+        name.to_string()
+    }
+}
+
+fn brand_color(name: &str) -> crate::palette::HexColor {
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("nvidia") || lower.contains("geforce") || lower.contains("rtx") {
+        crate::palette::NVIDIA
+    } else if lower.contains("amd") || lower.contains("radeon") {
+        crate::palette::AMD
+    } else if lower.contains("intel") || lower.contains("arc") {
+        crate::palette::INTEL
+    } else if lower.contains("snapdragon") || lower.contains("qualcomm") {
+        crate::palette::SNAPDRAGON
+    } else if lower.contains("apple") || lower.starts_with('m') {
+        crate::palette::APPLE_SILICON
+    } else {
+        crate::palette::LOG_LIGHT
+    }
 }
 
 fn decimal(value: &str) -> String {
@@ -164,7 +209,10 @@ fn decimal(value: &str) -> String {
 fn medida(value: &Option<Reading>) -> String {
     value.as_ref().map_or_else(
         || NO_DISPONIBLE.into(),
-        |r| format!("{:.2}{}", r.value, r.unit),
+        |r| match r.unit {
+            "°C" => format!("{:.1}{}", r.value, r.unit),
+            _ => format!("{:.2}{}", r.value, r.unit),
+        },
     )
 }
 
@@ -186,6 +234,10 @@ fn memoria(used: &Option<Reading>, total: &Option<Reading>, palette: &Palette) -
         }
         _ => format!("{} / {}", format_reading(used), format_reading(total)),
     }
+}
+
+pub fn vram_color(name: &str) -> crate::palette::HexColor {
+    brand_color(name)
 }
 
 fn porcentaje(used: &Option<Reading>, total: &Option<Reading>) -> String {

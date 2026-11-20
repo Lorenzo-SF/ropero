@@ -374,7 +374,7 @@ fn el_arranque_dice_el_puerto() {
         estado.path(),
         motor.path(),
         modelo.path(),
-        &["modelo-alpha"],
+        &["run", "modelo-alpha"],
     );
 
     // El puerto sale del rango del motor del fixture (turbo-llama:

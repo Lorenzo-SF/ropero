@@ -41,6 +41,12 @@ file = "my-model.gguf"
 # repo = "another-owner/another-repository"
 # use = "run"
 
+# [tool] calls the pull command declared by the engine manifest instead of
+# HF download or local build. Parameters are passed as raw executable tokens.
+# Supported placeholders: ${model}, ${repo}, ${file}, ${dir}.
+# [tool]
+# params = ["--revision", "main"]
+
 # [build] describes conversion/quantization. It may coexist with download;
 # `ropero install models` then asks which route to use.
 # repo = "owner/source-weights"
@@ -85,6 +91,13 @@ file = "my-model.gguf"
 # copying the template does not silently add engine flags.
 [args]
 base = []
+
+# Replace selected engine-wide arguments for this model. Entries are raw argv
+# tokens; specify both a parameter and its value when it takes one.
+# [args.override]
+# list = ["--batch-size", "2048"]
+# [args.avoid]
+# list = ["--flash-attn", "--metrics"]
 
 # Additional arguments are appended to the common list:
 # [args.level.high]

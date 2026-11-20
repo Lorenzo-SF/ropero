@@ -86,6 +86,22 @@ pub fn gguffer(flags: peticion::Flags, env: &ropero_core::Environment) -> Report
             .vars
             .insert("ROPERO_GGUFFER_ENGINE".into(), "turbo-llama".into());
     }
+    if !flags.list_quants
+        && !flags.diagnostico
+        && let Some(engine) = flags.engine
+        && matches!(
+            engine,
+            ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama
+        )
+    {
+        entorno.vars.insert(
+            "ROPERO_GGUFFER_ENGINE_REQUIRED".into(),
+            engine.as_str().into(),
+        );
+        entorno
+            .vars
+            .insert("ROPERO_GGUFFER_ENGINE".into(), engine.as_str().into());
+    }
     if flags.list_quants || flags.diagnostico {
         if let Err(error) = peticion::valida_consulta(&flags) {
             return Reporte::error(error);

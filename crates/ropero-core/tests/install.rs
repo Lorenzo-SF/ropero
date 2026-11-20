@@ -99,6 +99,15 @@ engine = "llama-server"
 gguf = "vacio.gguf"
 "#;
 
+const SOLO_TOOL: &str = r#"
+[model]
+name = "nativo"
+engine = "ignis"
+[files]
+[tool]
+params = ["--out", "${dir}"]
+"#;
+
 fn spec(toml: &str) -> ModelSpec {
     spec_en(toml, "modelo.toml")
 }
@@ -212,6 +221,7 @@ fn un_valor_de_prio_invalido_es_error_con_el_valor_recibido() {
 fn los_dos_valores_validos_se_parsean() {
     assert_eq!(Via::parse("download"), Ok(Via::Download));
     assert_eq!(Via::parse("build"), Ok(Via::Build));
+    assert_eq!(Via::parse("tool"), Ok(Via::Tool));
 }
 
 /// El valor recibido aparece **íntegro** en el mensaje: no se recorta
@@ -266,6 +276,22 @@ fn un_modelo_con_un_solo_camino_ignora_el_prio() {
     let ignorado = prio_ignorado(&spec, Some(Via::Build)).expect("aviso de ignorado");
     assert_eq!(ignorado.via, Via::Build);
     assert_eq!(ignorado.motivo, Motivo::SinCamino);
+}
+
+/// Los modelos instalados por la herramienta del engine usan `tool` por defecto.
+#[test]
+fn una_herramienta_nativa_es_via_unica_y_acepta_prio_tool() {
+    let spec = spec(SOLO_TOOL);
+    assert_eq!(vias_de(&spec).unica(), Some(Via::Tool));
+    assert_eq!(elegir_via(&spec, None), Ok(Decision::Via(Via::Tool)));
+    assert_eq!(
+        elegir_via(&spec, Some(Via::Tool)),
+        Ok(Decision::Via(Via::Tool))
+    );
+    assert_eq!(
+        prio_ignorado(&spec, Some(Via::Tool)).unwrap().via,
+        Via::Tool
+    );
 }
 
 /// Un modelo con un solo camino y el `--prio` de ese camino también se

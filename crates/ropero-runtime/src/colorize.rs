@@ -159,6 +159,7 @@ pub fn colorize_engine_line(
         Some(ropero_core::EngineId::Vllm) => &["vllm", "enginecore", "scheduler"],
         Some(ropero_core::EngineId::Ignis) => &["ignis.", "ignis-server", "model loaded"],
         Some(ropero_core::EngineId::Basalt) => &["[server]", "basalt", "loaded"],
+        Some(ropero_core::EngineId::Colibri) => &["colibri", "coli", "model loaded"],
         Some(ropero_core::EngineId::LlamaServer | ropero_core::EngineId::TurboLlama) => {
             &["llama.cpp", "llama_server", "llama_context", "ggml_", "srv"]
         }

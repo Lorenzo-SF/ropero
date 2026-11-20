@@ -48,6 +48,7 @@ fn engines_sale_con_cero_y_lista_los_motores() {
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stdout.contains("llama-server"), "stdout={stdout}");
     assert!(stdout.contains("turbo-llama"), "stdout={stdout}");
+    assert!(stdout.contains("colibri"), "stdout={stdout}");
     // Los motores usan fondo hexadecimal y texto negro desde la paleta común.
     assert!(
         stdout.contains("\u{1b}[48;2;253;186;116m\u{1b}[38;2;0;0;0mllama-server"),

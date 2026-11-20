@@ -11,6 +11,9 @@ path    = "lfm3:1.7b"
 repo = "FastFlowLM/LFM3-1.7B-NPU2"
 size = "~1.7 GB"
 
+[tool]
+params = []
+
 [limits]
 min_ram_gb = 4
 

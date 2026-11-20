@@ -14,3 +14,6 @@ compat = [
 
 [detect]
 binaries = ["ignis-server"]
+
+[install]
+pull = ["ignis-server", "model", "download"]

@@ -27,6 +27,14 @@ pub fn run() -> i32 {
 /// Traduce los flags del contrato a la petición del runtime; la lógica del
 /// arranque vive en `ropero-runtime` (R-ARQ-1).
 pub fn run_modelo(argumentos: &[String]) -> i32 {
+    if argumentos
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "--help" | "-h"))
+    {
+        let _ = crate::parser::arranque().get_matches_from(
+            std::iter::once("ropero run".to_string()).chain(argumentos.iter().cloned()),
+        );
+    }
     let Ok(scan) = crate::discovery::scan() else {
         return 1;
     };

@@ -30,6 +30,7 @@ const CANONICOS: &[(&str, EngineId)] = &[
     ("strata", EngineId::Strata),
     ("ignis", EngineId::Ignis),
     ("basalt", EngineId::Basalt),
+    ("colibri", EngineId::Colibri),
 ];
 
 /// Los alias legacy (ADR-004 §"Alias legacy") y su id canónico.
@@ -302,6 +303,7 @@ fn los_ids_canonicos_son_los_de_adr_004() {
             "strata",
             "ignis",
             "basalt",
+            "colibri",
         ]
     );
 }

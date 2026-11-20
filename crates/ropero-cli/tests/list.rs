@@ -86,16 +86,18 @@ fn model_fired_y_hired_mueve_el_toml_sin_perderlo() {
 }
 
 #[test]
-fn model_requiere_un_estado_y_las_vistas_no_se_pueden_combinar() {
+fn model_requiere_un_estado_y_all_fired_se_acepta_como_sinonimo_de_fired() {
     for args in [
         &["model", "modelo-alpha"][..],
         &["model", "modelo-alpha", "--fired", "--hired"][..],
-        &["models", "--all", "--fired"][..],
         &["models", "add", "--all"][..],
     ] {
         let (code, _, _) = run(args);
         assert_eq!(code, 2, "uso aceptado: {args:?}");
     }
+    let (code, stdout, stderr) = run(&["models", "--all", "--fired"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("FIRED MODELS"), "stdout={stdout}");
 }
 
 #[test]
@@ -148,6 +150,19 @@ fn list_fired_muestra_solo_modelos_despedidos() {
     assert_eq!(code, 0, "stderr={stderr}");
     assert!(stdout.contains("modelo-retirado"), "stdout={stdout}");
     assert!(!stdout.contains("modelo-alpha"), "stdout={stdout}");
+}
+
+#[test]
+fn models_engine_muestra_activos_y_despedidos_y_filtra_fired() {
+    let (code, stdout, stderr) = run(&["models", "--engine", "turbo-llama"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(stdout.contains("modelo-alpha"), "stdout={stdout}");
+    assert!(stdout.contains("modelo-retirado"), "stdout={stdout}");
+    assert!(stdout.contains("[fired]"), "stdout={stdout}");
+    let (code, stdout, stderr) = run(&["models", "--fired", "--engine", "turbo-llama"]);
+    assert_eq!(code, 0, "stderr={stderr}");
+    assert!(!stdout.contains("modelo-alpha"), "stdout={stdout}");
+    assert!(stdout.contains("modelo-retirado"), "stdout={stdout}");
 }
 
 /// instalado: no están disponibles (doc CLI v2 §15).
@@ -205,9 +220,9 @@ fn el_listado_pone_una_sola_cabecera() {
     };
     let (code, stdout, stderr) = run(&["models", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    // En el fixture hay tres motores con modelos y la cabecera no se repite.
+    // --all muestra la lista general y, en una segunda sección, los fired.
     let cabeceras: Vec<&str> = stdout.lines().filter(|l| es_cabecera(l)).collect();
-    assert_eq!(cabeceras.len(), 1, "stdout={stdout}");
+    assert_eq!(cabeceras.len(), 2, "stdout={stdout}");
     // La regla va sangrada: se cuenta la línea de guiones, no sus espacios.
     let regla = stdout
         .lines()
@@ -217,8 +232,8 @@ fn el_listado_pone_una_sola_cabecera() {
         })
         .count();
     assert_eq!(
-        regla, 3,
-        "una sola regla por grupo de motor, stdout={stdout}"
+        regla, 4,
+        "una regla por grupo de motor incluyendo fired, stdout={stdout}"
     );
     assert!(
         stdout.contains("mlx-serve") && stdout.contains("turbo-llama"),
@@ -256,7 +271,12 @@ fn el_listado_no_deja_espacios_al_final() {
 fn el_listado_da_una_sola_forma_al_tamano() {
     let (code, stdout, stderr) = run(&["models", "--all"]);
     assert_eq!(code, 0, "stderr={stderr}");
-    let tamaños: Vec<String> = stdout
+    let general = stdout.split("FIRED MODELS").next().unwrap_or(&stdout);
+    assert!(
+        stdout.contains("FIRED MODELS"),
+        "--all debe incluir fired: {stdout}"
+    );
+    let tamaños: Vec<String> = general
         .lines()
         .filter_map(|l| {
             let i = l.find(" GB")?;
@@ -273,7 +293,7 @@ fn el_listado_da_una_sola_forma_al_tamano() {
         assert_eq!(decimales.len(), 2, "tamano={tamano}");
     }
     // Y la columna del tamaño cae en la misma posición para todos.
-    let posiciones: Vec<usize> = stdout
+    let posiciones: Vec<usize> = general
         .lines()
         .filter_map(|l| {
             let i = l.find(" GB")?;

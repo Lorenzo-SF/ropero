@@ -131,6 +131,40 @@ fn un_comando_que_va_bien_sale_con_cero() {
 }
 
 #[test]
+fn run_help_explicita_el_arranque_y_sus_opciones() {
+    let (code, stdout, stderr) = run(&["run", "--help"]);
+    assert_eq!(code, CODIGO_OK, "stderr={stderr}");
+    for expected in [
+        "ropero run <model>",
+        "--force",
+        "--cpu",
+        "--port",
+        "--api-key",
+        "--ctx",
+        "--background",
+    ] {
+        assert!(stdout.contains(expected), "falta {expected}: {stdout}");
+    }
+}
+
+#[test]
+fn install_admite_los_aliases_organizativos_models_y_engines() {
+    let (models_code, _, models_stderr) = run(&["models", "install", "modelo-inexistente"]);
+    assert_eq!(models_code, CODIGO_ERROR_USO, "stderr={models_stderr}");
+    assert!(
+        models_stderr.contains("modelo-inexistente"),
+        "stderr={models_stderr}"
+    );
+
+    let (engines_code, _, engines_stderr) = run(&["engines", "install", "motor-inexistente"]);
+    assert_eq!(engines_code, CODIGO_ERROR_USO, "stderr={engines_stderr}");
+    assert!(
+        engines_stderr.contains("motor-inexistente"),
+        "stderr={engines_stderr}"
+    );
+}
+
+#[test]
 fn connect_lista_integraciones_y_da_instrucciones_de_trae_sin_editar_archivos_privados() {
     let (code, stdout, stderr) = run(&["connect", "--list"]);
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
@@ -430,6 +464,7 @@ fn los_flags_del_gguffer_se_aceptan() {
     let pesos = "/tmp/pesos";
     let casos: &[(&[&str], i32)] = &[
         (&["--repo", "owner/name"], CODIGO_ERROR_EJECUCION),
+        (&["--repo", "owner/name", "--turbo"], CODIGO_ERROR_EJECUCION),
         (&["--path", pesos], CODIGO_ERROR_EJECUCION),
         (&["--gguf", "pesos.gguf"], CODIGO_ERROR_EJECUCION),
         (
@@ -616,6 +651,30 @@ fn command_imprime_opcion_y_valor_en_la_misma_linea() {
         rows.last().is_some_and(|line| !line.ends_with('\\')),
         "última línea con continuación: {stdout}"
     );
+}
+
+#[test]
+fn engine_params_muestra_los_argumentos_comunes_del_config_generado() {
+    let home = std::env::temp_dir().join(format!("ropero-engine-params-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    let mut command = bin();
+    let output = command
+        .env("HOME", &home)
+        .args(["engine", "--params", "llama-server"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(output.status.code(), Some(0), "stdout={stdout}");
+    assert!(
+        stdout.contains("llama-server: --threads 12"),
+        "stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("--context-shift") && stdout.contains("--seed -1"),
+        "stdout={stdout}"
+    );
+    let _ = std::fs::remove_dir_all(home);
 }
 
 #[test]
@@ -888,6 +947,10 @@ fn status_sale_con_cero() {
     assert_eq!(code, CODIGO_OK, "stderr={stderr}");
     assert!(stdout.contains("CPU"), "stdout={stdout}");
     assert!(stdout.contains("RAM"), "stdout={stdout}");
+    assert!(
+        stdout.contains("LLM\tSin modelos arrancados"),
+        "stdout={stdout}"
+    );
 }
 
 /// `ropero doctor` comprueba las dependencias y sale con 0 o 1.
